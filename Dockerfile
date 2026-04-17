@@ -23,10 +23,12 @@ RUN useradd -m -s /bin/bash -u ${SANDBOX_UID} sandbox
 
 # Python deps for the base runtime. If your fork needs agent-browser,
 # sqlite-vec for a knowledge store, or pyjwt[crypto] for GitHub App
-# auth, add them here.
+# auth, add them here. The ddgs + beautifulsoup4 pair powers the
+# starter web_search / fetch_url tools; drop them if you strip those.
 RUN pip install --no-cache-dir \
     gradio httpx uvicorn langfuse prometheus-client pyyaml \
-    langchain langchain-openai langgraph websockets
+    langchain langchain-openai langgraph websockets \
+    ddgs beautifulsoup4
 
 # Single COPY with a matching .dockerignore covers everything that
 # should ship and excludes .git/, tests/, docs, and dev state. Adding a

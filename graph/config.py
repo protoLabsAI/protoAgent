@@ -37,7 +37,7 @@ class LangGraphConfig:
     # Subagents — template ships with one example (see graph/subagents/config.py).
     # Add fields here as you add entries to SUBAGENT_REGISTRY.
     worker: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["echo"],
+        tools=["echo", "current_time", "calculator", "web_search", "fetch_url"],
         max_turns=20,
     ))
 

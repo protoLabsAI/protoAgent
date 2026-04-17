@@ -22,7 +22,7 @@ model:
 subagents:
   worker:
     enabled: true
-    tools: [echo]
+    tools: [echo, current_time, calculator, web_search, fetch_url]
     max_turns: 20
 
 middleware:

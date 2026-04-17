@@ -60,8 +60,11 @@ handler's output extraction depends on it.
 
 ## 4. Add your real tools
 
-`tools/lg_tools.py` ships with a single `echo` tool as a sanity
-check. Replace it:
+`tools/lg_tools.py` ships with a small keyless starter set so a
+fresh clone can demonstrate a real research loop: `echo`,
+`current_time`, `calculator` (safe AST eval — no `eval()`),
+`web_search` (DuckDuckGo via `ddgs`), and `fetch_url`. Keep the
+ones you want, drop the rest, and add your own:
 
 ```python
 from langchain_core.tools import tool

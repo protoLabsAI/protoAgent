@@ -58,7 +58,7 @@ Rules:
 
 Replace this prompt with domain-specific guidance once your agent has
 real specialized roles.""",
-    tools=["echo"],
+    tools=["echo", "current_time", "calculator", "web_search", "fetch_url"],
     max_turns=20,
 )
 

@@ -10,3 +10,7 @@ websockets>=12.0
 langchain>=1.2.3
 langgraph>=1.1.0
 langchain-openai>=0.3.0
+
+# Starter tools (tools/lg_tools.py)
+ddgs>=9.0
+beautifulsoup4>=4.12

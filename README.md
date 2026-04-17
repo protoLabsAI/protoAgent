@@ -24,6 +24,7 @@ step-by-step fork checklist.
 | Agent runtime | `graph/agent.py`, `server.py` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
 | LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one placeholder `worker` ships |
+| Starter tools | `tools/lg_tools.py` | Free, keyless tools so a fresh fork can demo real behaviour: `echo`, `current_time`, `calculator` (safe AST eval), `web_search` (DuckDuckGo), `fetch_url` |
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
 | Observability | `metrics.py`, `audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
 | Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
