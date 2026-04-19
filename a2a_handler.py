@@ -960,6 +960,31 @@ def register_a2a_routes(
         if not hmac.compare_digest(provided, _a2a_token):
             raise HTTPException(status_code=401, detail="Unauthorized: invalid bearer token")
 
+    # ── Origin verification for SSE/streaming endpoints ───────────────────────
+    _raw_allowed_origins = os.environ.get("A2A_ALLOWED_ORIGINS", "")
+    _allowed_origins_str = _raw_allowed_origins.strip()
+    if not _allowed_origins_str:
+        logger.warning(
+            "[a2a] A2A_ALLOWED_ORIGINS not set — SSE/streaming origin verification disabled"
+        )
+        _allowed_origins: list[str] | None = None
+    elif _allowed_origins_str == "*":
+        _allowed_origins = None  # wildcard: verification disabled
+    else:
+        _allowed_origins = [o.strip().lower() for o in _allowed_origins_str.split(",") if o.strip()]
+
+    def _check_origin(request: Request) -> None:
+        """Validate Origin header against A2A_ALLOWED_ORIGINS.
+
+        No-ops when A2A_ALLOWED_ORIGINS is unset or '*'.
+        Raises HTTP 403 when Origin is not in the allowlist.
+        """
+        if _allowed_origins is None:
+            return
+        origin = request.headers.get("Origin", "").lower()
+        if origin not in _allowed_origins:
+            raise HTTPException(status_code=403, detail="Forbidden: origin not allowed")
+
     # Update agent card capabilities
     agent_card.setdefault("capabilities", {})
     agent_card["capabilities"]["streaming"] = True
@@ -1189,6 +1214,12 @@ def register_a2a_routes(
             msg_metadata = params.get("metadata") or {}
             caller_trace = msg_metadata.get("a2a.trace") or {}
 
+            if method in ("message/stream", "message/sendStream"):
+                try:
+                    _check_origin(request)
+                except HTTPException as exc:
+                    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
             if method == "message/send":
                 record = await _submit_task(text, context_id, push_config, caller_trace)
                 # Use _task_to_response so the `kind: "task"` discriminator
@@ -1243,6 +1274,10 @@ def register_a2a_routes(
                 return _rpc_error(-32602, "Invalid params: id is required")
             if await _store.get(task_id) is None:
                 return _rpc_error(-32001, f"Task not found: {task_id}")
+            try:
+                _check_origin(request)
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
             return StreamingResponse(
                 _resubscribe_jsonrpc_stream(task_id, rpc_id),
                 media_type="text/event-stream",
@@ -1355,6 +1390,7 @@ def register_a2a_routes(
     async def _rest_stream(request: Request, body: dict):
         _check_auth(request, api_key)
         _check_bearer_auth(request)
+        _check_origin(request)
         message = body.get("message", {})
         configuration = body.get("configuration", {})
         context_id = body.get("contextId", "")
@@ -1385,6 +1421,7 @@ def register_a2a_routes(
     async def _subscribe_task(task_id: str, request: Request):
         _check_auth(request, api_key)
         _check_bearer_auth(request)
+        _check_origin(request)
         record = await _store.get(task_id)
         if record is None:
             raise HTTPException(404, f"Task not found: {task_id}")
