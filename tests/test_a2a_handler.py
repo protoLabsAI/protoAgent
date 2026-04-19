@@ -1630,3 +1630,221 @@ async def test_whitespace_only_token_treated_as_unset():
         })
     assert resp.status_code == 200
     assert "securitySchemes" not in card
+
+
+# ── Origin verification tests ──────────────────────────────────────────────────
+
+
+def _make_origin_test_app(allowed_origins: str | None = "https://example.com"):
+    """Create a test app with A2A_ALLOWED_ORIGINS configured."""
+    from fastapi import FastAPI
+    import os
+
+    app = FastAPI()
+    card = {"name": "test", "capabilities": {}}
+
+    async def _fake_stream(text, context_id, **kwargs):
+        yield ("text", "hello ")
+        yield ("done", "hello")
+
+    async def _fake_chat(text, session_id):
+        return [{"role": "assistant", "content": "response"}]
+
+    env_patch = {"A2A_ALLOWED_ORIGINS": allowed_origins} if allowed_origins is not None else {}
+    with patch.dict("os.environ", env_patch, clear=False):
+        if allowed_origins is None:
+            os.environ.pop("A2A_ALLOWED_ORIGINS", None)
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+        register_a2a_routes(
+            app=app,
+            chat_stream_fn_factory=_fake_stream,
+            chat_fn=_fake_chat,
+            api_key="",
+            agent_card=card,
+        )
+    return app
+
+
+@pytest.mark.asyncio
+async def test_origin_allowed_passes_sse():
+    """SSE request with Origin in allowlist is allowed."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            headers={"Origin": "https://example.com"},
+        )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_origin_rejected_returns_403():
+    """SSE request with Origin not in allowlist returns 403."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            headers={"Origin": "https://evil.com"},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_origin_missing_header_is_allowed():
+    """SSE request without Origin header is allowed (same-origin / curl)."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_origin_empty_string_rejected():
+    """SSE request with empty Origin header value is rejected with 403."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            headers={"Origin": ""},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_origin_wildcard_disables_check():
+    """When A2A_ALLOWED_ORIGINS='*', any origin is accepted without warning."""
+    app = _make_origin_test_app(allowed_origins="*")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            headers={"Origin": "https://any-domain.com"},
+        )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_origin_unset_logs_warning(caplog):
+    """When A2A_ALLOWED_ORIGINS is unset, a WARNING is logged at startup."""
+    import logging
+    import os
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("A2A_ALLOWED_ORIGINS", None)
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+        from fastapi import FastAPI
+        app = FastAPI()
+        card = {"name": "test", "capabilities": {}}
+
+        async def _fake_stream(text, context_id, **kwargs):
+            yield ("done", "")
+
+        async def _fake_chat(text, session_id):
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="a2a_handler"):
+            register_a2a_routes(
+                app=app,
+                chat_stream_fn_factory=_fake_stream,
+                chat_fn=_fake_chat,
+                api_key="",
+                agent_card=card,
+            )
+
+    assert any("A2A_ALLOWED_ORIGINS" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_origin_wildcard_no_warning(caplog):
+    """When A2A_ALLOWED_ORIGINS='*', no origin warning is logged."""
+    import logging
+    import os
+    with patch.dict("os.environ", {"A2A_ALLOWED_ORIGINS": "*"}, clear=False):
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+        from fastapi import FastAPI
+        app = FastAPI()
+        card = {"name": "test", "capabilities": {}}
+
+        async def _fake_stream(text, context_id, **kwargs):
+            yield ("done", "")
+
+        async def _fake_chat(text, session_id):
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="a2a_handler"):
+            register_a2a_routes(
+                app=app,
+                chat_stream_fn_factory=_fake_stream,
+                chat_fn=_fake_chat,
+                api_key="",
+                agent_card=card,
+            )
+
+    assert not any("A2A_ALLOWED_ORIGINS" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_origin_case_insensitive():
+    """Origin matching is case-insensitive per RFC 6454."""
+    app = _make_origin_test_app(allowed_origins="https://Example.COM")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/message:stream",
+            json={"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            headers={"Origin": "https://example.com"},
+        )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_origin_rpc_stream_rejected():
+    """JSON-RPC message/stream with disallowed Origin returns 403."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            "/a2a",
+            json={
+                "jsonrpc": "2.0", "id": 1, "method": "message/stream",
+                "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+            },
+            headers={"Origin": "https://evil.com"},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_origin_subscribe_rejected():
+    """GET /tasks/{id}:subscribe with disallowed Origin returns 403."""
+    app = _make_origin_test_app(allowed_origins="https://example.com")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        submit = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        })
+        task_id = submit.json()["result"]["id"]
+        resp = await client.get(
+            f"/tasks/{task_id}:subscribe",
+            headers={"Origin": "https://evil.com"},
+        )
+    assert resp.status_code == 403

@@ -960,6 +960,66 @@ def register_a2a_routes(
         if not hmac.compare_digest(provided, _a2a_token):
             raise HTTPException(status_code=401, detail="Unauthorized: invalid bearer token")
 
+    # ── Origin verification for SSE/WebSocket connections ─────────────────────
+    # Read A2A_ALLOWED_ORIGINS at startup (comma-separated list of allowed
+    # origins).  Empty/unset means "log a WARNING, allow all".  The special
+    # value '*' explicitly disables origin checking with no warning.
+    #
+    # Deviation rules:
+    #  - Missing Origin header           → allow (same-origin / older clients)
+    #  - Origin header present but empty → reject 403
+    #  - Case-insensitive domain comparison per RFC 6454
+    #  - Malformed env value             → log ERROR, fail-safe (allow all)
+    _raw_allowed_origins = os.environ.get("A2A_ALLOWED_ORIGINS", "").strip()
+    _allowed_origins: list[str] | None  # None = disabled (wildcard or error)
+
+    if _raw_allowed_origins == "*":
+        # Wildcard: explicitly disable origin checking — no WARNING logged.
+        _allowed_origins = None
+    elif not _raw_allowed_origins:
+        # Unset or empty: open mode, but warn operators.
+        logger.warning(
+            "[a2a] A2A_ALLOWED_ORIGINS not configured — SSE/WebSocket origin "
+            "verification is disabled; set this to a comma-separated list of "
+            "allowed origins (e.g. https://example.com) or '*' to silence this warning"
+        )
+        _allowed_origins = None
+    else:
+        try:
+            _allowed_origins = [o.strip().lower() for o in _raw_allowed_origins.split(",") if o.strip()]
+            if not _allowed_origins:
+                raise ValueError("empty after parsing")
+        except Exception as exc:  # pragma: no cover – malformed env
+            logger.error(
+                "[a2a] A2A_ALLOWED_ORIGINS is malformed (%r): %s — "
+                "CRITICAL: origin verification is disabled (fail-safe open mode)",
+                _raw_allowed_origins, exc,
+            )
+            _allowed_origins = None
+
+    def _check_origin(request: Request) -> None:
+        """Validate the Origin header against A2A_ALLOWED_ORIGINS.
+
+        Only applied to SSE-producing endpoints (message/stream,
+        tasks/resubscribe, /message:stream, /tasks/{id}:subscribe).
+
+        - Missing Origin header → allowed (same-origin requests / older clients)
+        - Origin present but empty → rejected with 403
+        - Origin not in allowlist → rejected with 403
+        - _allowed_origins is None (wildcard or unset) → no-op
+        """
+        if _allowed_origins is None:
+            return
+        origin = request.headers.get("Origin")
+        if origin is None:
+            # No Origin header: allow (same-origin, curl, server-to-server).
+            return
+        if not origin or origin.lower() not in _allowed_origins:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Origin '{origin}' is not allowed",
+            )
+
     # Update agent card capabilities
     agent_card.setdefault("capabilities", {})
     agent_card["capabilities"]["streaming"] = True
@@ -1200,6 +1260,10 @@ def register_a2a_routes(
                 return _rpc_result(_task_to_response(record))
 
             # streaming path — SSE frames wrapped in JSON-RPC envelopes
+            try:
+                _check_origin(request)
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
             return StreamingResponse(
                 _stream_new_task(text, context_id, push_config, rpc_id=rpc_id, caller_trace=caller_trace),
                 media_type="text/event-stream",
@@ -1243,6 +1307,10 @@ def register_a2a_routes(
                 return _rpc_error(-32602, "Invalid params: id is required")
             if await _store.get(task_id) is None:
                 return _rpc_error(-32001, f"Task not found: {task_id}")
+            try:
+                _check_origin(request)
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
             return StreamingResponse(
                 _resubscribe_jsonrpc_stream(task_id, rpc_id),
                 media_type="text/event-stream",
@@ -1355,6 +1423,7 @@ def register_a2a_routes(
     async def _rest_stream(request: Request, body: dict):
         _check_auth(request, api_key)
         _check_bearer_auth(request)
+        _check_origin(request)
         message = body.get("message", {})
         configuration = body.get("configuration", {})
         context_id = body.get("contextId", "")
@@ -1385,6 +1454,7 @@ def register_a2a_routes(
     async def _subscribe_task(task_id: str, request: Request):
         _check_auth(request, api_key)
         _check_bearer_auth(request)
+        _check_origin(request)
         record = await _store.get(task_id)
         if record is None:
             raise HTTPException(404, f"Task not found: {task_id}")

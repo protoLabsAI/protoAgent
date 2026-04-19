@@ -42,6 +42,13 @@ The template explicitly calls `logging.basicConfig(level=INFO)` — without this
 
 Without these set, the handler rejects webhook URLs that resolve to private / loopback / link-local IPs — defends against SSRF where a client registers `http://169.254.169.254/...` or `http://10.0.0.1/...` as a callback.
 
+## A2A security
+
+| Variable | Default | What |
+|---|---|---|
+| `A2A_AUTH_TOKEN` | (unset — open) | Bearer token required on all `/a2a` requests. When set, the `Authorization: Bearer <token>` header must match. Logs a WARNING at startup when unset. |
+| `A2A_ALLOWED_ORIGINS` | (unset — allow all) | Comma-separated list of allowed `Origin` header values for SSE and WebSocket streaming connections (e.g. `https://app.example.com,https://admin.example.com`). When unset, a WARNING is logged and all origins are accepted. Set to `*` to explicitly disable origin checking without a warning. Origin comparison is case-insensitive per RFC 6454. Requests without an `Origin` header (same-origin, curl, server-to-server) are always allowed. |
+
 ## UI
 
 | Variable | Default | What |
