@@ -61,12 +61,22 @@ LangGraph's `create_agent` gives you:
 
 The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ordered:
 
-1. **KnowledgeMiddleware** (optional) — injects retrieved context before each LLM call
+1. **KnowledgeMiddleware** (optional) — injects retrieved context before each LLM call; also loads prior session summaries from `/sandbox/memory/` as a `<prior_sessions>` block
 2. **AuditMiddleware** — records every tool call to JSONL + Langfuse
-3. **MemoryMiddleware** (optional) — persists useful context
+3. **MemoryMiddleware** (optional) — persists session summaries to `/sandbox/memory/` on session end
 4. **MessageCaptureMiddleware** — captures `message()` tool calls for later retrieval
 
 Middleware order matters. Knowledge must run before audit (so the injected context is captured). Message capture runs last so every upstream transformation is already applied.
+
+## Session memory
+
+Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config.yaml`). At session end `MemoryMiddleware` writes a JSON summary to `/sandbox/memory/`. On the next session, `KnowledgeMiddleware.load_memory()` reads the 10 most recent summaries and injects them as a `<prior_sessions>` XML block into the system prompt context, giving the agent continuity across restarts without any external store.
+
+**Token budget:** the prior-sessions block is capped at 2 000 tokens (character approximation: chars ÷ 4). Oldest sessions are dropped first when the budget is exceeded.
+
+**Disabling memory:** set `middleware.memory: false` in your fork's config, or set `PROTOAGENT_DISABLE_MEMORY=1` in the environment to suppress disk writes without changing the config.
+
+**Persistence across container restarts:** mount a volume at `/sandbox/memory/`. Without a volume the directory is ephemeral and summaries are lost on container stop.
 
 ## Why LiteLLM sits between the agent and models
 

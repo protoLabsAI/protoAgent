@@ -26,14 +26,22 @@ subagents:
     max_turns: 20
 
 middleware:
-  # The knowledge / memory middlewares require a knowledge store. The
-  # template ships with no store, so leave these false until you add
-  # one.
+  # The knowledge middleware requires a knowledge store. Leave false
+  # until you add one. Memory persistence is enabled by default and
+  # writes session summaries to /sandbox/memory/ without a store.
   knowledge: false
   audit: true
-  memory: false
+  memory: true
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db
   embed_model: nomic-embed-text
   top_k: 5
+
+# Session memory loading — prior summaries injected into system prompt
+# by KnowledgeMiddleware when it is active. Persistence via MemoryMiddleware
+# uses the same path. Mount a volume at this path to survive container restarts.
+memory:
+  path: /sandbox/memory/
+  max_sessions: 10
+  max_tokens: 2000
