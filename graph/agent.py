@@ -55,6 +55,7 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
         description: str,
         prompt: str,
         subagent_type: str = "worker",
+        emit_skill: bool = False,
     ) -> str:
         """Delegate a task to a specialized subagent.
 
@@ -62,7 +63,16 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
             description: Short description of what this task will accomplish
             prompt: Detailed instructions for the subagent
             subagent_type: Which subagent to use (see SUBAGENT_REGISTRY)
+            emit_skill: When True and the subagent config permits it, capture
+                the workflow as a skill-v1 artifact on successful completion.
+                Defaults to False (opt-in). No artifact is emitted on failure
+                or when the subagent config has allow_skill_emission=False.
         """
+        from datetime import datetime, timezone
+
+        import tracing
+        from graph.extensions.skills import SkillV1Artifact, emit_skill_artifact
+
         sub_config = SUBAGENT_REGISTRY.get(subagent_type)
         if not sub_config:
             return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
@@ -89,13 +99,56 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
             )
 
             messages = result.get("messages", [])
+
+            # Extract tools actually invoked during the subagent run.
+            tools_used: list[str] = []
+            for msg in messages:
+                # AIMessage tool_calls: [{"name": ..., "args": ..., "id": ...}]
+                for tc in getattr(msg, "tool_calls", []) or []:
+                    name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                    if name and name not in tools_used:
+                        tools_used.append(name)
+
+            output_text = None
             for msg in reversed(messages):
                 if hasattr(msg, "content") and msg.content:
                     content = msg.content if isinstance(msg.content, str) else str(msg.content)
                     if content and not content.startswith("Error"):
-                        return f"[{subagent_type} completed: {description}]\n\n{content}"
+                        output_text = f"[{subagent_type} completed: {description}]\n\n{content}"
+                        break
 
-            return f"[{subagent_type} completed: {description}] -- no output produced."
+            if output_text is None:
+                output_text = f"[{subagent_type} completed: {description}] -- no output produced."
+
+            # Emit skill-v1 artifact when opted in and config permits.
+            if emit_skill and sub_config.allow_skill_emission:
+                if not tools_used:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "[skill] emit_skill=True but no tool usage metadata "
+                        "captured for subagent '%s'; skipping skill emission.",
+                        subagent_type,
+                    )
+                else:
+                    try:
+                        artifact = SkillV1Artifact(
+                            name=description,
+                            description=f"Captured workflow: {description}",
+                            prompt_template=prompt,
+                            tools_used=tools_used,
+                            created_at=datetime.now(timezone.utc),
+                            source_session_id=tracing.current_session_id(),
+                        )
+                        emit_skill_artifact(artifact)
+                    except Exception as exc:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            "[skill] skill-v1 artifact construction failed: %s; "
+                            "skipping emission.",
+                            exc,
+                        )
+
+            return output_text
         except Exception as e:
             return f"Error: Subagent '{subagent_type}' failed: {e}"
 
