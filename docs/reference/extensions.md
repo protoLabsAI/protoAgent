@@ -94,6 +94,48 @@ Emitted as a DataPart on the terminal artifact:
 
 The template doesn't emit this by default because the shipped tools don't mutate anything. See `a2a_handler.py::TaskRecord.add_delta` for where to hook in.
 
+## `skill-v1`
+
+**URI / mimeType**: `application/vnd.protolabs.skill-v1+json`
+**Direction**: emitted by this agent (when subagents opt in)
+**Declared on card**: no (runtime artifact, not a card capability)
+
+Captures the "recipe" of a successful subagent workflow so future runs can reuse it. Emitted as a DataPart on the terminal artifact of any task that called `task(..., emit_skill=True)` when the subagent's config has `allow_skill_emission: true`:
+
+```json
+{
+  "kind": "data",
+  "metadata": {"mimeType": "application/vnd.protolabs.skill-v1+json"},
+  "data": {
+    "name": "refactor-memory-load",
+    "description": "Rewrites KnowledgeMiddleware.load_memory() to enforce a token budget",
+    "prompt_template": "You are the memory subagent. Given {{target_file}} and {{budget}}, ...",
+    "tools_used": ["read_file", "write_file", "run_tests"],
+    "created_at": "2026-04-19T17:24:36.860Z",
+    "source_session_id": "session-abc123"
+  }
+}
+```
+
+Fields:
+
+| Field | What |
+|---|---|
+| `name` | Short human-readable label used as the FTS5 search key |
+| `description` | What the skill does; primary retrieval surface |
+| `prompt_template` | The prompt that drove the original successful run, reusable verbatim or with variable substitution |
+| `tools_used` | Tool names actually invoked — proxy for which subagent type would run this skill |
+| `created_at` | UTC ISO timestamp |
+| `source_session_id` | Provenance — which session produced the artifact |
+
+**Collection** — `a2a_handler.py` reads skills from the `_pending_skills` ContextVar at task completion and appends them as DataParts. Agents and middleware never access the ContextVar directly; they use `emit_skill_artifact()` to add and `get_pending_skills()` to read.
+
+**Indexing** — protoAgent's own `SkillsIndex` (`graph/skills/index.py`) at `/sandbox/skills.db` picks these up on the next sweep and makes them retrievable by `KnowledgeMiddleware.load_skills(query)`. Consumers running their own skill registries can index the DataParts from the A2A stream directly — the mimeType is the contract.
+
+**Why ContextVar and not a state field** — skill emission happens inside LangGraph's tool loop, potentially from async tool execution frames that don't see the top-level state object. ContextVars propagate across async boundaries without threading state through every call site.
+
+See [architecture § Skill loop](/explanation/architecture#skill-loop) for the rationale and [skill loop tutorial](/tutorials/skill-loop) for the walkthrough.
+
 ## `a2a.trace` — distributed Langfuse propagation
 
 **Not an extension**, a protocol convention. Lives in `params.metadata`, not `capabilities.extensions`.

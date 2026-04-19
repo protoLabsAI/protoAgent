@@ -78,6 +78,37 @@ Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config
 
 **Persistence across container restarts:** mount a volume at `/sandbox/memory/`. Without a volume the directory is ephemeral and summaries are lost on container stop.
 
+## Security
+
+Three independent layers defend the A2A surface. Each can be enabled or left open for local dev, but production forks should enable all three.
+
+**Bearer authentication** — `a2a_handler.py` reads `A2A_AUTH_TOKEN` at startup. When set, every A2A route (`/a2a`, `message/send`, `tasks/*`, and SSE streaming endpoints) requires `Authorization: Bearer <token>`. Comparison uses `hmac.compare_digest` so timing analysis can't leak the token. When set, the agent card advertises `securitySchemes.bearer` so consumers know to present credentials.
+
+**Audit redaction** — `graph/middleware/redaction.py` scrubs credentials before anything is written to `audit.jsonl` or emitted as a Langfuse span attribute. Patterns covered: `Authorization: Bearer ...`, OpenAI-style `sk-...` keys, generic `api_key=...` forms, and nested dicts keyed by well-known env var names (`OPENAI_API_KEY`, `LANGFUSE_SECRET_KEY`, `A2A_AUTH_TOKEN`, etc.). This closes the class of bugs where a tool returns a secret in its payload and it leaks into the audit trail or trace.
+
+**Origin verification** — SSE and WebSocket connections to streaming endpoints check the `Origin` header against `A2A_ALLOWED_ORIGINS`. Without this, anyone who can reach the A2A endpoint can drain another session's events if they guess the task ID. Unset logs a WARNING at startup and accepts all origins (template default); setting `*` explicitly disables the check without the warning.
+
+The three layers compose: auth proves the caller is known, redaction ensures the audit trail won't leak secrets even if a tool misbehaves, origin verification prevents cross-origin SSE drain. Turn them all on — none substitute for the others.
+
+## Skill loop
+
+The `task()` subagent tool captures successful workflows as **skill-v1 artifacts** so the agent can reuse them on similar future problems. This is the "gets better the longer it runs" property you see in systems like Hermes Agent, adapted to protoAgent's A2A-native shape.
+
+Four pieces:
+
+1. **Emission** — when a subagent completes successfully and `task(..., emit_skill=True)` was called (and the subagent's config has `allow_skill_emission: true`), `graph/extensions/skills.py` serializes a `SkillV1Artifact` (name, description, prompt_template, tools_used, source_session_id) into a ContextVar.
+2. **Collection** — the A2A handler reads the ContextVar at task completion and appends a DataPart with `mimeType: application/vnd.protolabs.skill-v1+json` to the terminal artifact. See the [skill-v1 extension reference](/reference/extensions#skill-v1).
+3. **Indexing** — `graph/skills/index.py` stores emitted skills in a SQLite database at `/sandbox/skills.db` with an FTS5 virtual table over `name + description + prompt_template`. The DB auto-initializes on first write; an empty DB is a no-op for queries.
+4. **Retrieval** — `KnowledgeMiddleware.load_skills(query)` returns the top-k matches (default 5, BM25-ranked) for the current user message + recent context, injected as a `<learned_skills>` block in the system prompt. Same 2 K-token budget discipline as `<prior_sessions>`.
+
+**Curation** — `python -m graph.skills.curator` runs a periodic sweep that deduplicates near-identical skills and decays confidence 50 % every 90 days of idleness. Skills below 0.2 confidence are pruned. Run it on a cron or let operators trigger it manually — no automatic scheduling in the template.
+
+**Opting out per subagent** — set `allow_skill_emission: false` in `graph/subagents/config.py` for subagents whose runs shouldn't be captured (e.g. sensitive ones). The `disallowed_tools` mechanism is unaffected — skill emission is orthogonal to tool access control.
+
+**Why SQLite + FTS5** — the index lives inside the container, survives restarts if `/sandbox` is volume-mounted, handles tens of thousands of skills without a separate service, and the fts5 virtual table gives BM25 ranking without embedding model overhead. You can swap in a vector store later if recall beats keyword BM25 for your domain; the `KnowledgeMiddleware.load_skills()` seam is the single swap point.
+
+See the [skill loop tutorial](/tutorials/skill-loop) for the end-to-end walkthrough.
+
 ## Why LiteLLM sits between the agent and models
 
 See [LiteLLM gateway](/explanation/litellm-gateway) for the full rationale. The short version: swapping models should be a one-line gateway config change, not a code change in every agent.
