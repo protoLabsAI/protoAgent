@@ -2,23 +2,175 @@
 
 After the agent responds, extracts key topics/findings from the
 conversation and stores them in the knowledge base asynchronously.
+
+Also persists a session summary to disk when sessions end via the
+on_session_end lifecycle hook, enabling session memory across restarts.
 """
 
+import json
+import logging
+import os
+import tempfile
 import threading
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Configuration — read once at module init
+# ---------------------------------------------------------------------------
+
+MEMORY_PATH = os.environ.get("MEMORY_PATH", "/sandbox/memory/")
+_DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
+_PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
+
+if _PERSISTENCE_DISABLED:
+    log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")
+else:
+    log.info("[memory] session persistence enabled — path: %s", MEMORY_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Session persistence
+# ---------------------------------------------------------------------------
+
+def _persist_session(state: dict, trace_id: str) -> None:
+    """Write a session summary JSON file atomically.
+
+    Summary schema:
+        session_id       — str
+        trace_id         — str
+        messages         — list[{"role": str, "content": str}]
+        tool_calls       — top-5 by duration list[{"name", "args", "result", "duration_ms"}]
+        tool_calls_total_count — int (present when > 5 tool calls)
+        final_output     — str | null
+        timestamp        — ISO-8601 UTC string
+
+    Writes atomically: temp file → os.rename to avoid partial reads.
+    """
+    if _PERSISTENCE_DISABLED:
+        return
+
+    session_id: str = state.get("session_id", "") or ""
+    messages_raw: list = state.get("messages", []) or []
+
+    # --- Extract user-visible messages ---
+    user_messages: list[dict] = []
+    for msg in messages_raw:
+        if isinstance(msg, HumanMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            user_messages.append({"role": "user", "content": content})
+        elif isinstance(msg, AIMessage) and msg.content:
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            user_messages.append({"role": "assistant", "content": content})
+
+    # --- Extract tool call records ---
+    # Reconstruct from AI messages (which carry tool_calls) and ToolMessages
+    tool_results: dict[str, str] = {}
+    all_tool_calls: list[dict] = []
+
+    for msg in messages_raw:
+        if isinstance(msg, ToolMessage):
+            tool_call_id = getattr(msg, "tool_call_id", "") or ""
+            tool_results[tool_call_id] = (
+                msg.content if isinstance(msg.content, str) else str(msg.content)
+            )
+
+    for msg in messages_raw:
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id", "")
+                all_tool_calls.append({
+                    "name": tc.get("name", ""),
+                    "args": tc.get("args", {}),
+                    "result": tool_results.get(tc_id, ""),
+                    "duration_ms": 0,  # timing not available in state
+                })
+
+    total_count = len(all_tool_calls)
+
+    # Top-5 by duration (duration is 0 for all when not available — stable sort)
+    sorted_calls = sorted(all_tool_calls, key=lambda x: x["duration_ms"], reverse=True)
+    top_calls = sorted_calls[:5]
+
+    # --- Final output: last assistant message ---
+    final_output: str | None = None
+    for msg in reversed(messages_raw):
+        if isinstance(msg, AIMessage) and msg.content:
+            final_output = msg.content if isinstance(msg.content, str) else str(msg.content)
+            break
+
+    # --- Build summary ---
+    summary: dict[str, Any] = {
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "messages": user_messages,
+        "tool_calls": top_calls,
+        "final_output": final_output,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if total_count > 5:
+        summary["tool_calls_total_count"] = total_count
+
+    # --- Ensure directory exists ---
+    try:
+        os.makedirs(MEMORY_PATH, exist_ok=True)
+        log.debug("[memory] ensured directory: %s", MEMORY_PATH)
+    except OSError as exc:
+        log.warning("[memory] cannot create directory %s: %s — skipping persistence", MEMORY_PATH, exc)
+        return
+
+    # --- Atomic write ---
+    filename = f"{session_id or 'unknown'}.json"
+    dest = os.path.join(MEMORY_PATH, filename)
+    tmp_fd = None
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=MEMORY_PATH, suffix=".tmp")
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+            json.dump(summary, fh, indent=2, default=str)
+            tmp_fd = None  # fdopen took ownership
+        os.rename(tmp_path, dest)
+        log.info("[memory] persisted session %s -> %s", session_id, dest)
+        tmp_path = None  # rename succeeded — no cleanup needed
+    except OSError as exc:
+        log.error("[memory] write failed for session %s: %s", session_id, exc)
+    finally:
+        # Clean up temp file if rename didn't happen
+        if tmp_fd is not None:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Middleware class
+# ---------------------------------------------------------------------------
+
 class MemoryMiddleware(AgentMiddleware):
-    """Extract and store QA findings after agent responses."""
+    """Extract and store QA findings after agent responses.
+
+    Also persists a session summary on session end via on_session_end.
+    """
 
     def __init__(self, knowledge_store):
         super().__init__()
         self._store = knowledge_store
+
+    # --- Knowledge extraction (existing) ---
 
     def after_agent(self, state, runtime) -> dict | None:
         """Queue conversation for async knowledge extraction."""
@@ -61,3 +213,15 @@ class MemoryMiddleware(AgentMiddleware):
 
     async def aafter_agent(self, state, runtime) -> dict | None:
         return self.after_agent(state, runtime)
+
+    # --- Session persistence ---
+
+    def on_session_end(self, state, runtime) -> dict | None:
+        """Persist session summary to disk when session reaches terminal state."""
+        import tracing
+        trace_id = tracing.current_trace_id()
+        _persist_session(state, trace_id)
+        return None
+
+    async def aon_session_end(self, state, runtime) -> dict | None:
+        return self.on_session_end(state, runtime)
