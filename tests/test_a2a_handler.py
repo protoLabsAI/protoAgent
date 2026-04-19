@@ -1435,3 +1435,198 @@ async def test_rpc_unknown_method_returns_method_not_found():
     body = r.json()
     assert body["error"]["code"] == -32601
     assert "some/bogus/method" in body["error"]["message"]
+
+
+# ── Bearer token authentication tests ─────────────────────────────────────────
+
+
+def _make_auth_test_app(token: str | None = "secret-token"):
+    """Create a test app with A2A_AUTH_TOKEN configured (or unset)."""
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    card = {"name": "test", "capabilities": {}}
+
+    async def _fake_stream(text, context_id, **kwargs):
+        yield ("text", "hello ")
+        yield ("done", "hello")
+
+    async def _fake_chat(text, session_id):
+        return [{"role": "assistant", "content": "response"}]
+
+    env_patch = {"A2A_AUTH_TOKEN": token} if token is not None else {}
+    with patch.dict("os.environ", env_patch, clear=True if token is None else False):
+        register_a2a_routes(
+            app=app,
+            chat_stream_fn_factory=_fake_stream,
+            chat_fn=_fake_chat,
+            api_key="",
+            agent_card=card,
+        )
+    return app, card
+
+
+@pytest.mark.asyncio
+async def test_missing_bearer_token():
+    """POST /a2a without Authorization header returns 401 when auth is enabled."""
+    app, _ = _make_auth_test_app(token="secret-token")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        })
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_invalid_bearer_token():
+    """POST /a2a with wrong bearer token returns 401."""
+    app, _ = _make_auth_test_app(token="secret-token")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        }, headers={"Authorization": "Bearer wrong-token"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_valid_bearer_token():
+    """POST /a2a with correct bearer token returns 200 and processes request."""
+    app, _ = _make_auth_test_app(token="secret-token")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        }, headers={"Authorization": "Bearer secret-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "result" in body
+    assert body["result"]["status"]["state"] == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_auth_disabled_no_token():
+    """When A2A_AUTH_TOKEN is unset, requests pass without Authorization header."""
+    with patch.dict("os.environ", {}, clear=True):
+        from fastapi import FastAPI
+        app = FastAPI()
+        card = {"name": "test", "capabilities": {}}
+
+        async def _fake_stream(text, context_id, **kwargs):
+            yield ("text", "hello ")
+            yield ("done", "hello")
+
+        async def _fake_chat(text, session_id):
+            return [{"role": "assistant", "content": "response"}]
+
+        # Ensure A2A_AUTH_TOKEN is not set
+        import os
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+
+        register_a2a_routes(
+            app=app,
+            chat_stream_fn_factory=_fake_stream,
+            chat_fn=_fake_chat,
+            api_key="",
+            agent_card=card,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        })
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_disabled_warning(caplog):
+    """WARNING is logged at startup when A2A_AUTH_TOKEN is not configured."""
+    import logging
+    import os
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+        from fastapi import FastAPI
+        app = FastAPI()
+        card = {"name": "test", "capabilities": {}}
+
+        async def _fake_stream(text, context_id, **kwargs):
+            yield ("done", "")
+
+        async def _fake_chat(text, session_id):
+            return []
+
+        with caplog.at_level(logging.WARNING, logger="a2a_handler"):
+            register_a2a_routes(
+                app=app,
+                chat_stream_fn_factory=_fake_stream,
+                chat_fn=_fake_chat,
+                api_key="",
+                agent_card=card,
+            )
+
+    assert any("A2A auth token not configured" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_advertised_in_agent_card():
+    """securitySchemes.bearer is present in agent card when A2A_AUTH_TOKEN is set."""
+    _, card = _make_auth_test_app(token="secret-token")
+    assert "securitySchemes" in card
+    assert card["securitySchemes"]["bearer"]["type"] == "http"
+    assert card["securitySchemes"]["bearer"]["scheme"] == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_not_in_agent_card_when_unset():
+    """securitySchemes is absent from agent card when A2A_AUTH_TOKEN is not set."""
+    import os
+    os.environ.pop("A2A_AUTH_TOKEN", None)
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("A2A_AUTH_TOKEN", None)
+        _, card = _make_auth_test_app(token=None)
+    assert "securitySchemes" not in card
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_token_treated_as_unset():
+    """A2A_AUTH_TOKEN with only whitespace is treated as unset (open mode)."""
+    import os
+    with patch.dict("os.environ", {"A2A_AUTH_TOKEN": "   "}, clear=False):
+        from fastapi import FastAPI
+        app = FastAPI()
+        card = {"name": "test", "capabilities": {}}
+
+        async def _fake_stream(text, context_id, **kwargs):
+            yield ("done", "")
+
+        async def _fake_chat(text, session_id):
+            return []
+
+        register_a2a_routes(
+            app=app,
+            chat_stream_fn_factory=_fake_stream,
+            chat_fn=_fake_chat,
+            api_key="",
+            agent_card=card,
+        )
+
+    # With whitespace-only token, no auth required — request succeeds without header
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1, "method": "message/send",
+            "params": {"message": {"parts": [{"kind": "text", "text": "hi"}]}},
+        })
+    assert resp.status_code == 200
+    assert "securitySchemes" not in card
