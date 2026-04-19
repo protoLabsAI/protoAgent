@@ -45,3 +45,11 @@ memory:
   path: /sandbox/memory/
   max_sessions: 10
   max_tokens: 2000
+
+# Skill index — SQLite FTS5 store for learned skill-v1 artifacts.
+# Skills emitted by task() are indexed here and injected into the system
+# prompt as a <learned_skills> block at inference time.
+skills:
+  db_path: /sandbox/skills.db
+  top_k: 5
+  max_tokens: 2000
