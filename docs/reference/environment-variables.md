@@ -33,6 +33,14 @@ If both keys are unset, tracing is disabled and every helper in `tracing.py` bec
 
 The template explicitly calls `logging.basicConfig(level=INFO)` — without this, Python's default WARNING would hide `logger.info(...)` lines like "webhook delivered", making A2A issues invisible in container logs.
 
+## Streaming / origin verification
+
+| Variable | Default | What |
+|---|---|---|
+| `A2A_ALLOWED_ORIGINS` | (unset — allow all, with WARNING) | Comma-separated list of allowed `Origin` header values for SSE and WebSocket streaming endpoints (`/a2a` streaming methods, `/message:stream`, `/tasks/{id}:subscribe`). Example: `https://app.example.com,https://admin.example.com`. Set to `*` to explicitly disable origin verification without the WARNING log. Origin values are compared case-insensitively. |
+
+When unset, all origins are accepted but a WARNING is logged at startup. When set, requests whose `Origin` header does not match any entry receive a `403 Forbidden` response. A missing `Origin` header is treated as an empty string and will be rejected when verification is enabled.
+
 ## Push notifications / SSRF guard
 
 | Variable | Default | What |
