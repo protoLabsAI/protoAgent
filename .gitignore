@@ -12,8 +12,11 @@ build/
 *.jsonl
 
 # protoLabs Studio agent workspace (never commit)
+.automaker-lock
 .automaker/
 .claude/
+.worktrees/
+worktrees/
 
 # VitePress build artifacts + node modules
 node_modules/
