@@ -5,19 +5,30 @@ top-k results to the state's `context` field.
 
 Also loads prior session summaries from disk and injects them as a
 <prior_sessions> block at the start of each session's context.
+
+Retrieves relevant learned skills from the SkillsIndex and injects
+them as a <learned_skills> block alongside <prior_sessions>.
 """
 
 import json
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
+if TYPE_CHECKING:
+    from graph.skills.index import SkillRecord, SkillsIndex
+
 
 log = logging.getLogger(__name__)
+
+# Token budget for the <learned_skills> block (chars // 4 approximation)
+_SKILLS_MAX_TOKENS = 2000
+_SKILLS_CONTEXT_CHARS = 2000  # chars of recent context to include in query
 
 
 class KnowledgeMiddleware(AgentMiddleware):
@@ -28,10 +39,18 @@ class KnowledgeMiddleware(AgentMiddleware):
     sessions without requiring an active knowledge store.
     """
 
-    def __init__(self, knowledge_store, top_k: int = 5):
+    def __init__(
+        self,
+        knowledge_store,
+        top_k: int = 5,
+        skills_index: "SkillsIndex | None" = None,
+        skills_top_k: int = 5,
+    ):
         super().__init__()
         self._store = knowledge_store
         self._top_k = top_k
+        self._skills_index = skills_index
+        self._skills_top_k = skills_top_k
         # Lazily loaded on first before_model call; None = not yet loaded
         self._prior_sessions_cache: str | None = None
 
@@ -146,6 +165,123 @@ class KnowledgeMiddleware(AgentMiddleware):
         return "<prior_sessions>\n" + "\n".join(formatted) + "\n</prior_sessions>"
 
     # ---------------------------------------------------------------------------
+    # Skill retrieval
+    # ---------------------------------------------------------------------------
+
+    def load_skills(self, query: str, k: int | None = None) -> list["SkillRecord"]:
+        """Retrieve top-k relevant skills from the SkillsIndex.
+
+        Searches the FTS5 index using *query* and returns ranked results.
+        Returns an empty list when no index is configured or there are no
+        matches — callers must handle the empty case gracefully.
+
+        Args:
+            query: Combined user message + recent context (up to 2K chars).
+            k:     Max results; defaults to self._skills_top_k.
+        """
+        if self._skills_index is None:
+            return []
+        if not query or not query.strip():
+            return []
+        k = k if k is not None else self._skills_top_k
+        try:
+            return self._skills_index.load_skills(query, k=k)
+        except Exception as exc:  # pragma: no cover
+            log.warning("[knowledge] skills retrieval error: %s", exc)
+            return []
+
+    def _build_skills_query(self, messages: list) -> str:
+        """Build a query string from the last human message + recent context.
+
+        Constructs query = last human message + last _SKILLS_CONTEXT_CHARS
+        chars of recent AI/human message content, capped at 2K chars total.
+        """
+        last_human = ""
+        context_parts: list[str] = []
+
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                if not last_human:
+                    last_human = (
+                        msg.content
+                        if isinstance(msg.content, str)
+                        else str(msg.content)
+                    )
+                else:
+                    content = (
+                        msg.content
+                        if isinstance(msg.content, str)
+                        else str(msg.content)
+                    )
+                    context_parts.append(content)
+            elif isinstance(msg, AIMessage):
+                content = (
+                    msg.content
+                    if isinstance(msg.content, str)
+                    else str(msg.content)
+                )
+                context_parts.append(content)
+
+        recent_context = " ".join(reversed(context_parts))
+        if recent_context:
+            recent_context = recent_context[-_SKILLS_CONTEXT_CHARS:]
+
+        query = (last_human + " " + recent_context).strip()
+        return query[:_SKILLS_CONTEXT_CHARS]
+
+    def _format_learned_skills(self, skills: list["SkillRecord"]) -> str:
+        """Format retrieved skills as a <learned_skills> XML block.
+
+        Enforces a token budget of _SKILLS_MAX_TOKENS (chars // 4 approximation).
+        Iteratively removes lowest-relevance skills (highest score, least negative
+        BM25 value) then truncates descriptions if still over budget.
+
+        Returns an empty string when *skills* is empty.
+        """
+        if not skills:
+            return ""
+
+        def _count_tokens(text: str) -> int:
+            return max(1, len(text) // 4)
+
+        def _format_skill(s: "SkillRecord") -> str:
+            # Truncate prompt_template to 500 chars to keep block concise
+            pt = s.prompt_template[:500] if s.prompt_template else ""
+            return (
+                f'  <skill name="{s.name}">\n'
+                f"    <description>{s.description}</description>\n"
+                f"    <prompt_template>{pt}</prompt_template>\n"
+                f"  </skill>"
+            )
+
+        # Sort by score ascending (most relevant first, BM25 scores are negative)
+        sorted_skills = sorted(skills, key=lambda s: s.score)
+
+        formatted = [_format_skill(s) for s in sorted_skills]
+
+        # Enforce token budget: remove lowest-relevance skills first (end of list)
+        while formatted:
+            block = "<learned_skills>\n" + "\n".join(formatted) + "\n</learned_skills>"
+            if _count_tokens(block) <= _SKILLS_MAX_TOKENS:
+                break
+            formatted.pop()
+            if formatted:
+                log.debug("[knowledge] skills token budget exceeded — removed lowest-relevance skill")
+
+        if not formatted:
+            return ""
+
+        # If still over budget after removing all but one, truncate descriptions
+        block = "<learned_skills>\n" + "\n".join(formatted) + "\n</learned_skills>"
+        if _count_tokens(block) > _SKILLS_MAX_TOKENS:
+            # Hard truncate the block to fit
+            max_chars = _SKILLS_MAX_TOKENS * 4
+            block = block[:max_chars]
+            log.warning("[knowledge] skills block hard-truncated to fit token budget")
+
+        return block
+
+    # ---------------------------------------------------------------------------
     # Middleware hooks
     # ---------------------------------------------------------------------------
 
@@ -154,6 +290,9 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         Also prepends prior session summaries on the first call so the
         agent has cross-session continuity from the very first LLM turn.
+
+        Retrieves relevant learned skills from the SkillsIndex (when
+        configured) and injects them as a <learned_skills> block.
         """
         parts: list[str] = []
 
@@ -164,6 +303,16 @@ class KnowledgeMiddleware(AgentMiddleware):
             parts.append(self._prior_sessions_cache)
 
         messages = state.get("messages", [])
+
+        # Inject learned skills from SkillsIndex when available
+        if self._skills_index is not None and messages:
+            skills_query = self._build_skills_query(messages)
+            if skills_query:
+                skills = self.load_skills(skills_query)
+                skills_block = self._format_learned_skills(skills)
+                if skills_block:
+                    parts.append(skills_block)
+
         if messages:
             # Find the last human message
             last_human: str | None = None
