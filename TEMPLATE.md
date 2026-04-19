@@ -156,6 +156,23 @@ your fork. A useful pattern:
 - Extend `tests/test_a2a_integration.py` with assertions for
   your declared skills + extensions on the agent card
 
+## 9a. Understand the skill loop
+
+protoAgent's skill loop lets your agent learn from experience automatically.
+After forking, review the skill loop lifecycle:
+
+1. **Emission** — subagents configured with `allow_skill_emission=True` capture
+   successful `task()` runs as `SkillV1Artifact` objects stored in the skill
+   index (`/sandbox/skills/index.jsonl`).
+2. **Retrieval** — `KnowledgeMiddleware` injects the top-k most relevant skills
+   before each LLM call, so the agent reuses proven workflows.
+3. **Curation** — run `python -m graph.skills.curator` periodically (or via
+   cron) to deduplicate near-identical skills, apply the 90-day confidence
+   half-life decay, and prune stale entries below confidence 0.2.
+
+See [docs/tutorials/skill-loop.md](./docs/tutorials/skill-loop.md) for a
+complete end-to-end example with cron setup and audit log inspection.
+
 ## 10. Delete this file
 
 Once you've worked through the checklist, delete `TEMPLATE.md`.

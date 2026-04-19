@@ -151,6 +151,37 @@ the repo check in all three files when forking.
   (see `config/langgraph-config.yaml`)
 - Optional: Langfuse, Prometheus, Discord webhook
 
+## Skill loop — agents that learn from experience
+
+protoAgent includes an end-to-end **skill loop** where successful subagent
+workflows are captured as reusable skills, retrieved automatically on future
+tasks, and periodically optimised by the skill curator.
+
+| Component | Where it lives | What it does |
+|---|---|---|
+| Skill emission | `graph/extensions/skills.py` | Captures `task()` results as `SkillV1Artifact` when `emit_skill=True` |
+| Skill index | `/sandbox/skills/index.jsonl` | JSONL store of accumulated skill recipes |
+| Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as context |
+| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes the skill index |
+
+### Running the curator
+
+```bash
+# Dry-run — see what would change without touching the index
+python -m graph.skills.curator --dry-run
+
+# Full curation pass (reads index.jsonl, writes audit.jsonl)
+python -m graph.skills.curator
+```
+
+The curator applies a **90-day confidence half-life** (confidence halves for
+every 90 days a skill goes unused), clusters near-duplicate skills by
+similarity and keeps the highest-confidence copy, and prunes any skill whose
+confidence has fallen below 0.2.
+
+See [docs/tutorials/skill-loop.md](./docs/tutorials/skill-loop.md) for a
+complete end-to-end example and cron setup.
+
 ## Contributing
 
 This is a template repo — bugs and improvements to the shared
