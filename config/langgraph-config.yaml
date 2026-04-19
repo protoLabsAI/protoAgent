@@ -37,3 +37,10 @@ knowledge:
   db_path: /sandbox/knowledge/agent.db
   embed_model: nomic-embed-text
   top_k: 5
+
+skills:
+  # Path to the SQLite database used for skill-v1 artifact indexing and
+  # retrieval.  Created automatically on first run; no-op until skills
+  # are actually emitted.
+  db_path: /sandbox/skills.db
+  top_k: 5
