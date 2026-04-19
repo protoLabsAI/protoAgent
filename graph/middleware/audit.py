@@ -12,6 +12,8 @@ from langchain_core.messages import ToolMessage
 
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
+from graph.middleware.redaction import redact
+
 
 class AuditMiddleware(AgentMiddleware):
     """Log all tool calls to audit, Langfuse, and Prometheus."""
@@ -45,12 +47,15 @@ class AuditMiddleware(AgentMiddleware):
                 content = str(result.content)[:200]
             success = not content.startswith("Error")
 
+            safe_args = redact(args)
+            safe_content = redact(content)
+
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=args,
-                result_summary=content, duration_ms=duration_ms, success=success,
+                session_id=session_id, tool=tool_name, args=safe_args,
+                result_summary=safe_content, duration_ms=duration_ms, success=success,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=args, result=content,
+                tool_name=tool_name, args=safe_args, result=safe_content,
                 duration_ms=duration_ms, success=success, session_id=session_id,
             )
             metrics.record_tool_call(tool_name, success, duration_ms / 1000)
@@ -58,12 +63,14 @@ class AuditMiddleware(AgentMiddleware):
             return result
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
+            safe_args = redact(args)
+            safe_exc = redact(str(exc)[:200])
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=args,
-                result_summary=str(exc)[:200], duration_ms=duration_ms, success=False,
+                session_id=session_id, tool=tool_name, args=safe_args,
+                result_summary=safe_exc, duration_ms=duration_ms, success=False,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=args, result=str(exc)[:200],
+                tool_name=tool_name, args=safe_args, result=safe_exc,
                 duration_ms=duration_ms, success=False, session_id=session_id,
             )
             metrics.record_tool_call(tool_name, False, duration_ms / 1000)
@@ -89,12 +96,15 @@ class AuditMiddleware(AgentMiddleware):
                 content = str(result.content)[:200]
             success = not content.startswith("Error")
 
+            safe_args = redact(args)
+            safe_content = redact(content)
+
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=args,
-                result_summary=content, duration_ms=duration_ms, success=success,
+                session_id=session_id, tool=tool_name, args=safe_args,
+                result_summary=safe_content, duration_ms=duration_ms, success=success,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=args, result=content,
+                tool_name=tool_name, args=safe_args, result=safe_content,
                 duration_ms=duration_ms, success=success, session_id=session_id,
             )
             metrics.record_tool_call(tool_name, success, duration_ms / 1000)
@@ -102,12 +112,14 @@ class AuditMiddleware(AgentMiddleware):
             return result
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
+            safe_args = redact(args)
+            safe_exc = redact(str(exc)[:200])
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=args,
-                result_summary=str(exc)[:200], duration_ms=duration_ms, success=False,
+                session_id=session_id, tool=tool_name, args=safe_args,
+                result_summary=safe_exc, duration_ms=duration_ms, success=False,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=args, result=str(exc)[:200],
+                tool_name=tool_name, args=safe_args, result=safe_exc,
                 duration_ms=duration_ms, success=False, session_id=session_id,
             )
             metrics.record_tool_call(tool_name, False, duration_ms / 1000)
