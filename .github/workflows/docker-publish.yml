@@ -75,6 +75,16 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
+      - name: Verify — pytest collection in runtime image
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          docker run --rm \
+            -v "${{ github.workspace }}:/repo" \
+            -w /repo \
+            --entrypoint sh \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" \
+            -c 'pip install -q pytest pytest-asyncio && python -m pytest tests/ --collect-only -q'
+
       - name: Summary
         run: |
           echo "## Published" >> "$GITHUB_STEP_SUMMARY"

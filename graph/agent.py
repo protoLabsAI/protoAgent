@@ -29,7 +29,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None):
     if config.audit_middleware:
         middleware.append(AuditMiddleware())
 
-    if config.memory_middleware and knowledge_store:
+    if config.memory_middleware:
         middleware.append(MemoryMiddleware(knowledge_store))
 
     middleware.append(MessageCaptureMiddleware())
