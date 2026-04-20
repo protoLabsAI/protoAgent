@@ -54,6 +54,29 @@ def test_agent_card_has_at_least_one_skill() -> None:
         assert "description" in skill
 
 
+def test_agent_card_no_bearer_when_token_unset(monkeypatch) -> None:
+    """With A2A_AUTH_TOKEN unset, card must NOT advertise bearer scheme."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    from server import _build_agent_card
+
+    card = _build_agent_card("protoagent:7870")
+    schemes = card.get("securitySchemes", {})
+    assert "apiKey" in schemes, "apiKey scheme must always be present"
+    assert "bearer" not in schemes, "bearer must not appear when A2A_AUTH_TOKEN is unset"
+
+
+def test_agent_card_bearer_when_token_set(monkeypatch) -> None:
+    """With A2A_AUTH_TOKEN set, card must advertise bearer scheme."""
+    monkeypatch.setenv("A2A_AUTH_TOKEN", "secret-test-token")
+    from server import _build_agent_card
+
+    card = _build_agent_card("protoagent:7870")
+    schemes = card.get("securitySchemes", {})
+    assert "apiKey" in schemes, "apiKey scheme must always be present"
+    assert "bearer" in schemes, "bearer must appear when A2A_AUTH_TOKEN is set"
+    assert schemes["bearer"] == {"type": "http", "scheme": "bearer"}
+
+
 def test_agent_card_declares_cost_v1_extension() -> None:
     """The runtime captures token usage on `on_chat_model_end` and the
     A2A handler emits a cost-v1 DataPart on every terminal task. The

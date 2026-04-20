@@ -251,6 +251,14 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
 AGENT_NAME = os.environ.get("AGENT_NAME", "protoagent")
 
 
+def _build_security_schemes() -> dict:
+    """Return securitySchemes dict, adding bearer only when A2A_AUTH_TOKEN is set."""
+    schemes: dict = {"apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}}
+    if os.environ.get("A2A_AUTH_TOKEN", ""):
+        schemes["bearer"] = {"type": "http", "scheme": "bearer"}
+    return schemes
+
+
 def _build_agent_card(host: str) -> dict:
     """Build the A2A agent card served at /.well-known/agent-card.json.
 
@@ -308,9 +316,7 @@ def _build_agent_card(host: str) -> dict:
                 "examples": ["hello", "what can you do?"],
             },
         ],
-        "securitySchemes": {
-            "apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
-        },
+        "securitySchemes": _build_security_schemes(),
         "security": [{"apiKey": []}],
     }
 
