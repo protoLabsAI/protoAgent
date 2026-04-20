@@ -166,9 +166,110 @@ class MemoryMiddleware(AgentMiddleware):
     Also persists a session summary on session end via on_session_end.
     """
 
-    def __init__(self, knowledge_store):
+    def __init__(self, knowledge_store=None):
         super().__init__()
         self._store = knowledge_store
+        self._prior_sessions_cache: str | None = None
+
+    # --- Session memory loading (only used when no KnowledgeMiddleware is active) ---
+
+    def _load_prior_sessions(self) -> str:
+        """Lazy-load prior session summaries when standalone (no KnowledgeMiddleware).
+
+        When KnowledgeMiddleware is also in the chain it owns `<prior_sessions>`
+        injection. This method runs only when `self._store is None`, so there is
+        no double-injection risk.
+
+        Reads from MEMORY_PATH, returns an XML block or empty string on first
+        run. Mirrors KnowledgeMiddleware.load_memory() but without the store
+        dependency — single source of truth would be cleaner but would couple
+        the two files.
+        """
+        if not os.path.isdir(MEMORY_PATH):
+            return ""
+        try:
+            entries = []
+            for fname in os.listdir(MEMORY_PATH):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(MEMORY_PATH, fname)
+                try:
+                    entries.append((os.path.getmtime(fpath), fpath))
+                except OSError:
+                    continue
+            entries.sort(reverse=True)
+        except OSError:
+            return ""
+        if not entries:
+            return "<prior_sessions/>"
+        summaries = []
+        for _, fpath in entries[:10]:
+            try:
+                with open(fpath, encoding="utf-8") as fh:
+                    summaries.append(json.load(fh))
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+        if not summaries:
+            return "<prior_sessions/>"
+        lines_out = []
+        for s in summaries:
+            ts = s.get("timestamp", "unknown")
+            sid = s.get("session_id", "unknown")
+            lines = [f'<session id="{sid}" timestamp="{ts}">']
+            msgs = s.get("messages", []) or []
+            if msgs:
+                lines.append("  <messages>")
+                for m in msgs:
+                    role = m.get("role", "unknown")
+                    content = (m.get("content", "") or "")[:500]
+                    lines.append(f"    <{role}>{content}</{role}>")
+                lines.append("  </messages>")
+            final = (s.get("final_output") or "")[:300]
+            if final:
+                lines.append(f"  <final_output>{final}</final_output>")
+            lines.append("</session>")
+            lines_out.append("\n".join(lines))
+        # 2K token budget — chars // 4 approx, drop oldest first
+        while lines_out:
+            joined = "\n".join(lines_out)
+            if max(1, len(joined) // 4) <= 2000:
+                break
+            lines_out.pop()
+        if not lines_out:
+            return "<prior_sessions/>"
+        return "<prior_sessions>\n" + "\n".join(lines_out) + "\n</prior_sessions>"
+
+    def before_model(self, state, runtime) -> dict | None:
+        """Inject `<prior_sessions>` into system prompt when running standalone.
+
+        When KnowledgeMiddleware is present it handles this; we only act when
+        `self._store is None`.
+        """
+        if self._store is not None:
+            return None
+        if self._prior_sessions_cache is None:
+            self._prior_sessions_cache = self._load_prior_sessions()
+        if not self._prior_sessions_cache:
+            return None
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        # Prepend as a system-adjacent HumanMessage block. LangGraph has no
+        # dedicated system-context append hook on state, so we piggyback on
+        # the first human message by modifying its content.
+        from langchain_core.messages import SystemMessage
+        first = messages[0]
+        if isinstance(first, SystemMessage):
+            # Already has a system message — append prior_sessions to it
+            new_content = first.content + "\n\n" + self._prior_sessions_cache
+            new_msgs = [SystemMessage(content=new_content)] + list(messages[1:])
+            return {"messages": new_msgs}
+        # Otherwise prepend a new SystemMessage
+        new_msgs = [SystemMessage(content=self._prior_sessions_cache)] + list(messages)
+        return {"messages": new_msgs}
+
+    async def abefore_model(self, state, runtime) -> dict | None:
+        return self.before_model(state, runtime)
 
     # --- Knowledge extraction (existing) ---
 
@@ -189,7 +290,9 @@ class MemoryMiddleware(AgentMiddleware):
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
 
-        # --- Knowledge extraction ---
+        # --- Knowledge extraction (only when a store is configured) ---
+        if self._store is None:
+            return None
         if len(messages) < 2:
             return None
 
