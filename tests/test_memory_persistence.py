@@ -392,3 +392,73 @@ def test_on_session_end_calls_persist_session(tmp_path):
 
     mock_persist.assert_called_once_with(state, "trace-hook")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 10. after_agent persistence on terminal turn
+# ---------------------------------------------------------------------------
+
+def test_after_agent_persists_on_terminal_turn(tmp_path):
+    """after_agent must call _persist_session when last message is a terminal AIMessage."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    store = MagicMock()
+    mw = mod.MemoryMiddleware(knowledge_store=store)
+
+    messages = [
+        HumanMessage(content="Hello"),
+        AIMessage(content="Final answer with no pending tool calls."),
+    ]
+    state = _make_state("after-agent-terminal", messages=messages)
+    runtime = MagicMock()
+
+    with patch.object(mod, "_persist_session") as mock_persist, \
+         patch("tracing.current_trace_id", return_value="trace-after"):
+        mw.after_agent(state, runtime)
+
+    mock_persist.assert_called_once_with(state, "trace-after")
+
+
+def test_after_agent_does_not_persist_when_tool_calls_pending(tmp_path):
+    """after_agent must NOT persist when the last AIMessage has pending tool_calls."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    store = MagicMock()
+    mw = mod.MemoryMiddleware(knowledge_store=store)
+
+    ai_msg = AIMessage(content="")
+    ai_msg.tool_calls = [{"id": "tc1", "name": "search", "args": {"query": "x"}}]
+    messages = [
+        HumanMessage(content="Search for x"),
+        ai_msg,
+    ]
+    state = _make_state("after-agent-pending", messages=messages)
+    runtime = MagicMock()
+
+    with patch.object(mod, "_persist_session") as mock_persist, \
+         patch("tracing.current_trace_id", return_value="trace-pending"):
+        mw.after_agent(state, runtime)
+
+    mock_persist.assert_not_called()
+
+
+def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
+    """after_agent must NOT persist when the last message is not an AIMessage."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    store = MagicMock()
+    mw = mod.MemoryMiddleware(knowledge_store=store)
+
+    messages = [
+        HumanMessage(content="Hello"),
+        AIMessage(content="Some response."),
+        HumanMessage(content="Follow-up question"),
+    ]
+    state = _make_state("after-agent-human-last", messages=messages)
+    runtime = MagicMock()
+
+    with patch.object(mod, "_persist_session") as mock_persist, \
+         patch("tracing.current_trace_id", return_value="trace-human"):
+        mw.after_agent(state, runtime)
+
+    mock_persist.assert_not_called()
