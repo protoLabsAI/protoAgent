@@ -173,8 +173,23 @@ class MemoryMiddleware(AgentMiddleware):
     # --- Knowledge extraction (existing) ---
 
     def after_agent(self, state, runtime) -> dict | None:
-        """Queue conversation for async knowledge extraction."""
+        """Queue conversation for async knowledge extraction. Persists session on terminal turn."""
         messages = state.get("messages", [])
+
+        # --- Session persistence: detect terminal turn ---
+        # Terminal = last message is AIMessage with content and no pending tool calls
+        if messages:
+            last_msg = messages[-1]
+            if (
+                isinstance(last_msg, AIMessage)
+                and last_msg.content
+                and not getattr(last_msg, "tool_calls", None)
+            ):
+                import tracing
+                trace_id = tracing.current_trace_id()
+                _persist_session(state, trace_id)
+
+        # --- Knowledge extraction ---
         if len(messages) < 2:
             return None
 
