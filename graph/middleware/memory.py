@@ -163,17 +163,145 @@ def _persist_session(state: dict, trace_id: str) -> None:
 class MemoryMiddleware(AgentMiddleware):
     """Extract and store QA findings after agent responses.
 
-    Also persists a session summary on session end via on_session_end.
+    Also persists a session summary on session end via on_session_end,
+    and injects prior session context before the first LLM call when
+    KnowledgeMiddleware is not active (knowledge_store is None).
+
+    knowledge_store is optional — when None, knowledge extraction is
+    skipped but session persistence and prior_sessions injection still work.
     """
 
-    def __init__(self, knowledge_store):
+    def __init__(self, knowledge_store=None):
         super().__init__()
         self._store = knowledge_store
+        # Lazily loaded on first before_model call; None = not yet loaded
+        self._prior_sessions_cache: str | None = None
+
+    # --- Prior session loading (used when KnowledgeMiddleware is not active) ---
+
+    def load_memory(
+        self,
+        memory_path: str = MEMORY_PATH,
+        max_sessions: int = 10,
+        max_tokens: int = 2000,
+    ) -> str:
+        """Load prior session summaries and format as a <prior_sessions> block.
+
+        Reads up to *max_sessions* most recent JSON files from *memory_path*,
+        enforces *max_tokens* budget by dropping oldest sessions first, and
+        returns a formatted XML block ready for injection into context.
+
+        Returns an empty string when the directory is missing or no readable
+        sessions exist. Never raises — all errors are logged and treated as
+        empty memory.
+        """
+        if not os.path.isdir(memory_path):
+            log.info(
+                "[memory] memory directory not found: %s — starting with empty prior_sessions",
+                memory_path,
+            )
+            return ""
+
+        try:
+            entries: list[tuple[float, str]] = []
+            for fname in os.listdir(memory_path):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(memory_path, fname)
+                try:
+                    entries.append((os.path.getmtime(fpath), fpath))
+                except OSError:
+                    continue
+            entries.sort(reverse=True)
+        except OSError as exc:
+            log.warning(
+                "[memory] cannot list memory directory %s: %s — treating as empty",
+                memory_path,
+                exc,
+            )
+            return ""
+
+        if not entries:
+            return "<prior_sessions/>"
+
+        summaries: list[dict] = []
+        for _, fpath in entries[:max_sessions]:
+            try:
+                with open(fpath, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                summaries.append(data)
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                log.debug("[memory] skipping malformed session file %s: %s", fpath, exc)
+                continue
+
+        if not summaries:
+            return "<prior_sessions/>"
+
+        def _format_summary(s: dict) -> str:
+            ts = s.get("timestamp", "unknown")
+            sid = s.get("session_id", "unknown")
+            lines = [f'<session id="{sid}" timestamp="{ts}">']
+            msgs: list[dict] = s.get("messages", [])
+            if msgs:
+                lines.append("  <messages>")
+                for m in msgs:
+                    role = m.get("role", "unknown")
+                    content = (m.get("content", "") or "")[:500]
+                    lines.append(f"    <{role}>{content}</{role}>")
+                lines.append("  </messages>")
+            final = (s.get("final_output") or "")[:300]
+            if final:
+                lines.append(f"  <final_output>{final}</final_output>")
+            lines.append("</session>")
+            return "\n".join(lines)
+
+        def _count_tokens(text: str) -> int:
+            return max(1, len(text) // 4)
+
+        formatted = [_format_summary(s) for s in summaries]
+        while formatted:
+            joined = "\n".join(formatted)
+            if _count_tokens(joined) <= max_tokens:
+                break
+            formatted.pop()
+
+        if not formatted:
+            return "<prior_sessions/>"
+
+        return "<prior_sessions>\n" + "\n".join(formatted) + "\n</prior_sessions>"
+
+    # --- Prior sessions injection (only when KnowledgeMiddleware is not active) ---
+
+    def before_model(self, state, runtime) -> dict | None:
+        """Inject prior session context before the first LLM call.
+
+        Only active when knowledge_store is None (i.e., KnowledgeMiddleware
+        is not in the chain). When both middleware are active, KnowledgeMiddleware
+        handles prior_sessions injection to avoid duplication.
+        """
+        if self._store is not None:
+            # KnowledgeMiddleware is active and will handle prior_sessions injection
+            return None
+
+        if self._prior_sessions_cache is None:
+            self._prior_sessions_cache = self.load_memory()
+
+        if self._prior_sessions_cache:
+            return {"context": self._prior_sessions_cache}
+
+        return None
+
+    async def abefore_model(self, state, runtime) -> dict | None:
+        return self.before_model(state, runtime)
 
     # --- Knowledge extraction (existing) ---
 
     def after_agent(self, state, runtime) -> dict | None:
         """Queue conversation for async knowledge extraction."""
+        if self._store is None:
+            # No knowledge store — skip extraction, persistence handled by on_session_end
+            return None
+
         messages = state.get("messages", [])
         if len(messages) < 2:
             return None
