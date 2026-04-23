@@ -778,6 +778,35 @@ def create_chat_app(
                     outputs=[*w_inputs, w_test_status, w_autostart_note],
                 )
 
+                # Re-check setup state on every page load so external
+                # completions (POST /api/config/setup from curl, or a
+                # reset triggered in another tab) are reflected after
+                # a browser refresh. Without this, Gradio keeps serving
+                # the initial visibility state from when the Blocks
+                # were first rendered.
+                def _sync_visibility():
+                    if "is_setup_complete" not in settings:
+                        return gr.update(), gr.update(), gr.update()
+                    done = bool(settings["is_setup_complete"]())
+                    sidebar_upd = (
+                        gr.update(visible=done)
+                        if sidebar_block is not None
+                        else gr.update()
+                    )
+                    return (
+                        gr.update(visible=not done),  # wizard_pane
+                        gr.update(visible=done),      # chat_pane
+                        sidebar_upd,
+                    )
+
+                app.load(
+                    fn=_sync_visibility,
+                    outputs=[
+                        wizard_pane, chat_pane,
+                        sidebar_block if sidebar_block is not None else wizard_pane,
+                    ],
+                )
+
                 # Connection test — fills the model dropdown
                 def _test_connection(api_base, api_key):
                     if "list_models" not in settings:
