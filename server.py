@@ -120,15 +120,26 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     try:
         new_config = LangGraphConfig.from_yaml(config_path)
     except Exception as e:
-        log.exception("[reload] config load failed: %s", e)
+        log.exception("[reload] config load failed")
         return False, f"config load failed: {e}"
 
-    _graph_config = new_config
+    # Build the graph FIRST (when setup is complete) — only commit
+    # runtime state after the rebuild succeeds. Doing the swap first
+    # would leave the process serving the prior compiled _graph under
+    # fresh _graph_config + rotated bearer auth on failure — the
+    # metrics / card / auth all de-sync from what's actually running.
+    if is_setup_complete():
+        try:
+            new_graph = create_agent_graph(new_config)
+        except Exception as e:
+            log.exception("[reload] graph rebuild failed")
+            return False, f"graph rebuild failed: {e}"
+    else:
+        new_graph = None
 
-    # Keep A2A bearer-auth state aligned with YAML on every reload.
-    # ``a2a_handler.set_a2a_token`` mutates the module-level holder the
-    # bearer-check closure reads, so wizard/drawer updates take effect
-    # on the next incoming request without a route re-register.
+    # Commit: config → A2A bearer → graph. All three reference the
+    # same ``new_config`` so they stay consistent.
+    _graph_config = new_config
     try:
         from a2a_handler import set_a2a_token
 
@@ -137,21 +148,48 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # a2a_handler not yet imported (e.g. during early-boot reload
         # before _main wires routes) — harmless.
         pass
+    _graph = new_graph
 
-    if not is_setup_complete():
-        _graph = None
+    if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
         return True, "config reloaded • setup not complete"
 
-    try:
-        new_graph = create_agent_graph(new_config)
-    except Exception as e:
-        log.exception("[reload] graph rebuild failed: %s", e)
-        return False, f"graph rebuild failed: {e}"
-
-    _graph = new_graph
     log.info("LangGraph agent reloaded (model: %s)", _graph_config.model_name)
     return True, f"reloaded • model={_graph_config.model_name}"
+
+
+def _sync_autostart_with_config(config: dict | None) -> str | None:
+    """Align the OS autostart artifact with the YAML runtime flag.
+
+    Returns a short status string to append to the caller's message
+    log, or ``None`` when the config doesn't touch the runtime
+    section. Shared by ``finish_setup`` (wizard path) and
+    ``_apply_settings_changes`` (drawer path) so both surfaces
+    produce the same side effect when the checkbox flips.
+    """
+    if not (config and "runtime" in config):
+        return None
+    want = bool(config.get("runtime", {}).get("autostart_on_boot", False))
+
+    try:
+        from autostart import install_autostart, uninstall_autostart
+
+        as_name = (
+            config.get("identity", {}).get("name")
+            or (_graph_config.identity_name if _graph_config else "")
+            or "protoagent"
+        )
+        if want:
+            ok, msg = install_autostart(agent_name=as_name, port=_active_port)
+        else:
+            ok, msg = uninstall_autostart(agent_name=as_name)
+    except Exception as e:
+        log.exception("[autostart] sync raised")
+        return f"autostart failed: {e}"
+
+    if not ok:
+        log.warning("[autostart] sync failed: %s", msg)
+    return f"autostart: {msg}"
 
 
 def _apply_settings_changes(
@@ -184,7 +222,7 @@ def _apply_settings_changes(
             save_yaml_doc(doc)
             messages.append("config saved")
         except Exception as e:
-            log.exception("[config] YAML write failed: %s", e)
+            log.exception("[config] YAML write failed")
             return False, [f"config write: {e}"]
 
     if soul is not None:
@@ -192,8 +230,15 @@ def _apply_settings_changes(
             paths = write_soul(soul)
             messages.append(f"SOUL saved ({len(paths)} path{'s' if len(paths) != 1 else ''})")
         except Exception as e:
-            log.exception("[config] SOUL write failed: %s", e)
+            log.exception("[config] SOUL write failed")
             return False, [f"soul write: {e}"]
+
+    # Drawer toggles of runtime.autostart_on_boot ride this path,
+    # not the wizard's finish_setup, so the LaunchAgent plist has
+    # to be installed/removed here too.
+    as_msg = _sync_autostart_with_config(config)
+    if as_msg:
+        messages.append(as_msg)
 
     ok, reload_msg = _reload_langgraph_agent()
     messages.append(reload_msg)
@@ -286,35 +331,21 @@ def _build_settings_callbacks() -> dict[str, Any]:
         mark_setup_complete()
         messages.append("setup marked complete")
 
-        # 3. Autostart sync
-        if config and "runtime" in config:
-            want_autostart = bool(config.get("runtime", {}).get("autostart_on_boot", False))
-            try:
-                from autostart import install_autostart, uninstall_autostart
+        # 3. Autostart sync (shared helper — drawer path runs the same)
+        as_msg = _sync_autostart_with_config(config)
+        if as_msg:
+            messages.append(as_msg)
 
-                as_name = (
-                    config.get("identity", {}).get("name")
-                    or _graph_config.identity_name
-                    or "protoagent"
-                )
-                if want_autostart:
-                    # Pass the port this process is actually bound to so the
-                    # LaunchAgent reboots on the right port, not the 7870
-                    # default. Operators frequently pick a custom port when
-                    # another agent is already on 7870.
-                    ok_as, msg_as = install_autostart(agent_name=as_name, port=_active_port)
-                else:
-                    ok_as, msg_as = uninstall_autostart(agent_name=as_name)
-                messages.append(f"autostart: {msg_as}")
-                if not ok_as:
-                    log.warning("[setup] autostart sync failed: %s", msg_as)
-            except Exception as e:
-                log.exception("[setup] autostart sync raised: %s", e)
-                messages.append(f"autostart failed: {e}")
-
-        # 4. Reload — now picks up setup_complete=True and compiles
+        # 4. Reload — now picks up setup_complete=True and compiles.
+        # On failure, roll back the marker so the next page load
+        # drops the user back into the wizard instead of landing
+        # them in the chat UI with the "setup required" fallback
+        # and no obvious way to retry.
         ok, reload_msg = _reload_langgraph_agent()
         messages.append(reload_msg)
+        if not ok:
+            reset_setup()
+            messages.append("setup marker rolled back — re-run the wizard after fixing the error above")
 
         return ok, " • ".join(messages)
 
@@ -728,11 +759,25 @@ def _main():
         ok, messages = _apply_settings_changes(config=req.config, soul=req.soul)
         return {"ok": ok, "messages": messages}
 
-    @fastapi_app.get("/api/config/models")
-    async def _api_list_models(api_base: str = "", api_key: str = ""):
+    class ModelsProbeRequest(PydanticBaseModel):
+        api_base: str = ""
+        api_key: str = ""
+
+    @fastapi_app.post("/api/config/models")
+    async def _api_list_models(req: ModelsProbeRequest | None = None):
+        """Fetch the gateway's model list.
+
+        POST (body) not GET (query) so the caller's API key doesn't
+        end up in browser history, reverse-proxy access logs, or the
+        uvicorn request log. A blank body falls back to whatever key
+        and base are stored in the current config — useful for the
+        drawer's initial render where there's nothing to POST yet.
+        """
         from graph.config_io import list_gateway_models
-        base = api_base or (_graph_config.api_base if _graph_config else "")
-        key = api_key or (_graph_config.api_key if _graph_config else "")
+
+        body = req or ModelsProbeRequest()
+        base = body.api_base or (_graph_config.api_base if _graph_config else "")
+        key = body.api_key or (_graph_config.api_key if _graph_config else "")
         models, error = list_gateway_models(base, key)
         return {"models": models, "error": error}
 

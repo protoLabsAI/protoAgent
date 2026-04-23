@@ -447,6 +447,37 @@ def create_chat_app(
                                 minimum=1, interactive=True,
                             )
 
+                        with gr.Accordion("Identity", open=False):
+                            identity_name_in = gr.Textbox(
+                                label="Agent name",
+                                placeholder="short lowercase slug",
+                                interactive=True,
+                            )
+                            identity_operator_in = gr.Textbox(
+                                label="Your name (operator)",
+                                placeholder="injected into system prompt when set",
+                                interactive=True,
+                            )
+
+                        with gr.Accordion("Security — A2A bearer token", open=False):
+                            auth_token_in = gr.Textbox(
+                                label="Bearer token",
+                                type="password",
+                                placeholder="blank → open mode; set to require Authorization: Bearer <token>",
+                                interactive=True,
+                            )
+                            gr.Markdown(
+                                "_Live-reloadable. Save & Reload flips A2A "
+                                "enforcement on or off immediately; no restart._"
+                            )
+
+                        with gr.Accordion("Autostart on login", open=False):
+                            autostart_in = gr.Checkbox(
+                                label="Launch this agent automatically on login",
+                                interactive=True,
+                            )
+                            autostart_drawer_status = gr.Markdown("")
+
                         with gr.Accordion("Persona (SOUL.md)", open=False):
                             soul_in = gr.Textbox(
                                 label="SOUL.md", lines=16, show_label=False,
@@ -487,6 +518,8 @@ def create_chat_app(
                             worker_enabled_in, worker_tools_in, worker_max_turns_in,
                             mw_knowledge_in, mw_audit_in, mw_memory_in,
                             kb_db_in, kb_embed_in, kb_top_k_in,
+                            identity_name_in, identity_operator_in,
+                            auth_token_in, autostart_in,
                             soul_in,
                         ]
 
@@ -517,6 +550,9 @@ def create_chat_app(
                             )
 
                             worker = cfg["subagents"]["worker"]
+                            identity = cfg.get("identity", {})
+                            auth = cfg.get("auth", {})
+                            runtime = cfg.get("runtime", {})
                             return (
                                 cfg["model"]["api_base"],
                                 cfg["model"]["api_key"],
@@ -533,6 +569,10 @@ def create_chat_app(
                                 cfg["knowledge"]["db_path"],
                                 cfg["knowledge"]["embed_model"],
                                 cfg["knowledge"]["top_k"],
+                                identity.get("name", ""),
+                                identity.get("operator", ""),
+                                auth.get("token", ""),
+                                bool(runtime.get("autostart_on_boot", False)),
                                 soul,
                                 fetch_msg,
                             )
@@ -554,6 +594,8 @@ def create_chat_app(
                             worker_enabled, worker_tools, worker_max_turns,
                             mw_knowledge, mw_audit, mw_memory,
                             kb_db, kb_embed, kb_top_k,
+                            identity_name, identity_operator,
+                            auth_token, autostart_on,
                             soul,
                         ):
                             # Numeric fields fall back to sensible minimums
@@ -586,6 +628,16 @@ def create_chat_app(
                                     "db_path": kb_db or "",
                                     "embed_model": kb_embed or "",
                                     "top_k": int(kb_top_k or 1),
+                                },
+                                "identity": {
+                                    "name": (identity_name or "").strip() or "protoagent",
+                                    "operator": (identity_operator or "").strip(),
+                                },
+                                "auth": {
+                                    "token": auth_token or "",
+                                },
+                                "runtime": {
+                                    "autostart_on_boot": bool(autostart_on),
                                 },
                             }
                             try:

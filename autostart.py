@@ -27,6 +27,7 @@ Design notes:
 from __future__ import annotations
 
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -113,10 +114,23 @@ def autostart_status(agent_name: str = "protoagent") -> dict:
 # ---------------------------------------------------------------------------
 
 
+_SAFE_LABEL_RE = re.compile(r"[^a-z0-9_.-]+")
+
+
 def _macos_label(agent_name: str) -> str:
-    """Plist label — namespaced so it doesn't collide with system labels."""
-    safe = agent_name.lower().replace(" ", "-")
-    return f"ai.protolabs.{safe}"
+    """Plist label — namespaced so it doesn't collide with system labels.
+
+    Sanitizes the input: only ``[a-z0-9_.-]`` survive. Leading / trailing
+    dots and hyphens are stripped so the resulting filename can't be
+    a hidden file or look like a path-segment. Path-traversal
+    characters like ``/`` and ``..`` are filtered here rather than at
+    the filesystem layer so ``install_autostart(agent_name="../../x")``
+    can't escape ``~/Library/LaunchAgents/``.
+    """
+    sanitized = _SAFE_LABEL_RE.sub("-", agent_name.lower()).strip("-.")
+    if not sanitized:
+        sanitized = "protoagent"
+    return f"ai.protolabs.{sanitized}"
 
 
 def _macos_plist_path(agent_name: str) -> Path:
