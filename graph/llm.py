@@ -32,4 +32,14 @@ def create_llm(config: LangGraphConfig) -> ChatOpenAI:
         # AIMessageChunks with usage_metadata=None and we can't emit
         # the cost-v1 DataPart on the terminal artifact.
         stream_usage=True,
+        # Cloudflare's managed WAF blocks the OpenAI SDK's default
+        # `OpenAI/Python <ver>` User-Agent (observed 403 "Your request
+        # was blocked" against api.proto-labs.ai). Override with the
+        # same identifier `tools/lg_tools.py` uses for outbound fetches
+        # so every protoAgent egress presents a consistent, allowlisted
+        # UA. If you self-host behind a different edge, this is safe to
+        # keep.
+        default_headers={
+            "User-Agent": "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)",
+        },
     )
