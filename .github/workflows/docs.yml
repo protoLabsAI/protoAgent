@@ -10,6 +10,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  administration: write
 
 concurrency:
   group: pages
@@ -39,3 +40,7 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Update repo homepage
+        run: gh api -X PATCH repos/${{ github.repository }} -f homepage="${{ steps.deployment.outputs.page_url }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
