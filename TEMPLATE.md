@@ -1,5 +1,16 @@
 # Fork checklist
 
+> **Most of what used to be in this file is now a runtime wizard**
+> that runs on first page load. Model, tools, persona, name, auth,
+> autostart — all captured without editing code. See
+> [first-agent tutorial](./docs/tutorials/first-agent.md).
+>
+> This checklist is only for forks that want to ship their own
+> container image under their own GitHub org — the structural
+> changes the wizard can't do. For most of that, the new
+> [Customize & deploy](./docs/guides/customize-and-deploy.md)
+> guide is the canonical source. This file stays for back-compat.
+
 You clicked "Use this template" (or ran `gh repo create --template`).
 Now what?
 

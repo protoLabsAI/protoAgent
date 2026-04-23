@@ -12,9 +12,15 @@ close to a rewrite of `SOUL.md`, `graph/prompts.py`, and
 Quinn was the first agent built on this template — it's a good
 example of what a filled-in fork looks like end-to-end.
 
-Start a new agent by clicking **"Use this template"** at the top
-of the GitHub repo. See [TEMPLATE.md](./TEMPLATE.md) for the
-step-by-step fork checklist.
+**Try it in 5 minutes:** clone, `pip install -r requirements.txt`,
+`python server.py`, open <http://localhost:7870>, and walk the
+setup wizard — no forking, no `sed`, no Docker required to get
+your first agent talking. See the [first-agent tutorial](./docs/tutorials/first-agent.md).
+
+**When you're ready to ship your own:** click **"Use this template"**
+at the top of the GitHub repo, then follow [Customize &
+deploy](./docs/guides/customize-and-deploy.md) for the fork /
+rename / release-pipeline wiring.
 
 ## What you get out of the box
 
@@ -31,28 +37,31 @@ step-by-step fork checklist.
 | UI | `chat_ui.py`, `static/` | Gradio chat with PWA shell, dark theme, offline fallback |
 | Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
 
-## Quickstart
+## Quickstart — from zero to chatting in 5 minutes
 
 ```bash
-# 1. Click "Use this template" on GitHub, or:
-gh repo create protoLabsAI/my-agent \
-    --template protoLabsAI/protoAgent \
-    --public --clone
-
+# 1. Get the code (no fork needed for a first run)
+git clone https://github.com/protoLabsAI/protoAgent.git my-agent
 cd my-agent
 
-# 2. Rename the agent (one env var, read by server.py, metrics, tracing)
-export AGENT_NAME=my-agent
+# 2. Install deps into a venv
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-# 3. Boot the container
-docker build -t my-agent:local .
-docker run --rm -p 7870:7870 -e AGENT_NAME=my-agent my-agent:local
+# 3. Run the server — no env vars required
+python server.py
 
-# 4. Hit the agent card
-curl http://localhost:7870/.well-known/agent-card.json
+# 4. Open the wizard — pick your endpoint, pick a model, name the
+#    agent, pick a persona preset, hit Launch. The chat UI appears
+#    on the same page.
+open http://localhost:7870
 ```
 
-See [TEMPLATE.md](./TEMPLATE.md) for the full fork checklist.
+[First-agent tutorial](./docs/tutorials/first-agent.md) walks
+through every wizard step with screenshots.
+
+Once you're happy and want to ship it as your own image in your
+own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
 ## Architecture
 

@@ -55,21 +55,364 @@ log = logging.getLogger("protoagent.server")
 _graph = None          # LangGraph compiled graph
 _graph_config = None   # LangGraphConfig
 _checkpointer = None   # MemorySaver for session persistence
+_active_port = 7870    # populated by _main() — the port this process is actually bound to.
+                       # Read by the autostart installer so the LaunchAgent reboots
+                       # on the same port the operator launched with, not the default.
 
 
 def _init_langgraph_agent():
-    """Initialize the LangGraph agent backend."""
+    """Initialize the LangGraph backend — setup-aware.
+
+    Always loads the config + checkpointer so the wizard and drawer
+    can introspect what's on disk. The compiled graph is only built
+    when the setup wizard has been completed (``.setup-complete``
+    marker present). This lets the server boot cleanly on a fresh
+    clone with no model credentials — the wizard drives the user to
+    provide them, then triggers a reload.
+    """
     global _graph, _graph_config, _checkpointer
 
-    from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
+    from graph.config_io import is_setup_complete
     from langgraph.checkpoint.memory import MemorySaver
 
     config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
     _graph_config = LangGraphConfig.from_yaml(config_path)
     _checkpointer = MemorySaver()
+
+    if not is_setup_complete():
+        _graph = None
+        log.info(
+            "Setup wizard has not been completed — graph not compiled. "
+            "Open the UI to finish setup.",
+        )
+        return
+
+    from graph.agent import create_agent_graph
+
     _graph = create_agent_graph(_graph_config)
     log.info("LangGraph agent initialized (model: %s)", _graph_config.model_name)
+
+
+def _reload_langgraph_agent() -> tuple[bool, str]:
+    """Rebuild the compiled graph from the latest config YAML.
+
+    Called by the drawer's Save & Reload action and the
+    ``/api/config/reload`` endpoint. Preserves the existing
+    ``_checkpointer`` so active session threads stay addressable
+    — a fresh MemorySaver would orphan every in-flight thread.
+
+    Rebinding ``_graph`` is atomic in CPython; in-flight
+    ``astream_events`` iterators hold their own reference to the
+    prior graph and finish cleanly on the old instance.
+
+    If the setup marker is absent this returns early without
+    compiling — the wizard is still in front of the user, so there
+    is nothing to hot-swap yet.
+    """
+    global _graph, _graph_config
+
+    from graph.agent import create_agent_graph
+    from graph.config import LangGraphConfig
+    from graph.config_io import is_setup_complete
+
+    config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
+    try:
+        new_config = LangGraphConfig.from_yaml(config_path)
+    except Exception as e:
+        log.exception("[reload] config load failed")
+        return False, f"config load failed: {e}"
+
+    # Build the graph FIRST (when setup is complete) — only commit
+    # runtime state after the rebuild succeeds. Doing the swap first
+    # would leave the process serving the prior compiled _graph under
+    # fresh _graph_config + rotated bearer auth on failure — the
+    # metrics / card / auth all de-sync from what's actually running.
+    if is_setup_complete():
+        try:
+            new_graph = create_agent_graph(new_config)
+        except Exception as e:
+            log.exception("[reload] graph rebuild failed")
+            return False, f"graph rebuild failed: {e}"
+    else:
+        new_graph = None
+
+    # Commit: config → A2A bearer → graph. All three reference the
+    # same ``new_config`` so they stay consistent.
+    _graph_config = new_config
+    try:
+        from a2a_handler import set_a2a_token
+
+        set_a2a_token(new_config.auth_token or None)
+    except ImportError:
+        # a2a_handler not yet imported (e.g. during early-boot reload
+        # before _main wires routes) — harmless.
+        pass
+    _graph = new_graph
+
+    if new_graph is None:
+        log.info("[reload] setup not complete — config reloaded, graph not compiled")
+        return True, "config reloaded • setup not complete"
+
+    log.info("LangGraph agent reloaded (model: %s)", _graph_config.model_name)
+    return True, f"reloaded • model={_graph_config.model_name}"
+
+
+def _sync_autostart_with_config(config: dict | None) -> str | None:
+    """Align the OS autostart artifact with the YAML runtime flag.
+
+    Returns a short status string to append to the caller's message
+    log, or ``None`` when the config doesn't touch the runtime
+    section. Shared by ``finish_setup`` (wizard path) and
+    ``_apply_settings_changes`` (drawer path) so both surfaces
+    produce the same side effect when the checkbox flips.
+    """
+    if not (config and "runtime" in config):
+        return None
+    want = bool(config.get("runtime", {}).get("autostart_on_boot", False))
+
+    try:
+        from autostart import install_autostart, uninstall_autostart
+
+        as_name = (
+            config.get("identity", {}).get("name")
+            or (_graph_config.identity_name if _graph_config else "")
+            or "protoagent"
+        )
+        if want:
+            ok, msg = install_autostart(agent_name=as_name, port=_active_port)
+        else:
+            ok, msg = uninstall_autostart(agent_name=as_name)
+    except Exception as e:
+        log.exception("[autostart] sync raised")
+        return f"autostart failed: {e}"
+
+    if not ok:
+        log.warning("[autostart] sync failed: %s", msg)
+    return f"autostart: {msg}"
+
+
+def _apply_settings_changes(
+    config: dict | None = None,
+    soul: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Persist config YAML + SOUL.md then reload the graph once.
+
+    Passing ``None`` for either argument skips that write — a bare
+    call with both None acts as a pure reload (useful for picking up
+    external file edits).
+    """
+    from graph.config_io import (
+        apply_updates_to_yaml,
+        load_yaml_doc,
+        save_yaml_doc,
+        validate_config_dict,
+        write_soul,
+    )
+
+    messages: list[str] = []
+
+    if config is not None:
+        ok, err = validate_config_dict(config)
+        if not ok:
+            return False, [f"validation: {err}"]
+        try:
+            doc = load_yaml_doc()
+            apply_updates_to_yaml(doc, config)
+            save_yaml_doc(doc)
+            messages.append("config saved")
+        except Exception as e:
+            log.exception("[config] YAML write failed")
+            return False, [f"config write: {e}"]
+
+    if soul is not None:
+        try:
+            paths = write_soul(soul)
+            messages.append(f"SOUL saved ({len(paths)} path{'s' if len(paths) != 1 else ''})")
+        except Exception as e:
+            log.exception("[config] SOUL write failed")
+            return False, [f"soul write: {e}"]
+
+    # Drawer toggles of runtime.autostart_on_boot ride this path,
+    # not the wizard's finish_setup, so the LaunchAgent plist has
+    # to be installed/removed here too.
+    as_msg = _sync_autostart_with_config(config)
+    if as_msg:
+        messages.append(as_msg)
+
+    ok, reload_msg = _reload_langgraph_agent()
+    messages.append(reload_msg)
+    return ok, messages
+
+
+def _build_settings_callbacks() -> dict[str, Any]:
+    """Callbacks consumed by the Gradio Configuration drawer + wizard."""
+    from graph.config_io import (
+        config_to_dict,
+        is_setup_complete,
+        list_available_tools,
+        list_gateway_models,
+        list_soul_presets,
+        mark_setup_complete,
+        read_soul,
+        read_soul_preset,
+        reset_setup,
+    )
+
+    def get_config() -> dict[str, Any]:
+        return config_to_dict(_graph_config)
+
+    def list_models(api_base: str = "", api_key: str = "") -> tuple[list[str], str]:
+        """UI-friendly model lookup.
+
+        Uses the form-local api_base/api_key when the user is trying a
+        different endpoint before saving; falls back to the currently
+        loaded graph config so the initial render works without
+        arguments.
+        """
+        base = api_base or (_graph_config.api_base if _graph_config else "")
+        key = api_key or (_graph_config.api_key if _graph_config else "")
+        return list_gateway_models(base, key)
+
+    def save_all(config: dict | None, soul: str | None) -> tuple[bool, str]:
+        ok, messages = _apply_settings_changes(config=config, soul=soul)
+        return ok, " • ".join(messages)
+
+    def finish_setup(config: dict | None, soul: str | None) -> tuple[bool, str]:
+        """Wizard terminal action — write everything, mark complete, reload.
+
+        Ordering matters:
+
+        1. Write config YAML + SOUL.md (no reload yet).
+        2. ``mark_setup_complete()`` — flip the marker BEFORE the
+           reload so ``_reload_langgraph_agent`` actually compiles
+           the graph. Doing it after means the reload sees
+           setup-incomplete and stays ``_graph = None``.
+        3. Sync autostart (LaunchAgent plist is independent of the
+           graph, so it can happen any time after the config is
+           written).
+        4. Reload — marker present, graph compiles, chat works.
+
+        Returns a single status string joining per-step messages.
+        """
+        from graph.config_io import (
+            apply_updates_to_yaml,
+            load_yaml_doc,
+            save_yaml_doc,
+            validate_config_dict,
+            write_soul,
+        )
+
+        messages: list[str] = []
+
+        # 1. Persist
+        if config is not None:
+            ok, err = validate_config_dict(config)
+            if not ok:
+                return False, f"validation: {err}"
+            try:
+                doc = load_yaml_doc()
+                apply_updates_to_yaml(doc, config)
+                save_yaml_doc(doc)
+                messages.append("config saved")
+            except Exception as e:
+                log.exception("[setup] YAML write failed: %s", e)
+                return False, f"config write: {e}"
+
+        if soul is not None:
+            try:
+                paths = write_soul(soul)
+                messages.append(f"SOUL saved ({len(paths)} path{'s' if len(paths) != 1 else ''})")
+            except Exception as e:
+                log.exception("[setup] SOUL write failed: %s", e)
+                return False, f"soul write: {e}"
+
+        # 2. Flip the marker — MUST be before reload so the graph builds
+        mark_setup_complete()
+        messages.append("setup marked complete")
+
+        # 3. Autostart sync (shared helper — drawer path runs the same)
+        as_msg = _sync_autostart_with_config(config)
+        if as_msg:
+            messages.append(as_msg)
+
+        # 4. Reload — now picks up setup_complete=True and compiles.
+        # On failure, roll back the marker so the next page load
+        # drops the user back into the wizard instead of landing
+        # them in the chat UI with the "setup required" fallback
+        # and no obvious way to retry.
+        ok, reload_msg = _reload_langgraph_agent()
+        messages.append(reload_msg)
+        if not ok:
+            reset_setup()
+            messages.append("setup marker rolled back — re-run the wizard after fixing the error above")
+
+        return ok, " • ".join(messages)
+
+    def restart_setup() -> str:
+        """Drawer action — delete the marker so the wizard runs again."""
+        reset_setup()
+        log.info("[setup] marker removed — wizard will run on next page load")
+        return "setup marker removed • reload the page to run the wizard"
+
+    def autostart_info() -> dict[str, Any]:
+        """Report platform support + current on-disk state. The drawer
+        uses this to render the toggle correctly and to print the
+        plist path for debugging."""
+        try:
+            from autostart import autostart_status
+
+            name = (_graph_config.identity_name if _graph_config else "") or "protoagent"
+            return autostart_status(name)
+        except Exception as e:
+            return {"supported": False, "installed": False, "reason": str(e)}
+
+    def toggle_autostart(enabled: bool) -> tuple[bool, str]:
+        """Install or uninstall the OS autostart artifact, mirroring
+        the YAML field. Called from the drawer's checkbox handler so
+        toggling takes effect immediately without waiting for Save."""
+        try:
+            from autostart import install_autostart, uninstall_autostart
+
+            name = (_graph_config.identity_name if _graph_config else "") or "protoagent"
+            if enabled:
+                return install_autostart(agent_name=name, port=_active_port)
+            return uninstall_autostart(agent_name=name)
+        except Exception as e:
+            return False, str(e)
+
+    return {
+        "get_config": get_config,
+        "get_soul": read_soul,
+        "list_models": list_models,
+        "list_tools": list_available_tools,
+        "list_soul_presets": list_soul_presets,
+        "read_soul_preset": read_soul_preset,
+        "save_all": save_all,
+        "finish_setup": finish_setup,
+        "restart_setup": restart_setup,
+        "is_setup_complete": is_setup_complete,
+        "autostart_info": autostart_info,
+        "toggle_autostart": toggle_autostart,
+    }
+
+
+def _setup_required_message() -> list[dict[str, Any]]:
+    """Returned by chat endpoints when the wizard hasn't been run.
+
+    The Gradio UI hides the chat pane until setup completes, but the
+    HTTP /api/chat, OpenAI-compat, and A2A endpoints don't know the
+    UI state — so they emit a plain-text "finish setup first"
+    message instead of 500ing on ``_graph is None``.
+    """
+    return [{
+        "role": "assistant",
+        "content": (
+            "**Setup required.** The setup wizard has not been completed. "
+            "Open the UI and finish the wizard, or POST the completed config "
+            "to `/api/config/setup` before calling chat endpoints."
+        ),
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +428,8 @@ async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
     capture tool events and emit the cost-v1 DataPart on the terminal
     artifact.
     """
+    if _graph is None:
+        return _setup_required_message()
     return await _chat_langgraph(message, session_id)
 
 
@@ -119,6 +464,10 @@ async def _chat_langgraph_stream(
             trace_meta["caller_trace_id"] = caller_trace["traceId"]
         if caller_trace.get("spanId"):
             trace_meta["caller_span_id"] = caller_trace["spanId"]
+
+    if _graph is None:
+        yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
+        return
 
     async with tracing.trace_session(
         session_id=session_id,
@@ -248,13 +597,28 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
 # Agent card — EDIT THIS when forking
 # ---------------------------------------------------------------------------
 
-AGENT_NAME = os.environ.get("AGENT_NAME", "protoagent")
+AGENT_NAME_ENV = os.environ.get("AGENT_NAME", "protoagent")
+
+
+def agent_name() -> str:
+    """Resolve the active agent name.
+
+    Preference order: wizard-set ``identity.name`` in YAML (when loaded
+    and non-placeholder) → ``AGENT_NAME`` env var → ``"protoagent"``.
+    The agent card, OpenAI-compat model id, and chat header all call
+    this so a wizard rename propagates without a restart. The
+    Prometheus metric prefix and ``<AGENT>_API_KEY`` env name are
+    set at boot and still require a restart (see docs).
+    """
+    if _graph_config and _graph_config.identity_name and _graph_config.identity_name != "protoagent":
+        return _graph_config.identity_name
+    return AGENT_NAME_ENV
 
 
 def _build_security_schemes() -> dict:
     """Return securitySchemes dict, adding bearer only when A2A_AUTH_TOKEN is set."""
     schemes: dict = {"apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}}
-    if os.environ.get("A2A_AUTH_TOKEN", ""):
+    if os.environ.get("A2A_AUTH_TOKEN", "") or (_graph_config and _graph_config.auth_token):
         schemes["bearer"] = {"type": "http", "scheme": "bearer"}
     return schemes
 
@@ -281,7 +645,7 @@ def _build_agent_card(host: str) -> dict:
       it only if you strip the usage-capture.
     """
     return {
-        "name": AGENT_NAME,
+        "name": agent_name(),
         "description": (
             "protoAgent template — A2A-compliant LangGraph agent. "
             "Replace this description with your agent's actual purpose."
@@ -326,10 +690,13 @@ def _build_agent_card(host: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _main():
-    parser = argparse.ArgumentParser(description=f"{AGENT_NAME} — protoAgent server")
+    global _active_port
+
+    parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
     args = parser.parse_args()
+    _active_port = args.port
 
     # Initialize observability
     import tracing
@@ -343,10 +710,11 @@ def _main():
     from chat_ui import create_chat_app
     blocks = create_chat_app(
         chat_fn=chat,
-        title=AGENT_NAME,
+        title=agent_name(),
         subtitle="protoAgent",
         placeholder="Send a message...",
         pwa=True,
+        settings=_build_settings_callbacks(),
     )
 
     import gradio as gr
@@ -356,7 +724,7 @@ def _main():
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
-    fastapi_app = FastAPI(title=f"{AGENT_NAME} — protoAgent")
+    fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
 
     # --- Chat API -----------------------------------------------------------
     class ChatRequest(PydanticBaseModel):
@@ -368,6 +736,80 @@ def _main():
         result = await chat(req.message, req.session_id)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result}
+
+    # --- Live config / SOUL editing ----------------------------------------
+    # GET returns the current config + persona so external clients (the
+    # Gradio drawer is one; curl is another) can mirror what's running.
+    # POST accepts partial edits — pass only the sections you want to
+    # change. Reload is automatic.
+    class ConfigReloadRequest(PydanticBaseModel):
+        config: dict | None = None
+        soul: str | None = None
+
+    @fastapi_app.get("/api/config")
+    async def _api_get_config():
+        from graph.config_io import config_to_dict, read_soul
+        return {
+            "config": config_to_dict(_graph_config),
+            "soul": read_soul(),
+        }
+
+    @fastapi_app.post("/api/config")
+    async def _api_post_config(req: ConfigReloadRequest):
+        ok, messages = _apply_settings_changes(config=req.config, soul=req.soul)
+        return {"ok": ok, "messages": messages}
+
+    class ModelsProbeRequest(PydanticBaseModel):
+        api_base: str = ""
+        api_key: str = ""
+
+    @fastapi_app.post("/api/config/models")
+    async def _api_list_models(req: ModelsProbeRequest | None = None):
+        """Fetch the gateway's model list.
+
+        POST (body) not GET (query) so the caller's API key doesn't
+        end up in browser history, reverse-proxy access logs, or the
+        uvicorn request log. A blank body falls back to whatever key
+        and base are stored in the current config — useful for the
+        drawer's initial render where there's nothing to POST yet.
+        """
+        from graph.config_io import list_gateway_models
+
+        body = req or ModelsProbeRequest()
+        base = body.api_base or (_graph_config.api_base if _graph_config else "")
+        key = body.api_key or (_graph_config.api_key if _graph_config else "")
+        models, error = list_gateway_models(base, key)
+        return {"models": models, "error": error}
+
+    # --- Setup wizard state -------------------------------------------------
+    @fastapi_app.get("/api/config/setup-status")
+    async def _api_setup_status():
+        from graph.config_io import is_setup_complete, list_soul_presets
+        return {
+            "setup_complete": is_setup_complete(),
+            "presets": list_soul_presets(),
+        }
+
+    @fastapi_app.post("/api/config/setup")
+    async def _api_finish_setup(req: ConfigReloadRequest):
+        """Terminal wizard action over HTTP. Same semantics as the
+        drawer's ``finish_setup`` callback — writes everything, marks
+        setup complete, optionally installs autostart, then reloads.
+        """
+        callbacks = _build_settings_callbacks()
+        ok, msg = callbacks["finish_setup"](req.config, req.soul)
+        return {"ok": ok, "message": msg}
+
+    @fastapi_app.post("/api/config/reset-setup")
+    async def _api_reset_setup():
+        from graph.config_io import reset_setup
+        reset_setup()
+        return {"ok": True, "message": "setup marker removed"}
+
+    @fastapi_app.get("/api/config/presets/{name}")
+    async def _api_read_preset(name: str):
+        from graph.config_io import read_soul_preset
+        return {"name": name, "content": read_soul_preset(name)}
 
     # --- OpenAI-compatible chat completions --------------------------------
     # Lets this agent be registered as a model in the LiteLLM gateway /
@@ -386,19 +828,19 @@ def _main():
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         content = "\n\n".join(parts)
         created = int(time.time())
-        completion_id = f"{AGENT_NAME}-{session_id}"
+        completion_id = f"{agent_name()}-{session_id}"
 
         if stream:
             async def _stream():
                 chunk = {
                     "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": AGENT_NAME,
+                    "created": created, "model": agent_name(),
                     "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
                 done_chunk = {
                     "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": AGENT_NAME,
+                    "created": created, "model": agent_name(),
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
                 yield f"data: {json.dumps(done_chunk)}\n\n"
@@ -407,7 +849,7 @@ def _main():
 
         return {
             "id": completion_id, "object": "chat.completion",
-            "created": created, "model": AGENT_NAME,
+            "created": created, "model": agent_name(),
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
@@ -420,14 +862,14 @@ def _main():
     async def _openai_models():
         return {
             "object": "list",
-            "data": [{"id": AGENT_NAME, "object": "model", "created": 1774600000, "owned_by": "protolabs"}],
+            "data": [{"id": agent_name(), "object": "model", "created": 1774600000, "owned_by": "protolabs"}],
         }
 
     # --- A2A agent card -----------------------------------------------------
     @fastapi_app.get("/.well-known/agent.json", include_in_schema=False)
     @fastapi_app.get("/.well-known/agent-card.json", include_in_schema=False)
     async def _a2a_agent_card(request: Request):
-        host = request.headers.get("host", f"{AGENT_NAME}:7870")
+        host = request.headers.get("host", f"{agent_name()}:7870")
         return JSONResponse(
             content=_build_agent_card(host),
             headers={"Cache-Control": "public, max-age=60"},
@@ -437,12 +879,24 @@ def _main():
     # JSON-RPC + REST, streaming, polling, cancel, push webhooks.
     from a2a_handler import register_a2a_routes
 
-    auth_env = f"{AGENT_NAME.upper()}_API_KEY"
+    # Two independent A2A auth surfaces:
+    #
+    # 1. **Bearer** (modern) — ``auth.token`` in YAML, captured by the
+    #    wizard as "A2A bearer token". Passed via the ``auth_token``
+    #    argument, with ``A2A_AUTH_TOKEN`` env as fallback. Updates
+    #    from a wizard/drawer-driven reload propagate live through
+    #    ``a2a_handler.set_a2a_token`` — no restart needed.
+    # 2. **X-API-Key** (legacy) — ``<AGENT>_API_KEY`` env var, threaded
+    #    through the ``api_key`` argument. Kept env-driven; forks that
+    #    want it YAML-configurable can add a field later.
+    yaml_bearer = _graph_config.auth_token if _graph_config else ""
+    auth_env = f"{AGENT_NAME_ENV.upper()}_API_KEY"
     register_a2a_routes(
         app=fastapi_app,
         chat_stream_fn_factory=_chat_langgraph_stream,
         chat_fn=chat,
         api_key=os.environ.get(auth_env, ""),
+        auth_token=yaml_bearer,
         agent_card={},
         register_card_route=False,  # card is already served above
     )
@@ -486,7 +940,7 @@ def _main():
         favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
     )
 
-    log.info("Starting %s on http://0.0.0.0:%d", AGENT_NAME, args.port)
+    log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 

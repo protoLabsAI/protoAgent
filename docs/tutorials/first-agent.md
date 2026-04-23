@@ -1,99 +1,80 @@
 # Spin up your first agent
 
-This walks you from "I clicked Use this template" to "I have a running agent answering a web-search query". About 15 minutes, assuming Docker and a LiteLLM gateway are already set up.
+About 5 minutes. You need Python 3.11+ and an OpenAI-compatible API key (OpenAI direct, LiteLLM gateway, Anthropic-via-gateway, Ollama, anything that speaks the OpenAI REST shape).
 
-## What you'll need
+No forking, no `sed`, no Docker for your first run. That's all in [Customize & deploy](/guides/customize-and-deploy) once you've decided this template works for you.
 
-- A GitHub account with access to `protoLabsAI` (or your own org — the workflows gate on the repo owner; see step 7)
-- Docker
-- A LiteLLM gateway running somewhere reachable (the template points at `http://gateway:4000/v1`)
-- A model alias in that gateway. The template's default is `protolabs/agent` — either add that alias or retarget `model.name` in step 4
-
-## 1. Use the template
-
-From GitHub, click **Use this template → Create a new repository** on [protoLabsAI/protoAgent](https://github.com/protoLabsAI/protoAgent). Pick a short slug like `jon` or `echo-agent` — it will end up as the image name, metric prefix, Langfuse tag, and more.
-
-Or from the CLI:
+## 1. Get the code
 
 ```bash
-gh repo create protoLabsAI/my-agent \
-    --template protoLabsAI/protoAgent \
-    --public --clone
-
+git clone https://github.com/protoLabsAI/protoAgent.git my-agent
 cd my-agent
 ```
 
-## 2. Rename the agent
-
-The template uses `protoagent` as the placeholder throughout. Do a pass:
+## 2. Install dependencies
 
 ```bash
-git grep -li protoagent | xargs sed -i 's/protoagent/my-agent/g'
-git grep -li protoAgent | xargs sed -i 's/protoAgent/MyAgent/g'
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Review the diff before committing — the replacement hits Dockerfile paths (`/opt/protoagent` → `/opt/my-agent`), the GHCR image path, workflow repo guards, and the Gradio UI branding. All of those want the new name.
-
-## 3. Rewrite identity
-
-Three files carry the agent's identity. Edit each one:
-
-- `config/SOUL.md` — the persona doc loaded at session start. See the placeholder file itself for guidance.
-- `graph/prompts.py` — the system prompt for the lead agent + subagents.
-- `server.py::_build_agent_card` — the agent card served at `/.well-known/agent-card.json`. At minimum, fix `name` and `description`; revisit `skills` once you have real tools.
-
-## 4. Point at a model
-
-Edit `config/langgraph-config.yaml`:
-
-```yaml
-model:
-  name: protolabs/my-agent   # or openai/gpt-4o, anthropic/claude-opus-4-6, etc.
-  api_base: http://gateway:4000/v1
-```
-
-If you're using a gateway alias (recommended), make sure the alias is registered there before booting — swapping models later becomes a gateway edit instead of a code change.
-
-## 5. Build and run
+## 3. Run the server
 
 ```bash
-docker build -t my-agent:local .
-docker run --rm -p 7870:7870 \
-    -e AGENT_NAME=my-agent \
-    -e OPENAI_API_KEY="$LITELLM_MASTER_KEY" \
-    my-agent:local
+python server.py
 ```
 
-## 6. Verify the agent is up
+You should see:
 
-In another terminal:
-
-```bash
-curl http://localhost:7870/.well-known/agent-card.json | jq .name
-# → "my-agent"
-
-curl http://localhost:7870/metrics | grep my_agent_active_sessions
-# → my_agent_active_sessions 0
+```
+LangGraph agent initialized (setup wizard not complete — graph not compiled. Open the UI to finish setup.)
+Starting protoagent on http://0.0.0.0:7870
 ```
 
-Hit `http://localhost:7870` in a browser to get the Gradio chat UI. Ask it:
+## 4. Open the setup wizard
+
+Visit <http://localhost:7870> in a browser. Because `config/.setup-complete` doesn't exist yet, you'll land in the wizard instead of the chat UI.
+
+Walk through the four steps:
+
+1. **Connect to your model.** Paste your API base URL (`https://api.openai.com/v1` for OpenAI direct, `http://localhost:4000/v1` for a local LiteLLM gateway) and API key. Click **Test connection & fetch models** — the dropdown fills with whatever the endpoint actually exposes. Pick one.
+2. **Name your agent.** Short lowercase slug (e.g. `product-director`). Pick a persona preset — **Generic Assistant** is the safe default; **Research** / **Coding** / **Blank** are the alternatives — and click **Load preset into SOUL.md**. Edit the loaded text if you want to make it specific to your agent.
+3. **Tools & middleware.** All five starter tools (`echo`, `current_time`, `calculator`, `web_search`, `fetch_url`) are enabled by default. Leave **Audit** and **Memory** middleware on. Leave **Knowledge** off — that needs an index the template doesn't ship with.
+4. **Optional — you, security, autostart.** Your name makes the agent address you directly. A2A auth token blank for local dev, set it before you expose the port. "Launch this agent automatically on login" installs a macOS LaunchAgent so the server is up after every reboot without remembering to `python server.py`.
+
+Hit **Launch agent**. The wizard closes, the chat UI appears, and the Configuration drawer on the right is now populated with your choices.
+
+## 5. Try it
+
+In the chat box:
 
 > What time is it in Tokyo?
 
-If the starter tools are wired correctly, it should call `current_time`, return an ISO-8601 timestamp with the timezone offset, and explain what it found.
+The agent calls `current_time`, returns an ISO-8601 timestamp, and explains what it found.
 
 Then:
 
 > Find three recent articles about the A2A protocol and summarize them.
 
-The agent will call `web_search`, then `fetch_url` for each of the top results, and return a summary. That round-trip exercises the full tool loop + LLM call + streaming response path.
+The agent calls `web_search`, then `fetch_url` on the top results, and hands back a synthesis. That round-trip exercises the full tool loop + LLM call + streaming response path.
 
-## 7. Un-freeze the release pipeline
+## What just happened
 
-The three release workflows (`docker-publish.yml`, `prepare-release.yml`, `release.yml`) all gate on `github.repository == 'protoLabsAI/protoAgent'`. Change that check in each file to match your repo's owner/repo before merging anything to `main`, or the release automation won't fire.
+- Your answers were written to `config/langgraph-config.yaml` (human-readable — peek at it).
+- The persona preset was written to `config/SOUL.md`.
+- A `config/.setup-complete` marker was created so the next boot goes straight to chat.
+- The agent card at <http://localhost:7870/.well-known/agent-card.json> now reflects your agent name.
+- If you checked autostart, `~/Library/LaunchAgents/ai.protolabs.<name>.plist` was installed and `launchctl load`-ed.
+
+## Changing your mind
+
+- **Any field** — open the Configuration drawer on the right side of the chat UI. Every wizard field is there, plus a few advanced ones (temperature, max_tokens, max_iterations, knowledge store settings).
+- **The whole wizard** — expand the drawer's "Re-run setup wizard" accordion and click **Run wizard now**. Your current values pre-fill every step.
+- **Autostart** — toggle it off in the wizard or the drawer; the LaunchAgent is removed and the plist file deleted.
 
 ## Where to go next
 
 - [Write your first tool](/tutorials/first-tool) — wire a custom LangChain tool into the loop
+- [Customize & deploy](/guides/customize-and-deploy) — fork the template, rename throughout, ship a GHCR image
 - [Add a custom skill](/guides/add-a-skill) — expose the new behaviour on the A2A agent card
-- [Deploy via GHCR](/guides/deploy) — get Watchtower auto-deploying your merges

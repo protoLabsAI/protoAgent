@@ -3,7 +3,13 @@ __pycache__/
 *.pyo
 .env
 .venv/
+.venv-*/
 venv/
+
+# Local-run artifacts — autostart stdout/stderr logs + memory middleware
+# fallback directory when /sandbox is not available.
+logs/
+.proto/
 *.egg-info/
 dist/
 build/

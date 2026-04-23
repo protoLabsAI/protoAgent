@@ -919,6 +919,26 @@ def _check_auth(request: Request, api_key: str) -> None:
 # ── Route factory ─────────────────────────────────────────────────────────────
 
 
+# Module-level mutable holder for the bearer token so hosts can
+# update it at runtime without re-registering routes (e.g. when the
+# setup wizard captures a token post-boot). ``register_a2a_routes``
+# seeds this from its ``auth_token`` argument (or ``A2A_AUTH_TOKEN``
+# env as fallback); ``set_a2a_token`` updates it live. Closures inside
+# ``register_a2a_routes`` read ``_A2A_TOKEN[0]`` on every request, so
+# a mutation is picked up by the next incoming call.
+_A2A_TOKEN: list[str | None] = [None]
+
+
+def set_a2a_token(token: str | None) -> None:
+    """Update the active A2A bearer token at runtime.
+
+    Called by the host (e.g. ``server.py``) after the wizard / drawer
+    changes ``auth.token`` in the YAML — without this, bearer auth
+    captured at register time would stay stale until process restart.
+    """
+    _A2A_TOKEN[0] = (token or "").strip() or None
+
+
 def register_a2a_routes(
     app: FastAPI,
     chat_stream_fn_factory: Callable[..., AsyncGenerator],
@@ -926,29 +946,39 @@ def register_a2a_routes(
     api_key: str,
     agent_card: dict,
     register_card_route: bool = True,
+    auth_token: str = "",
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
     Host apps that already serve the agent card themselves (e.g. at multiple
     well-known paths for sdk compat) should pass ``register_card_route=False``
     so FastAPI does not raise on a duplicate route registration.
+
+    ``auth_token`` seeds the bearer-token check. When empty, falls
+    back to the ``A2A_AUTH_TOKEN`` env var. Hosts can update the
+    active token post-registration via ``set_a2a_token(...)`` (e.g.
+    after a wizard-driven config reload) without needing a restart.
     """
 
     # ── Bearer token authentication ───────────────────────────────────────────
-    _raw_a2a_token = os.environ.get("A2A_AUTH_TOKEN", "")
-    _a2a_token: str | None = _raw_a2a_token.strip() or None
-    if not _a2a_token:
+    # Seed order: explicit arg > env. Stored in the module-level holder
+    # so mutations propagate to the closure below.
+    seed = (auth_token or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
+    _A2A_TOKEN[0] = seed or None
+    if _A2A_TOKEN[0] is None:
         logger.warning(
             "[a2a] A2A auth token not configured — endpoint is open"
         )
 
     def _check_bearer_auth(request: Request) -> None:
-        """Validate Authorization: Bearer <token> against A2A_AUTH_TOKEN.
+        """Validate Authorization: Bearer <token> against the active
+        token. No-ops when unset. Raises HTTP 401 on missing/invalid.
 
-        No-ops when A2A_AUTH_TOKEN is unset (open mode).
-        Raises HTTP 401 on missing or invalid token.
+        Reads ``_A2A_TOKEN[0]`` on every call so runtime updates via
+        ``set_a2a_token`` are honored without route re-registration.
         """
-        if not _a2a_token:
+        active = _A2A_TOKEN[0]
+        if not active:
             return
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -957,7 +987,7 @@ def register_a2a_routes(
                 detail="Unauthorized: expected 'Authorization: Bearer <token>'",
             )
         provided = auth_header[len("Bearer "):]
-        if not hmac.compare_digest(provided, _a2a_token):
+        if not hmac.compare_digest(provided, active):
             raise HTTPException(status_code=401, detail="Unauthorized: invalid bearer token")
 
     # ── Origin verification for SSE/streaming endpoints ───────────────────────
@@ -989,7 +1019,7 @@ def register_a2a_routes(
     agent_card.setdefault("capabilities", {})
     agent_card["capabilities"]["streaming"] = True
     agent_card["capabilities"]["pushNotifications"] = True
-    if _a2a_token:
+    if _A2A_TOKEN[0]:
         agent_card.setdefault("securitySchemes", {})
         agent_card["securitySchemes"]["bearer"] = {
             "type": "http",

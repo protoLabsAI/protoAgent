@@ -4,6 +4,7 @@ uvicorn>=0.30
 langfuse>=3.0
 prometheus-client>=0.20
 pyyaml>=6.0
+ruamel.yaml>=0.18  # round-trip YAML that preserves comments in config/langgraph-config.yaml when the drawer writes back edits
 websockets>=12.0
 
 # LangGraph agent backend

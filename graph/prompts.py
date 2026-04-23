@@ -49,8 +49,13 @@ def build_system_prompt(
     """
     parts = []
 
-    # 1. Identity
+    # 1. Identity — prefer the runtime workspace (entrypoint.sh copies
+    # config/SOUL.md to /sandbox/SOUL.md at container start). Fall back
+    # to the repo source so local `python server.py` runs without a
+    # /sandbox mount still pick up persona edits made via the drawer.
     soul = _read_file(f"{workspace}/SOUL.md")
+    if not soul:
+        soul = _read_file(Path(__file__).parent.parent / "config" / "SOUL.md")
     if soul:
         parts.append(soul)
     else:

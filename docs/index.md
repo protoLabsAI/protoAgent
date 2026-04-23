@@ -3,14 +3,14 @@ layout: home
 hero:
   name: protoAgent
   text: LangGraph + A2A template for protoLabs agents
-  tagline: Fork this repo. Rewrite SOUL.md, prompts, and tools. Ship.
+  tagline: Clone. Run. Walk the wizard. Chat. Fork when you're ready to ship.
   actions:
     - theme: brand
       text: Spin up your first agent
       link: /tutorials/first-agent
     - theme: alt
-      text: Reference
-      link: /reference/
+      text: Customize & deploy
+      link: /guides/customize-and-deploy
 
 features:
   - icon: 🔌
