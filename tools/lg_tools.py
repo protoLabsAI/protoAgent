@@ -281,7 +281,7 @@ _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
 
 
-def _build_memory_tools(knowledge_store):
+def _build_memory_tools(knowledge_store) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
     from datetime import datetime, timezone
 
@@ -328,9 +328,7 @@ def _build_memory_tools(knowledge_store):
         results = knowledge_store.search(query, k=clamped_k)
         if not results:
             return "No matches."
-        lines = []
-        for r in results:
-            lines.append(f"[{r.get('domain', '?')}] {r['preview']}")
+        lines = [f"[{r.get('domain', '?')}] {r['preview']}" for r in results]
         return "\n".join(lines)
 
     @tool

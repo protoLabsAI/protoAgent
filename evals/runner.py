@@ -148,7 +148,6 @@ async def _run_prompt_case(
     streaming: bool,
 ) -> CaseResult:
     # Pre-seed state via direct DB writes (model never sees this).
-    setup_applied = False
     if "setup" in case:
         err = verify.apply_setup(case["setup"])
         if err:
@@ -156,7 +155,6 @@ async def _run_prompt_case(
                 case["id"], case["category"], case["name"], False,
                 f"setup failed: {err}",
             )
-        setup_applied = True
 
     events: list[dict] = []
     result: TaskResult | None = None
@@ -240,9 +238,8 @@ async def _run_prompt_case(
         # Teardown unconditionally — even when the task crashed or
         # an assertion raised — so seeded KB rows never leak into the
         # next case.
-        if setup_applied or "teardown" in case:
-            if "teardown" in case:
-                verify.apply_teardown(case["teardown"])
+        if "teardown" in case:
+            verify.apply_teardown(case["teardown"])
 
 
 # ── dispatch ────────────────────────────────────────────────────────────────
