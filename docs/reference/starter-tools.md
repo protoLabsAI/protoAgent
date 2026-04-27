@@ -180,11 +180,14 @@ async def my_tool(required_arg: str, optional_arg: int = 5) -> str:
     return f"Success: {result}"
 ```
 
-Then append it to the list in `get_all_tools()`:
+Then append it to the keyless tool list in `get_all_tools()` — keep the conditional `_build_memory_tools(knowledge_store)` extension below it so the bundled memory tools still ship when a store is configured:
 
 ```python
 def get_all_tools(knowledge_store=None):
-    return [current_time, calculator, web_search, fetch_url, my_tool]
+    tools = [current_time, calculator, web_search, fetch_url, my_tool]
+    if knowledge_store is not None:
+        tools.extend(_build_memory_tools(knowledge_store))
+    return tools
 ```
 
 See [Write your first tool](/tutorials/first-tool) for the full walkthrough.

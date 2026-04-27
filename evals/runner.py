@@ -129,7 +129,26 @@ async def _run_auth_check(client: AgentClient, case: dict) -> CaseResult:
 
 
 async def _run_ask(client: AgentClient, case: dict) -> CaseResult:
+    """Send via ``message/send`` + poll. Teardown always runs."""
+    return await _run_prompt_case(client, case, streaming=False)
+
+
+async def _run_stream(client: AgentClient, case: dict) -> CaseResult:
+    """Send via ``message/stream`` + SSE. Same assertion shape as ``ask``,
+    plus an optional ``expected_event_kinds`` list that asserts the SSE
+    stream surfaced the named event kinds (``status-update``, ``task``,
+    etc.) at least once."""
+    return await _run_prompt_case(client, case, streaming=True)
+
+
+async def _run_prompt_case(
+    client: AgentClient,
+    case: dict,
+    *,
+    streaming: bool,
+) -> CaseResult:
     # Pre-seed state via direct DB writes (model never sees this).
+    setup_applied = False
     if "setup" in case:
         err = verify.apply_setup(case["setup"])
         if err:
@@ -137,66 +156,93 @@ async def _run_ask(client: AgentClient, case: dict) -> CaseResult:
                 case["id"], case["category"], case["name"], False,
                 f"setup failed: {err}",
             )
+        setup_applied = True
 
-    since = verify.audit_now()
-    result: TaskResult = await client.ask(
-        case["prompt"], timeout_s=case.get("timeout_s", 90),
-    )
+    events: list[dict] = []
+    result: TaskResult | None = None
 
-    if result.state != "completed":
-        if "teardown" in case:
-            verify.apply_teardown(case["teardown"])
+    try:
+        since = verify.audit_now()
+
+        if streaming:
+            events, result = await client.stream(
+                case["prompt"], timeout_s=case.get("timeout_s", 90),
+            )
+        else:
+            result = await client.ask(
+                case["prompt"], timeout_s=case.get("timeout_s", 90),
+            )
+
+        if result is None or result.state != "completed":
+            state = result.state if result else "no-final-event"
+            error = (result.error if result else None) or "(none)"
+            duration = result.duration_ms if result else 0
+            text_preview = (result.text if result else "")[:200]
+            return CaseResult(
+                case["id"], case["category"], case["name"], False,
+                f"task state={state}; error={error}",
+                duration_ms=duration,
+                raw={"text": text_preview},
+            )
+
+        problems: list[str] = []
+
+        # Tool firing assertions. ``expected_tools is not None`` so an
+        # explicit empty list asserts that *no* tools fired (abstention
+        # cases). Missing key skips the audit check entirely.
+        expected_tools = case.get("expected_tools")
+        if expected_tools is not None:
+            await asyncio.sleep(0.3)  # let the audit log catch up
+            entries = verify.audit_entries_since(since)
+            require_success = case.get("tool_outcome", "success") == "success"
+            passed, detail = verify.assert_tools_fired(
+                entries, expected_tools, require_success=require_success,
+            )
+            if not passed:
+                problems.append(detail)
+
+        # Text pattern assertions (case-insensitive substrings).
+        text_lower = result.text.lower()
+        for pattern in case.get("expected_patterns") or []:
+            if pattern.lower() not in text_lower:
+                problems.append(f"missing pattern {pattern!r}")
+
+        # KB side-effect assertions.
+        vk = case.get("verify_kb") or {}
+        if "find_chunk_containing" in vk:
+            chunk = verify.find_chunk_containing(
+                vk["find_chunk_containing"], domain=vk.get("domain"),
+            )
+            if not chunk:
+                problems.append(f"no chunk containing {vk['find_chunk_containing']!r}")
+
+        # Streaming-only: assert the SSE event sequence surfaced the
+        # expected kinds at least once.
+        if streaming:
+            seen_kinds = {e.get("kind") for e in events}
+            for kind in case.get("expected_event_kinds") or []:
+                if kind not in seen_kinds:
+                    problems.append(f"missing SSE event kind {kind!r}; saw {sorted(seen_kinds)}")
+
+        detail = (
+            "; ".join(problems) if problems
+            else f"OK ({result.duration_ms}ms, {result.usage.get('total_tokens', '?')}t)"
+        )
         return CaseResult(
-            case["id"], case["category"], case["name"], False,
-            f"task state={result.state}; error={result.error or '(none)'}",
+            case["id"], case["category"], case["name"],
+            passed=not problems,
+            detail=detail,
             duration_ms=result.duration_ms,
-            raw={"text": result.text[:200]},
+            tokens=result.usage.get("total_tokens", 0) or 0,
+            raw={"reply": result.text[:300]},
         )
-
-    problems: list[str] = []
-
-    # Tool firing assertions.
-    expected_tools = case.get("expected_tools") or []
-    if expected_tools:
-        await asyncio.sleep(0.3)  # let the audit log catch up
-        entries = verify.audit_entries_since(since)
-        require_success = case.get("tool_outcome", "success") == "success"
-        passed, detail = verify.assert_tools_fired(
-            entries, expected_tools, require_success=require_success,
-        )
-        if not passed:
-            problems.append(detail)
-
-    # Text pattern assertions (case-insensitive substrings).
-    text_lower = result.text.lower()
-    for pattern in case.get("expected_patterns") or []:
-        if pattern.lower() not in text_lower:
-            problems.append(f"missing pattern {pattern!r}")
-
-    # KB side-effect assertions.
-    vk = case.get("verify_kb") or {}
-    if "find_chunk_containing" in vk:
-        chunk = verify.find_chunk_containing(
-            vk["find_chunk_containing"], domain=vk.get("domain"),
-        )
-        if not chunk:
-            problems.append(f"no chunk containing {vk['find_chunk_containing']!r}")
-
-    if "teardown" in case:
-        verify.apply_teardown(case["teardown"])
-
-    detail = (
-        "; ".join(problems) if problems
-        else f"OK ({result.duration_ms}ms, {result.usage.get('total_tokens', '?')}t)"
-    )
-    return CaseResult(
-        case["id"], case["category"], case["name"],
-        passed=not problems,
-        detail=detail,
-        duration_ms=result.duration_ms,
-        tokens=result.usage.get("total_tokens", 0) or 0,
-        raw={"reply": result.text[:300]},
-    )
+    finally:
+        # Teardown unconditionally — even when the task crashed or
+        # an assertion raised — so seeded KB rows never leak into the
+        # next case.
+        if setup_applied or "teardown" in case:
+            if "teardown" in case:
+                verify.apply_teardown(case["teardown"])
 
 
 # ── dispatch ────────────────────────────────────────────────────────────────
@@ -206,6 +252,7 @@ _RUNNERS = {
     "agent_card": _run_agent_card,
     "auth_check": _run_auth_check,
     "ask": _run_ask,
+    "stream": _run_stream,
 }
 
 

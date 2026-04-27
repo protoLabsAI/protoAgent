@@ -277,6 +277,10 @@ def _extract_text_from_html(content: bytes) -> str:
 # process.
 
 
+_MEMORY_RECALL_MAX_K = 20
+_MEMORY_LIST_MAX_LIMIT = 200
+
+
 def _build_memory_tools(knowledge_store):
     """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
     from datetime import datetime, timezone
@@ -320,7 +324,8 @@ def _build_memory_tools(knowledge_store):
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
         """
-        results = knowledge_store.search(query, k=k)
+        clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
+        results = knowledge_store.search(query, k=clamped_k)
         if not results:
             return "No matches."
         lines = []
@@ -335,7 +340,8 @@ def _build_memory_tools(knowledge_store):
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
         """
-        chunks = knowledge_store.list_chunks(domain=domain, limit=limit)
+        clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
+        chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []

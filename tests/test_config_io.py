@@ -327,6 +327,7 @@ def test_list_available_tools_returns_starter_set():
     # contract is "return tool names in a stable list".
     assert "current_time" in names
     assert "calculator" in names
+    assert "web_search" in names
     assert "fetch_url" in names
     assert all(isinstance(n, str) for n in names)
 

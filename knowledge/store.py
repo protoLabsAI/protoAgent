@@ -162,7 +162,14 @@ class KnowledgeStore:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(str(self.path))
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
+        # WAL is best-effort — read-only sqlite files (e.g. immutable
+        # mounts) reject the PRAGMA. The connection stays usable for
+        # reads; only writes will fail later, and those go through
+        # the per-method OperationalError guards.
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            log.debug("[knowledge] PRAGMA journal_mode=WAL skipped: %s", exc)
         return db
 
     def _init_db(self) -> None:
@@ -172,6 +179,16 @@ class KnowledgeStore:
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
+                # Re-index any pre-existing rows. The CREATE TRIGGER
+                # statements only fire on subsequent inserts, so a DB
+                # populated before FTS was added would have an empty
+                # virtual table without this rebuild.
+                try:
+                    db.execute(
+                        "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')"
+                    )
+                except sqlite3.OperationalError as exc:
+                    log.debug("[knowledge] FTS rebuild skipped: %s", exc)
             else:
                 log.info(
                     "[knowledge] FTS5 unavailable — search will use LIKE fallback"
@@ -399,8 +416,12 @@ class KnowledgeStore:
         """Return the most-recent chunk whose content or heading contains ``text``.
 
         Used by the eval runner to assert side-effect outcomes after a
-        memory-writing turn.
+        memory-writing turn. Empty / whitespace-only ``text`` returns
+        ``None`` rather than building a ``LIKE '%%'`` predicate that
+        would match every row.
         """
+        if not text or not text.strip():
+            return None
         db = self._get_db()
         if db is None:
             return None
@@ -423,7 +444,13 @@ class KnowledgeStore:
         return Chunk(**dict(row)) if row else None
 
     def delete_by_content(self, contains: str) -> int:
-        """Delete chunks whose content matches ``%contains%``. Returns count."""
+        """Delete chunks whose content matches ``%contains%``. Returns count.
+
+        Empty / whitespace-only ``contains`` is a no-op — the alternative
+        is ``DELETE WHERE content LIKE '%%'`` which wipes every row.
+        """
+        if not contains or not contains.strip():
+            return 0
         db = self._get_db()
         if db is None:
             return 0
