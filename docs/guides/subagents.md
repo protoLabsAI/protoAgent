@@ -56,7 +56,11 @@ The template's `LangGraphConfig` (in `graph/config.py`) has a `worker` field. Ad
 class LangGraphConfig:
     # ... existing fields ...
     worker: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["echo", "current_time", "calculator", "web_search", "fetch_url"],
+        tools=[
+            "current_time", "calculator", "web_search", "fetch_url",
+            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+            "daily_log",
+        ],
         max_turns=20,
     ))
     researcher: SubagentDef = field(default_factory=lambda: SubagentDef(

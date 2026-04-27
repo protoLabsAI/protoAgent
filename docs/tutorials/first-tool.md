@@ -47,12 +47,17 @@ def get_all_tools(knowledge_store=None):
 
 ## 2. Allow the subagent to use it (optional)
 
-If you want the worker subagent to be able to call `git_sha`, add it to the allowlist in `graph/subagents/config.py`:
+If you want the worker subagent to be able to call `git_sha`, add it to the allowlist in `graph/subagents/config.py`. Append rather than replace — dropping the bundled defaults removes the worker's memory tools:
 
 ```python
 WORKER_CONFIG = SubagentConfig(
     # ...
-    tools=["current_time", "calculator", "web_search", "fetch_url", "git_sha"],
+    tools=[
+        "current_time", "calculator", "web_search", "fetch_url",
+        "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+        "daily_log",
+        "git_sha",   # ← new
+    ],
     # ...
 )
 ```

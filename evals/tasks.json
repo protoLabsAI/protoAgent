@@ -17,6 +17,16 @@
     "bad_token": "definitely-not-the-real-token",
     "expect": {"status": 401}
   },
+  {
+    "id": "streaming_status_updates",
+    "category": "a2a-protocol",
+    "kind": "stream",
+    "name": "message/stream surfaces status-update events ending in final=true",
+    "prompt": "Hi.",
+    "expected_tools": [],
+    "expected_patterns": [],
+    "expected_event_kinds": ["status-update"]
+  },
 
   {
     "id": "abstain_no_tool",
