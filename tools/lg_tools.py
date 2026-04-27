@@ -7,11 +7,19 @@ the lead agent can invoke during a run.
 The template ships with a small starter set of free, keyless tools so
 a fresh clone can demonstrate real agent behaviour out of the box:
 
-- ``echo`` — sanity check
 - ``current_time`` — wall-clock time in any IANA timezone
 - ``calculator`` — safe numeric expression evaluation
 - ``web_search`` — DuckDuckGo text search (via ``ddgs``, no API key)
 - ``fetch_url`` — fetch a URL and return cleaned text
+
+Plus memory tools that bind to a ``KnowledgeStore`` (constructed in
+``server.py`` and threaded through ``get_all_tools(knowledge_store)``):
+
+- ``memory_ingest`` — store a fact / preference / note
+- ``memory_recall`` — search the store for relevant chunks
+- ``memory_list``   — list recent chunks (optionally per domain)
+- ``memory_stats``  — per-domain counts
+- ``daily_log``     — convenience: write a daily-log chunk
 
 Replace or extend this file with your agent's real tools and update
 ``get_all_tools()`` to return the full list.
@@ -37,20 +45,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
-
-
-# ── echo ─────────────────────────────────────────────────────────────────────
-
-
-@tool
-async def echo(message: str) -> str:
-    """Echo the input back with a prefix. Template-only sanity tool.
-
-    Useful to verify the tool loop is wired end-to-end before real
-    tools are in place. Safe to delete once your fork has its own
-    tools.
-    """
-    return f"echo: {message}"
 
 
 # ── current_time ─────────────────────────────────────────────────────────────
@@ -273,16 +267,130 @@ def _extract_text_from_html(content: bytes) -> str:
     return "\n".join(lines)
 
 
+# ── memory tools ─────────────────────────────────────────────────────────────
+#
+# Each memory tool is built by a factory that closes over the
+# ``KnowledgeStore`` instance. Doing it this way (rather than module-
+# level globals) keeps tests isolated — they pass a temp store and get
+# a fresh tool list bound to it. Production constructs one store in
+# ``server.py`` and reuses the bound tools for the lifetime of the
+# process.
+
+
+def _build_memory_tools(knowledge_store):
+    """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
+    from datetime import datetime, timezone
+
+    @tool
+    async def memory_ingest(
+        content: str,
+        domain: str = "general",
+        heading: str | None = None,
+    ) -> str:
+        """Store a fact, preference, or note in long-term memory.
+
+        Use this for things the operator wants you to remember across
+        sessions — preferences ("I take my coffee black"), facts about
+        the operator's environment, decisions worth recalling later.
+
+        Args:
+            content: The text to remember. Be specific and self-contained;
+                the chunk is retrieved by keyword search.
+            domain: Logical bucket — ``"preferences"``, ``"context"``,
+                ``"general"``. Defaults to ``"general"``.
+            heading: Optional short label (e.g. ``"coffee"``) used as a
+                stable de-dupe key by the eval suite and curator.
+
+        Returns ``"Stored chunk N in 'domain'."`` on success.
+        """
+        chunk_id = knowledge_store.add_chunk(content, domain=domain, heading=heading)
+        if chunk_id is None:
+            return "Error: failed to store chunk (knowledge store unavailable)."
+        return f"Stored chunk {chunk_id} in {domain!r}."
+
+    @tool
+    async def memory_recall(query: str, k: int = 5) -> str:
+        """Search long-term memory for chunks relevant to ``query``.
+
+        Returns the top-k matches, one per line. Pull this when the
+        operator asks something where stored context is more reliable
+        than the model's own training data ("what's my coffee order?",
+        "remind me what we decided about the auth migration").
+
+        Returns ``"No matches."`` when the store is empty or nothing
+        scores above the keyword threshold.
+        """
+        results = knowledge_store.search(query, k=k)
+        if not results:
+            return "No matches."
+        lines = []
+        for r in results:
+            lines.append(f"[{r.get('domain', '?')}] {r['preview']}")
+        return "\n".join(lines)
+
+    @tool
+    async def memory_list(domain: str | None = None, limit: int = 10) -> str:
+        """List the most recent chunks. Filter by domain when given.
+
+        Useful when the operator asks for recent activity ("what did I
+        log today?") or wants to inspect what the agent has stored.
+        """
+        chunks = knowledge_store.list_chunks(domain=domain, limit=limit)
+        if not chunks:
+            return f"No chunks in {domain or 'any domain'}."
+        lines = []
+        for c in chunks:
+            head = f"[{c.domain}]"
+            if c.heading:
+                head += f" {c.heading}:"
+            preview = (c.content or "")[:200]
+            lines.append(f"{c.created_at} {head} {preview}")
+        return "\n".join(lines)
+
+    @tool
+    async def memory_stats() -> str:
+        """Return chunk counts per domain. Useful for sanity checks."""
+        s = knowledge_store.stats()
+        if s.get("total", 0) == 0:
+            return "Knowledge store is empty."
+        lines = [f"Total: {s['total']}"]
+        for k, v in s.items():
+            if k == "total":
+                continue
+            lines.append(f"  {k}: {v}")
+        return "\n".join(lines)
+
+    @tool
+    async def daily_log(content: str) -> str:
+        """Append a daily-log entry for today.
+
+        Stored under ``domain='daily-log'`` with today's UTC date as
+        the heading, so the same day's entries cluster together for
+        ``memory_list(domain='daily-log')`` queries.
+        """
+        today = datetime.now(timezone.utc).date().isoformat()
+        chunk_id = knowledge_store.add_chunk(
+            content, domain="daily-log", heading=today,
+        )
+        if chunk_id is None:
+            return "Error: failed to write daily log entry."
+        return f"Logged ({today}): {content[:120]}"
+
+    return [memory_ingest, memory_recall, memory_list, memory_stats, daily_log]
+
+
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
 def get_all_tools(knowledge_store=None):
     """Return every LangChain tool the lead agent + subagents can use.
 
-    ``knowledge_store`` is threaded through for agents that ship a
-    knowledge / memory subsystem (see ``graph/middleware/knowledge.py``
-    for the hook-in pattern). The template doesn't ship a store — the
-    parameter is kept so adding one later doesn't require touching
-    every call site.
+    When ``knowledge_store`` is provided, the memory tools are bound
+    to it and included. Forks that disable the store can pass
+    ``knowledge_store=None`` and the lead agent runs with the four
+    keyless tools only.
     """
-    return [echo, current_time, calculator, web_search, fetch_url]
+    tools = [current_time, calculator, web_search, fetch_url]
+    if knowledge_store is not None:
+        tools.extend(_build_memory_tools(knowledge_store))
+    return tools

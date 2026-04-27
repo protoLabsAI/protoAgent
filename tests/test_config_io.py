@@ -105,11 +105,11 @@ def test_apply_updates_nested_worker(tmp_path: Path) -> None:
 
     config_io.apply_updates_to_yaml(
         doc,
-        {"subagents": {"worker": {"enabled": True, "tools": ["echo", "calculator"]}}},
+        {"subagents": {"worker": {"enabled": True, "tools": ["current_time", "calculator"]}}},
     )
 
     assert doc["subagents"]["worker"]["enabled"] is True
-    assert list(doc["subagents"]["worker"]["tools"]) == ["echo", "calculator"]
+    assert list(doc["subagents"]["worker"]["tools"]) == ["current_time", "calculator"]
 
 
 # ── config_to_dict ───────────────────────────────────────────────────────────
@@ -325,9 +325,9 @@ def test_list_available_tools_returns_starter_set():
     # Lock in the template's starter set — forks replace these but
     # the drawer's CheckboxGroup populates from this call, so the
     # contract is "return tool names in a stable list".
-    assert "echo" in names
-    assert "calculator" in names
     assert "current_time" in names
+    assert "calculator" in names
+    assert "fetch_url" in names
     assert all(isinstance(n, str) for n in names)
 
 

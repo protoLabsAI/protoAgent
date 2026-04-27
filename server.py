@@ -90,8 +90,38 @@ def _init_langgraph_agent():
 
     from graph.agent import create_agent_graph
 
-    _graph = create_agent_graph(_graph_config)
-    log.info("LangGraph agent initialized (model: %s)", _graph_config.model_name)
+    # Construct the default KnowledgeStore so memory tools (memory_ingest,
+    # memory_recall, daily_log) and KnowledgeMiddleware have something to
+    # bind to. Forks that don't want a store can set
+    # ``middleware.knowledge: false`` and remove the memory tools from
+    # the worker subagent — the store is still cheap to construct.
+    knowledge_store = _build_knowledge_store(_graph_config)
+
+    _graph = create_agent_graph(_graph_config, knowledge_store=knowledge_store)
+    log.info(
+        "LangGraph agent initialized (model: %s, knowledge_db: %s)",
+        _graph_config.model_name,
+        getattr(knowledge_store, "path", "(disabled)"),
+    )
+
+
+def _build_knowledge_store(config):
+    """Return a ``KnowledgeStore`` bound to the configured DB path.
+
+    Best-effort: any sqlite-level failure is logged and the store
+    falls back to ``~/.protoagent/knowledge/agent.db`` automatically
+    (see ``knowledge.store._resolve_path``). Returns ``None`` only when
+    knowledge is disabled in config — kept as a separate code path so
+    forks can audit when the agent is running KB-less.
+    """
+    if not getattr(config, "knowledge_middleware", True):
+        return None
+    try:
+        from knowledge import KnowledgeStore
+        return KnowledgeStore(db_path=config.knowledge_db_path)
+    except Exception as exc:
+        log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
+        return None
 
 
 def _reload_langgraph_agent() -> tuple[bool, str]:
@@ -130,7 +160,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # metrics / card / auth all de-sync from what's actually running.
     if is_setup_complete():
         try:
-            new_graph = create_agent_graph(new_config)
+            new_store = _build_knowledge_store(new_config)
+            new_graph = create_agent_graph(new_config, knowledge_store=new_store)
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
             return False, f"graph rebuild failed: {e}"

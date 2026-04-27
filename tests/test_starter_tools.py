@@ -114,13 +114,3 @@ async def test_fetch_url_rejects_non_http_scheme():
     ):
         result = await fetch_url.ainvoke({"url": bad})
         assert result.startswith("Error:"), f"accepted unsafe url: {bad!r}"
-
-
-# ── echo — sanity ────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_echo_sanity():
-    from tools.lg_tools import echo
-    result = await echo.ainvoke({"message": "hello"})
-    assert result == "echo: hello"

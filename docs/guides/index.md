@@ -9,4 +9,5 @@ Task-oriented procedures. Assumes you already have a running agent (see [Tutoria
 | [Add a custom skill](/guides/add-a-skill) | Your agent does new things and callers need to dispatch to them |
 | [Configure subagents](/guides/subagents) | You want specialized delegates beyond the placeholder `worker` |
 | [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
+| [Eval your fork](/guides/evals) | You want a baseline pass-rate for the tools / memory / A2A surface in your fork |
 | [Deploy via GHCR](/guides/deploy) | You're ready to ship and want auto-deploy wired up |

@@ -22,14 +22,24 @@ model:
 subagents:
   worker:
     enabled: true
-    tools: [echo, current_time, calculator, web_search, fetch_url]
+    tools:
+      - current_time
+      - calculator
+      - web_search
+      - fetch_url
+      - memory_ingest
+      - memory_recall
+      - memory_list
+      - memory_stats
+      - daily_log
     max_turns: 20
 
 middleware:
-  # The knowledge middleware requires a knowledge store. Leave false
-  # until you add one. Memory persistence is enabled by default and
-  # writes session summaries to /sandbox/memory/ without a store.
-  knowledge: false
+  # All three middlewares default ON. The knowledge middleware needs a
+  # store; the template constructs one automatically (see
+  # ``server.py::_build_knowledge_store``). Set ``knowledge: false`` if
+  # your fork is purely stateless.
+  knowledge: true
   audit: true
   memory: true
 

@@ -52,7 +52,7 @@ def _make_skill(
         "name": name,
         "description": description,
         "prompt_template": f"Run the {name} workflow.",
-        "tools_used": ["echo"],
+        "tools_used": ["current_time"],
         "confidence": confidence,
         "created_at": _utc_iso(days_ago),
     }

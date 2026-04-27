@@ -72,10 +72,10 @@ handler's output extraction depends on it.
 ## 4. Add your real tools
 
 `tools/lg_tools.py` ships with a small keyless starter set so a
-fresh clone can demonstrate a real research loop: `echo`,
-`current_time`, `calculator` (safe AST eval — no `eval()`),
-`web_search` (DuckDuckGo via `ddgs`), and `fetch_url`. Keep the
-ones you want, drop the rest, and add your own:
+fresh clone can demonstrate a real research loop: `current_time`,
+`calculator` (safe AST eval — no `eval()`), `web_search` (DuckDuckGo
+via `ddgs`), and `fetch_url`. Keep the ones you want, drop the rest,
+and add your own:
 
 ```python
 from langchain_core.tools import tool
@@ -166,6 +166,19 @@ your fork. A useful pattern:
 - `tests/test_my_tool.py` — unit tests for each tool
 - Extend `tests/test_a2a_integration.py` with assertions for
   your declared skills + extensions on the agent card
+
+For end-to-end behaviour testing — "when the operator asks X, does
+the right tool actually fire and the right row land in the KB?" —
+the template ships an eval harness under `evals/`:
+
+```bash
+python -m evals.runner             # against a running agent
+python -m evals.runner --category tool
+```
+
+See [Eval your fork](./docs/guides/evals.md) for what each case
+asserts, how the three assertion channels work, and how to add
+cases for your fork's new tools.
 
 ## 9a. Understand the skill loop
 

@@ -86,7 +86,16 @@ for name in ("worker", "researcher"):  # ← add new names
 subagents:
   worker:
     enabled: true
-    tools: [echo, current_time, calculator, web_search, fetch_url]
+    tools:
+      - current_time
+      - calculator
+      - web_search
+      - fetch_url
+      - memory_ingest
+      - memory_recall
+      - memory_list
+      - memory_stats
+      - daily_log
     max_turns: 20
   researcher:
     enabled: true
@@ -117,8 +126,8 @@ If your agent is simple enough that subagents are pure overhead, flip `include_s
 ```python
 _graph = create_agent_graph(
     _graph_config,
-    knowledge_store=None,
-    include_subagents=False,   # ← skip the task() tool and subagent machinery
+    knowledge_store=knowledge_store,  # keep the bundled store wired up
+    include_subagents=False,           # ← skip the task() tool and subagent machinery
 )
 ```
 

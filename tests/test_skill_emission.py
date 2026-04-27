@@ -88,14 +88,14 @@ def test_skill_datapart_serialization() -> None:
         name="dp-test",
         description="DataPart test",
         prompt_template="prompt",
-        tools_used=["echo"],
+        tools_used=["current_time"],
         source_session_id="s1",
     )
     part = artifact.to_datapart()
     assert part["kind"] == "data"
     assert part["metadata"]["mimeType"] == SKILL_V1_MIME
     assert part["data"]["name"] == "dp-test"
-    assert part["data"]["tools_used"] == ["echo"]
+    assert part["data"]["tools_used"] == ["current_time"]
     # created_at must be present and parseable
     datetime.fromisoformat(part["data"]["created_at"])
 
@@ -125,7 +125,7 @@ def test_skill_artifact_validation_tools_not_list() -> None:
     with pytest.raises(TypeError, match="tools_used"):
         SkillV1Artifact(
             name="x", description="d", prompt_template="p",
-            tools_used="echo",  # type: ignore[arg-type]
+            tools_used="current_time",  # type: ignore[arg-type]
         )
 
 
@@ -250,7 +250,7 @@ def _run_emit_logic(
 def test_skill_emitted_when_emit_skill_true() -> None:
     """Skill artifact is emitted when emit_skill=True and subagent succeeds."""
     msgs = [
-        _make_ai_message_with_tool_calls(["echo"]),
+        _make_ai_message_with_tool_calls(["current_time"]),
         _make_ai_message_with_content("done"),
     ]
     _run_emit_logic(
@@ -264,7 +264,7 @@ def test_skill_emitted_when_emit_skill_true() -> None:
     assert len(skills) == 1
     skill = skills[0]
     assert skill.name == "my-task"
-    assert skill.tools_used == ["echo"]
+    assert skill.tools_used == ["current_time"]
     assert skill.prompt_template == "do the thing"
     assert "Captured workflow" in skill.description
 
@@ -272,7 +272,7 @@ def test_skill_emitted_when_emit_skill_true() -> None:
 def test_no_emission_on_opt_out() -> None:
     """No skill artifact is emitted when emit_skill=False."""
     msgs = [
-        _make_ai_message_with_tool_calls(["echo"]),
+        _make_ai_message_with_tool_calls(["current_time"]),
         _make_ai_message_with_content("done"),
     ]
     _run_emit_logic(
@@ -307,7 +307,7 @@ def test_no_emission_on_failure() -> None:
 def test_no_emission_when_config_disallows() -> None:
     """No skill artifact is emitted when allow_skill_emission=False."""
     msgs = [
-        _make_ai_message_with_tool_calls(["echo"]),
+        _make_ai_message_with_tool_calls(["current_time"]),
         _make_ai_message_with_content("done"),
     ]
     _run_emit_logic(
@@ -323,8 +323,8 @@ def test_no_emission_when_config_disallows() -> None:
 def test_tool_tracking_metadata_captured() -> None:
     """tools_used in the artifact lists all tools invoked, deduplicated."""
     msgs = [
-        _make_ai_message_with_tool_calls(["echo", "calculator"]),
-        _make_ai_message_with_tool_calls(["echo"]),  # duplicate — should appear once
+        _make_ai_message_with_tool_calls(["current_time", "calculator"]),
+        _make_ai_message_with_tool_calls(["current_time"]),  # duplicate — should appear once
         _make_ai_message_with_content("result"),
     ]
     _run_emit_logic(
@@ -336,7 +336,7 @@ def test_tool_tracking_metadata_captured() -> None:
     )
     skills = get_pending_skills()
     assert len(skills) == 1
-    assert skills[0].tools_used.count("echo") == 1
+    assert skills[0].tools_used.count("current_time") == 1
     assert "calculator" in skills[0].tools_used
 
 

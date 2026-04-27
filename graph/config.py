@@ -37,16 +37,24 @@ class LangGraphConfig:
     # Subagents — template ships with one example (see graph/subagents/config.py).
     # Add fields here as you add entries to SUBAGENT_REGISTRY.
     worker: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["echo", "current_time", "calculator", "web_search", "fetch_url"],
+        tools=[
+            "current_time", "calculator", "web_search", "fetch_url",
+            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+            "daily_log",
+        ],
         max_turns=20,
     ))
 
     # Middleware toggles
-    knowledge_middleware: bool = False  # template ships no knowledge store
+    knowledge_middleware: bool = True
     audit_middleware: bool = True
-    memory_middleware: bool = False
+    memory_middleware: bool = True
 
-    # Knowledge store (opt-in — leave disabled until the fork ships one)
+    # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
+    # The default path lives under ``/sandbox/`` to play well with the
+    # bundled Docker volume; the store falls back to
+    # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
+    # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
     embed_model: str = "qwen3-embedding"
     knowledge_top_k: int = 5

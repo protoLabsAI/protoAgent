@@ -66,7 +66,7 @@ Replace with the skills your agent actually advertises over A2A. The `name` and 
 
 ## 5. (Optional) Add domain tools
 
-`tools/lg_tools.py` ships with `echo`, `current_time`, `calculator`, `web_search`, `fetch_url`. Keep the ones you want, drop the rest, add your own. Update `get_all_tools()` at the bottom. Any tool returned from there becomes a checkbox in the wizard and drawer automatically.
+`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url`. Keep the ones you want, drop the rest, add your own. Update `get_all_tools()` at the bottom. Any tool returned from there becomes a checkbox in the wizard and drawer automatically.
 
 ## 6. (Optional) Configure subagents
 

@@ -37,7 +37,6 @@ Then register it in `get_all_tools()` at the bottom of the same file:
 ```python
 def get_all_tools(knowledge_store=None):
     return [
-        echo,
         current_time,
         calculator,
         web_search,
@@ -53,7 +52,7 @@ If you want the worker subagent to be able to call `git_sha`, add it to the allo
 ```python
 WORKER_CONFIG = SubagentConfig(
     # ...
-    tools=["echo", "current_time", "calculator", "web_search", "fetch_url", "git_sha"],
+    tools=["current_time", "calculator", "web_search", "fetch_url", "git_sha"],
     # ...
 )
 ```

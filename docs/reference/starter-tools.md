@@ -1,15 +1,11 @@
 # Starter tools
 
-Five free, keyless tools ship in `tools/lg_tools.py`. They exist so a fresh template clone can demonstrate real behaviour immediately. Keep them, drop them, or swap them — `get_all_tools()` is the registry.
+Nine tools ship in `tools/lg_tools.py`:
 
-## `echo`
+- Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
+- Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
 
-```python
-@tool
-async def echo(message: str) -> str
-```
-
-Returns `"echo: <message>"`. The template-only sanity tool. Safe to delete once your real tools are wired.
+`get_all_tools(knowledge_store)` is the registry. When `knowledge_store` is `None` (the store is disabled in config) the memory tools are omitted automatically.
 
 ## `current_time`
 
@@ -106,6 +102,62 @@ Example Domain
 This domain is for use in documentation examples...
 ```
 
+## `memory_ingest`
+
+```python
+@tool
+async def memory_ingest(content: str, domain: str = "general", heading: str | None = None) -> str
+```
+
+Stores a chunk in the bundled `KnowledgeStore`. Use for things the operator wants you to remember across sessions — preferences, environment facts, decisions worth recalling later.
+
+`domain` is a logical bucket (`"preferences"`, `"context"`, `"general"`, …). `heading` is an optional short label that doubles as a stable de-dupe key.
+
+Returns `"Stored chunk 17 in 'preferences'."` on success, an error string when the store is unavailable.
+
+## `memory_recall`
+
+```python
+@tool
+async def memory_recall(query: str, k: int = 5) -> str
+```
+
+Top-k keyword search over the store via FTS5 (LIKE fallback). Returns one match per line:
+
+```
+[preferences] coffee: Operator's preferred coffee is a Gibraltar with oat milk.
+[context] lab: Primary lab is Snickerdoodle in Spokane.
+```
+
+Returns `"No matches."` when nothing scores above the keyword threshold.
+
+## `memory_list`
+
+```python
+@tool
+async def memory_list(domain: str | None = None, limit: int = 10) -> str
+```
+
+Most-recent-first listing of stored chunks. Filter by domain when given. Useful for "what did I log today?" style queries.
+
+## `memory_stats`
+
+```python
+@tool
+async def memory_stats() -> str
+```
+
+Per-domain chunk counts plus a total. Useful for sanity-checking that ingest landed.
+
+## `daily_log`
+
+```python
+@tool
+async def daily_log(content: str) -> str
+```
+
+Convenience wrapper around `memory_ingest` that writes to `domain='daily-log'` with today's UTC date as the heading. Same-day entries cluster under the same heading for `memory_list(domain='daily-log')`.
+
 ## Adding your own
 
 Follow the same pattern:
@@ -132,7 +184,7 @@ Then append it to the list in `get_all_tools()`:
 
 ```python
 def get_all_tools(knowledge_store=None):
-    return [echo, current_time, calculator, web_search, fetch_url, my_tool]
+    return [current_time, calculator, web_search, fetch_url, my_tool]
 ```
 
 See [Write your first tool](/tutorials/first-tool) for the full walkthrough.
@@ -141,3 +193,4 @@ See [Write your first tool](/tutorials/first-tool) for the full walkthrough.
 
 - [Configure subagents](/guides/subagents) — tools are allowlisted per subagent
 - [Environment variables](/reference/environment-variables) — SSRF allowlist vars affect `fetch_url`
+- [Eval your fork](/guides/evals) — the eval harness exercises every tool listed here end-to-end

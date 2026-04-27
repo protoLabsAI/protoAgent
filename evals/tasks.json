@@ -1,0 +1,186 @@
+[
+  {
+    "id": "card_discovery",
+    "category": "a2a-protocol",
+    "kind": "agent_card",
+    "name": "Agent card discovery",
+    "expect": {
+      "skills_min": 1,
+      "extensions_contain": ["cost-v1"]
+    }
+  },
+  {
+    "id": "auth_negative",
+    "category": "a2a-protocol",
+    "kind": "auth_check",
+    "name": "Reject bad bearer when bearer auth is configured",
+    "bad_token": "definitely-not-the-real-token",
+    "expect": {"status": 401}
+  },
+
+  {
+    "id": "abstain_no_tool",
+    "category": "abstention",
+    "kind": "ask",
+    "name": "Don't reach for a tool when training data is fine",
+    "prompt": "What's the capital of France? One word.",
+    "expected_tools": [],
+    "expected_patterns": ["paris"]
+  },
+  {
+    "id": "greeting",
+    "category": "simple",
+    "kind": "ask",
+    "name": "Direct greeting, no tool",
+    "prompt": "Hi.",
+    "expected_tools": [],
+    "expected_patterns": []
+  },
+
+  {
+    "id": "current_time_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks about live time → current_time",
+    "prompt": "What time is it in UTC right now?",
+    "expected_tools": ["current_time"],
+    "expected_patterns": ["UTC"]
+  },
+  {
+    "id": "calculator_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks for arithmetic → calculator",
+    "prompt": "How much is 17 times 23, plus 1?",
+    "expected_tools": ["calculator"],
+    "expected_patterns": ["392"]
+  },
+  {
+    "id": "web_search_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks about recent news → web_search",
+    "prompt": "Anything notable in the news about Anthropic this week?",
+    "expected_tools": ["web_search"],
+    "expected_patterns": []
+  },
+  {
+    "id": "fetch_url_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks about a URL's content → fetch_url",
+    "prompt": "What's on https://example.com? Just the page title is fine.",
+    "expected_tools": ["fetch_url"],
+    "expected_patterns": ["example"]
+  },
+
+  {
+    "id": "memory_ingest_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Stores a stable preference → memory_ingest writes a chunk",
+    "prompt": "Remember that I prefer protoLabs Studio standups at 9am Eastern.",
+    "expected_tools": ["memory_ingest"],
+    "expected_patterns": [],
+    "verify_kb": {
+      "find_chunk_containing": "9am"
+    },
+    "teardown": [
+      {"kb_delete_by_content": {"contains": "9am"}}
+    ]
+  },
+  {
+    "id": "daily_log_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks to log an event → daily_log writes today's chunk",
+    "prompt": "Log this for today: my standup just ended, team is unblocked on the auth migration.",
+    "expected_tools": ["daily_log"],
+    "expected_patterns": [],
+    "verify_kb": {
+      "find_chunk_containing": "auth migration",
+      "domain": "daily-log"
+    },
+    "teardown": [
+      {"kb_delete_by_content": {"contains": "auth migration"}}
+    ]
+  },
+  {
+    "id": "memory_recall_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks about a stored fact → recall surfaces it",
+    "setup": [
+      {"kb_ingest": {
+        "content": "Operator's primary lab is Snickerdoodle, located in Spokane.",
+        "domain": "context",
+        "heading": "lab"
+      }}
+    ],
+    "prompt": "Where's my primary lab and what's it called?",
+    "expected_tools": ["memory_recall"],
+    "expected_patterns": ["snickerdoodle", "spokane"],
+    "teardown": [
+      {"kb_delete_by_heading": {"domain": "context", "heading": "lab"}}
+    ]
+  },
+  {
+    "id": "memory_list_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks for recent log entries → memory_list",
+    "setup": [
+      {"kb_ingest": {"content": "called the dentist", "domain": "daily-log", "heading": "today"}},
+      {"kb_ingest": {"content": "merged the auth PR", "domain": "daily-log", "heading": "today"}}
+    ],
+    "prompt": "What did I do today? Summarize from the log.",
+    "expected_tools": ["memory_list"],
+    "expected_patterns": ["dentist"],
+    "teardown": [
+      {"kb_delete_by_content": {"contains": "called the dentist"}},
+      {"kb_delete_by_content": {"contains": "merged the auth PR"}}
+    ]
+  },
+  {
+    "id": "memory_stats_intent",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Asks how much is in memory → memory_stats",
+    "prompt": "How much have I got stored across each memory domain?",
+    "expected_tools": ["memory_stats"],
+    "expected_patterns": []
+  },
+
+  {
+    "id": "log_then_recall_chain",
+    "category": "chained",
+    "kind": "ask",
+    "name": "Log an event, then recall it later in the same turn",
+    "prompt": "Log this for today: 'eval-chain-flag-q9: chained log+recall test'. After logging, search memory for that flag and quote it back.",
+    "expected_tools": ["daily_log", "memory_recall"],
+    "expected_patterns": ["eval-chain-flag-q9"],
+    "teardown": [
+      {"kb_delete_by_content": {"contains": "eval-chain-flag-q9"}}
+    ]
+  },
+
+  {
+    "id": "knowledge_middleware_recall",
+    "category": "subsystem",
+    "kind": "ask",
+    "name": "KnowledgeMiddleware surfaces a stored fact without an explicit search",
+    "setup": [
+      {"kb_ingest": {
+        "content": "Operator's preferred coffee is a Gibraltar with oat milk from Atticus.",
+        "domain": "preferences",
+        "heading": "coffee"
+      }}
+    ],
+    "prompt": "What's my usual coffee order?",
+    "expected_tools": [],
+    "expected_patterns": ["gibraltar", "oat"],
+    "teardown": [
+      {"kb_delete_by_heading": {"domain": "preferences", "heading": "coffee"}}
+    ]
+  }
+]

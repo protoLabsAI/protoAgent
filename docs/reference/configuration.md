@@ -17,13 +17,22 @@ model:
 subagents:
   worker:
     enabled: true
-    tools: [echo, current_time, calculator, web_search, fetch_url]
+    tools:
+      - current_time
+      - calculator
+      - web_search
+      - fetch_url
+      - memory_ingest
+      - memory_recall
+      - memory_list
+      - memory_stats
+      - daily_log
     max_turns: 20
 
 middleware:
-  knowledge: false
+  knowledge: true
   audit: true
-  memory: false
+  memory: true
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db
@@ -59,9 +68,9 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 
 | Key | Default | What |
 |---|---|---|
-| `knowledge` | `false` | Inject retrieved knowledge into state before LLM calls. Requires a knowledge store — leave off until you add one. |
+| `knowledge` | `true` | Inject retrieved knowledge into state before LLM calls. Backed by the bundled `KnowledgeStore` (sqlite + FTS5). Set `false` for a stateless agent. |
 | `audit` | `true` | Append every tool call to `/sandbox/audit/audit.jsonl`. |
-| `memory` | `false` | Memory middleware (experimental). Requires a knowledge store. |
+| `memory` | `true` | Persist a session summary on terminal turn and asynchronously index conversation findings under `domain='finding'`. |
 
 ## `knowledge`
 
@@ -69,8 +78,8 @@ Only read when `middleware.knowledge` is `true`.
 
 | Key | Default | What |
 |---|---|---|
-| `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. |
-| `embed_model` | `nomic-embed-text` | Embedding model. |
+| `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
+| `embed_model` | `nomic-embed-text` | Reserved for forks that bolt embeddings on top of the FTS5 baseline. The bundled store ignores it. |
 | `top_k` | `5` | Results per query fed into state. |
 
-The template does not ship a knowledge store — the config keys are kept so a fork can flip the switch without rewiring every call site.
+The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 isn't available). One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).

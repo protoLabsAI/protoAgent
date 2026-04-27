@@ -43,7 +43,7 @@ Keep the `<scratch_pad>` / `<output>` protocol block in `prompts.py` — the A2A
 
 ## 4. Replace the starter tools
 
-`tools/lg_tools.py` ships with `echo`, `current_time`, `calculator`, `web_search`, `fetch_url`. Keep what you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of the file.
+`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url`. Keep what you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of the file.
 
 See the [starter tools reference](/reference/starter-tools) for the shapes of the shipped ones.
 
