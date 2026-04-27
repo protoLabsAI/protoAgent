@@ -226,16 +226,16 @@ class KnowledgeStore:
                 )
             db.commit()
             db.close()
-        except sqlite3.DatabaseError as exc:
-            log.error("[knowledge] schema init failed at %s: %s", self.path, exc)
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] schema init failed at %s", self.path)
 
     # Convenience for middleware that wants the raw connection. Kept
     # private so the public API stays small.
     def _get_db(self) -> sqlite3.Connection | None:
         try:
             return self._connect()
-        except sqlite3.OperationalError as exc:
-            log.error("[knowledge] connect failed: %s", exc)
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] connect failed")
             return None
 
     # ── writes ──────────────────────────────────────────────────────────────
@@ -266,8 +266,8 @@ class KnowledgeStore:
             )
             db.commit()
             return int(cur.lastrowid)
-        except sqlite3.DatabaseError as exc:
-            log.error("[knowledge] add_chunk failed: %s", exc)
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] add_chunk failed")
             return None
         finally:
             db.close()

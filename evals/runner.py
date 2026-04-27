@@ -36,7 +36,7 @@ import json
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Allow ``python -m evals.runner`` and ``python evals/runner.py``.
@@ -167,7 +167,7 @@ async def _await_audit_assertion(
     passes; the deadline only kicks in when the tool genuinely never
     fired.
     """
-    deadline = asyncio.get_event_loop().time() + _AUDIT_POLL_DEADLINE_S
+    deadline = asyncio.get_running_loop().time() + _AUDIT_POLL_DEADLINE_S
     entries: list[dict] = []
     passed = False
     detail = ""
@@ -176,7 +176,7 @@ async def _await_audit_assertion(
         passed, detail = verify.assert_tools_fired(
             entries, expected_tools, require_success=require_success,
         )
-        if passed or asyncio.get_event_loop().time() >= deadline:
+        if passed or asyncio.get_running_loop().time() >= deadline:
             return entries, passed, detail
         await asyncio.sleep(_AUDIT_POLL_INTERVAL_S)
 
@@ -234,7 +234,7 @@ async def _run_prompt_case(
         expected_tools = case.get("expected_tools")
         if expected_tools is not None:
             require_success = case.get("tool_outcome", "success") == "success"
-            entries, passed, detail = await _await_audit_assertion(
+            _entries, passed, detail = await _await_audit_assertion(
                 since, expected_tools, require_success=require_success,
             )
             if not passed:
@@ -337,7 +337,7 @@ def _print_board(results: list[CaseResult]) -> None:
 def _save_report(results: list[CaseResult], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "total": len(results),
         "passed": sum(1 for r in results if r.passed),
         "results": [asdict(r) for r in results],
