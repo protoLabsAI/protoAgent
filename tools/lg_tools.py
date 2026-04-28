@@ -40,6 +40,7 @@ Every tool that hits an external service should:
 from __future__ import annotations
 
 import ast
+import asyncio
 import operator as _op
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -430,7 +431,7 @@ def _build_scheduler_tools(scheduler) -> list:
         an error string on malformed ``when`` or backend failure.
         """
         try:
-            job = scheduler.add_job(prompt, when, job_id=job_id)
+            job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id)
         except ValueError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001
@@ -449,7 +450,7 @@ def _build_scheduler_tools(scheduler) -> list:
         Workstacean adapter) may return an empty list even when jobs
         exist — query the remote scheduler directly to see those.
         """
-        jobs = scheduler.list_jobs()
+        jobs = await asyncio.to_thread(scheduler.list_jobs)
         if not jobs:
             return "No scheduled jobs."
         lines = []
@@ -472,10 +473,10 @@ def _build_scheduler_tools(scheduler) -> list:
         if not job_id or not job_id.strip():
             return "Error: job_id is required."
         try:
-            ok = scheduler.cancel_job(job_id)
+            ok = await asyncio.to_thread(scheduler.cancel_job, job_id)
         except Exception as exc:  # noqa: BLE001
             return f"Error: scheduler cancel_job failed: {exc}"
-        return f"Canceled {job_id}." if ok else f"Error: no such job {job_id}."
+        return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     return [schedule_task, list_schedules, cancel_schedule]
 

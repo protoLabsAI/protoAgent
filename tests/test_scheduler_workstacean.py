@@ -101,7 +101,7 @@ class TestAddJob:
         assert len(recorder.calls) == 1
 
     def test_malformed_schedule_rejected(self, adapter):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid isoformat|could not convert"):
             adapter.add_job("hi", "not-a-schedule", job_id="x")
 
     def test_empty_prompt_rejected(self, adapter):

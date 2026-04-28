@@ -13,9 +13,9 @@ Workstacean install without cross-firing:
 - Topics are namespaced: ``cron.{agent_name}``
 
 The adapter is fire-and-forget — Workstacean owns scheduling state.
-``list_jobs()`` issues a ``list`` command and waits for the response
-on the ``schedule.list`` topic. If the user wants strict local
-introspection, they should run the local backend.
+``list_jobs()`` returns an empty list because Workstacean's list
+action publishes asynchronously — strict local introspection requires
+the local backend.
 
 Note: Workstacean today does not natively dispatch to A2A endpoints;
 forks need to wire their Workstacean install to route ``cron.*``

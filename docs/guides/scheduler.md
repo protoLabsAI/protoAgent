@@ -8,7 +8,7 @@ active.
 
 ## When to read this
 
-- You want forks (or your own multiple ginas) to support reminders,
+- You want forks (or your own multiple agents) to support reminders,
   recurring sweeps, or any "do this later" intent.
 - You're running protoWorkstacean and want scheduled fires to flow
   through the existing bus.

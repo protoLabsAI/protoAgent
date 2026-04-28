@@ -24,4 +24,4 @@ from scheduler.interface import Job, SchedulerBackend
 from scheduler.local import LocalScheduler
 from scheduler.workstacean import WorkstaceanScheduler
 
-__all__ = ["Job", "SchedulerBackend", "LocalScheduler", "WorkstaceanScheduler"]
+__all__ = ["Job", "LocalScheduler", "SchedulerBackend", "WorkstaceanScheduler"]

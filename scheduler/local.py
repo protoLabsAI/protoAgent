@@ -144,8 +144,8 @@ class LocalScheduler:
             db.executescript(_SCHEMA)
             db.commit()
             db.close()
-        except sqlite3.DatabaseError as exc:
-            log.error("[scheduler] schema init failed at %s: %s", self.path, exc)
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] schema init failed at %s", self.path)
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 

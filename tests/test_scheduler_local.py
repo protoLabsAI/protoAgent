@@ -73,7 +73,7 @@ class TestParseIso:
         assert dt.hour == 20  # 15 EST → 20 UTC
 
     def test_malformed_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid isoformat|could not convert"):
             parse_iso_to_utc("not an iso string")
 
 

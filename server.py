@@ -849,7 +849,7 @@ def _main():
     # is the only blocking call) and FastAPI fires startup/shutdown
     # around it.
     @fastapi_app.on_event("startup")
-    async def _scheduler_startup():
+    async def _scheduler_startup() -> None:
         if _scheduler is None:
             return
         try:
@@ -858,7 +858,7 @@ def _main():
             log.exception("[scheduler] startup failed")
 
     @fastapi_app.on_event("shutdown")
-    async def _scheduler_shutdown():
+    async def _scheduler_shutdown() -> None:
         if _scheduler is None:
             return
         try:
