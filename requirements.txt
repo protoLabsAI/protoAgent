@@ -16,3 +16,7 @@ langchain-openai>=0.3.0
 # Starter tools (tools/lg_tools.py)
 ddgs>=9.0
 beautifulsoup4>=4.12
+
+# Scheduler (scheduler/local.py — cron expression parsing for the
+# bundled local backend; the Workstacean adapter doesn't need this)
+croniter>=2.0

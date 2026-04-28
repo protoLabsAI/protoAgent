@@ -180,6 +180,28 @@ See [Eval your fork](./docs/guides/evals.md) for what each case
 asserts, how the three assertion channels work, and how to add
 cases for your fork's new tools.
 
+## 9b. Scheduler — local sqlite or Workstacean
+
+The bundled scheduler ships three agent tools — `schedule_task`,
+`list_schedules`, `cancel_schedule` — backed by either a local
+sqlite poller or a Workstacean adapter, selected at startup via env:
+
+```bash
+# Default: local sqlite, persists at /sandbox/scheduler/<agent_name>/jobs.db
+python server.py
+
+# Workstacean: set both and restart
+export WORKSTACEAN_API_BASE=http://your-workstacean:3000
+export WORKSTACEAN_API_KEY=...
+python server.py
+```
+
+Multi-fork safety: every job is namespaced by `AGENT_NAME`, so
+spinning up `gina-personal` next to `gina-work` (or any number of
+ginas under one Workstacean) doesn't cross-fire prompts. See
+[Schedule future work](./docs/guides/scheduler.md) for the full
+firing model and integration notes.
+
 ## 9a. Understand the skill loop
 
 protoAgent's skill loop lets your agent learn from experience automatically.

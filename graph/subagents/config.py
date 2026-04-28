@@ -67,6 +67,7 @@ real specialized roles.""",
         "current_time", "calculator", "web_search", "fetch_url",
         "memory_ingest", "memory_recall", "memory_list", "memory_stats",
         "daily_log",
+        "schedule_task", "list_schedules", "cancel_schedule",
     ],
     max_turns=20,
 )

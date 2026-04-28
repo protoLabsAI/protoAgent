@@ -32,6 +32,7 @@ rename / release-pipeline wiring.
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one placeholder `worker` ships |
 | Starter tools | `tools/lg_tools.py` | Keyless general tools (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) plus memory tools (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the bundled store |
 | Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
+| Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
 | Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
 | Observability | `metrics.py`, `audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |

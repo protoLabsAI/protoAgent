@@ -383,18 +383,123 @@ def _build_memory_tools(knowledge_store) -> list:
     return [memory_ingest, memory_recall, memory_list, memory_stats, daily_log]
 
 
+# ── scheduler tools ──────────────────────────────────────────────────────────
+#
+# Three tools that bind to either the local sqlite-backed scheduler or
+# the Workstacean adapter — the agent loop sees one stable surface and
+# never has to know which backend is wired up.
+#
+# Multi-agent safety: the underlying backend is constructed in
+# ``server.py`` with the active ``AGENT_NAME`` baked in. add_job /
+# list_jobs / cancel_job all filter by that name so two protoAgent
+# instances on the same machine (or sharing one Workstacean install)
+# never see each other's jobs.
+
+
+def _build_scheduler_tools(scheduler) -> list:
+    """Bind scheduler tools to a ``SchedulerBackend``. Returns a list."""
+
+    @tool
+    async def schedule_task(
+        prompt: str,
+        when: str,
+        job_id: str | None = None,
+    ) -> str:
+        """Schedule a future task. The agent receives ``prompt`` as a
+        new turn when the schedule fires.
+
+        Use this for anything the operator wants done later: reminders
+        ("remind me to follow up on the auth migration tomorrow at
+        9am"), recurring sweeps ("every Monday morning, summarize last
+        week's logs"), one-off check-ins ("at 3pm today, ask whether
+        the deploy is healthy").
+
+        Args:
+            prompt: The text the agent should receive when the schedule
+                fires. Be self-contained — the agent has no memory of
+                this scheduling moment when the task fires.
+            when: Either a 5-field cron expression (``"0 9 * * 1-5"``
+                = every weekday at 9am) or an ISO-8601 datetime
+                (``"2026-05-01T15:00:00"`` = once at 3pm UTC on May 1).
+                Compute exact times using ``current_time`` — the agent
+                cannot infer "now" from training data.
+            job_id: Optional human-readable id for the job. Auto-
+                generated if omitted; you'll need it later to cancel.
+
+        Returns ``"Scheduled job <id> next at <iso>."`` on success,
+        an error string on malformed ``when`` or backend failure.
+        """
+        try:
+            job = scheduler.add_job(prompt, when, job_id=job_id)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: scheduler add_job failed: {exc}"
+        next_fire = job.next_fire or "(managed by remote scheduler)"
+        return f"Scheduled job {job.id} next at {next_fire}."
+
+    @tool
+    async def list_schedules() -> str:
+        """List the current scheduled jobs for this agent.
+
+        Returns one job per line with id, next-fire timestamp, and a
+        prompt preview. Returns ``"No scheduled jobs."`` when empty.
+
+        Backends that delegate state to a remote scheduler (e.g. the
+        Workstacean adapter) may return an empty list even when jobs
+        exist — query the remote scheduler directly to see those.
+        """
+        jobs = scheduler.list_jobs()
+        if not jobs:
+            return "No scheduled jobs."
+        lines = []
+        for j in jobs:
+            preview = (j.prompt or "")[:80]
+            next_fire = j.next_fire or "(managed remotely)"
+            lines.append(f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {preview}")
+        return "\n".join(lines)
+
+    @tool
+    async def cancel_schedule(job_id: str) -> str:
+        """Cancel a scheduled job by id.
+
+        Args:
+            job_id: The id returned by ``schedule_task`` (or shown by
+                ``list_schedules``).
+
+        Returns ``"Canceled <id>."`` or ``"Error: no such job <id>."``.
+        """
+        if not job_id or not job_id.strip():
+            return "Error: job_id is required."
+        try:
+            ok = scheduler.cancel_job(job_id)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: scheduler cancel_job failed: {exc}"
+        return f"Canceled {job_id}." if ok else f"Error: no such job {job_id}."
+
+    return [schedule_task, list_schedules, cancel_schedule]
+
+
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
-def get_all_tools(knowledge_store=None):
+def get_all_tools(knowledge_store=None, scheduler=None):
     """Return every LangChain tool the lead agent + subagents can use.
 
-    When ``knowledge_store`` is provided, the memory tools are bound
-    to it and included. Forks that disable the store can pass
-    ``knowledge_store=None`` and the lead agent runs with the four
-    keyless tools only.
+    Optional dependencies:
+
+    - ``knowledge_store`` enables the memory tools (memory_ingest,
+      memory_recall, memory_list, memory_stats, daily_log).
+    - ``scheduler`` enables the scheduler tools (schedule_task,
+      list_schedules, cancel_schedule). Accepts any backend that
+      implements ``scheduler.interface.SchedulerBackend``.
+
+    Pass ``None`` to disable either subsystem — the lead agent runs
+    fine with just the four keyless general tools.
     """
     tools = [current_time, calculator, web_search, fetch_url]
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
+    if scheduler is not None:
+        tools.extend(_build_scheduler_tools(scheduler))
     return tools

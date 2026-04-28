@@ -158,6 +158,7 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
 def create_agent_graph(
     config: LangGraphConfig,
     knowledge_store=None,
+    scheduler=None,
     include_subagents: bool = True,
 ):
     """Create the protoAgent LangGraph agent.
@@ -167,7 +168,7 @@ def create_agent_graph(
     """
     llm = create_llm(config)
 
-    all_tools = get_all_tools(knowledge_store)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
 
     if include_subagents:
         task_tool = _build_task_tool(config, all_tools)
@@ -189,12 +190,12 @@ def create_agent_graph(
     return agent
 
 
-def create_simple_agent(config: LangGraphConfig, knowledge_store=None):
+def create_simple_agent(config: LangGraphConfig, knowledge_store=None, scheduler=None):
     """Create a simple agent without subagents (for debugging/testing)."""
     from langgraph.prebuilt import create_react_agent
 
     llm = create_llm(config)
-    all_tools = get_all_tools(knowledge_store)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
 
     system_prompt = build_system_prompt(include_subagents=False)
 

@@ -83,3 +83,16 @@ Only read when `middleware.knowledge` is `true`.
 | `top_k` | `5` | Results per query fed into state. |
 
 The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 isn't available). One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
+
+## Scheduler
+
+The bundled scheduler is configured entirely via environment, not YAML, so the same image can be deployed under either backend without rebuilding. See [Schedule future work](/guides/scheduler) for the full guide.
+
+| Env var | Default | What |
+|---|---|---|
+| `WORKSTACEAN_API_BASE` | unset | When set together with `WORKSTACEAN_API_KEY`, swaps the bundled local scheduler for the `WorkstaceanScheduler` HTTP adapter. |
+| `WORKSTACEAN_API_KEY` | unset | Auth token sent as `X-API-Key` to Workstacean's `/publish`. |
+| `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
+| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
+| `SCHEDULER_DISABLED` | unset | Set to `1` / `true` to drop the scheduler tools entirely. |

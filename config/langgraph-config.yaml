@@ -32,6 +32,9 @@ subagents:
       - memory_list
       - memory_stats
       - daily_log
+      - schedule_task
+      - list_schedules
+      - cancel_schedule
     max_turns: 20
 
 middleware:
