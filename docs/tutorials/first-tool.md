@@ -108,5 +108,5 @@ The template runs tests via `pytest` with `pytest-asyncio` in auto mode — no e
 ## Where to go next
 
 - [Add a custom skill](/guides/add-a-skill) — advertise new capabilities on the agent card so A2A callers can find them
-- [Starter tools reference](/reference/starter-tools) — the shapes of the five tools that ship
+- [Starter tools reference](/reference/starter-tools) — the shapes of all twelve tools that ship by default
 - [Configure subagents](/guides/subagents) — add specialized delegates beyond the placeholder `worker`

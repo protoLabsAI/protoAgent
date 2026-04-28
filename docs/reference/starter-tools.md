@@ -1,11 +1,12 @@
 # Starter tools
 
-Nine tools ship in `tools/lg_tools.py`:
+Twelve tools ship by default:
 
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
 - Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
+- Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
 
-`get_all_tools(knowledge_store)` is the registry. When `knowledge_store` is `None` (the store is disabled in config) the memory tools are omitted automatically.
+`get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
 
 ## `current_time`
 
@@ -158,6 +159,47 @@ async def daily_log(content: str) -> str
 
 Convenience wrapper around `memory_ingest` that writes to `domain='daily-log'` with today's UTC date as the heading. Same-day entries cluster under the same heading for `memory_list(domain='daily-log')`.
 
+## `schedule_task`
+
+```python
+@tool
+async def schedule_task(prompt: str, when: str, job_id: str | None = None) -> str
+```
+
+Persist a future invocation. The agent receives `prompt` as a fresh turn when the schedule fires.
+
+`when` is either a 5-field cron expression (`"0 9 * * 1-5"` = every weekday at 9am) or an ISO-8601 datetime (`"2026-05-01T15:00:00"` = once at 3pm UTC on May 1). Backends auto-detect.
+
+`job_id` is optional — auto-generated as `<agent_name>-<uuid>` when omitted. You'll need it later for `cancel_schedule`.
+
+Output: `"Scheduled job <id> next at <iso>."` on success. Returns `"Error: ..."` on malformed `when` or backend failure.
+
+Prompts are self-contained — the agent has no memory of the scheduling moment when the task fires, so write the prompt as a fresh turn ("review last week's pipeline incidents and post a summary"), not a reference ("do that thing we discussed").
+
+## `list_schedules`
+
+```python
+@tool
+async def list_schedules() -> str
+```
+
+List the current scheduled jobs for *this* agent. Multi-agent isolation: each agent only sees jobs it created.
+
+Output: one job per line with id, next-fire timestamp, schedule, and prompt preview. Returns `"No scheduled jobs."` when empty.
+
+The Workstacean adapter intentionally returns `[]` (Workstacean owns scheduling state and its `list` action publishes asynchronously to a topic). Run the local backend or query Workstacean directly for live introspection there.
+
+## `cancel_schedule`
+
+```python
+@tool
+async def cancel_schedule(job_id: str) -> str
+```
+
+Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."`.
+
+Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path or a Workstacean install.
+
 ## Adding your own
 
 Follow the same pattern:
@@ -180,13 +222,15 @@ async def my_tool(required_arg: str, optional_arg: int = 5) -> str:
     return f"Success: {result}"
 ```
 
-Then append it to the keyless tool list in `get_all_tools()` — keep the conditional `_build_memory_tools(knowledge_store)` extension below it so the bundled memory tools still ship when a store is configured:
+Then append it to the keyless tool list in `get_all_tools()` — keep the two conditional extensions below it so the bundled memory + scheduler tools still ship when their backends are configured:
 
 ```python
-def get_all_tools(knowledge_store=None):
+def get_all_tools(knowledge_store=None, scheduler=None):
     tools = [current_time, calculator, web_search, fetch_url, my_tool]
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
+    if scheduler is not None:
+        tools.extend(_build_scheduler_tools(scheduler))
     return tools
 ```
 
@@ -195,5 +239,6 @@ See [Write your first tool](/tutorials/first-tool) for the full walkthrough.
 ## Related
 
 - [Configure subagents](/guides/subagents) — tools are allowlisted per subagent
-- [Environment variables](/reference/environment-variables) — SSRF allowlist vars affect `fetch_url`
+- [Environment variables](/reference/environment-variables) — SSRF allowlist vars affect `fetch_url`; scheduler backend selection lives there too
 - [Eval your fork](/guides/evals) — the eval harness exercises every tool listed here end-to-end
+- [Schedule future work](/guides/scheduler) — the firing model + multi-agent isolation story behind the scheduler tools

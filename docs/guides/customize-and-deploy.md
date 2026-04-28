@@ -66,7 +66,9 @@ Replace with the skills your agent actually advertises over A2A. The `name` and 
 
 ## 5. (Optional) Add domain tools
 
-`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url`. Keep the ones you want, drop the rest, add your own. Update `get_all_tools()` at the bottom. Any tool returned from there becomes a checkbox in the wizard and drawer automatically.
+`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url` plus 5 memory tools (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the bundled `KnowledgeStore`. The 3 scheduler tools (`schedule_task`, `list_schedules`, `cancel_schedule`) are wired in separately by `server.py::_build_scheduler` when the scheduler backend is enabled. Keep the ones you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of `tools/lg_tools.py`. Any tool returned from there (or from `_build_scheduler_tools`) becomes a checkbox in the wizard and drawer automatically.
+
+The memory tools are dropped automatically when `middleware.knowledge: false`; the scheduler tools when `middleware.scheduler: false`. See [Schedule future work](/guides/scheduler) and [Configuration](/reference/configuration#middleware) for the toggles.
 
 ## 6. (Optional) Configure subagents
 

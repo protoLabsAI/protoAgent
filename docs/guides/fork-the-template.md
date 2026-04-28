@@ -43,7 +43,7 @@ Keep the `<scratch_pad>` / `<output>` protocol block in `prompts.py` — the A2A
 
 ## 4. Replace the starter tools
 
-`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url`. Keep what you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of the file.
+Twelve tools ship by default: `current_time`, `calculator`, `web_search`, `fetch_url` (keyless general) plus `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` (bound to the bundled `KnowledgeStore`) plus `schedule_task`, `list_schedules`, `cancel_schedule` (bound to the scheduler backend). Keep what you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of `tools/lg_tools.py`.
 
 See the [starter tools reference](/reference/starter-tools) for the shapes of the shipped ones.
 
