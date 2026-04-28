@@ -48,9 +48,17 @@ _MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h — matches Workstacean
 
 
 def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
-    """Pick a writable jobs.db path namespaced by agent name."""
+    """Pick a writable jobs.db path namespaced by agent name.
+
+    ``agent_name`` is sanitized to a single path segment before being
+    appended — operators set it via env or YAML, but defence in depth
+    against a value like ``../etc/passwd`` or ``/tmp/elsewhere`` is
+    cheap and prevents an exotic typo from putting a sqlite file
+    outside the configured scheduler dir.
+    """
+    safe_name = _safe_segment(agent_name)
     raw = os.environ.get("SCHEDULER_DB_DIR") or db_dir or DEFAULT_DB_DIR
-    base = Path(str(raw)).expanduser() / agent_name
+    base = Path(str(raw)).expanduser() / safe_name
     try:
         base.mkdir(parents=True, exist_ok=True)
         probe = base / ".write-probe"
@@ -58,10 +66,25 @@ def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
         probe.unlink()
         return base / "jobs.db"
     except OSError:
-        fallback = Path.home() / ".protoagent" / "scheduler" / agent_name
+        fallback = Path.home() / ".protoagent" / "scheduler" / safe_name
         fallback.mkdir(parents=True, exist_ok=True)
         log.info("[scheduler] %s not writable; using %s instead", base, fallback)
         return fallback / "jobs.db"
+
+
+def _safe_segment(name: str) -> str:
+    """Reduce ``name`` to a single safe path segment.
+
+    Replaces path separators, ``..``, and absolute-path prefixes with
+    underscores; falls back to ``"default"`` when nothing usable
+    remains. Preserves the common slug shape (``gina-personal``,
+    ``ginavision``) without surprises.
+    """
+    if not name:
+        return "default"
+    cleaned = name.replace("/", "_").replace("\\", "_").replace("..", "_")
+    cleaned = cleaned.lstrip(".").strip()
+    return cleaned or "default"
 
 
 def _now_iso() -> str:
@@ -363,10 +386,15 @@ class LocalScheduler:
                     "role": "user",
                     "parts": [{"kind": "text", "text": job.prompt}],
                     "messageId": message_id,
-                    # Carry the originating job id so observers can tell
-                    # this turn was scheduler-driven, not user-driven.
-                    "metadata": {"scheduler_job_id": job.id, "scheduler_kind": "local"},
-                }
+                },
+                # Custom metadata goes at params.metadata — that's
+                # where a2a_handler._a2a_rpc reads it (see
+                # ``msg_metadata = params.get("metadata")``). Putting
+                # it inside params.message.metadata silently drops it.
+                "metadata": {
+                    "scheduler_job_id": job.id,
+                    "scheduler_kind": "local",
+                },
             },
         }
         try:

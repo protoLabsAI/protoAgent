@@ -170,13 +170,14 @@ class TestRescheduleOrDelete:
         s = _make_scheduler(tmp_path)
         s.add_job("hi", "0 9 * * *", job_id="cron")
         job = s.list_jobs()[0]
-        original_next = job.next_fire
-        # Fire at "now" — next_fire should advance to the next 09:00 UTC
-        s._reschedule_or_delete(job, fired_at=datetime.now(UTC))
-        new_next = s.list_jobs()[0].next_fire
-        assert new_next != original_next or original_next > datetime.now(UTC).isoformat()
-        # last_fire should be populated
-        assert s.list_jobs()[0].last_fire is not None
+        # Fire at a fixed timestamp — 2026-04-28T10:00:00Z is one hour
+        # past the 09:00 cron slot, so the next fire must be exactly
+        # 2026-04-29T09:00:00Z.
+        fired_at = datetime(2026, 4, 28, 10, 0, 0, tzinfo=UTC)
+        s._reschedule_or_delete(job, fired_at=fired_at)
+        rescheduled = s.list_jobs()[0]
+        assert rescheduled.next_fire == "2026-04-29T09:00:00+00:00"
+        assert rescheduled.last_fire == fired_at.isoformat()
 
 
 class TestMissedFireRecovery:

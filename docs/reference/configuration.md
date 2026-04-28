@@ -88,7 +88,7 @@ The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 is
 
 ## Scheduler
 
-The bundled scheduler is configured entirely via environment, not YAML, so the same image can be deployed under either backend without rebuilding. See [Schedule future work](/guides/scheduler) for the full guide.
+Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.
 
 | Env var | Default | What |
 |---|---|---|
@@ -97,4 +97,4 @@ The bundled scheduler is configured entirely via environment, not YAML, so the s
 | `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
 | `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
-| `SCHEDULER_DISABLED` | unset | Set to `1` / `true` to drop the scheduler tools entirely. |
+| `SCHEDULER_DISABLED` | unset | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

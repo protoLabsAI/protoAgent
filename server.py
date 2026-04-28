@@ -288,36 +288,44 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # would leave the process serving the prior compiled _graph under
     # fresh _graph_config + rotated bearer auth on failure — the
     # metrics / card / auth all de-sync from what's actually running.
+    # Plan the scheduler swap *before* attempting the graph rebuild so
+    # the polling loop isn't torn down (or a fresh one started) until
+    # we know the rebuild will succeed. Three states:
+    #
+    # 1. Toggle flipped OFF, scheduler currently running → next graph
+    #    uses None; we stop the running scheduler only after commit.
+    # 2. Toggle ON, none running (first-run after setup completes) →
+    #    construct now (cheap), start only after commit.
+    # 3. Toggle ON, already running → reuse. Drawer saves don't tear
+    #    down the polling loop.
+    #
+    # Env-driven config (WORKSTACEAN_API_BASE) only takes effect on
+    # full process restart; the YAML toggle is the canonical
+    # reload-time switch.
+    global _scheduler
+    scheduler_wanted = getattr(new_config, "scheduler_enabled", True)
+    next_scheduler: "SchedulerBackend | None"
+    pending_start: "SchedulerBackend | None" = None
+    pending_stop: "SchedulerBackend | None" = None
+    if not scheduler_wanted:
+        next_scheduler = None
+        pending_stop = _scheduler  # may be None — stopper is no-op then
+    elif _scheduler is None:
+        next_scheduler = _build_scheduler(new_config)
+        pending_start = next_scheduler
+    else:
+        next_scheduler = _scheduler
+
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
-            # Three states for the scheduler on reload:
-            #
-            # 1. Toggle flipped OFF (was on) → stop + drop the running
-            #    scheduler so the agent stops registering scheduler
-            #    tools. The new graph is built with scheduler=None.
-            # 2. Toggle is ON and we have a running scheduler → reuse
-            #    it. Drawer saves don't tear down the polling loop.
-            # 3. Toggle is ON but _scheduler is None (first-run after
-            #    setup completes) → construct + start.
-            #
-            # Env-driven config (WORKSTACEAN_API_BASE) only takes
-            # effect on full process restart; the YAML toggle is the
-            # canonical reload-time switch.
-            global _scheduler
-            scheduler_wanted = getattr(new_config, "scheduler_enabled", True)
-            if not scheduler_wanted and _scheduler is not None:
-                _stop_scheduler_async(_scheduler)
-                _scheduler = None
-            elif scheduler_wanted and _scheduler is None:
-                _scheduler = _build_scheduler(new_config)
-                if _scheduler is not None:
-                    _start_scheduler_async(_scheduler)
             new_graph = create_agent_graph(
-                new_config, knowledge_store=new_store, scheduler=_scheduler,
+                new_config, knowledge_store=new_store, scheduler=next_scheduler,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
+            # Scheduler state hasn't been committed yet — caller's
+            # running scheduler keeps polling, no orphaned tasks.
             return False, f"graph rebuild failed: {e}"
     else:
         new_graph = None
@@ -334,6 +342,15 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # before _main wires routes) — harmless.
         pass
     _graph = new_graph
+    # Commit the scheduler swap. start/stop are async — fire-and-forget
+    # onto the active loop so reload stays sync. We've already verified
+    # the graph rebuild succeeded; if start/stop fails we log but
+    # don't roll back (the agent is already serving the new graph).
+    _scheduler = next_scheduler
+    if pending_stop is not None:
+        _stop_scheduler_async(pending_stop)
+    if pending_start is not None:
+        _start_scheduler_async(pending_start)
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
