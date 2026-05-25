@@ -1,4 +1,4 @@
-name: 'Prepare Release'
+name: "Prepare Release"
 
 # Runs after any non-release PR merges to main, OR manually.
 # Bumps the version in pyproject.toml, opens a prepare-release/vX.Y.Z
@@ -14,13 +14,13 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Version bump type'
+        description: "Version bump type"
         required: true
         type: choice
         options: [patch, minor, major]
         default: patch
       dry_run:
-        description: 'Preview only — no branch or PR created'
+        description: "Preview only — no branch or PR created"
         type: boolean
         default: false
 
@@ -31,7 +31,7 @@ concurrency:
 jobs:
   prepare:
     name: Prepare Release
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-protolabs-linux
     # Guards:
     # - repo-scope: don't run in forks
     # - workflow_dispatch always runs
@@ -63,7 +63,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Bump version
         run: python scripts/version.py ${{ inputs.bump || 'patch' }}

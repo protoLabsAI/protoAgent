@@ -30,6 +30,8 @@ docs/.vitepress/cache/
 
 # protoLabs workspace-config standard
 .beads/beads.db
+# Git-friendly issue export must be committed despite the blanket *.jsonl ignore.
+!.beads/issues.jsonl
 .automaker/features/
 .automaker/checkpoints/
 .automaker/trajectory/

@@ -1,4 +1,4 @@
-name: 'Release'
+name: "Release"
 
 # Triggered by a push of a vX.Y.Z tag (cut by prepare-release.yml).
 # Builds and pushes the stable semver Docker tags, creates a GitHub
@@ -9,11 +9,11 @@ name: 'Release'
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v0.1.1)'
+        description: "Tag to release (e.g. v0.1.1)"
         required: true
 
 env:
@@ -23,6 +23,7 @@ env:
 jobs:
   release:
     name: Release
+    # workspace-config: allow-hosted-runner docker buildx build + registry push
     runs-on: ubuntu-latest
     if: github.repository == 'protoLabsAI/protoAgent'
     permissions:
@@ -130,7 +131,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Post release notes to Discord
         continue-on-error: true
