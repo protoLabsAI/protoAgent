@@ -17,13 +17,23 @@ model:
 subagents:
   worker:
     enabled: true
-    tools: [echo, current_time, calculator, web_search, fetch_url]
+    tools:
+      - current_time
+      - calculator
+      - web_search
+      - fetch_url
+      - memory_ingest
+      - memory_recall
+      - memory_list
+      - memory_stats
+      - daily_log
     max_turns: 20
 
 middleware:
-  knowledge: false
+  knowledge: true
   audit: true
-  memory: false
+  memory: true
+  scheduler: true
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db
@@ -59,9 +69,10 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 
 | Key | Default | What |
 |---|---|---|
-| `knowledge` | `false` | Inject retrieved knowledge into state before LLM calls. Requires a knowledge store — leave off until you add one. |
+| `knowledge` | `true` | Inject retrieved knowledge into state before LLM calls. Backed by the bundled `KnowledgeStore` (sqlite + FTS5). Set `false` for a stateless agent. |
 | `audit` | `true` | Append every tool call to `/sandbox/audit/audit.jsonl`. |
-| `memory` | `false` | Memory middleware (experimental). Requires a knowledge store. |
+| `memory` | `true` | Persist a session summary on terminal turn and asynchronously index conversation findings under `domain='finding'`. |
+| `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite, or `WorkstaceanScheduler` when env vars are set). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
 
 ## `knowledge`
 
@@ -69,8 +80,21 @@ Only read when `middleware.knowledge` is `true`.
 
 | Key | Default | What |
 |---|---|---|
-| `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. |
-| `embed_model` | `nomic-embed-text` | Embedding model. |
+| `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
+| `embed_model` | `nomic-embed-text` | Reserved for forks that bolt embeddings on top of the FTS5 baseline. The bundled store ignores it. |
 | `top_k` | `5` | Results per query fed into state. |
 
-The template does not ship a knowledge store — the config keys are kept so a fork can flip the switch without rewiring every call site.
+The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 isn't available). One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
+
+## Scheduler
+
+Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.
+
+| Env var | Default | What |
+|---|---|---|
+| `WORKSTACEAN_API_BASE` | unset | When set together with `WORKSTACEAN_API_KEY`, swaps the bundled local scheduler for the `WorkstaceanScheduler` HTTP adapter. |
+| `WORKSTACEAN_API_KEY` | unset | Auth token sent as `X-API-Key` to Workstacean's `/publish`. |
+| `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
+| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
+| `SCHEDULER_DISABLED` | unset | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

@@ -35,7 +35,8 @@ export default defineConfig({
           text: "How-To Guides",
           items: [
             { text: "Overview", link: "/guides/" },
-            { text: "Fork the template", link: "/guides/fork-the-template" },
+            { text: "Customize & deploy", link: "/guides/customize-and-deploy" },
+            { text: "Fork checklist (fast path)", link: "/guides/fork-the-template" },
             { text: "Add a custom skill", link: "/guides/add-a-skill" },
             { text: "Configure subagents", link: "/guides/subagents" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },

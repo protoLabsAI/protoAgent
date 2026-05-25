@@ -29,6 +29,7 @@ env:
 
 jobs:
   build-and-push:
+    # workspace-config: allow-hosted-runner docker buildx build + registry push
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

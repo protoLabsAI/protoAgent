@@ -3,7 +3,13 @@ __pycache__/
 *.pyo
 .env
 .venv/
+.venv-*/
 venv/
+
+# Local-run artifacts — autostart stdout/stderr logs + memory middleware
+# fallback directory when /sandbox is not available.
+logs/
+.proto/
 *.egg-info/
 dist/
 build/
@@ -13,7 +19,6 @@ build/
 
 # protoLabs Studio agent workspace (never commit)
 .automaker-lock
-.automaker/
 .claude/
 .worktrees/
 worktrees/
@@ -22,3 +27,11 @@ worktrees/
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# protoLabs workspace-config standard
+.beads/beads.db
+# Git-friendly issue export must be committed despite the blanket *.jsonl ignore.
+!.beads/issues.jsonl
+.automaker/features/
+.automaker/checkpoints/
+.automaker/trajectory/

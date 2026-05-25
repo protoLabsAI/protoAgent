@@ -22,16 +22,32 @@ model:
 subagents:
   worker:
     enabled: true
-    tools: [echo, current_time, calculator, web_search, fetch_url]
+    tools:
+      - current_time
+      - calculator
+      - web_search
+      - fetch_url
+      - memory_ingest
+      - memory_recall
+      - memory_list
+      - memory_stats
+      - daily_log
+      - schedule_task
+      - list_schedules
+      - cancel_schedule
     max_turns: 20
 
 middleware:
-  # The knowledge middleware requires a knowledge store. Leave false
-  # until you add one. Memory persistence is enabled by default and
-  # writes session summaries to /sandbox/memory/ without a store.
-  knowledge: false
+  # All four subsystems default ON. The template constructs the
+  # knowledge store + scheduler backends automatically (see
+  # ``server.py::_build_knowledge_store`` and ``_build_scheduler``).
+  # Flip any of these to ``false`` to opt out — the corresponding
+  # tools (memory_*, schedule_*) are dropped from the agent loop
+  # without touching the worker subagent's tool allowlist.
+  knowledge: true
   audit: true
   memory: true
+  scheduler: true
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db

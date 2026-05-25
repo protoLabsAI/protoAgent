@@ -7,11 +7,19 @@ the lead agent can invoke during a run.
 The template ships with a small starter set of free, keyless tools so
 a fresh clone can demonstrate real agent behaviour out of the box:
 
-- ``echo`` — sanity check
 - ``current_time`` — wall-clock time in any IANA timezone
 - ``calculator`` — safe numeric expression evaluation
 - ``web_search`` — DuckDuckGo text search (via ``ddgs``, no API key)
 - ``fetch_url`` — fetch a URL and return cleaned text
+
+Plus memory tools that bind to a ``KnowledgeStore`` (constructed in
+``server.py`` and threaded through ``get_all_tools(knowledge_store)``):
+
+- ``memory_ingest`` — store a fact / preference / note
+- ``memory_recall`` — search the store for relevant chunks
+- ``memory_list``   — list recent chunks (optionally per domain)
+- ``memory_stats``  — per-domain counts
+- ``daily_log``     — convenience: write a daily-log chunk
 
 Replace or extend this file with your agent's real tools and update
 ``get_all_tools()`` to return the full list.
@@ -32,25 +40,12 @@ Every tool that hits an external service should:
 from __future__ import annotations
 
 import ast
+import asyncio
 import operator as _op
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
-
-
-# ── echo ─────────────────────────────────────────────────────────────────────
-
-
-@tool
-async def echo(message: str) -> str:
-    """Echo the input back with a prefix. Template-only sanity tool.
-
-    Useful to verify the tool loop is wired end-to-end before real
-    tools are in place. Safe to delete once your fork has its own
-    tools.
-    """
-    return f"echo: {message}"
 
 
 # ── current_time ─────────────────────────────────────────────────────────────
@@ -273,16 +268,251 @@ def _extract_text_from_html(content: bytes) -> str:
     return "\n".join(lines)
 
 
+# ── memory tools ─────────────────────────────────────────────────────────────
+#
+# Each memory tool is built by a factory that closes over the
+# ``KnowledgeStore`` instance. Doing it this way (rather than module-
+# level globals) keeps tests isolated — they pass a temp store and get
+# a fresh tool list bound to it. Production constructs one store in
+# ``server.py`` and reuses the bound tools for the lifetime of the
+# process.
+
+
+_MEMORY_RECALL_MAX_K = 20
+_MEMORY_LIST_MAX_LIMIT = 200
+
+# Stable list of scheduler tool names. Exposed as a module-level
+# constant so ``graph/config_io.py::list_available_tools`` can show
+# the wizard the right surface even when the runtime hasn't yet
+# constructed a scheduler instance (e.g. fresh boot before setup is
+# complete). Keep in sync with ``_build_scheduler_tools``.
+SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
+    "schedule_task", "list_schedules", "cancel_schedule",
+)
+MEMORY_TOOL_NAMES: tuple[str, ...] = (
+    "memory_ingest", "memory_recall", "memory_list", "memory_stats", "daily_log",
+)
+
+
+def _build_memory_tools(knowledge_store) -> list:
+    """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
+    from datetime import datetime, timezone
+
+    @tool
+    async def memory_ingest(
+        content: str,
+        domain: str = "general",
+        heading: str | None = None,
+    ) -> str:
+        """Store a fact, preference, or note in long-term memory.
+
+        Use this for things the operator wants you to remember across
+        sessions — preferences ("I take my coffee black"), facts about
+        the operator's environment, decisions worth recalling later.
+
+        Args:
+            content: The text to remember. Be specific and self-contained;
+                the chunk is retrieved by keyword search.
+            domain: Logical bucket — ``"preferences"``, ``"context"``,
+                ``"general"``. Defaults to ``"general"``.
+            heading: Optional short label (e.g. ``"coffee"``) used as a
+                stable de-dupe key by the eval suite and curator.
+
+        Returns ``"Stored chunk N in 'domain'."`` on success.
+        """
+        chunk_id = knowledge_store.add_chunk(content, domain=domain, heading=heading)
+        if chunk_id is None:
+            return "Error: failed to store chunk (knowledge store unavailable)."
+        return f"Stored chunk {chunk_id} in {domain!r}."
+
+    @tool
+    async def memory_recall(query: str, k: int = 5) -> str:
+        """Search long-term memory for chunks relevant to ``query``.
+
+        Returns the top-k matches, one per line. Pull this when the
+        operator asks something where stored context is more reliable
+        than the model's own training data ("what's my coffee order?",
+        "remind me what we decided about the auth migration").
+
+        Returns ``"No matches."`` when the store is empty or nothing
+        scores above the keyword threshold.
+        """
+        clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
+        results = knowledge_store.search(query, k=clamped_k)
+        if not results:
+            return "No matches."
+        lines = [f"[{r.get('domain', '?')}] {r['preview']}" for r in results]
+        return "\n".join(lines)
+
+    @tool
+    async def memory_list(domain: str | None = None, limit: int = 10) -> str:
+        """List the most recent chunks. Filter by domain when given.
+
+        Useful when the operator asks for recent activity ("what did I
+        log today?") or wants to inspect what the agent has stored.
+        """
+        clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
+        chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
+        if not chunks:
+            return f"No chunks in {domain or 'any domain'}."
+        lines = []
+        for c in chunks:
+            head = f"[{c.domain}]"
+            if c.heading:
+                head += f" {c.heading}:"
+            preview = (c.content or "")[:200]
+            lines.append(f"{c.created_at} {head} {preview}")
+        return "\n".join(lines)
+
+    @tool
+    async def memory_stats() -> str:
+        """Return chunk counts per domain. Useful for sanity checks."""
+        s = knowledge_store.stats()
+        if s.get("total", 0) == 0:
+            return "Knowledge store is empty."
+        lines = [f"Total: {s['total']}"]
+        for k, v in s.items():
+            if k == "total":
+                continue
+            lines.append(f"  {k}: {v}")
+        return "\n".join(lines)
+
+    @tool
+    async def daily_log(content: str) -> str:
+        """Append a daily-log entry for today.
+
+        Stored under ``domain='daily-log'`` with today's UTC date as
+        the heading, so the same day's entries cluster together for
+        ``memory_list(domain='daily-log')`` queries.
+        """
+        today = datetime.now(timezone.utc).date().isoformat()
+        chunk_id = knowledge_store.add_chunk(
+            content, domain="daily-log", heading=today,
+        )
+        if chunk_id is None:
+            return "Error: failed to write daily log entry."
+        return f"Logged ({today}): {content[:120]}"
+
+    return [memory_ingest, memory_recall, memory_list, memory_stats, daily_log]
+
+
+# ── scheduler tools ──────────────────────────────────────────────────────────
+#
+# Three tools that bind to either the local sqlite-backed scheduler or
+# the Workstacean adapter — the agent loop sees one stable surface and
+# never has to know which backend is wired up.
+#
+# Multi-agent safety: the underlying backend is constructed in
+# ``server.py`` with the active ``AGENT_NAME`` baked in. add_job /
+# list_jobs / cancel_job all filter by that name so two protoAgent
+# instances on the same machine (or sharing one Workstacean install)
+# never see each other's jobs.
+
+
+def _build_scheduler_tools(scheduler) -> list:
+    """Bind scheduler tools to a ``SchedulerBackend``. Returns a list."""
+
+    @tool
+    async def schedule_task(
+        prompt: str,
+        when: str,
+        job_id: str | None = None,
+    ) -> str:
+        """Schedule a future task. The agent receives ``prompt`` as a
+        new turn when the schedule fires.
+
+        Use this for anything the operator wants done later: reminders
+        ("remind me to follow up on the auth migration tomorrow at
+        9am"), recurring sweeps ("every Monday morning, summarize last
+        week's logs"), one-off check-ins ("at 3pm today, ask whether
+        the deploy is healthy").
+
+        Args:
+            prompt: The text the agent should receive when the schedule
+                fires. Be self-contained — the agent has no memory of
+                this scheduling moment when the task fires.
+            when: Either a 5-field cron expression (``"0 9 * * 1-5"``
+                = every weekday at 9am) or an ISO-8601 datetime
+                (``"2026-05-01T15:00:00"`` = once at 3pm UTC on May 1).
+                Compute exact times using ``current_time`` — the agent
+                cannot infer "now" from training data.
+            job_id: Optional human-readable id for the job. Auto-
+                generated if omitted; you'll need it later to cancel.
+
+        Returns ``"Scheduled job <id> next at <iso>."`` on success,
+        an error string on malformed ``when`` or backend failure.
+        """
+        try:
+            job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: scheduler add_job failed: {exc}"
+        next_fire = job.next_fire or "(managed by remote scheduler)"
+        return f"Scheduled job {job.id} next at {next_fire}."
+
+    @tool
+    async def list_schedules() -> str:
+        """List the current scheduled jobs for this agent.
+
+        Returns one job per line with id, next-fire timestamp, and a
+        prompt preview. Returns ``"No scheduled jobs."`` when empty.
+
+        Backends that delegate state to a remote scheduler (e.g. the
+        Workstacean adapter) may return an empty list even when jobs
+        exist — query the remote scheduler directly to see those.
+        """
+        jobs = await asyncio.to_thread(scheduler.list_jobs)
+        if not jobs:
+            return "No scheduled jobs."
+        lines = []
+        for j in jobs:
+            preview = (j.prompt or "")[:80]
+            next_fire = j.next_fire or "(managed remotely)"
+            lines.append(f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {preview}")
+        return "\n".join(lines)
+
+    @tool
+    async def cancel_schedule(job_id: str) -> str:
+        """Cancel a scheduled job by id.
+
+        Args:
+            job_id: The id returned by ``schedule_task`` (or shown by
+                ``list_schedules``).
+
+        Returns ``"Canceled <id>."`` or ``"Error: no such job <id>."``.
+        """
+        if not job_id or not job_id.strip():
+            return "Error: job_id is required."
+        try:
+            ok = await asyncio.to_thread(scheduler.cancel_job, job_id)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: scheduler cancel_job failed: {exc}"
+        return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
+
+    return [schedule_task, list_schedules, cancel_schedule]
+
+
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
-def get_all_tools(knowledge_store=None):
+def get_all_tools(knowledge_store=None, scheduler=None):
     """Return every LangChain tool the lead agent + subagents can use.
 
-    ``knowledge_store`` is threaded through for agents that ship a
-    knowledge / memory subsystem (see ``graph/middleware/knowledge.py``
-    for the hook-in pattern). The template doesn't ship a store — the
-    parameter is kept so adding one later doesn't require touching
-    every call site.
+    Optional dependencies:
+
+    - ``knowledge_store`` enables the memory tools (memory_ingest,
+      memory_recall, memory_list, memory_stats, daily_log).
+    - ``scheduler`` enables the scheduler tools (schedule_task,
+      list_schedules, cancel_schedule). Accepts any backend that
+      implements ``scheduler.interface.SchedulerBackend``.
+
+    Pass ``None`` to disable either subsystem — the lead agent runs
+    fine with just the four keyless general tools.
     """
-    return [echo, current_time, calculator, web_search, fetch_url]
+    tools = [current_time, calculator, web_search, fetch_url]
+    if knowledge_store is not None:
+        tools.extend(_build_memory_tools(knowledge_store))
+    if scheduler is not None:
+        tools.extend(_build_scheduler_tools(scheduler))
+    return tools

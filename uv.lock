@@ -1,0 +1,8 @@
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[[package]]
+name = "protoagent"
+version = "0.2.1"
+source = { virtual = "." }

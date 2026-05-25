@@ -12,9 +12,15 @@ close to a rewrite of `SOUL.md`, `graph/prompts.py`, and
 Quinn was the first agent built on this template — it's a good
 example of what a filled-in fork looks like end-to-end.
 
-Start a new agent by clicking **"Use this template"** at the top
-of the GitHub repo. See [TEMPLATE.md](./TEMPLATE.md) for the
-step-by-step fork checklist.
+**Try it in 5 minutes:** clone, `pip install -r requirements.txt`,
+`python server.py`, open <http://localhost:7870>, and walk the
+setup wizard — no forking, no `sed`, no Docker required to get
+your first agent talking. See the [first-agent tutorial](./docs/tutorials/first-agent.md).
+
+**When you're ready to ship your own:** click **"Use this template"**
+at the top of the GitHub repo, then follow [Customize &
+deploy](./docs/guides/customize-and-deploy.md) for the fork /
+rename / release-pipeline wiring.
 
 ## What you get out of the box
 
@@ -24,35 +30,41 @@ step-by-step fork checklist.
 | Agent runtime | `graph/agent.py`, `server.py` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
 | LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one placeholder `worker` ships |
-| Starter tools | `tools/lg_tools.py` | Free, keyless tools so a fresh fork can demo real behaviour: `echo`, `current_time`, `calculator` (safe AST eval), `web_search` (DuckDuckGo), `fetch_url` |
+| Starter tools | `tools/lg_tools.py` | Twelve tools default-on: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 5 memory (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the KB store + 3 scheduler (`schedule_task`, `list_schedules`, `cancel_schedule`) bound to the scheduler backend |
+| Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
+| Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
+| Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
 | Observability | `metrics.py`, `audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
 | Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
 | UI | `chat_ui.py`, `static/` | Gradio chat with PWA shell, dark theme, offline fallback |
 | Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
 
-## Quickstart
+## Quickstart — from zero to chatting in 5 minutes
 
 ```bash
-# 1. Click "Use this template" on GitHub, or:
-gh repo create protoLabsAI/my-agent \
-    --template protoLabsAI/protoAgent \
-    --public --clone
-
+# 1. Get the code (no fork needed for a first run)
+git clone https://github.com/protoLabsAI/protoAgent.git my-agent
 cd my-agent
 
-# 2. Rename the agent (one env var, read by server.py, metrics, tracing)
-export AGENT_NAME=my-agent
+# 2. Install deps into a venv
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-# 3. Boot the container
-docker build -t my-agent:local .
-docker run --rm -p 7870:7870 -e AGENT_NAME=my-agent my-agent:local
+# 3. Run the server — no env vars required
+python server.py
 
-# 4. Hit the agent card
-curl http://localhost:7870/.well-known/agent-card.json
+# 4. Open the wizard — pick your endpoint, pick a model, name the
+#    agent, pick a persona preset, hit Launch. The chat UI appears
+#    on the same page.
+open http://localhost:7870
 ```
 
-See [TEMPLATE.md](./TEMPLATE.md) for the full fork checklist.
+[First-agent tutorial](./docs/tutorials/first-agent.md) walks
+through every wizard step with screenshots.
+
+Once you're happy and want to ship it as your own image in your
+own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
 ## Architecture
 

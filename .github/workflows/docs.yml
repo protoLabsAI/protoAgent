@@ -3,7 +3,7 @@ name: Deploy docs to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'package.json', 'package-lock.json']
+    paths: ["docs/**", "package.json", "package-lock.json"]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-protolabs-linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,6 +33,7 @@ jobs:
 
   deploy:
     needs: build
+    # workspace-config: allow-hosted-runner GitHub Pages deploy requires the hosted Pages environment
     runs-on: ubuntu-latest
     environment:
       name: github-pages

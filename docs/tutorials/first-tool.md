@@ -37,7 +37,6 @@ Then register it in `get_all_tools()` at the bottom of the same file:
 ```python
 def get_all_tools(knowledge_store=None):
     return [
-        echo,
         current_time,
         calculator,
         web_search,
@@ -48,12 +47,17 @@ def get_all_tools(knowledge_store=None):
 
 ## 2. Allow the subagent to use it (optional)
 
-If you want the worker subagent to be able to call `git_sha`, add it to the allowlist in `graph/subagents/config.py`:
+If you want the worker subagent to be able to call `git_sha`, add it to the allowlist in `graph/subagents/config.py`. Append rather than replace — dropping the bundled defaults removes the worker's memory tools:
 
 ```python
 WORKER_CONFIG = SubagentConfig(
     # ...
-    tools=["echo", "current_time", "calculator", "web_search", "fetch_url", "git_sha"],
+    tools=[
+        "current_time", "calculator", "web_search", "fetch_url",
+        "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+        "daily_log",
+        "git_sha",   # ← new
+    ],
     # ...
 )
 ```
@@ -104,5 +108,5 @@ The template runs tests via `pytest` with `pytest-asyncio` in auto mode — no e
 ## Where to go next
 
 - [Add a custom skill](/guides/add-a-skill) — advertise new capabilities on the agent card so A2A callers can find them
-- [Starter tools reference](/reference/starter-tools) — the shapes of the five tools that ship
+- [Starter tools reference](/reference/starter-tools) — the shapes of all twelve tools that ship by default
 - [Configure subagents](/guides/subagents) — add specialized delegates beyond the placeholder `worker`

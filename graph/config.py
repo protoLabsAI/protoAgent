@@ -37,19 +37,52 @@ class LangGraphConfig:
     # Subagents — template ships with one example (see graph/subagents/config.py).
     # Add fields here as you add entries to SUBAGENT_REGISTRY.
     worker: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["echo", "current_time", "calculator", "web_search", "fetch_url"],
+        tools=[
+            "current_time", "calculator", "web_search", "fetch_url",
+            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+            "daily_log",
+            "schedule_task", "list_schedules", "cancel_schedule",
+        ],
         max_turns=20,
     ))
 
-    # Middleware toggles
-    knowledge_middleware: bool = False  # template ships no knowledge store
+    # Middleware / subsystem toggles. All default-on so a fresh fork has
+    # a working memory loop + scheduler on day one. Forks that want a
+    # purely stateless agent (no KB, no scheduled tasks) can flip these
+    # via the drawer or by editing the YAML directly.
+    knowledge_middleware: bool = True
     audit_middleware: bool = True
-    memory_middleware: bool = False
+    memory_middleware: bool = True
+    scheduler_enabled: bool = True
 
-    # Knowledge store (opt-in — leave disabled until the fork ships one)
+    # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
+    # The default path lives under ``/sandbox/`` to play well with the
+    # bundled Docker volume; the store falls back to
+    # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
+    # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
     embed_model: str = "qwen3-embedding"
     knowledge_top_k: int = 5
+
+    # Identity — captured by the setup wizard, editable via the drawer.
+    # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
+    # the YAML value wins when both are set so per-fork customization
+    # survives image rebuilds. ``operator`` is the human the agent thinks
+    # it's talking to — injected into the system prompt when non-empty.
+    identity_name: str = "protoagent"
+    identity_operator: str = ""
+
+    # A2A bearer token — blank = open mode (local dev). Writing a token
+    # here makes the A2A handler require ``Authorization: Bearer <token>``
+    # on every request and advertises the bearer scheme on the agent card.
+    # Kept in YAML rather than env so the drawer can manage it.
+    auth_token: str = ""
+
+    # OS-level autostart — ``True`` means the server launches on user
+    # login (macOS LaunchAgent today; Linux/Windows TBD). Managed by
+    # ``autostart.py``; the field here is the source of truth for
+    # whether the plist should exist.
+    autostart_on_boot: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
@@ -65,6 +98,9 @@ class LangGraphConfig:
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
+        identity = data.get("identity", {})
+        auth = data.get("auth", {})
+        runtime = data.get("runtime", {})
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -77,9 +113,14 @@ class LangGraphConfig:
             knowledge_middleware=middleware.get("knowledge", cls.knowledge_middleware),
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),
+            scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
+            identity_name=identity.get("name", cls.identity_name),
+            identity_operator=identity.get("operator", cls.identity_operator),
+            auth_token=auth.get("token", cls.auth_token),
+            autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
         )
 
         for name in ("worker",):

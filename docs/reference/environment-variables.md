@@ -36,6 +36,37 @@ Session memory is enabled by default. See [architecture § Session memory](/expl
 
 To persist memory across container restarts, mount a volume at whatever `MEMORY_PATH` resolves to. Without a volume the directory is ephemeral.
 
+## Knowledge store
+
+The bundled `KnowledgeStore` (sqlite + FTS5) is enabled by default. See [Configuration § knowledge](/reference/configuration#knowledge) for the full guide.
+
+| Variable | Default | What |
+|---|---|---|
+| `KNOWLEDGE_DB_PATH` | (unset — uses YAML `knowledge.db_path`) | Runtime override for the sqlite path. Falls back to `~/.protoagent/knowledge/agent.db` when the resolved path is unwritable (e.g. running locally without `/sandbox`). |
+
+To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_ingest`, `memory_recall`, etc.) are dropped from the agent loop when the store is disabled.
+
+## Audit log
+
+| Variable | Default | What |
+|---|---|---|
+| `AUDIT_PATH` | `/sandbox/audit/audit.jsonl` | Directory + filename of the JSONL audit log written by `AuditMiddleware`. Read by `evals/verify.py` for side-effect assertions. |
+
+## Scheduler
+
+The bundled scheduler is enabled by default. See [Schedule future work](/guides/scheduler) and [Configuration § scheduler](/reference/configuration#scheduler) for the full guide. **Backend selection** is env-driven; **enable/disable** lives in YAML (`middleware.scheduler`) so the drawer can toggle without a restart.
+
+| Variable | Default | What |
+|---|---|---|
+| `WORKSTACEAN_API_BASE` | (unset) | When set together with `WORKSTACEAN_API_KEY`, swaps the bundled `LocalScheduler` for the `WorkstaceanScheduler` HTTP adapter. |
+| `WORKSTACEAN_API_KEY` | (unset) | Auth token sent as `X-API-Key` to Workstacean's `/publish`. |
+| `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
+| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
+| `SCHEDULER_DISABLED` | (unset) | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |
+
+> **protoLabs operators**: the fleet's Workstacean lives on the `ava` node. `WORKSTACEAN_API_KEY` is in the org's secrets manager under `secret-management → workstacean`.
+
 ## Tracing (optional)
 
 | Variable | What |

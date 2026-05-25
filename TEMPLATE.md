@@ -1,5 +1,16 @@
 # Fork checklist
 
+> **Most of what used to be in this file is now a runtime wizard**
+> that runs on first page load. Model, tools, persona, name, auth,
+> autostart — all captured without editing code. See
+> [first-agent tutorial](./docs/tutorials/first-agent.md).
+>
+> This checklist is only for forks that want to ship their own
+> container image under their own GitHub org — the structural
+> changes the wizard can't do. For most of that, the new
+> [Customize & deploy](./docs/guides/customize-and-deploy.md)
+> guide is the canonical source. This file stays for back-compat.
+
 You clicked "Use this template" (or ran `gh repo create --template`).
 Now what?
 
@@ -61,10 +72,10 @@ handler's output extraction depends on it.
 ## 4. Add your real tools
 
 `tools/lg_tools.py` ships with a small keyless starter set so a
-fresh clone can demonstrate a real research loop: `echo`,
-`current_time`, `calculator` (safe AST eval — no `eval()`),
-`web_search` (DuckDuckGo via `ddgs`), and `fetch_url`. Keep the
-ones you want, drop the rest, and add your own:
+fresh clone can demonstrate a real research loop: `current_time`,
+`calculator` (safe AST eval — no `eval()`), `web_search` (DuckDuckGo
+via `ddgs`), and `fetch_url`. Keep the ones you want, drop the rest,
+and add your own:
 
 ```python
 from langchain_core.tools import tool
@@ -155,6 +166,41 @@ your fork. A useful pattern:
 - `tests/test_my_tool.py` — unit tests for each tool
 - Extend `tests/test_a2a_integration.py` with assertions for
   your declared skills + extensions on the agent card
+
+For end-to-end behaviour testing — "when the operator asks X, does
+the right tool actually fire and the right row land in the KB?" —
+the template ships an eval harness under `evals/`:
+
+```bash
+python -m evals.runner             # against a running agent
+python -m evals.runner --category tool
+```
+
+See [Eval your fork](./docs/guides/evals.md) for what each case
+asserts, how the three assertion channels work, and how to add
+cases for your fork's new tools.
+
+## 9b. Scheduler — local sqlite or Workstacean
+
+The bundled scheduler ships three agent tools — `schedule_task`,
+`list_schedules`, `cancel_schedule` — backed by either a local
+sqlite poller or a Workstacean adapter, selected at startup via env:
+
+```bash
+# Default: local sqlite, persists at /sandbox/scheduler/<agent_name>/jobs.db
+python server.py
+
+# Workstacean: set both and restart
+export WORKSTACEAN_API_BASE=http://your-workstacean:3000
+export WORKSTACEAN_API_KEY=...
+python server.py
+```
+
+Multi-fork safety: every job is namespaced by `AGENT_NAME`, so
+spinning up `gina-personal` next to `gina-work` (or any number of
+ginas under one Workstacean) doesn't cross-fire prompts. See
+[Schedule future work](./docs/guides/scheduler.md) for the full
+firing model and integration notes.
 
 ## 9a. Understand the skill loop
 

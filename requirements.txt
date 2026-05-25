@@ -4,6 +4,7 @@ uvicorn>=0.30
 langfuse>=3.0
 prometheus-client>=0.20
 pyyaml>=6.0
+ruamel.yaml>=0.18  # round-trip YAML that preserves comments in config/langgraph-config.yaml when the drawer writes back edits
 websockets>=12.0
 
 # LangGraph agent backend
@@ -15,3 +16,7 @@ langchain-openai>=0.3.0
 # Starter tools (tools/lg_tools.py)
 ddgs>=9.0
 beautifulsoup4>=4.12
+
+# Scheduler (scheduler/local.py — cron expression parsing for the
+# bundled local backend; the Workstacean adapter doesn't need this)
+croniter>=2.0
