@@ -19,7 +19,6 @@ build/
 
 # protoLabs Studio agent workspace (never commit)
 .automaker-lock
-.automaker/
 .claude/
 .worktrees/
 worktrees/
@@ -28,3 +27,9 @@ worktrees/
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# protoLabs workspace-config standard
+.beads/beads.db
+.automaker/features/
+.automaker/checkpoints/
+.automaker/trajectory/
