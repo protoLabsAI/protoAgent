@@ -109,6 +109,15 @@ Without these set, the handler rejects webhook URLs that resolve to private / lo
 | `GRADIO_SERVER_NAME` | `0.0.0.0` | Bind address for the Gradio UI. |
 | `GRADIO_SERVER_PORT` | `7870` | Port for the Gradio UI. The A2A handler + metrics + agent card are all served on the same port. |
 
+## Peer federation (A2A peer-consult tools)
+
+Register peer agents so this agent can consult them via the `peer_list` / `peer_consult` tools (added to the toolset only when at least one peer is set). See [`tools/peer_tools.py`](https://github.com/protoLabsAI/protoAgent/blob/main/tools/peer_tools.py).
+
+| Variable | What |
+|---|---|
+| `PEER_<HANDLE>_URL` | Base URL of a peer agent (its `/a2a` endpoint is derived). `<HANDLE>` becomes the peer name (e.g. `PEER_ALICE_URL` → peer `alice`). |
+| `PEER_<HANDLE>_TOKEN` | Optional bearer token sent to that peer if it requires auth. |
+
 ## Release pipeline (shared `release-tools` Action)
 
 These are **CI secrets**, not env vars the template reads at runtime. The
