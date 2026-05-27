@@ -116,3 +116,31 @@ def test_extract_output_empty_when_scratch_only(caplog):
 def test_extract_output_empty_input_returns_empty():
     assert extract_output("") == ""
     assert extract_output("   \n  ") == ""
+
+
+# ── dropped-turn detection ────────────────────────────────────────────────────
+
+from graph.output_format import DROPPED_SCRATCH_KICKER, is_dropped_scratch_turn
+
+
+def test_dropped_scratch_only_is_detected():
+    assert is_dropped_scratch_turn("<scratch_pad>thinking, never committed</scratch_pad>") is True
+
+
+def test_dropped_think_only_is_detected():
+    """Qwen-style <think> with no output is also a drop."""
+    assert is_dropped_scratch_turn("<think>reasoning</think>") is True
+
+
+def test_not_dropped_when_output_present():
+    assert is_dropped_scratch_turn("<scratch_pad>x</scratch_pad><output>answer</output>") is False
+
+
+def test_not_dropped_when_no_reasoning_markers():
+    assert is_dropped_scratch_turn("plain text answer") is False
+    assert is_dropped_scratch_turn("") is False
+
+
+def test_kicker_is_actionable():
+    k = DROPPED_SCRATCH_KICKER.lower()
+    assert "<output>" in k and ("tool" in k)
