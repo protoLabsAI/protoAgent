@@ -33,7 +33,8 @@ def _build_match_query(query: str) -> str:
     return " OR ".join(f"{t}*" for t in terms)
 
 # Bump when FTS table columns change — triggers auto-migration
-_SCHEMA_VERSION = 1
+# v2: added confidence + last_used (consumed by the skill curator).
+_SCHEMA_VERSION = 2
 
 # Columns indexed by FTS5 (order matters for sqlite_master check)
 _FTS_CONTENT_COLUMNS = (
@@ -143,7 +144,9 @@ class SkillsIndex:
                 prompt_template,
                 tools_used,
                 source_session_id,
-                created_at UNINDEXED
+                created_at UNINDEXED,
+                confidence UNINDEXED,
+                last_used UNINDEXED
             );
 
             CREATE TABLE _skills_meta (
@@ -152,7 +155,7 @@ class SkillsIndex:
             );
 
             INSERT INTO _skills_meta (key, version)
-            VALUES ('schema_version', 1);
+            VALUES ('schema_version', 2);
         """)
         conn.commit()
         log.info("[skills] schema created at %s", self._db_path)
@@ -193,16 +196,21 @@ class SkillsIndex:
         created_at = str(getattr(artifact, "created_at", ""))
 
         tools_str = " ".join(tools_used) if isinstance(tools_used, (list, tuple)) else str(tools_used)
+        # New skills start fully confident; last_used seeds from created_at so
+        # the curator's decay clock starts at emission (bumped on retrieval).
+        last_used = created_at
 
         conn = self._open_conn()
         try:
             conn.execute(
                 """
                 INSERT INTO skills_fts
-                    (name, description, prompt_template, tools_used, source_session_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (name, description, prompt_template, tools_used,
+                     source_session_id, created_at, confidence, last_used)
+                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?)
                 """,
-                (name, description, prompt_template, tools_str, source_session_id, created_at),
+                (name, description, prompt_template, tools_str,
+                 source_session_id, created_at, last_used),
             )
             conn.commit()
             log.debug("[skills] indexed skill: %s", name)
@@ -260,6 +268,58 @@ class SkillsIndex:
             # Table may be empty or query syntax invalid
             log.debug("[skills] FTS5 search error (returning empty): %s", exc)
             return []
+
+    # ── Curation surface (consumed by graph/skills/curator.py) ─────────────────
+
+    def all_skills(self) -> list[dict]:
+        """Return every skill as a dict, including the curator's bookkeeping
+        fields (``id`` = rowid, ``confidence``, ``last_used``). Empty on error."""
+        conn = self._open_conn()
+        try:
+            cur = conn.execute(
+                """
+                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                       created_at, confidence, last_used
+                FROM skills_fts
+                """
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row["description"],
+                    "prompt_template": row["prompt_template"],
+                    "tools_used": (row["tools_used"] or "").split(),
+                    "created_at": row["created_at"],
+                    "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
+                    "last_used": row["last_used"],
+                }
+                for row in cur.fetchall()
+            ]
+        except sqlite3.OperationalError as exc:
+            log.debug("[skills] all_skills error (returning empty): %s", exc)
+            return []
+
+    def update_confidence(self, skill_id: int, confidence: float) -> None:
+        """Set a skill's confidence (used by the curator's decay pass)."""
+        conn = self._open_conn()
+        try:
+            conn.execute(
+                "UPDATE skills_fts SET confidence = ? WHERE rowid = ?",
+                (float(confidence), int(skill_id)),
+            )
+            conn.commit()
+        except sqlite3.Error as exc:
+            log.error("[skills] update_confidence failed for %s: %s", skill_id, exc)
+
+    def delete_skill(self, skill_id: int) -> None:
+        """Remove a skill by rowid (used by the curator's dedup/prune passes)."""
+        conn = self._open_conn()
+        try:
+            conn.execute("DELETE FROM skills_fts WHERE rowid = ?", (int(skill_id),))
+            conn.commit()
+        except sqlite3.Error as exc:
+            log.error("[skills] delete_skill failed for %s: %s", skill_id, exc)
 
     def rebuild_index(self, artifacts: list[object]) -> None:
         """Drop all rows and re-index from *artifacts*.

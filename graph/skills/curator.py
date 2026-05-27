@@ -15,7 +15,7 @@ Usage
 
     # Custom paths:
     python -m graph.skills.curator \\
-        --index /sandbox/skills/index.jsonl \\
+        --db /sandbox/skills.db \\
         --audit /sandbox/audit/curator.jsonl
 
 Skill index format (JSONL, one JSON object per line)
@@ -83,7 +83,9 @@ log = logging.getLogger(__name__)
 HALF_LIFE_DAYS: float = 90.0
 PRUNE_THRESHOLD: float = 0.2
 SIMILARITY_THRESHOLD: float = 0.6
-DEFAULT_INDEX_PATH: str = "/sandbox/skills/index.jsonl"
+# The live skill index is the SQLite store written by the runtime
+# (graph/skills/index.py); the curator operates on it directly.
+DEFAULT_DB_PATH: str = "/sandbox/skills.db"
 DEFAULT_AUDIT_PATH: str = "audit.jsonl"
 AUDIT_MAX_BYTES: int = 100 * 1024 * 1024  # 100 MB
 
@@ -155,19 +157,29 @@ class SkillCurator:
 
     def __init__(
         self,
-        index_path: str = DEFAULT_INDEX_PATH,
+        db_path: str = DEFAULT_DB_PATH,
         audit_path: str = DEFAULT_AUDIT_PATH,
         dry_run: bool = False,
         half_life_days: float = HALF_LIFE_DAYS,
         prune_threshold: float = PRUNE_THRESHOLD,
         similarity_threshold: float = SIMILARITY_THRESHOLD,
+        index=None,
     ) -> None:
-        self.index_path = index_path
+        self.db_path = db_path
         self.audit_path = audit_path
         self.dry_run = dry_run
         self.half_life_days = half_life_days
         self.prune_threshold = prune_threshold
         self.similarity_threshold = similarity_threshold
+        # The live SkillsIndex (SQLite). Injectable for tests; built lazily
+        # from db_path otherwise.
+        self._index = index
+
+    def _get_index(self):
+        if self._index is None:
+            from graph.skills.index import SkillsIndex
+            self._index = SkillsIndex(self.db_path)
+        return self._index
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -218,44 +230,30 @@ class SkillCurator:
     # ── Loading / saving ───────────────────────────────────────────────────────
 
     def _load_index(self) -> list[dict]:
-        """Load skills from the JSONL index.  Returns [] if file is absent."""
-        if not os.path.exists(self.index_path):
-            log.info("[curator] index not found at %s — starting with empty set", self.index_path)
-            return []
-
-        skills: list[dict] = []
-        with open(self.index_path, encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    skill = json.loads(line)
-                    if not isinstance(skill, dict):
-                        raise ValueError("expected a JSON object")
-                    # Ensure required fields exist
-                    if "id" not in skill:
-                        skill["id"] = str(uuid.uuid4())
-                    if "confidence" not in skill:
-                        skill["confidence"] = 1.0
-                    skills.append(skill)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    log.error(
-                        "[curator] skipping malformed entry at line %d in %s: %s",
-                        lineno,
-                        self.index_path,
-                        exc,
-                    )
-        log.info("[curator] loaded %d skills from %s", len(skills), self.index_path)
+        """Load every skill from the live SQLite index as curator dicts."""
+        skills = self._get_index().all_skills()
+        log.info("[curator] loaded %d skills from %s", len(skills), self.db_path)
         return skills
 
-    def _save_index(self, skills: list[dict]) -> None:
-        """Persist *skills* back to the JSONL index."""
-        os.makedirs(os.path.dirname(self.index_path) or ".", exist_ok=True)
-        with open(self.index_path, "w", encoding="utf-8") as fh:
-            for skill in skills:
-                fh.write(json.dumps(skill, default=str) + "\n")
-        log.info("[curator] saved %d skills to %s", len(skills), self.index_path)
+    def _save_index(self, kept: list[dict]) -> None:
+        """Reconcile the SQLite index against the post-curation *kept* set.
+
+        Skills removed by dedup/prune (present in the store but not in *kept*)
+        are deleted; survivors get their (decayed) confidence written back.
+        """
+        index = self._get_index()
+        kept_by_id = {s["id"]: s for s in kept if s.get("id") is not None}
+        deleted = 0
+        for current in index.all_skills():
+            if current["id"] not in kept_by_id:
+                index.delete_skill(current["id"])
+                deleted += 1
+        for sid, s in kept_by_id.items():
+            index.update_confidence(sid, s.get("confidence", 1.0))
+        log.info(
+            "[curator] persisted %d skills to %s (deleted %d)",
+            len(kept_by_id), self.db_path, deleted,
+        )
 
     # ── Confidence decay ───────────────────────────────────────────────────────
 
@@ -468,10 +466,10 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--index",
-        default=DEFAULT_INDEX_PATH,
+        "--db",
+        default=DEFAULT_DB_PATH,
         metavar="PATH",
-        help=f"Path to the JSONL skill index (default: {DEFAULT_INDEX_PATH})",
+        help=f"Path to the SQLite skill index (default: {DEFAULT_DB_PATH})",
     )
     p.add_argument(
         "--audit",
@@ -524,7 +522,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     curator = SkillCurator(
-        index_path=args.index,
+        db_path=args.db,
         audit_path=args.audit,
         dry_run=args.dry_run,
         half_life_days=args.half_life,
