@@ -83,6 +83,15 @@ class LangGraphConfig:
     ingest_enabled: bool = False
     ingest_tools: list[str] = field(default_factory=list)
 
+    # Prompt caching — Anthropic prefix caching on the stable system prompt.
+    # Safe no-op on non-Anthropic models (gated on model name unless forced).
+    # NOTE: this middleware also DELIVERS KnowledgeMiddleware's context to the
+    # model (create_agent doesn't read the `context` state key), so it's wired
+    # unconditionally; the flags below only control the caching half.
+    prompt_cache_enabled: bool = True
+    prompt_cache_ttl: str = "5m"          # "5m" (ephemeral) or "1h" (persistent)
+    prompt_cache_force: bool = False      # bypass the Anthropic-name heuristic
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -156,6 +165,9 @@ class LangGraphConfig:
             ),
             ingest_enabled=middleware.get("ingest", cls.ingest_enabled),
             ingest_tools=data.get("ingest", {}).get("tools", []),
+            prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
+            prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
+            prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),

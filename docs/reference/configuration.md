@@ -112,6 +112,26 @@ ingest:
 |---|---|---|
 | `tools` | `[]` | Restrict capture to these tool names (empty = all). |
 
+## `prompt_cache`
+
+`PromptCacheMiddleware` (`graph/middleware/prompt_cache.py`) does two things at the model-call boundary: (1) **delivers** the volatile knowledge/skills/hot-memory context that `KnowledgeMiddleware` produces — `create_agent` builds a static system prompt and doesn't read the `context` state key, so this is what actually gets that context to the model; (2) sets Anthropic **`cache_control`** on the stable system-prompt prefix, with the volatile context placed *after* the breakpoint so it never invalidates the cached prefix.
+
+Caching is gated to Anthropic-family models (safe no-op elsewhere); **context delivery happens regardless**, so the middleware is always wired.
+
+```yaml
+prompt_cache:
+  enabled: true     # caching half (delivery is unconditional)
+  ttl: "5m"         # "5m" ephemeral, or "1h" persistent (agent turns exceed 5m)
+  force: false      # cache even when the model name doesn't look Anthropic
+                    # (use when your gateway alias hides a Claude model)
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `true` | Apply `cache_control` (Anthropic). No-op on non-Anthropic models. |
+| `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
+| `force` | `false` | Bypass the Anthropic-name heuristic (opaque gateway aliases). |
+
 ## `knowledge`
 
 Only read when `middleware.knowledge` is `true`.
