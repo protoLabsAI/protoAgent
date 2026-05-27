@@ -1,0 +1,64 @@
+# Hardened local/edge runtime for protoAgent.
+#
+# `docker compose up --build` runs the agent locked down: read-only root
+# filesystem, all Linux capabilities dropped, no privilege escalation, and
+# the bundled seccomp-profile.json applied (the Dockerfile ships that profile
+# but nothing referenced it until now). The few writable paths are explicit —
+# /tmp + /home as ephemeral tmpfs, agent state in named volumes.
+#
+# Backported from the protoLabs fleet (pwnDeck), generalised to neutral
+# defaults. Tune the resource ceiling and ports per deployment.
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/protolabsai/protoagent:latest
+    container_name: protoagent
+    restart: unless-stopped
+
+    # ── Hardening ──────────────────────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=seccomp-profile.json
+    cap_drop:
+      - ALL
+    read_only: true
+
+    # ── Writable surfaces ──────────────────────────────────────────────────
+    # Ephemeral scratch (tmpfs); uid/gid match the image's non-root sandbox
+    # user (Dockerfile SANDBOX_UID=1001). PYTHONDONTWRITEBYTECODE avoids
+    # __pycache__ writes against the read-only /opt/protoagent tree.
+    tmpfs:
+      - /tmp:size=256M,uid=1001,gid=1001
+      - /home/sandbox:size=64M,uid=1001,gid=1001
+    # Persistent state: knowledge DB, audit log, scheduler jobs all live under
+    # /sandbox; wizard/drawer edits under /opt/protoagent/config.
+    volumes:
+      - protoagent-sandbox:/sandbox
+      - protoagent-config:/opt/protoagent/config
+
+    ports:
+      - "7870:7870"
+
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - AGENT_NAME=${AGENT_NAME:-protoagent}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Optional Langfuse tracing — left blank disables it.
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-}
+
+    # Modest ceiling so a runaway run can't starve the host. Tune per deploy.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          memory: 256M
+
+volumes:
+  protoagent-sandbox:
+  protoagent-config:
