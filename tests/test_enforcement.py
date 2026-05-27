@@ -110,6 +110,9 @@ def test_config_wires_enforcement(monkeypatch, tmp_path):
     assert cfg.enforcement_enabled is True
     assert cfg.enforcement_disallowed_tools == ["rm_rf"]
     mw = _build_middleware(cfg, knowledge_store=None)
-    assert any(m.__class__.__name__ == "EnforcementMiddleware" for m in mw)
-    # Gate is outermost.
-    assert mw[0].__class__.__name__ == "EnforcementMiddleware"
+    names = [m.__class__.__name__ for m in mw]
+    assert "EnforcementMiddleware" in names
+    # Gate is the outermost *tool* wrapper — it must precede the other
+    # tool-call middleware (audit/ingest/message-capture) so blocked calls
+    # never execute. (PromptCacheMiddleware wraps the model call, not tools.)
+    assert names.index("EnforcementMiddleware") < names.index("MessageCaptureMiddleware")

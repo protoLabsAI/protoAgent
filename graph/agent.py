@@ -21,6 +21,16 @@ from tools.lg_tools import get_all_tools
 def _build_middleware(config: LangGraphConfig, knowledge_store=None):
     middleware = []
 
+    # Prompt caching + knowledge-context delivery (wrap_model_call). Added
+    # first/outermost so the cache breakpoint lands on the stable system
+    # prefix; KnowledgeMiddleware's context is delivered just after it.
+    from graph.middleware.prompt_cache import PromptCacheMiddleware
+    middleware.append(PromptCacheMiddleware(
+        enabled=config.prompt_cache_enabled,
+        ttl=config.prompt_cache_ttl,
+        force=config.prompt_cache_force,
+    ))
+
     # Enforcement gate first (outermost) so disallowed/rate-limited tool
     # calls are blocked before any execution. Opt-in via config.
     if config.enforcement_enabled and (
