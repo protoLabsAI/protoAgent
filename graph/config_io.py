@@ -123,10 +123,10 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "max_iterations": config.max_iterations,
         },
         "subagents": {
-            "worker": {
-                "enabled": config.worker.enabled,
-                "tools": list(config.worker.tools),
-                "max_turns": config.worker.max_turns,
+            "researcher": {
+                "enabled": config.researcher.enabled,
+                "tools": list(config.researcher.tools),
+                "max_turns": config.researcher.max_turns,
             },
         },
         "middleware": {
@@ -196,14 +196,14 @@ def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
         if max_iter < 1:
             return False, f"max_iterations must be >= 1, got {max_iter}"
 
-        worker = updates.get("subagents", {}).get("worker", {})
-        if worker:
-            max_turns = int(worker.get("max_turns", 20))
+        researcher = updates.get("subagents", {}).get("researcher", {})
+        if researcher:
+            max_turns = int(researcher.get("max_turns", 40))
             if max_turns < 1:
-                return False, f"worker.max_turns must be >= 1, got {max_turns}"
-            tools = worker.get("tools", [])
+                return False, f"researcher.max_turns must be >= 1, got {max_turns}"
+            tools = researcher.get("tools", [])
             if not isinstance(tools, list):
-                return False, "worker.tools must be a list"
+                return False, "researcher.tools must be a list"
 
         knowledge = updates.get("knowledge", {})
         if knowledge:

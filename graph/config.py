@@ -34,16 +34,17 @@ class LangGraphConfig:
     max_tokens: int = 4096
     max_iterations: int = 75
 
-    # Subagents — template ships with one example (see graph/subagents/config.py).
-    # Add fields here as you add entries to SUBAGENT_REGISTRY.
-    worker: SubagentDef = field(default_factory=lambda: SubagentDef(
+    # Subagents — template ships one example, `researcher` (see
+    # graph/subagents/config.py). Add fields here as you add entries to
+    # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
+    # are the YAML-overridable layer.
+    researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
         tools=[
-            "current_time", "calculator", "web_search", "fetch_url",
-            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
-            "daily_log",
-            "schedule_task", "list_schedules", "cancel_schedule",
+            "current_time",
+            "web_search", "fetch_url",
+            "memory_recall", "memory_list",
         ],
-        max_turns=20,
+        max_turns=40,
     ))
 
     # Middleware / subsystem toggles. All default-on so a fresh fork has
@@ -123,7 +124,7 @@ class LangGraphConfig:
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
         )
 
-        for name in ("worker",):
+        for name in ("researcher",):
             if name in subagents:
                 sub = subagents[name]
                 setattr(config, name, SubagentDef(
