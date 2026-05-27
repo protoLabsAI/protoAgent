@@ -15,19 +15,15 @@ model:
   max_iterations: 50
 
 subagents:
-  worker:
+  researcher:
     enabled: true
     tools:
       - current_time
-      - calculator
       - web_search
       - fetch_url
-      - memory_ingest
       - memory_recall
       - memory_list
-      - memory_stats
-      - daily_log
-    max_turns: 20
+    max_turns: 40
 
 middleware:
   knowledge: true

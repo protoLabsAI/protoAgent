@@ -54,7 +54,7 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
     async def task(
         description: str,
         prompt: str,
-        subagent_type: str = "worker",
+        subagent_type: str = "researcher",
         emit_skill: bool = False,
     ) -> str:
         """Delegate a task to a specialized subagent.

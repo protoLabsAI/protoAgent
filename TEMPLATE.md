@@ -110,7 +110,7 @@ Guidelines that have paid off across the protoLabs fleet:
 
 ## 5. Configure subagents (optional)
 
-`graph/subagents/config.py` ships with one placeholder `worker`.
+`graph/subagents/config.py` ships with one example, a `researcher`.
 Add more by registering `SubagentConfig` instances in
 `SUBAGENT_REGISTRY`. Each subagent gets a subset of tools and
 its own recursion budget.
