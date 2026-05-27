@@ -12,11 +12,25 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import sqlite3
 from typing import NamedTuple
 
 log = logging.getLogger(__name__)
+
+
+def _build_match_query(query: str) -> str:
+    """Turn free text into a safe FTS5 prefix-OR MATCH expression.
+
+    A bare query string is an implicit AND of its terms, so one non-matching
+    word (or a morphological variant like ``calculation`` vs ``calculations``)
+    zeroes the result. We instead OR each token as a prefix (``term*``), which
+    matches variants and ranks by BM25. Tokenizing to ``\\w+`` also strips FTS5
+    syntax characters, so arbitrary user text can't raise a query error.
+    """
+    terms = re.findall(r"\w+", query.lower())
+    return " OR ".join(f"{t}*" for t in terms)
 
 # Bump when FTS table columns change — triggers auto-migration
 _SCHEMA_VERSION = 1
@@ -216,6 +230,10 @@ class SkillsIndex:
         if not query or not query.strip():
             return []
 
+        match_query = _build_match_query(query)
+        if not match_query:
+            return []
+
         conn = self._open_conn()
         try:
             cur = conn.execute(
@@ -226,7 +244,7 @@ class SkillsIndex:
                 ORDER BY score
                 LIMIT ?
                 """,
-                (query.strip(), k),
+                (match_query, k),
             )
             rows = cur.fetchall()
             return [

@@ -15,19 +15,15 @@ model:
   max_iterations: 50
 
 subagents:
-  worker:
+  researcher:
     enabled: true
     tools:
       - current_time
-      - calculator
       - web_search
       - fetch_url
-      - memory_ingest
       - memory_recall
       - memory_list
-      - memory_stats
-      - daily_log
-    max_turns: 20
+    max_turns: 40
 
 middleware:
   knowledge: true
@@ -52,6 +48,13 @@ knowledge:
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `4096` | Per-call output cap. |
 | `max_iterations` | `50` | Upper bound on tool-call loops per task. |
+| `top_p` | _(unset)_ | Nucleus sampling. Standard OpenAI param; sent only when set. |
+| `presence_penalty` | _(unset)_ | Standard OpenAI param; sent only when set. |
+| `top_k` | `-1` | Top-k sampling. Rides `extra_body` (vLLM-style gateways). `-1`/negative = gateway default. |
+| `repetition_penalty` | _(unset)_ | Rides `extra_body`; sent only when set. |
+| `chat_template_kwargs` | _(unset)_ | Dict passed via `extra_body` to the vLLM renderer, e.g. `{preserve_thinking: true}` to keep historical `<think>`/`<scratch_pad>` blocks across turns. |
+
+All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
 
 ## `subagents`
 

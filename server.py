@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from graph.output_format import extract_output
+from graph.output_format import extract_confidence, extract_output
 
 if TYPE_CHECKING:
     from scheduler.interface import SchedulerBackend
@@ -736,6 +736,13 @@ async def _chat_langgraph_stream(
                             "output_tokens": int(usage.get("output_tokens", 0) or 0),
                         })
 
+            # Self-reported confidence, if the model emitted <confidence>.
+            # Yielded before "done" so the A2A handler records it on the
+            # terminal artifact's confidence-v1 DataPart.
+            confidence, explanation = extract_confidence(accumulated_raw)
+            if confidence is not None:
+                yield ("confidence", {"confidence": confidence, "explanation": explanation})
+
             yield ("done", extract_output(accumulated_raw))
 
         except GeneratorExit:
@@ -868,6 +875,10 @@ def _build_agent_card(host: str) -> dict:
                 # cost-v1 emission is wired by default via the `on_chat_model_end`
                 # capture in _chat_langgraph_stream above.
                 {"uri": "https://protolabs.ai/a2a/ext/cost-v1"},
+                # confidence-v1: emitted when the model self-reports a
+                # <confidence> tag (see graph/output_format.py::extract_confidence
+                # and the confidence handler in _run_task_background).
+                {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"},
             ],
         },
         "defaultInputModes": ["text/plain"],

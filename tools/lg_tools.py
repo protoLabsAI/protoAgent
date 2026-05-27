@@ -47,11 +47,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
 
+from tools.fallbacks import with_fallback
+
 
 # ── current_time ─────────────────────────────────────────────────────────────
 
 
 @tool
+@with_fallback()
 async def current_time(timezone: str = "UTC") -> str:
     """Return the current wall-clock time in the given IANA timezone.
 
@@ -117,6 +120,7 @@ def _safe_eval(node: ast.AST) -> float | int:
 
 
 @tool
+@with_fallback()
 async def calculator(expression: str) -> str:
     """Evaluate a numeric expression and return the result.
 
@@ -145,6 +149,7 @@ async def calculator(expression: str) -> str:
 
 
 @tool
+@with_fallback()
 async def web_search(query: str, max_results: int = 5) -> str:
     """Search the web via DuckDuckGo and return a list of result summaries.
 
@@ -194,6 +199,7 @@ _MAX_OUTPUT_CHARS = 8000      # LLM context budget; callers can ask for a shorte
 
 
 @tool
+@with_fallback()
 async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     """Fetch a URL and return its main text content.
 

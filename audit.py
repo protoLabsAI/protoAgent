@@ -16,7 +16,17 @@ class AuditLogger:
 
     def __init__(self, path: str | Path = "/sandbox/audit/audit.jsonl"):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # /sandbox isn't writable (non-root CI runner, local `python
+            # server.py`, etc.) — fall back to a per-user path so audit
+            # logging degrades gracefully instead of crashing at import.
+            self.path = Path.home() / ".protoagent" / "audit" / self.path.name
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
         self._session_stats: dict[str, dict] = {}
 
     def log(

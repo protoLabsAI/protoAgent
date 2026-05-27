@@ -39,15 +39,12 @@ Create a fine-grained PAT with `contents: write` on the repo, then add it as a s
 
 ## 4. (Optional) Discord release embeds
 
-`release.yml` calls `scripts/post-release-notes.mjs`, which reads two env secrets:
+`release.yml` delegates to the shared [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action, which reads two CI secrets:
 
-- `ANTHROPIC_API_KEY` — for Claude Haiku to rewrite raw commits as polished notes. Without it, the script posts raw commit subjects.
-- `DISCORD_RELEASE_WEBHOOK` — Discord channel webhook URL. Without it, notes print to stdout and never leave CI.
+- `GATEWAY_API_KEY` — bearer token for the protoLabs LLM gateway; the Action rewrites raw commits into themed notes.
+- `DISCORD_RELEASE_WEBHOOK` — Discord channel webhook URL. Without it, set `post-discord: false` (notes generate but aren't posted).
 
-Also configurable via env (override in workflow if you want different branding per deploy):
-
-- `AGENT_NAME` — the name that shows in the embed title (defaults to `protoAgent`)
-- `AGENT_TAGLINE` — one-line tagline in the embed footer
+The embed footer/repo link can be customized via the Action's `footer` and `repo` inputs — see the [release-tools README](https://github.com/protoLabsAI/release-tools#inputs).
 
 ## 5. Verify the first push
 

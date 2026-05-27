@@ -1,6 +1,6 @@
 # protoAgent — LangGraph runtime configuration
 #
-# The template ships with a single ``worker`` subagent and no knowledge
+# The template ships with a single ``researcher`` subagent and no knowledge
 # store. Fork this file to match your agent's skills / subagents /
 # middleware needs. Anything referenced here must also have a matching
 # entry in ``graph/subagents/config.py`` (for subagents) or a tool
@@ -18,24 +18,26 @@ model:
   temperature: 0.2
   max_tokens: 4096
   max_iterations: 50
+  # Advanced sampling — all optional; omit to use the gateway / model-card
+  # defaults. top_p + presence_penalty are standard OpenAI params; top_k +
+  # repetition_penalty + chat_template_kwargs ride extra_body for vLLM-style
+  # gateways. Typical self-hosted Qwen card:
+  #   top_p: 0.95
+  #   top_k: 20
+  #   presence_penalty: 0.0
+  #   repetition_penalty: 1.05
+  #   chat_template_kwargs: { preserve_thinking: true }
 
 subagents:
-  worker:
+  researcher:
     enabled: true
     tools:
       - current_time
-      - calculator
       - web_search
       - fetch_url
-      - memory_ingest
       - memory_recall
       - memory_list
-      - memory_stats
-      - daily_log
-      - schedule_task
-      - list_schedules
-      - cancel_schedule
-    max_turns: 20
+    max_turns: 40
 
 middleware:
   # All four subsystems default ON. The template constructs the
@@ -43,7 +45,7 @@ middleware:
   # ``server.py::_build_knowledge_store`` and ``_build_scheduler``).
   # Flip any of these to ``false`` to opt out — the corresponding
   # tools (memory_*, schedule_*) are dropped from the agent loop
-  # without touching the worker subagent's tool allowlist.
+  # without touching the researcher subagent's tool allowlist.
   knowledge: true
   audit: true
   memory: true

@@ -34,16 +34,29 @@ class LangGraphConfig:
     max_tokens: int = 4096
     max_iterations: int = 75
 
-    # Subagents — template ships with one example (see graph/subagents/config.py).
-    # Add fields here as you add entries to SUBAGENT_REGISTRY.
-    worker: SubagentDef = field(default_factory=lambda: SubagentDef(
+    # Advanced sampling — all opt-in. ``None`` (or a negative top_k) means
+    # "let the gateway / model card decide". top_p and presence_penalty are
+    # standard OpenAI params; top_k and repetition_penalty aren't, so they
+    # ride ``extra_body`` for vLLM-compatible gateways. ``chat_template_kwargs``
+    # also rides extra_body — e.g. vLLM's ``preserve_thinking=True`` to keep
+    # historical <think>/<scratch_pad> blocks across turns.
+    top_p: float | None = None
+    top_k: int = -1
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
+    chat_template_kwargs: dict | None = None
+
+    # Subagents — template ships one example, `researcher` (see
+    # graph/subagents/config.py). Add fields here as you add entries to
+    # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
+    # are the YAML-overridable layer.
+    researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
         tools=[
-            "current_time", "calculator", "web_search", "fetch_url",
-            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
-            "daily_log",
-            "schedule_task", "list_schedules", "cancel_schedule",
+            "current_time",
+            "web_search", "fetch_url",
+            "memory_recall", "memory_list",
         ],
-        max_turns=20,
+        max_turns=40,
     ))
 
     # Middleware / subsystem toggles. All default-on so a fresh fork has
@@ -110,6 +123,11 @@ class LangGraphConfig:
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
             max_iterations=model.get("max_iterations", cls.max_iterations),
+            top_p=model.get("top_p", cls.top_p),
+            top_k=model.get("top_k", cls.top_k),
+            presence_penalty=model.get("presence_penalty", cls.presence_penalty),
+            repetition_penalty=model.get("repetition_penalty", cls.repetition_penalty),
+            chat_template_kwargs=model.get("chat_template_kwargs", cls.chat_template_kwargs),
             knowledge_middleware=middleware.get("knowledge", cls.knowledge_middleware),
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),
@@ -123,7 +141,7 @@ class LangGraphConfig:
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
         )
 
-        for name in ("worker",):
+        for name in ("researcher",):
             if name in subagents:
                 sub = subagents[name]
                 setattr(config, name, SubagentDef(
