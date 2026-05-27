@@ -21,6 +21,17 @@ from tools.lg_tools import get_all_tools
 def _build_middleware(config: LangGraphConfig, knowledge_store=None):
     middleware = []
 
+    # Enforcement gate first (outermost) so disallowed/rate-limited tool
+    # calls are blocked before any execution. Opt-in via config.
+    if config.enforcement_enabled and (
+        config.enforcement_disallowed_tools or config.enforcement_rate_limits
+    ):
+        from graph.middleware.enforcement import EnforcementMiddleware
+        middleware.append(EnforcementMiddleware(
+            disallowed_tools=config.enforcement_disallowed_tools,
+            rate_limits=config.enforcement_rate_limits,
+        ))
+
     if config.knowledge_middleware and knowledge_store:
         middleware.append(KnowledgeMiddleware(
             knowledge_store, top_k=config.knowledge_top_k,

@@ -68,6 +68,14 @@ class LangGraphConfig:
     memory_middleware: bool = True
     scheduler_enabled: bool = True
 
+    # Enforcement gate — opt-in safety middleware that blocks tool calls
+    # before they execute (deny list + per-tool rate limits). Off by default;
+    # forks enable it and supply a deny list / rate limits (and can attach a
+    # custom predicate in code). See graph/middleware/enforcement.py.
+    enforcement_enabled: bool = False
+    enforcement_disallowed_tools: list[str] = field(default_factory=list)
+    enforcement_rate_limits: dict = field(default_factory=dict)
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -132,6 +140,13 @@ class LangGraphConfig:
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),
             scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
+            enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
+            enforcement_disallowed_tools=(
+                data.get("enforcement", {}).get("disallowed_tools", [])
+            ),
+            enforcement_rate_limits=(
+                data.get("enforcement", {}).get("rate_limits", {})
+            ),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
