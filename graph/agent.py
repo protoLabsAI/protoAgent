@@ -43,6 +43,12 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None):
     if config.memory_middleware:
         middleware.append(MemoryMiddleware(knowledge_store))
 
+    if config.ingest_enabled and knowledge_store is not None:
+        from graph.middleware.knowledge_ingest import KnowledgeIngestMiddleware
+        middleware.append(KnowledgeIngestMiddleware(
+            knowledge_store, ingest_tools=config.ingest_tools or None,
+        ))
+
     middleware.append(MessageCaptureMiddleware())
 
     return middleware

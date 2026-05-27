@@ -76,6 +76,13 @@ class LangGraphConfig:
     enforcement_disallowed_tools: list[str] = field(default_factory=list)
     enforcement_rate_limits: dict = field(default_factory=dict)
 
+    # Knowledge-ingest gate — opt-in middleware that captures tool output into
+    # the KB after execution. Off by default; ``ingest_tools`` (empty = all)
+    # narrows which tools are captured. Forks attach a structured extractor in
+    # code. See graph/middleware/knowledge_ingest.py.
+    ingest_enabled: bool = False
+    ingest_tools: list[str] = field(default_factory=list)
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -147,6 +154,8 @@ class LangGraphConfig:
             enforcement_rate_limits=(
                 data.get("enforcement", {}).get("rate_limits", {})
             ),
+            ingest_enabled=middleware.get("ingest", cls.ingest_enabled),
+            ingest_tools=data.get("ingest", {}).get("tools", []),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
