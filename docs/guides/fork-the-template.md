@@ -49,7 +49,7 @@ See the [starter tools reference](/reference/starter-tools) for the shapes of th
 
 ## 5. Configure subagents (optional)
 
-`graph/subagents/config.py` ships with one `worker`. Either:
+`graph/subagents/config.py` ships with one `researcher`. Either:
 
 - Add more by registering `SubagentConfig` instances in `SUBAGENT_REGISTRY` and matching fields in `graph/config.py::LangGraphConfig`, or
 - Call `create_agent_graph(config, include_subagents=False)` in `server.py::_init_langgraph_agent()` to skip subagents entirely.

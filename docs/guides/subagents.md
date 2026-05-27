@@ -1,6 +1,6 @@
 # Configure subagents
 
-Subagents are specialized LLM workers the lead agent delegates to via the `task()` tool. The template ships with one placeholder `worker`. This guide walks through either adding more, trimming down, or turning the pattern off entirely.
+Subagents are specialized LLM workers the lead agent delegates to via the `task()` tool. The template ships one worked example: a `researcher` (web + memory, plan→search→synthesize→cite). This guide walks through adding more, trimming down, or turning the pattern off entirely.
 
 ## When to use subagents
 
@@ -15,56 +15,55 @@ When *not* to use:
 
 ## 1. Define the config
 
-Edit `graph/subagents/config.py`:
+`graph/subagents/config.py` already defines `RESEARCHER_CONFIG`. To add a second role, define another `SubagentConfig` and register it:
 
 ```python
-RESEARCHER_CONFIG = SubagentConfig(
-    name="researcher",
+SUMMARIZER_CONFIG = SubagentConfig(
+    name="summarizer",
     description=(
-        "Gathers background on a topic via web_search + fetch_url. "
-        "Returns a 200-word brief; the lead decides what to do next."
+        "Condenses long source text into a tight brief. "
+        "Returns a ≤200-word summary; the lead decides what to do next."
     ),
-    system_prompt="""You are the researcher subagent.
+    system_prompt="""You are the summarizer subagent.
 
-Your job: given a topic, search the web, read the top few results,
-and return a concise brief (≤200 words) that covers:
-- What the topic is
-- Key facts worth knowing
-- Any obvious risks or controversies
+Your job: given source text or URLs, return a concise brief (≤200 words):
+- What the material says
+- Key facts worth keeping
+- Any obvious gaps or caveats
 
 Rules:
 - Keep responses focused — the lead agent is waiting on your return
   value, not a conversation.
 - Use the same <scratch_pad> / <output> format as the lead agent.
 """,
-    tools=["web_search", "fetch_url", "current_time"],
+    tools=["fetch_url", "current_time"],
     max_turns=15,
 )
 
 SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {
-    "worker": WORKER_CONFIG,
     "researcher": RESEARCHER_CONFIG,
+    "summarizer": SUMMARIZER_CONFIG,
 }
 ```
 
 ## 2. Expose the config shape
 
-The template's `LangGraphConfig` (in `graph/config.py`) has a `worker` field. Add one for each new subagent:
+The template's `LangGraphConfig` (in `graph/config.py`) has a `researcher` field. Add one for each new subagent:
 
 ```python
 @dataclass
 class LangGraphConfig:
     # ... existing fields ...
-    worker: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=[
-            "current_time", "calculator", "web_search", "fetch_url",
-            "memory_ingest", "memory_recall", "memory_list", "memory_stats",
-            "daily_log",
-        ],
-        max_turns=20,
-    ))
     researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["web_search", "fetch_url", "current_time"],
+        tools=[
+            "current_time",
+            "web_search", "fetch_url",
+            "memory_recall", "memory_list",
+        ],
+        max_turns=40,
+    ))
+    summarizer: SubagentDef = field(default_factory=lambda: SubagentDef(
+        tools=["fetch_url", "current_time"],
         max_turns=15,
     ))
 ```
@@ -72,7 +71,7 @@ class LangGraphConfig:
 And update the `from_yaml()` subagent loop:
 
 ```python
-for name in ("worker", "researcher"):  # ← add new names
+for name in ("researcher", "summarizer"):  # ← add new names
     if name in subagents:
         sub = subagents[name]
         setattr(config, name, SubagentDef(
@@ -88,22 +87,18 @@ for name in ("worker", "researcher"):  # ← add new names
 
 ```yaml
 subagents:
-  worker:
+  researcher:
     enabled: true
     tools:
       - current_time
-      - calculator
       - web_search
       - fetch_url
-      - memory_ingest
       - memory_recall
       - memory_list
-      - memory_stats
-      - daily_log
-    max_turns: 20
-  researcher:
+    max_turns: 40
+  summarizer:
     enabled: true
-    tools: [web_search, fetch_url, current_time]
+    tools: [fetch_url, current_time]
     max_turns: 15
 ```
 
@@ -115,8 +110,8 @@ The lead's `task()` tool docstring is how the LLM learns what subagents exist. I
 SYSTEM_PROMPT = """You are my-agent.
 
 Available subagents (invoke via the `task` tool):
-- `researcher` — gathers background on a topic, returns a ≤200-word brief
-- `worker` — general-purpose tool runner
+- `researcher` — gathers + synthesizes background on a topic, returns a sourced brief
+- `summarizer` — condenses long source text into a ≤200-word brief
 
 Delegate to researcher when a user asks an open-ended "find out about X"
 question. Handle short factual queries yourself.

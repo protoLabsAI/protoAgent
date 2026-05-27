@@ -101,7 +101,7 @@ The memory tools are dropped automatically when `middleware.knowledge: false`; t
 
 ## 6. (Optional) Configure subagents
 
-`graph/subagents/config.py` ships with one `worker`. Register more `SubagentConfig` instances in `SUBAGENT_REGISTRY` and add matching fields in `graph/config.py::LangGraphConfig`. The lead agent delegates via the `task` tool; the subagent delegation rules are built from the registry.
+`graph/subagents/config.py` ships with one `researcher`. Register more `SubagentConfig` instances in `SUBAGENT_REGISTRY` and add matching fields in `graph/config.py::LangGraphConfig`. The lead agent delegates via the `task` tool; the subagent delegation rules are built from the registry.
 
 ## 7. Build and ship the image
 
