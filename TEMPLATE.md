@@ -48,9 +48,15 @@ guards so the template itself doesn't trigger releases:
 
 - `.github/workflows/prepare-release.yml`
 - `.github/workflows/release.yml`
+- `.github/workflows/docker-publish.yml`
 
-Change both to your fork's owner/repo. Until you do, releases
+Change all three to your fork's owner/repo. Until you do, releases
 won't fire — intentional, not a bug.
+
+All workflows must stay on the org-owned runner
+(`runs-on: namespace-profile-protolabs-linux`); `checks.yml` runs
+`verify-workspace-config` on every PR and fails the build on drift.
+See [Customize & deploy](./docs/guides/customize-and-deploy.md) §3b.
 
 ## 2. Rewrite the persona
 

@@ -52,6 +52,35 @@ The release workflows gate on the template's repo path so third-party clones don
 
 Each has a `if: github.repository == 'protoLabsAI/protoAgent'` (or similar) check. Swap `protoLabsAI/protoAgent` for `<your-org>/<your-repo>` in all three, or the pipeline won't fire on merges.
 
+## 3b. Stay conformant with the fleet workspace-config standard
+
+Every fleet-watched repo carries a shared baseline enforced by
+[`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools)
+`verify-workspace-config`, and **`checks.yml` runs it on every PR** — so a
+non-conformant fork goes red in CI. The rules that bite most often:
+
+- **Owned runners.** Every workflow `runs-on:` must be
+  `namespace-profile-protolabs-linux`, never a GitHub-hosted label
+  (`ubuntu-*`, `macos-*`, `windows-*`). Hosted runners burn metered minutes
+  and may be disabled org-wide. Legit exceptions (cross-platform binaries,
+  npm provenance) get an inline `# workspace-config: allow-hosted-runner <reason>`.
+- **`.beads/issues.jsonl` committed**, `.beads/beads.db` gitignored.
+- **`.automaker/settings.json` committed**; transient `.automaker/` dirs
+  (`features/`, `checkpoints/`, `trajectory/`) gitignored.
+
+A fresh template clone already conforms. If you add or copy a workflow,
+keep it on the owned runner. To check (and scaffold) at any time:
+
+```bash
+npx --yes -p @protolabsai/release-tools verify-workspace-config
+npx --yes -p @protolabsai/release-tools init-workspace-config   # fills gaps
+```
+
+The release-notes step in `release.yml` also delegates to the shared
+`protoLabsAI/release-tools@v1` Action (reads `GATEWAY_API_KEY` +
+`DISCORD_RELEASE_WEBHOOK` from CI secrets) rather than a per-fork script —
+nothing to copy or maintain.
+
 ## 4. Rewrite the agent card
 
 `server.py::_build_agent_card` ships with placeholder skills:

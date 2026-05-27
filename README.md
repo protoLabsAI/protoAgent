@@ -149,11 +149,15 @@ The included GitHub Actions pipeline is optional but opinionated.
   the stable semver Docker tags, creates a GitHub release with
   filtered notes, and posts a Discord embed via the shared
   [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action.
+- **On every PR + push** → `checks.yml` runs `pytest` and
+  `verify-workspace-config` (the fleet `.beads`/`.automaker`/owned-runner
+  standard), so drift is caught in CI rather than mid-run.
 
-All three workflows gate on `github.repository ==
-'protoLabsAI/<name>'` so they no-op on clones that haven't
-updated the owner — avoids surprise releases on forks. Update
-the repo check in all three files when forking.
+All workflows run on the org-owned `namespace-profile-protolabs-linux`
+runner. The three release workflows (`docker-publish`, `prepare-release`,
+`release`) gate on `github.repository == 'protoLabsAI/<name>'` so they
+no-op on clones that haven't updated the owner — avoids surprise releases
+on forks. Update the repo check in all three when forking.
 
 ## Requirements
 
