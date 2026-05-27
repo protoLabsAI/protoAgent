@@ -74,6 +74,13 @@ WORLDSTATE_DELTA_MIME = "application/vnd.protolabs.worldstate-delta+json"
 # Ref: protoWorkstacean/docs/extensions/cost-v1.md
 COST_MIME = "application/vnd.protolabs.cost-v1+json"
 
+# Confidence-v1: the agent's self-reported confidence + optional explanation on
+# the terminal artifact. A consumer (e.g. Workstacean's confidence interceptor)
+# reads result.data.confidence (clamped to [0, 1]) and optional
+# result.data.confidenceExplanation to record calibration samples.
+# Schema: {"confidence": float, "confidenceExplanation": str?, "success": bool}
+CONFIDENCE_MIME = "application/vnd.protolabs.confidence-v1+json"
+
 # ── Data types ────────────────────────────────────────────────────────────────
 
 
@@ -119,6 +126,12 @@ class TaskRecord:
     # cost interceptor (protoWorkstacean#372) can record per-skill samples.
     # Shape: {"input_tokens": int, "output_tokens": int, "total_tokens": int}
     usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    # Self-reported confidence for the confidence-v1 DataPart. Set by the
+    # producer when it parses a <confidence> tag out of the model's final
+    # output. Clamped to [0, 1] on write; None when the model didn't report
+    # one (the DataPart is then omitted).
+    confidence: float | None = None
+    confidence_explanation: str | None = None
     # ── asyncio primitives (not serialised) ──
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _update_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -236,6 +249,28 @@ class A2ATaskStore:
                 record.usage["input_tokens"] + record.usage["output_tokens"]
             )
 
+    async def set_confidence(
+        self,
+        task_id: str,
+        confidence: float,
+        explanation: str | None = None,
+    ) -> None:
+        """Record the agent's self-reported confidence for this task.
+
+        Called once from the producer when it parses a <confidence> tag out of
+        the model's final output. Emitted on the terminal artifact under the
+        confidence-v1 MIME. Clamped to [0, 1] defensively so the DataPart is
+        always in-spec.
+        """
+        clamped = max(0.0, min(1.0, float(confidence)))
+        async with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return
+            record.confidence = clamped
+            if explanation and isinstance(explanation, str):
+                record.confidence_explanation = explanation.strip() or None
+
     async def cancel_if_not_terminal(self, task_id: str) -> TaskRecord | None:
         """Atomically cancel a task iff it's not already terminal.
 
@@ -350,7 +385,33 @@ def _terminal_artifact_parts(record: TaskRecord) -> list[dict]:
             "data": cost_data,
             "metadata": {"mimeType": COST_MIME},
         })
+    confidence_data = _confidence_payload(record)
+    if confidence_data is not None:
+        parts.append({
+            "kind": "data",
+            "data": confidence_data,
+            "metadata": {"mimeType": CONFIDENCE_MIME},
+        })
     return parts
+
+
+def _confidence_payload(record: TaskRecord) -> dict | None:
+    """Build the confidence-v1 payload, or None if the agent didn't
+    self-report a confidence this run.
+
+    ``success`` is derived from the terminal state — COMPLETED is the only
+    truthy case. Reporting confidence on a FAILED run is exactly the
+    "high-confidence failure" calibration signal, so it's still emitted.
+    """
+    if record.confidence is None:
+        return None
+    payload: dict = {
+        "confidence": record.confidence,
+        "success": record.state == COMPLETED,
+    }
+    if record.confidence_explanation:
+        payload["confidenceExplanation"] = record.confidence_explanation
+    return payload
 
 
 def _cost_payload(record: TaskRecord) -> dict | None:
@@ -784,6 +845,17 @@ async def _run_task_background(
                         task_id,
                         input_tokens=payload.get("input_tokens", 0),
                         output_tokens=payload.get("output_tokens", 0),
+                    )
+
+            elif event_type == "confidence":
+                # Self-reported confidence parsed from the model's <confidence>
+                # tag. Yielded before "done" so it lands on the COMPLETED
+                # artifact's confidence-v1 DataPart.
+                if isinstance(payload, dict) and payload.get("confidence") is not None:
+                    await _store.set_confidence(
+                        task_id,
+                        confidence=payload["confidence"],
+                        explanation=payload.get("explanation"),
                     )
 
             elif event_type == "done":

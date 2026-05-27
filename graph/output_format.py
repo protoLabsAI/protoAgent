@@ -50,6 +50,16 @@ Rules:
   finished, customer-ready answer in `<output>`.
 - If you must defer or ask for clarification, put the question inside
   `<output>` too — the user never sees `<scratch_pad>`.
+
+Optionally, after `</output>`, you may self-report confidence:
+
+    <confidence>0.85</confidence>
+    <confidence_explanation>one short sentence on what drove the score</confidence_explanation>
+
+- `<confidence>` is a number in [0, 1] — your honest self-assessment of
+  whether the answer is correct/complete. Omit it if you'd only be guessing.
+- `<confidence_explanation>` is optional. Neither tag is shown to the user;
+  they ride a confidence-v1 DataPart on the A2A artifact.
 """.strip()
 
 
@@ -59,6 +69,14 @@ _ORPHAN_SCRATCH_OPEN_RE = re.compile(r"<scratch_pad>[\s\S]*$", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 _ORPHAN_THINK_OPEN_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
 _ORPHAN_THINK_CLOSE_RE = re.compile(r"</think>\s*", re.IGNORECASE)
+_CONFIDENCE_BLOCK_RE = re.compile(r"<confidence>[\s\S]*?</confidence>", re.IGNORECASE)
+_CONFIDENCE_EXPL_BLOCK_RE = re.compile(
+    r"<confidence_explanation>[\s\S]*?</confidence_explanation>", re.IGNORECASE,
+)
+_CONFIDENCE_RE = re.compile(r"<confidence>\s*(-?[\d.]+)\s*</confidence>", re.IGNORECASE)
+_CONFIDENCE_EXPLANATION_RE = re.compile(
+    r"<confidence_explanation>([\s\S]*?)</confidence_explanation>", re.IGNORECASE,
+)
 
 
 def _strip_reasoning(text: str) -> str:
@@ -73,7 +91,32 @@ def _strip_reasoning(text: str) -> str:
     text = _ORPHAN_THINK_CLOSE_RE.sub("", text)
     text = _SCRATCH_RE.sub("", text)
     text = _ORPHAN_SCRATCH_OPEN_RE.sub("", text)
+    # Confidence tags ride a DataPart, never the user-facing text. Strip them
+    # in case the model emits them inside (or right after) <output>.
+    text = _CONFIDENCE_EXPL_BLOCK_RE.sub("", text)
+    text = _CONFIDENCE_BLOCK_RE.sub("", text)
     return text
+
+
+def extract_confidence(text: str) -> tuple[float | None, str | None]:
+    """Parse an optional self-reported ``<confidence>`` (and explanation).
+
+    Returns ``(confidence, explanation)`` where confidence is a float or
+    None (malformed/absent) and explanation is a stripped string or None.
+    The A2A handler clamps confidence to [0, 1] on write.
+    """
+    confidence: float | None = None
+    m = _CONFIDENCE_RE.search(text)
+    if m:
+        try:
+            confidence = float(m.group(1))
+        except ValueError:
+            confidence = None
+    explanation: str | None = None
+    me = _CONFIDENCE_EXPLANATION_RE.search(text)
+    if me:
+        explanation = me.group(1).strip() or None
+    return confidence, explanation
 
 
 def extract_output(text: str) -> str:

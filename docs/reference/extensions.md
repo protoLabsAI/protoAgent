@@ -29,6 +29,27 @@ Captured by the `on_chat_model_end` handler in `_chat_langgraph_stream`. Require
 
 `costUsd` is not captured today — deriving it from model rates is a follow-up. Consumers tolerate missing `costUsd` and can compute it from `usage` themselves.
 
+## `confidence-v1`
+
+**URI**: `https://proto-labs.ai/a2a/ext/confidence-v1`
+**mimeType**: `application/vnd.protolabs.confidence-v1+json`
+**Direction**: emitted by this agent
+**Declared on card**: yes (by default)
+
+When the model self-reports a `<confidence>` tag in its final output, the terminal task carries a DataPart with the score:
+
+```json
+{
+  "data": {
+    "confidence": 0.85,
+    "success": true,
+    "confidenceExplanation": "two consistent sources agreed"
+  }
+}
+```
+
+The model emits the tags after `</output>` (see the protocol in `graph/output_format.py::OUTPUT_FORMAT_INSTRUCTIONS`); the server parses them with `extract_confidence()` and the A2A handler records them via `set_confidence()`, clamping to `[0, 1]`. The DataPart is omitted entirely when the model didn't report a score. `success` reflects the terminal state (`COMPLETED` only) — a high `confidence` on a non-success run is the "high-confidence failure" calibration signal.
+
 ## `effect-domain-v1`
 
 **URI**: `https://protolabs.ai/a2a/ext/effect-domain-v1`

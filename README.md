@@ -98,6 +98,7 @@ subagent `task()` delegation, and the structured-output protocol.
 | URI | Declared on card | Emitted at runtime |
 |---|---|---|
 | `cost-v1` (`https://protolabs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal task carries a cost-v1 DataPart with token usage + `durationMs` |
+| `confidence-v1` (`https://proto-labs.ai/a2a/ext/confidence-v1`) | Yes | When the model self-reports a `<confidence>` tag — a confidence-v1 DataPart with the score (`[0,1]`), optional explanation, and `success` |
 | `a2a.trace` propagation | No (it's a protocol convention, not a card extension) | Yes — reads caller's Langfuse trace context from `params.metadata["a2a.trace"]` and nests this agent's trace under it |
 
 Declare additional extensions on the card in
