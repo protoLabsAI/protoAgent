@@ -18,6 +18,15 @@ model:
   temperature: 0.2
   max_tokens: 4096
   max_iterations: 50
+  # Advanced sampling — all optional; omit to use the gateway / model-card
+  # defaults. top_p + presence_penalty are standard OpenAI params; top_k +
+  # repetition_penalty + chat_template_kwargs ride extra_body for vLLM-style
+  # gateways. Typical self-hosted Qwen card:
+  #   top_p: 0.95
+  #   top_k: 20
+  #   presence_penalty: 0.0
+  #   repetition_penalty: 1.05
+  #   chat_template_kwargs: { preserve_thinking: true }
 
 subagents:
   researcher:
