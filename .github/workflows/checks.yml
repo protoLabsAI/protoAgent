@@ -55,18 +55,6 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-asyncio
-      - name: Diagnose import resolution
-        run: |
-          . .venv/bin/activate
-          python - <<'PY'
-          import sys, site, importlib.util
-          print("sys.path:"); [print("  ", p) for p in sys.path]
-          print("getsitepackages:", site.getsitepackages())
-          spec = importlib.util.find_spec("langchain_core")
-          print("langchain_core spec:", spec.origin if spec else None,
-                "| submodule_search_locations:",
-                list(spec.submodule_search_locations) if spec and spec.submodule_search_locations else None)
-          PY
       - name: Run tests
         run: |
           . .venv/bin/activate
