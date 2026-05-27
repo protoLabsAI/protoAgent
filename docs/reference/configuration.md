@@ -76,6 +76,25 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 | `audit` | `true` | Append every tool call to `/sandbox/audit/audit.jsonl`. |
 | `memory` | `true` | Persist a session summary on terminal turn and asynchronously index conversation findings under `domain='finding'`. |
 | `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite, or `WorkstaceanScheduler` when env vars are set). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
+| `enforcement` | `false` | Opt-in safety gate that blocks tool calls **before** they execute (see `enforcement` block below). No-op unless a deny list or rate limit is configured. |
+
+## `enforcement`
+
+Optional pre-execution gate (`graph/middleware/enforcement.py`). Only read when `middleware.enforcement: true`. Blocked calls return a `ToolMessage` explaining the denial (the model reads it and adapts) instead of running the tool. Forks needing richer policy (scope/cost/etc.) can attach a `predicate(tool_name, args) -> reason|None` in code.
+
+```yaml
+middleware:
+  enforcement: true
+enforcement:
+  disallowed_tools: [fetch_url]          # exact names never allowed
+  rate_limits:
+    web_search: { max: 20, window_seconds: 60 }
+```
+
+| Key | Default | What |
+|---|---|---|
+| `disallowed_tools` | `[]` | Tool names that are always blocked. |
+| `rate_limits` | `{}` | Per-tool sliding-window limit: `{max, window_seconds}`. |
 
 ## `knowledge`
 
