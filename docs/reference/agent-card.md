@@ -9,7 +9,7 @@ Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by
   "name": "my-agent",
   "description": "One-sentence statement of what this agent is for.",
   "url": "http://my-agent:7870/a2a",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "provider": {
     "organization": "protoLabsAI",
     "url": "https://github.com/protoLabsAI"
@@ -19,7 +19,7 @@ Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by
     "pushNotifications": true,
     "stateTransitionHistory": false,
     "extensions": [
-      {"uri": "https://protolabs.ai/a2a/ext/cost-v1"}
+      {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"}
     ]
   },
   "defaultInputModes": ["text/plain"],

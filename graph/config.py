@@ -30,9 +30,9 @@ class LangGraphConfig:
     model_name: str = "protolabs/agent"  # override in YAML per agent
     api_base: str = "http://gateway:4000/v1"
     api_key: str = ""  # set via OPENAI_API_KEY env (gateway master key)
-    temperature: float = 0.3
-    max_tokens: int = 4096
-    max_iterations: int = 75
+    temperature: float = 0.2
+    max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
+    max_iterations: int = 50
 
     # Advanced sampling — all opt-in. ``None`` (or a negative top_k) means
     # "let the gateway / model card decide". top_p and presence_penalty are
@@ -74,7 +74,7 @@ class LangGraphConfig:
     # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
     # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
-    embed_model: str = "qwen3-embedding"
+    embed_model: str = "nomic-embed-text"
     knowledge_top_k: int = 5
 
     # Identity — captured by the setup wizard, editable via the drawer.

@@ -47,9 +47,9 @@ If the skill actually mutates shared state Workstacean cares about (creates a PR
     "streaming": True,
     "pushNotifications": True,
     "extensions": [
-        {"uri": "https://protolabs.ai/a2a/ext/cost-v1"},
+        {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"},
         {
-            "uri": "https://protolabs.ai/a2a/ext/effect-domain-v1",
+            "uri": "https://proto-labs.ai/a2a/ext/effect-domain-v1",
             "params": {
                 "skills": {
                     "file_bug": {
