@@ -59,9 +59,39 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None):
             knowledge_store, ingest_tools=config.ingest_tools or None,
         ))
 
+    # Context compaction — summarize old history near the context limit.
+    if config.compaction_enabled:
+        from langchain.agents.middleware import SummarizationMiddleware
+        summ_model = create_llm(config, model_name=config.compaction_model or None)
+        middleware.append(SummarizationMiddleware(
+            model=summ_model,
+            trigger=_parse_compaction_trigger(config.compaction_trigger),
+            keep=("messages", config.compaction_keep_messages),
+        ))
+
+    # Model routing / failover — retry on fallback models (same gateway).
+    if config.routing_fallback_models:
+        from langchain.agents.middleware import ModelFallbackMiddleware
+        fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
+        middleware.append(ModelFallbackMiddleware(*fallbacks))
+
     middleware.append(MessageCaptureMiddleware())
 
     return middleware
+
+
+def _parse_compaction_trigger(spec: str):
+    """Parse 'fraction:0.8' / 'tokens:120000' / 'messages:80' → langchain trigger tuple."""
+    try:
+        kind, _, val = spec.partition(":")
+        kind = kind.strip().lower()
+        if kind == "fraction":
+            return ("fraction", float(val))
+        if kind in ("tokens", "messages"):
+            return (kind, int(val))
+    except (ValueError, AttributeError):
+        pass
+    return ("fraction", 0.8)
 
 
 def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):

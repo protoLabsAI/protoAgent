@@ -61,11 +61,16 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
     return kwargs
 
 
-def create_llm(config: LangGraphConfig) -> ChatOpenAI:
+def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> ChatOpenAI:
     """Create a LangChain ChatModel from config.
 
     Routes through the LiteLLM gateway which handles provider
     routing (Anthropic, OpenAI, vLLM, etc.) behind a single
-    OpenAI-compatible endpoint.
+    OpenAI-compatible endpoint. Pass ``model_name`` to build an instance
+    for a different model on the same gateway (used for compaction /
+    fallback models).
     """
-    return ChatOpenAI(**_build_llm_kwargs(config))
+    kwargs = _build_llm_kwargs(config)
+    if model_name:
+        kwargs["model"] = model_name
+    return ChatOpenAI(**kwargs)

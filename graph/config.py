@@ -92,6 +92,18 @@ class LangGraphConfig:
     prompt_cache_ttl: str = "5m"          # "5m" (ephemeral) or "1h" (persistent)
     prompt_cache_force: bool = False      # bypass the Anthropic-name heuristic
 
+    # Context compaction — wires langchain's SummarizationMiddleware to
+    # summarize old history near the context limit. Opt-in. trigger is
+    # "fraction:0.8" | "tokens:120000" | "messages:80"; keep = last N messages.
+    compaction_enabled: bool = False
+    compaction_trigger: str = "fraction:0.8"
+    compaction_keep_messages: int = 20
+    compaction_model: str = ""            # blank = summarize with the main model
+
+    # Model routing / failover — wires langchain's ModelFallbackMiddleware.
+    # On primary error, retry on each fallback model (same gateway) in order.
+    routing_fallback_models: list[str] = field(default_factory=list)
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -168,6 +180,11 @@ class LangGraphConfig:
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
             prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
+            compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
+            compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
+            compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
+            compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
+            routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
