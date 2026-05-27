@@ -94,3 +94,25 @@ def test_instructions_mention_both_tags():
     """Sanity check — the prompt fragment must teach both tags."""
     assert "<scratch_pad>" in OUTPUT_FORMAT_INSTRUCTIONS
     assert "<output>" in OUTPUT_FORMAT_INSTRUCTIONS
+
+
+def test_extract_output_recovers_truncated_orphan_output():
+    """max_tokens hit mid-<output>: no closing tag. Tier 2 recovers the
+    partial answer from the opener to EOT, scratch stripped."""
+    text = "<scratch_pad>planning the reply</scratch_pad><output>The partial answer that got cut o"
+    assert extract_output(text) == "The partial answer that got cut o"
+
+
+def test_extract_output_empty_when_scratch_only(caplog):
+    """Scratch-only with no output → empty (never leak reasoning), and a
+    WARNING diagnostic so the operator can see the turn went silent."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.output_format"):
+        assert extract_output("<scratch_pad>only reasoning, never committed</scratch_pad>") == ""
+    assert any("empty after stripping" in r.message for r in caplog.records)
+
+
+def test_extract_output_empty_input_returns_empty():
+    assert extract_output("") == ""
+    assert extract_output("   \n  ") == ""

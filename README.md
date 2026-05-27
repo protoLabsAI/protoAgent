@@ -29,7 +29,7 @@ rename / release-pipeline wiring.
 | A2A server | `a2a_handler.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
 | Agent runtime | `graph/agent.py`, `server.py` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
 | LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
-| Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one placeholder `worker` ships |
+| Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
 | Starter tools | `tools/lg_tools.py` | Twelve tools default-on: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 5 memory (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the KB store + 3 scheduler (`schedule_task`, `list_schedules`, `cancel_schedule`) bound to the scheduler backend |
 | Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
 | Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
@@ -98,6 +98,7 @@ subagent `task()` delegation, and the structured-output protocol.
 | URI | Declared on card | Emitted at runtime |
 |---|---|---|
 | `cost-v1` (`https://proto-labs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal task carries a cost-v1 DataPart with token usage + `durationMs` |
+| `confidence-v1` (`https://proto-labs.ai/a2a/ext/confidence-v1`) | Yes | When the model self-reports a `<confidence>` tag — a confidence-v1 DataPart with the score (`[0,1]`), optional explanation, and `success` |
 | `a2a.trace` propagation | No (it's a protocol convention, not a card extension) | Yes — reads caller's Langfuse trace context from `params.metadata["a2a.trace"]` and nests this agent's trace under it |
 
 Declare additional extensions on the card in
@@ -147,13 +148,17 @@ The included GitHub Actions pipeline is optional but opinionated.
   semver tag.
 - **When a semver tag lands** → `release.yml` builds and pushes
   the stable semver Docker tags, creates a GitHub release with
-  filtered notes, and posts a Discord embed via
-  `scripts/post-release-notes.mjs`.
+  filtered notes, and posts a Discord embed via the shared
+  [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action.
+- **On every PR + push** → `checks.yml` runs `pytest` and
+  `verify-workspace-config` (the fleet `.beads`/`.automaker`/owned-runner
+  standard), so drift is caught in CI rather than mid-run.
 
-All three workflows gate on `github.repository ==
-'protoLabsAI/<name>'` so they no-op on clones that haven't
-updated the owner — avoids surprise releases on forks. Update
-the repo check in all three files when forking.
+All workflows run on the org-owned `namespace-profile-protolabs-linux`
+runner. The three release workflows (`docker-publish`, `prepare-release`,
+`release`) gate on `github.repository == 'protoLabsAI/<name>'` so they
+no-op on clones that haven't updated the owner — avoids surprise releases
+on forks. Update the repo check in all three when forking.
 
 ## Requirements
 

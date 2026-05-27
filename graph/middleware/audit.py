@@ -8,7 +8,6 @@ import time
 from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
 
 from langgraph.prebuilt.chat_agent_executor import AgentState
 
@@ -42,9 +41,13 @@ class AuditMiddleware(AgentMiddleware):
             result = handler(request)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
+            # Duck-type on `.content`: the handler returns a ToolMessage in
+            # production, but isinstance is brittle across langchain versions
+            # (and ToolMessage subclasses) — capture any message-like result.
             content = ""
-            if isinstance(result, ToolMessage):
-                content = str(result.content)[:200]
+            result_content = getattr(result, "content", None)
+            if result_content is not None:
+                content = str(result_content)[:200]
             success = not content.startswith("Error")
 
             safe_args = redact(args)
@@ -91,9 +94,13 @@ class AuditMiddleware(AgentMiddleware):
             result = await handler(request)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
+            # Duck-type on `.content`: the handler returns a ToolMessage in
+            # production, but isinstance is brittle across langchain versions
+            # (and ToolMessage subclasses) — capture any message-like result.
             content = ""
-            if isinstance(result, ToolMessage):
-                content = str(result.content)[:200]
+            result_content = getattr(result, "content", None)
+            if result_content is not None:
+                content = str(result_content)[:200]
             success = not content.startswith("Error")
 
             safe_args = redact(args)

@@ -360,9 +360,17 @@ class TestCuratorRun:
         index = str(tmp_path / "index.jsonl")
         audit = str(tmp_path / "audit.jsonl")
 
-        # After 300 days: 0.5^(300/90) ≈ 0.099 < 0.2 → should be pruned
-        old_skill = _make_skill(confidence=1.0, last_used_days_ago=300)
-        fresh_skill = _make_skill(confidence=0.9, last_used_days_ago=5)
+        # After 300 days: 0.5^(300/90) ≈ 0.099 < 0.2 → should be pruned.
+        # Distinct name/description so dedup doesn't collapse the pair before
+        # prune runs — this test exercises the decay→prune path specifically.
+        old_skill = _make_skill(
+            name="stale crawler", description="scrapes an old feed",
+            confidence=1.0, last_used_days_ago=300,
+        )
+        fresh_skill = _make_skill(
+            name="active summarizer", description="summarizes recent docs",
+            confidence=0.9, last_used_days_ago=5,
+        )
         _write_index(index, [old_skill, fresh_skill])
 
         curator = SkillCurator(index_path=index, audit_path=audit, dry_run=False)
