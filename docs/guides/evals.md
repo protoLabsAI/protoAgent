@@ -143,6 +143,21 @@ implementation runs 3 attempts and gates at 2 passes for those
 categories. Deterministic ones (`a2a-protocol`, `subsystem` with
 seeded state) gate at 100%.
 
+## Testing push notifications
+
+A2A push notifications POST to a consumer callback URL. To assert on delivery without a real server, use [`evals/webhook.py`](https://github.com/protoLabsAI/protoAgent/blob/main/evals/webhook.py):
+
+```python
+from evals.webhook import webhook_listener
+
+async with webhook_listener() as (url, capture):
+    # register `url` as the task's pushNotificationConfig, then run the task
+    ...
+    assert capture.received  # the agent delivered a notification (body + headers captured)
+```
+
+It runs a raw `asyncio` HTTP server on an ephemeral port (no FastAPI/aiohttp) and captures each POST body + headers.
+
 ## References
 
 - [`evals/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/evals/README.md) — quick reference for case authors
