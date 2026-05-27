@@ -167,6 +167,29 @@ compaction:
   model: ""                  # blank = summarize with the main model; or a cheaper one
 ```
 
+## `execute_code`
+
+Opt-in **programmatic tool calling** (`tools/execute_code.py`). Adds an `execute_code` tool: the model writes one Python script that calls several tools, loops/filters/composes their results in code, and `print()`s only the final answer — collapsing a long tool-call chain into a single turn (the model reads just the stdout, not every intermediate payload).
+
+The script runs in a **child process** with a **scrubbed environment** (only `PATH` + the bridge fds — no gateway keys / auth tokens) and a **hard timeout**. Tools are invoked back in the **parent** over an fd-based RPC bridge, so they run with the parent's credentials, audit, and trace context; the child only orchestrates. Inside the script, tools are reached via an injected `tools` object (`tools.web_search(query=...)`). The `execute_code` tool never exposes itself, so scripts can't recurse.
+
+```yaml
+execute_code:
+  enabled: false           # OFF by default — runs model-authored code
+  timeout: 30.0            # seconds before the child process is killed
+  tools: []                # allowlist; empty = all tools except execute_code
+  output_truncate: 6000    # cap on returned stdout (chars)
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Register the `execute_code` tool. |
+| `timeout` | `30.0` | Wall-clock limit; the child is killed past it. |
+| `tools` | `[]` | Tool-name allowlist exposed to scripts (empty = all but `execute_code`). |
+| `output_truncate` | `6000` | Max returned stdout chars. |
+
+> **Security:** subprocess + env-scrub + timeout is *isolation, not a true sandbox* — the child can still touch the filesystem and network as the server user. Enable only for trusted-model output or inside a hardened container (seccomp / read-only FS / network policy). Narrow `tools` to the minimum the workload needs.
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).

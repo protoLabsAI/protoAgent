@@ -117,6 +117,19 @@ class LangGraphConfig:
     compaction_keep_messages: int = 20
     compaction_model: str = ""            # blank = summarize with the main model
 
+    # Programmatic tool calling — the `execute_code` tool. Lets the model write
+    # one Python script that calls several tools, loops/filters/composes their
+    # results, and returns only stdout — collapsing a long tool-call chain into
+    # a single turn. The script runs in a subprocess with a scrubbed env (no
+    # secrets) and a hard timeout; tools are invoked back in the parent over an
+    # fd-based RPC bridge. OFF by default (run only trusted-model output, or in
+    # a hardened container). ``execute_code_tools`` empty = expose all tools
+    # except execute_code itself.
+    execute_code_enabled: bool = False
+    execute_code_timeout: float = 30.0
+    execute_code_tools: list[str] = field(default_factory=list)
+    execute_code_output_truncate: int = 6000
+
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
@@ -203,6 +216,10 @@ class LangGraphConfig:
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
+            execute_code_enabled=data.get("execute_code", {}).get("enabled", cls.execute_code_enabled),
+            execute_code_timeout=data.get("execute_code", {}).get("timeout", cls.execute_code_timeout),
+            execute_code_tools=data.get("execute_code", {}).get("tools", []),
+            execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),

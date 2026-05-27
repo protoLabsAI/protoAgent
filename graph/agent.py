@@ -329,6 +329,12 @@ def create_agent_graph(
     if include_subagents:
         all_tools.extend(_build_task_tools(config, all_tools))
 
+    # Programmatic tool calling — opt-in. Built last so it can wrap every
+    # other tool (including task/task_batch) but never itself.
+    if config.execute_code_enabled:
+        from tools.execute_code import build_execute_code_tool
+        all_tools.append(build_execute_code_tool(all_tools, config=config))
+
     middleware = _build_middleware(config, knowledge_store)
 
     system_prompt = build_system_prompt(
