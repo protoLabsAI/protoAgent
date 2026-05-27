@@ -517,6 +517,10 @@ def get_all_tools(knowledge_store=None, scheduler=None):
     fine with just the four keyless general tools.
     """
     tools = [current_time, calculator, web_search, fetch_url]
+    # GitHub read tools (PRs/issues/commits) over the gh CLI. Always
+    # included — they degrade to a readable error if gh/auth is missing.
+    from tools.github_tools import get_github_tools
+    tools.extend(get_github_tools())
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
     if scheduler is not None:
