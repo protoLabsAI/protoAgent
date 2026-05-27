@@ -162,7 +162,7 @@ def test_emit_multiple_skills() -> None:
 def test_subagent_config_default_allows_skill_emission() -> None:
     """SubagentConfig.allow_skill_emission defaults to True."""
     cfg = SubagentConfig(
-        name="worker",
+        name="researcher",
         description="d",
         system_prompt="s",
     )
@@ -172,7 +172,7 @@ def test_subagent_config_default_allows_skill_emission() -> None:
 def test_subagent_config_can_disable_skill_emission() -> None:
     """SubagentConfig.allow_skill_emission can be set to False."""
     cfg = SubagentConfig(
-        name="worker",
+        name="researcher",
         description="d",
         system_prompt="s",
         allow_skill_emission=False,
@@ -183,7 +183,7 @@ def test_subagent_config_can_disable_skill_emission() -> None:
 def test_subagent_config_disallowed_tools_unaffected() -> None:
     """Adding allow_skill_emission does not affect disallowed_tools."""
     cfg = SubagentConfig(
-        name="worker",
+        name="researcher",
         description="d",
         system_prompt="s",
         disallowed_tools=["task", "rm_rf"],

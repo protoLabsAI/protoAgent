@@ -23,7 +23,7 @@ env:
 jobs:
   release:
     name: Release
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-protolabs-linux
     if: github.repository == 'protoLabsAI/protoAgent'
     permissions:
       contents: write
@@ -45,6 +45,11 @@ jobs:
           TAG="${{ inputs.tag || github.ref_name }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # Previous tag for the release-notes diff range. Falls back to the
+          # repo's first commit if this is the first tagged release.
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null \
+            || git rev-list --max-parents=0 HEAD | head -n1)
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
 
       # ── Docker ────────────────────────────────────────────────────────────────
 
@@ -127,16 +132,17 @@ jobs:
             --notes "${{ steps.notes.outputs.notes }}"
 
       # ── Discord ───────────────────────────────────────────────────────────────
+      # Shared fleet tooling: rewrites the commit range into themed notes via
+      # the protoLabs gateway and posts the Discord embed. See
+      # protoLabsAI/release-tools. Replaces the former local
+      # scripts/post-release-notes.mjs.
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Post release notes to Discord
+      - name: Generate + post release notes
         continue-on-error: true
+        uses: protoLabsAI/release-tools@v1
+        with:
+          version: ${{ steps.version.outputs.tag }}
+          previous-version: ${{ steps.version.outputs.prev_tag }}
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
-        run: |
-          node scripts/post-release-notes.mjs \
-            --title "${{ steps.version.outputs.tag }}"
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}

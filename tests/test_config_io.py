@@ -94,22 +94,22 @@ def test_apply_updates_adds_missing_sections(tmp_path: Path) -> None:
     assert doc["model"]["name"] == "x"
 
 
-def test_apply_updates_nested_worker(tmp_path: Path) -> None:
-    """subagents.worker.tools is a list, subagents.worker.enabled
+def test_apply_updates_nested_researcher(tmp_path: Path) -> None:
+    """subagents.researcher.tools is a list, subagents.researcher.enabled
     is a bool — both must land in the right nested slot."""
     from graph import config_io
 
     yaml_path = tmp_path / "c.yaml"
-    yaml_path.write_text("subagents:\n  worker:\n    enabled: false\n")
+    yaml_path.write_text("subagents:\n  researcher:\n    enabled: false\n")
     doc = config_io.load_yaml_doc(yaml_path)
 
     config_io.apply_updates_to_yaml(
         doc,
-        {"subagents": {"worker": {"enabled": True, "tools": ["current_time", "calculator"]}}},
+        {"subagents": {"researcher": {"enabled": True, "tools": ["current_time", "calculator"]}}},
     )
 
-    assert doc["subagents"]["worker"]["enabled"] is True
-    assert list(doc["subagents"]["worker"]["tools"]) == ["current_time", "calculator"]
+    assert doc["subagents"]["researcher"]["enabled"] is True
+    assert list(doc["subagents"]["researcher"]["tools"]) == ["current_time", "calculator"]
 
 
 # ── config_to_dict ───────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
-    assert d["subagents"]["worker"]["tools"] == list(cfg.worker.tools)
+    assert d["subagents"]["researcher"]["tools"] == list(cfg.researcher.tools)
     assert d["middleware"]["audit"] == cfg.audit_middleware
     assert d["knowledge"]["top_k"] == cfg.knowledge_top_k
     assert d["identity"]["name"] == cfg.identity_name
@@ -150,8 +150,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     ({"model": {"temperature": -0.1}}, "temperature"),
     ({"model": {"max_tokens": 0}}, "max_tokens"),
     ({"model": {"max_iterations": 0}}, "max_iterations"),
-    ({"subagents": {"worker": {"max_turns": 0}}}, "max_turns"),
-    ({"subagents": {"worker": {"tools": "not-a-list"}}}, "list"),
+    ({"subagents": {"researcher": {"max_turns": 0}}}, "max_turns"),
+    ({"subagents": {"researcher": {"tools": "not-a-list"}}}, "list"),
     ({"knowledge": {"top_k": 0}}, "top_k"),
 ])
 def test_validate_rejects_bad_values(bad_value, expected_error_fragment):

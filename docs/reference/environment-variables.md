@@ -109,16 +109,17 @@ Without these set, the handler rejects webhook URLs that resolve to private / lo
 | `GRADIO_SERVER_NAME` | `0.0.0.0` | Bind address for the Gradio UI. |
 | `GRADIO_SERVER_PORT` | `7870` | Port for the Gradio UI. The A2A handler + metrics + agent card are all served on the same port. |
 
-## Release pipeline (`scripts/post-release-notes.mjs`)
+## Release pipeline (shared `release-tools` Action)
 
-Read only during the Discord-release step of `release.yml`.
+These are **CI secrets**, not env vars the template reads at runtime. The
+Discord-release step of `release.yml` delegates to the shared
+[`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools)
+Action, which reads them from the job env.
 
 | Variable | What |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude Haiku rewrites raw commits as polished notes. If unset, raw commit subjects post instead. |
-| `DISCORD_WEBHOOK_URL` | Discord channel webhook. If unset, notes print to stdout and don't leave CI. |
-| `AGENT_NAME` | Embed title uses this name. |
-| `AGENT_TAGLINE` | Footer tagline under the embed. |
+| `GATEWAY_API_KEY` | Bearer token for the protoLabs LLM gateway; the Action rewrites raw commits into themed notes. |
+| `DISCORD_RELEASE_WEBHOOK` | Discord channel webhook. If unset (`post-discord: false`), notes generate but aren't posted. |
 
 ## Not set by the template
 

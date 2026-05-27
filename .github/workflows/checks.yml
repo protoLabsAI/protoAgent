@@ -1,0 +1,59 @@
+name: Checks
+
+# PR + main gate: enforce the fleet workspace-config standard and run the
+# Python test suite. Replaces the prior collect-only smoke in docker-publish.yml
+# with a real `pytest` run, and catches .beads/.automaker/runner drift in CI
+# instead of as a mid-run failure.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-config:
+    name: Verify workspace config
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify workspace config (.beads / .automaker / owned runners)
+        # The npm package is still 1.0.0 (predates verify-workspace-config),
+        # so run the v1.1.0 script directly. It's zero-dependency (node
+        # builtins only), so no `npm install` is needed. Switch to
+        # `npx -p @protolabsai/release-tools verify-workspace-config` once
+        # 1.1.0+ is published to npm (protoLabsAI/release-tools#27).
+        run: |
+          git clone --depth 1 \
+            https://github.com/protoLabsAI/release-tools /tmp/release-tools
+          node /tmp/release-tools/bin/verify-workspace-config.mjs --root "$GITHUB_WORKSPACE"
+
+  tests:
+    name: Python tests
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        # venv keeps tests/conftest.py's site.getsitepackages() reorder
+        # resolving correctly (see #175).
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Run tests
+        run: |
+          . .venv/bin/activate
+          python -m pytest tests/ -q
