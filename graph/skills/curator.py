@@ -104,9 +104,12 @@ def _parse_iso(ts: str) -> datetime:
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
-    """Clamp *value* to [lo, hi], handling NaN / infinity."""
-    if not math.isfinite(value):
-        log.warning("[curator] confidence clamped from non-finite value %s", value)
+    """Clamp *value* to [lo, hi], handling NaN / infinity.
+
+    NaN can't be ordered, so it's special-cased to *lo*. ±infinity fall out
+    of ``max(lo, min(hi, value))`` correctly (+inf→hi, -inf→lo)."""
+    if math.isnan(value):
+        log.warning("[curator] confidence clamped from NaN to %s", lo)
         return lo
     return max(lo, min(hi, value))
 
@@ -292,13 +295,17 @@ class SkillCurator:
                 continue
             factor = self._decay_factor(days)
             new_confidence = _clamp(old_confidence * factor)
-            if new_confidence != old_confidence:
+            old_r = round(old_confidence, 4)
+            new_r = round(new_confidence, 4)
+            # Only report (and persist) a meaningful change. Sub-second idle
+            # time produces a negligible factor that rounds back to old.
+            if new_r != old_r:
                 report.append(
                     {
                         "id": skill.get("id"),
                         "days_idle": round(days, 1),
-                        "old": round(old_confidence, 4),
-                        "new": round(new_confidence, 4),
+                        "old": old_r,
+                        "new": new_r,
                     }
                 )
                 skill["confidence"] = new_confidence

@@ -7,11 +7,13 @@ pyyaml>=6.0
 ruamel.yaml>=0.18  # round-trip YAML that preserves comments in config/langgraph-config.yaml when the drawer writes back edits
 websockets>=12.0
 
-# LangGraph agent backend
+# LangGraph agent backend. Keep the langchain-* lower bounds on the 1.x
+# line — a 0.3.x core/openai resolves against langchain 1.x into a broken
+# `langchain_core` namespace (surfaced by checks.yml in PR #171).
 langchain>=1.2.3
-langchain-core>=0.3.0
+langchain-core>=1.0
 langgraph>=1.1.0
-langchain-openai>=0.3.0
+langchain-openai>=1.0
 
 # Starter tools (tools/lg_tools.py)
 ddgs>=9.0
