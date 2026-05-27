@@ -132,7 +132,8 @@ def test_schema_meta_table_exists(tmp_db) -> None:
     cur = conn.execute("SELECT version FROM _skills_meta WHERE key = 'schema_version'")
     row = cur.fetchone()
     assert row is not None
-    assert row[0] == 1
+    from graph.skills.index import _SCHEMA_VERSION
+    assert row[0] == _SCHEMA_VERSION
     conn.close()
 
 
@@ -476,3 +477,40 @@ def test_build_skills_query_caps_at_context_chars() -> None:
     messages = [HumanMessage(content=long_content)]
     query = km._build_skills_query(messages)
     assert len(query) <= 2000
+
+
+# ── Curation surface (v2 schema: confidence + last_used) ──────────────────────
+
+
+def test_all_skills_returns_curation_fields(populated_index) -> None:
+    """all_skills() exposes id/confidence/last_used for the curator."""
+    rows = populated_index.all_skills()
+    assert len(rows) == 3
+    r = rows[0]
+    assert set(r) >= {"id", "name", "description", "prompt_template",
+                      "tools_used", "created_at", "confidence", "last_used"}
+    assert r["confidence"] == 1.0          # new skills start fully confident
+    assert isinstance(r["id"], int)        # rowid
+    assert isinstance(r["tools_used"], list)
+
+
+def test_update_confidence_and_delete(populated_index) -> None:
+    rows = populated_index.all_skills()
+    target = rows[0]["id"]
+    populated_index.update_confidence(target, 0.42)
+    updated = {r["id"]: r for r in populated_index.all_skills()}
+    assert abs(updated[target]["confidence"] - 0.42) < 1e-9
+
+    populated_index.delete_skill(target)
+    remaining = {r["id"] for r in populated_index.all_skills()}
+    assert target not in remaining
+    assert len(remaining) == 2
+
+
+def test_curator_runs_against_live_index(populated_index) -> None:
+    """The curator operates on the live SkillsIndex (no JSONL) — #173."""
+    from graph.skills.curator import SkillCurator
+
+    before = len(populated_index.all_skills())
+    entry = SkillCurator(index=populated_index, audit_path="/dev/null", dry_run=True).run()
+    assert entry["skills_before"] == before
