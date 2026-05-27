@@ -429,6 +429,25 @@ class KnowledgeStore:
             db.close()
         return [Chunk(**dict(r)) for r in rows]
 
+    def get_hot_memory(self, max_chars: int = 6000) -> str:
+        """Concatenate every ``domain="hot"`` chunk for always-on injection.
+
+        "Hot" chunks are operator facts that should be in front of the model
+        every turn (vs. retrieved-on-relevance). ``KnowledgeMiddleware`` reads
+        this each turn so a newly-added hot fact is seen immediately. Returns
+        "" when there are none; trims oldest-first if over ``max_chars``.
+        """
+        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first
+        formatted: list[str] = []
+        total = 0
+        for c in chunks:  # newest-first → oldest trimmed when over budget
+            piece = (f"[{c.heading}] " if c.heading else "") + c.content
+            if total + len(piece) > max_chars:
+                break
+            formatted.append(piece)
+            total += len(piece)
+        return "\n".join(formatted)
+
     def stats(self) -> dict[str, int]:
         """Return per-domain chunk counts plus a ``total`` key."""
         db = self._get_db()
