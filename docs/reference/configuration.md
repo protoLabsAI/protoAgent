@@ -132,6 +132,27 @@ prompt_cache:
 | `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
 | `force` | `false` | Bypass the Anthropic-name heuristic (opaque gateway aliases). |
 
+## `compaction`
+
+Wires langchain's `SummarizationMiddleware` to summarize old history near the context limit (enables long-horizon runs; we otherwise only cap via `max_iterations`). Opt-in.
+
+```yaml
+compaction:
+  enabled: true
+  trigger: "fraction:0.8"   # or "tokens:120000" / "messages:80"
+  keep_messages: 20          # most-recent messages kept verbatim
+  model: ""                  # blank = summarize with the main model; or a cheaper one
+```
+
+## `routing`
+
+Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).
+
+```yaml
+routing:
+  fallback_models: [claude-haiku-4-5, gpt-5]
+```
+
 ## `knowledge`
 
 Only read when `middleware.knowledge` is `true`.
