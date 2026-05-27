@@ -22,7 +22,10 @@ The store is path-aware and degradation-aware:
   the store never crashes the agent loop on a corrupt or read-only DB.
 
 Forks that want embeddings on top of FTS5 can subclass and override
-``search()`` — the middleware reads through that one method.
+``search()`` — the middleware reads through that one method. A worked
+reference lives in ``knowledge/hybrid_store.py`` (``HybridKnowledgeStore``):
+pluggable ``embed_fn``, RRF fusion of FTS5 + vector rankings, and an
+embedding circuit breaker that falls back to FTS5 on outage.
 """
 
 from __future__ import annotations
