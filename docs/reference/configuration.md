@@ -108,6 +108,8 @@ Only read when `middleware.knowledge` is `true`.
 
 The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 isn't available). One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
 
+**Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
+
 ## Scheduler
 
 Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.
