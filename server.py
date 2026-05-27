@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -825,6 +826,36 @@ def _build_security_schemes() -> dict:
     return schemes
 
 
+def _package_version() -> str:
+    """Single-source the agent-card version from the package metadata.
+
+    ``pyproject.toml`` ``[project].version`` is the one source of truth (the
+    release pipeline bumps it). Prefer installed-package metadata; fall back
+    to reading pyproject.toml (it's shipped in the image via ``COPY .``);
+    final fallback keeps the card valid if neither is available.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("protoagent")
+        except PackageNotFoundError:
+            pass
+    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
+        pass
+
+    pyproject = Path(__file__).parent / "pyproject.toml"
+    try:
+        m = re.search(
+            r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE
+        )
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
 def _build_agent_card(host: str) -> dict:
     """Build the A2A agent card served at /.well-known/agent-card.json.
 
@@ -855,7 +886,7 @@ def _build_agent_card(host: str) -> dict:
         # A2A spec: the url field must point at the JSON-RPC endpoint
         # (where message/send is accepted), NOT the server root.
         "url": f"http://{host}/a2a",
-        "version": "0.1.0",
+        "version": _package_version(),
         "provider": {
             "organization": "protoLabsAI",
             "url": "https://github.com/protoLabsAI",
@@ -867,7 +898,7 @@ def _build_agent_card(host: str) -> dict:
             "extensions": [
                 # cost-v1 emission is wired by default via the `on_chat_model_end`
                 # capture in _chat_langgraph_stream above.
-                {"uri": "https://protolabs.ai/a2a/ext/cost-v1"},
+                {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"},
             ],
         },
         "defaultInputModes": ["text/plain"],

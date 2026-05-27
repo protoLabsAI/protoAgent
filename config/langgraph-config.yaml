@@ -16,7 +16,7 @@ model:
   api_base: http://gateway:4000/v1
   api_key: ""  # falls back to OPENAI_API_KEY env
   temperature: 0.2
-  max_tokens: 4096
+  max_tokens: 32768  # 32k — required headroom for the Qwen models we run
   max_iterations: 50
 
 subagents:

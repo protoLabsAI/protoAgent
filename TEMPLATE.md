@@ -209,7 +209,7 @@ After forking, review the skill loop lifecycle:
 
 1. **Emission** — subagents configured with `allow_skill_emission=True` capture
    successful `task()` runs as `SkillV1Artifact` objects stored in the skill
-   index (`/sandbox/skills/index.jsonl`).
+   index (`/sandbox/skills.db`, SQLite + FTS5).
 2. **Retrieval** — `KnowledgeMiddleware` injects the top-k most relevant skills
    before each LLM call, so the agent reuses proven workflows.
 3. **Curation** — run `python -m graph.skills.curator` periodically (or via

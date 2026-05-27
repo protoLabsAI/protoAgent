@@ -97,7 +97,7 @@ subagent `task()` delegation, and the structured-output protocol.
 
 | URI | Declared on card | Emitted at runtime |
 |---|---|---|
-| `cost-v1` (`https://protolabs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal task carries a cost-v1 DataPart with token usage + `durationMs` |
+| `cost-v1` (`https://proto-labs.ai/a2a/ext/cost-v1`) | Yes | Yes — every terminal task carries a cost-v1 DataPart with token usage + `durationMs` |
 | `a2a.trace` propagation | No (it's a protocol convention, not a card extension) | Yes — reads caller's Langfuse trace context from `params.metadata["a2a.trace"]` and nests this agent's trace under it |
 
 Declare additional extensions on the card in
@@ -172,7 +172,7 @@ tasks, and periodically optimised by the skill curator.
 | Component | Where it lives | What it does |
 |---|---|---|
 | Skill emission | `graph/extensions/skills.py` | Captures `task()` results as `SkillV1Artifact` when `emit_skill=True` |
-| Skill index | `/sandbox/skills/index.jsonl` | JSONL store of accumulated skill recipes |
+| Skill index | `/sandbox/skills.db` | SQLite (FTS5) store of accumulated skill recipes, read by `KnowledgeMiddleware` |
 | Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as context |
 | Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes the skill index |
 
@@ -182,7 +182,7 @@ tasks, and periodically optimised by the skill curator.
 # Dry-run — see what would change without touching the index
 python -m graph.skills.curator --dry-run
 
-# Full curation pass (reads index.jsonl, writes audit.jsonl)
+# Full curation pass (deduplicate, decay, prune; writes an audit trail)
 python -m graph.skills.curator
 ```
 

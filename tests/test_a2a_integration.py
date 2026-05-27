@@ -90,7 +90,7 @@ def test_agent_card_declares_cost_v1_extension() -> None:
     exts = card["capabilities"].get("extensions", [])
     cost_ext = next(
         (e for e in exts
-         if e.get("uri") == "https://protolabs.ai/a2a/ext/cost-v1"),
+         if e.get("uri") == "https://proto-labs.ai/a2a/ext/cost-v1"),
         None,
     )
     assert cost_ext is not None, (

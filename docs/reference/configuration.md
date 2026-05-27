@@ -11,7 +11,7 @@ model:
   api_base: http://gateway:4000/v1
   api_key: ""
   temperature: 0.2
-  max_tokens: 4096
+  max_tokens: 32768
   max_iterations: 50
 
 subagents:
@@ -50,7 +50,7 @@ knowledge:
 | `api_base` | `http://gateway:4000/v1` | OpenAI-compatible endpoint. |
 | `api_key` | `""` | Falls back to the `OPENAI_API_KEY` env var. |
 | `temperature` | `0.2` | Sampling temperature. |
-| `max_tokens` | `4096` | Per-call output cap. |
+| `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `50` | Upper bound on tool-call loops per task. |
 
 ## `subagents`

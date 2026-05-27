@@ -4,7 +4,7 @@ A2A extensions the template implements. Each is either emitted, parsed, or both.
 
 ## `cost-v1`
 
-**URI**: `https://protolabs.ai/a2a/ext/cost-v1`
+**URI**: `https://proto-labs.ai/a2a/ext/cost-v1`
 **Direction**: emitted by this agent
 **Declared on card**: yes (by default)
 
@@ -31,7 +31,7 @@ Captured by the `on_chat_model_end` handler in `_chat_langgraph_stream`. Require
 
 ## `effect-domain-v1`
 
-**URI**: `https://protolabs.ai/a2a/ext/effect-domain-v1`
+**URI**: `https://proto-labs.ai/a2a/ext/effect-domain-v1`
 **Direction**: declared by this agent
 **Declared on card**: no (template has no mutating skills)
 
@@ -39,7 +39,7 @@ Advertises per-skill world-state mutations so Workstacean's L1 planner can rank 
 
 ```json
 {
-  "uri": "https://protolabs.ai/a2a/ext/effect-domain-v1",
+  "uri": "https://proto-labs.ai/a2a/ext/effect-domain-v1",
   "params": {
     "skills": {
       "file_bug": {
