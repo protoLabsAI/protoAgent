@@ -25,7 +25,10 @@ both the lead agent and subagent system prompts.
 
 from __future__ import annotations
 
+import logging
 import re
+
+log = logging.getLogger("protoagent.output_format")
 
 OUTPUT_FORMAT_INSTRUCTIONS = """
 # Response format
@@ -76,18 +79,55 @@ def _strip_reasoning(text: str) -> str:
     return text
 
 
+_ORPHAN_OUTPUT_OPEN_RE = re.compile(r"<output>([\s\S]*)$", re.IGNORECASE)
+
+
 def extract_output(text: str) -> str:
     """Return the user-facing content from a complete model response.
 
     Order of preference:
-    1. Content inside the first ``<output>...</output>`` pair (still
-       with any nested reasoning markers stripped).
-    2. Full text with all reasoning markers stripped — covers the case
+    1. Content inside the first ``<output>...</output>`` pair (with any
+       nested reasoning markers stripped).
+    2. Orphan-open ``<output>`` with no closing tag — recovers responses
+       truncated mid-output when ``max_tokens`` is hit. Everything from the
+       opener to end of text, scratch stripped.
+    3. Full text with all reasoning markers stripped — covers the case
        where the model skipped ``<output>`` but still wrapped scratch.
-    3. Raw text if none of the above triggers — the model ignored every
-       convention. Rare in practice once the prompt is in place.
+
+    Returns "" when every strategy yields empty, logging a WARNING with a
+    sanitized preview so operators can tell *why* a turn went silent
+    (truncated mid-scratch vs. truly empty vs. odd shape). ``scratch_pad`` is
+    never surfaced — leaking internal reasoning breaks the protocol contract.
     """
+    if not text or not text.strip():
+        return ""
+
+    # 1. Closed <output>...</output>
     m = _OUTPUT_RE.search(text)
     if m:
-        return _strip_reasoning(m.group(1)).strip()
-    return _strip_reasoning(text).strip()
+        cleaned = _strip_reasoning(m.group(1)).strip()
+        if cleaned:
+            return cleaned
+
+    # 2. Orphan <output> opener (max_tokens truncation mid-output).
+    orphan = _ORPHAN_OUTPUT_OPEN_RE.search(text)
+    if orphan:
+        cleaned = _strip_reasoning(orphan.group(1)).strip()
+        if cleaned:
+            return cleaned
+
+    # 3. Last resort — strip reasoning, return what's left.
+    fallback = _strip_reasoning(text).strip()
+    if fallback:
+        return fallback
+
+    preview = text[:400].replace("\n", "\\n")
+    log.warning(
+        "[extract_output] empty after stripping — len=%d scratch=%s "
+        "output=%s preview=%r",
+        len(text),
+        "<scratch_pad>" in text.lower(),
+        "<output>" in text.lower(),
+        preview,
+    )
+    return ""
