@@ -174,3 +174,37 @@ def extract_output(text: str) -> str:
         preview,
     )
     return ""
+
+
+def is_dropped_scratch_turn(text: str) -> bool:
+    """Detect the 'scratch-only, never committed' dropped-turn pattern.
+
+    Failure mode: the model writes reasoning (``<scratch_pad>...`` or
+    ``<think>...``) and then stops without emitting a tool call or an
+    ``<output>`` block. ``extract_output`` strips the reasoning, returns
+    empty, and the turn silently drops. Detecting it lets the server issue a
+    kicker and retry once. Callers should also confirm no tool call fired this
+    turn (the LangChain tool channel is separate from text content) — an empty
+    extract_output with a tool call is a normal mid-loop step, not a drop.
+
+    True when the text has ``<scratch_pad>`` or ``<think>`` content and no
+    ``<output>`` tag.
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    if "<scratch_pad>" not in lower and "<think>" not in lower:
+        return False
+    return "<output>" not in lower
+
+
+# Follow-up user message sent on the same thread when is_dropped_scratch_turn
+# fires — the dropped turn is still in the checkpointer history, so the model
+# has full context to pick up where it left off.
+DROPPED_SCRATCH_KICKER = (
+    "Your previous turn emitted only reasoning (`<scratch_pad>`/`<think>`) — "
+    "no tool call and no `<output>` block, so it was dropped. Pick up where "
+    "you left off: if you were about to call a tool, call it now; if you have "
+    "enough to answer, write the answer in `<output>` directly. Do not emit "
+    "another bare reasoning block without committing to one of those paths."
+)

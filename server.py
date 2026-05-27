@@ -33,7 +33,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from graph.output_format import extract_confidence, extract_output
+from graph.output_format import (
+    DROPPED_SCRATCH_KICKER,
+    extract_confidence,
+    extract_output,
+    is_dropped_scratch_turn,
+)
 
 if TYPE_CHECKING:
     from scheduler.interface import SchedulerBackend
@@ -737,14 +742,64 @@ async def _chat_langgraph_stream(
                             "output_tokens": int(usage.get("output_tokens", 0) or 0),
                         })
 
-            # Self-reported confidence, if the model emitted <confidence>.
-            # Yielded before "done" so the A2A handler records it on the
+            final_text = extract_output(accumulated_raw)
+            final_raw = accumulated_raw
+
+            # Dropped-turn recovery: the model emitted only <scratch_pad>/<think>
+            # — no <output>, no tool call — so extract_output is empty and the
+            # turn would silently drop. Re-prompt once on the same thread with a
+            # kicker (history is preserved by the checkpointer). Capped at 1 retry.
+            if not final_text and is_dropped_scratch_turn(accumulated_raw):
+                log.warning(
+                    "[chat-stream] dropped scratch-only turn (session=%s) — kicker retry",
+                    session_id,
+                )
+                yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
+                retry_raw = ""
+                async for event in _graph.astream_events(
+                    {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)],
+                     "session_id": session_id},
+                    config=config,
+                    version="v2",
+                ):
+                    kind = event.get("event", "")
+                    name = event.get("name", "")
+                    if kind == "on_tool_start":
+                        tool_input = event.get("data", {}).get("input", "")
+                        yield ("tool_start", f"🔧 {name}: {str(tool_input)[:200] if tool_input else ''}")
+                    elif kind == "on_tool_end":
+                        out = event.get("data", {}).get("output", "")
+                        yield ("tool_end", f"✅ {name} → {str(out)[:300] if out else ''}")
+                    elif kind == "on_chat_model_stream":
+                        chunk = event.get("data", {}).get("chunk")
+                        if chunk and hasattr(chunk, "content") and chunk.content:
+                            retry_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                    elif kind == "on_chat_model_end":
+                        output = event.get("data", {}).get("output")
+                        usage = getattr(output, "usage_metadata", None) if output else None
+                        if usage:
+                            yield ("usage", {
+                                "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                                "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                            })
+                recovered = extract_output(retry_raw)
+                if recovered:
+                    final_text, final_raw = recovered, retry_raw
+                    log.info("[chat-stream] kicker recovered the turn (session=%s)", session_id)
+                else:
+                    log.warning(
+                        "[chat-stream] kicker retry also empty (session=%s) — falling back",
+                        session_id,
+                    )
+
+            # Self-reported confidence (from whichever pass produced the answer),
+            # yielded before "done" so the A2A handler records it on the
             # terminal artifact's confidence-v1 DataPart.
-            confidence, explanation = extract_confidence(accumulated_raw)
+            confidence, explanation = extract_confidence(final_raw)
             if confidence is not None:
                 yield ("confidence", {"confidence": confidence, "explanation": explanation})
 
-            yield ("done", extract_output(accumulated_raw))
+            yield ("done", final_text)
 
         except GeneratorExit:
             # Expected: A2A consumers (e.g. Workstacean's A2AExecutor) break
