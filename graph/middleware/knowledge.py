@@ -302,6 +302,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         if self._prior_sessions_cache:
             parts.append(self._prior_sessions_cache)
 
+        # Hot memory — always-on operator facts (domain="hot"). Loaded per turn
+        # (not cached) so a freshly-added hot fact is seen immediately.
+        if self._store is not None and hasattr(self._store, "get_hot_memory"):
+            try:
+                hot = self._store.get_hot_memory()
+                if hot:
+                    parts.append(f"[Always-on facts (hot memory):]\n{hot}")
+            except Exception as exc:  # noqa: BLE001 - never break the loop on memory
+                log.debug("[knowledge] hot memory load failed: %s", exc)
+
         messages = state.get("messages", [])
 
         # Inject learned skills from SkillsIndex when available
