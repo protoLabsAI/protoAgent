@@ -100,6 +100,15 @@ class LangGraphConfig:
     prompt_cache_ttl: str = "5m"          # "5m" (ephemeral) or "1h" (persistent)
     prompt_cache_force: bool = False      # bypass the Anthropic-name heuristic
 
+    # Cache-warming heartbeat — optional background ping that reproduces the
+    # agent's cached system+tools prefix on an interval so the FIRST real
+    # request after an idle gap hits a warm cache instead of a full miss.
+    # OFF by default; only worth enabling for sporadic-but-latency-sensitive
+    # workloads on the "1h" persistent tier (interval just under the TTL).
+    # For steady traffic the cache stays warm on its own and this is pure cost.
+    cache_warming_enabled: bool = False
+    cache_warming_interval_seconds: int = 3300  # 55m — just under the 1h tier
+
     # Context compaction — wires langchain's SummarizationMiddleware to
     # summarize old history near the context limit. Opt-in. trigger is
     # "fraction:0.8" | "tokens:120000" | "messages:80"; keep = last N messages.
@@ -188,6 +197,8 @@ class LangGraphConfig:
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
             prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
+            cache_warming_enabled=data.get("prompt_cache", {}).get("warm", {}).get("enabled", cls.cache_warming_enabled),
+            cache_warming_interval_seconds=data.get("prompt_cache", {}).get("warm", {}).get("interval_seconds", cls.cache_warming_interval_seconds),
             compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),

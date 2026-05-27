@@ -140,6 +140,9 @@ prompt_cache:
   ttl: "5m"         # "5m" ephemeral, or "1h" persistent (agent turns exceed 5m)
   force: false      # cache even when the model name doesn't look Anthropic
                     # (use when your gateway alias hides a Claude model)
+  warm:             # cache-warming heartbeat (off by default)
+    enabled: false
+    interval_seconds: 3300   # 55m — just under the "1h" tier
 ```
 
 | Key | Default | What |
@@ -147,6 +150,10 @@ prompt_cache:
 | `enabled` | `true` | Apply `cache_control` (Anthropic). No-op on non-Anthropic models. |
 | `ttl` | `"5m"` | Cache tier: `5m` (ephemeral) or `1h` (persistent). |
 | `force` | `false` | Bypass the Anthropic-name heuristic (opaque gateway aliases). |
+| `warm.enabled` | `false` | Run a background heartbeat (`graph/cache_warmer.py`) that periodically reproduces the cached system prefix so the **first** request after an idle gap hits a warm cache instead of a full miss. |
+| `warm.interval_seconds` | `3300` | Heartbeat period. Set just under `ttl` (default 55m for the `1h` tier). |
+
+**When to enable `warm`:** sporadic but latency-sensitive traffic on the `1h` tier — the ~1-token ping per interval is cheap relative to a cold miss on a multi-thousand-token prefix while a user waits. Leave it **off** for steady traffic (the cache stays warm on its own — warming is then pure cost) and on non-Anthropic models (nothing to warm; the warmer no-ops at start unless `force` is set). It runs as its own asyncio task (started/stopped with the server), **not** through the scheduler — the scheduler fires full agent turns, the wrong primitive for a keep-alive.
 
 ## `compaction`
 

@@ -71,6 +71,8 @@ _scheduler = None      # SchedulerBackend (LocalScheduler or WorkstaceanSchedule
                        # Constructed at init, started on FastAPI startup, stopped
                        # on shutdown. Lifecycle is hooked in _main() so the
                        # polling coroutine doesn't leak on server reload.
+_cache_warmer = None   # Optional CacheWarmer (off by default). Same start/stop
+                       # lifecycle as _scheduler; keeps the prompt cache warm.
 
 
 def _init_langgraph_agent():
@@ -118,6 +120,14 @@ def _init_langgraph_agent():
     _scheduler = _build_scheduler(_graph_config)
 
     _graph = create_agent_graph(
+        _graph_config, knowledge_store=knowledge_store, scheduler=_scheduler,
+    )
+
+    # Cache-warming heartbeat — off by default; start() no-ops unless enabled
+    # for an Anthropic-family model (see graph/cache_warmer.py).
+    global _cache_warmer
+    from graph.cache_warmer import CacheWarmer
+    _cache_warmer = CacheWarmer(
         _graph_config, knowledge_store=knowledge_store, scheduler=_scheduler,
     )
     log.info(
@@ -1051,21 +1061,29 @@ def _main():
     # around it.
     @fastapi_app.on_event("startup")
     async def _scheduler_startup() -> None:
-        if _scheduler is None:
-            return
-        try:
-            await _scheduler.start()
-        except Exception:
-            log.exception("[scheduler] startup failed")
+        if _scheduler is not None:
+            try:
+                await _scheduler.start()
+            except Exception:
+                log.exception("[scheduler] startup failed")
+        if _cache_warmer is not None:
+            try:
+                await _cache_warmer.start()
+            except Exception:
+                log.exception("[cache-warmer] startup failed")
 
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
-        if _scheduler is None:
-            return
-        try:
-            await _scheduler.stop()
-        except Exception:
-            log.exception("[scheduler] shutdown failed")
+        if _scheduler is not None:
+            try:
+                await _scheduler.stop()
+            except Exception:
+                log.exception("[scheduler] shutdown failed")
+        if _cache_warmer is not None:
+            try:
+                await _cache_warmer.stop()
+            except Exception:
+                log.exception("[cache-warmer] shutdown failed")
 
     # --- Chat API -----------------------------------------------------------
     class ChatRequest(PydanticBaseModel):
