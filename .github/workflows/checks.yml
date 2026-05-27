@@ -25,7 +25,10 @@ jobs:
         with:
           node-version: "20"
       - name: Verify workspace config (.beads / .automaker / owned runners)
-        run: npx --yes -p @protolabsai/release-tools verify-workspace-config
+        # Pinned to the git tag: the npm package is still at 1.0.0, which
+        # predates the verify-workspace-config command. Switch to
+        # `-p @protolabsai/release-tools` once 1.1.0+ is published.
+        run: npx --yes -p 'github:protoLabsAI/release-tools#v1.1.0' verify-workspace-config
 
   tests:
     name: Python tests
