@@ -521,6 +521,11 @@ def get_all_tools(knowledge_store=None, scheduler=None):
     # included — they degrade to a readable error if gh/auth is missing.
     from tools.github_tools import get_github_tools
     tools.extend(get_github_tools())
+    # A2A peer-consult tools — only when at least one PEER_<HANDLE>_URL is set,
+    # so agents with no federation peers aren't cluttered.
+    from tools.peer_tools import get_peer_tools, list_env_peers
+    if list_env_peers():
+        tools.extend(get_peer_tools())
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
     if scheduler is not None:
