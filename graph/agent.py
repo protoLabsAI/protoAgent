@@ -94,18 +94,127 @@ def _parse_compaction_trigger(spec: str):
     return ("fraction", 0.8)
 
 
-def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
-    """Build the task tool for subagent delegation.
+async def _run_subagent(
+    *,
+    llm,
+    tool_map: dict,
+    available_subagents: str,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+    emit_skill: bool,
+    truncate: int | None = None,
+) -> str:
+    """Run a single subagent delegation and return its output text.
+
+    Shared by the single ``task`` tool and the concurrent ``task_batch`` tool.
+    ``truncate`` (chars) bounds the returned body so a wide fan-out can't blow
+    the parent context; ``None`` means unbounded (single-task path).
+    """
+    from datetime import datetime, timezone
+
+    import tracing
+    from graph.extensions.skills import SkillV1Artifact, emit_skill_artifact
+
+    sub_config = SUBAGENT_REGISTRY.get(subagent_type)
+    if not sub_config:
+        return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+
+    sub_tools = [tool_map[name] for name in sub_config.tools if name in tool_map]
+    if not sub_tools:
+        return f"Error: No tools available for subagent '{subagent_type}'."
+
+    subagent = create_agent(
+        model=llm,
+        tools=sub_tools,
+        middleware=[AuditMiddleware()],
+        system_prompt=build_subagent_prompt(subagent_type),
+    )
+
+    try:
+        result = await subagent.ainvoke(
+            {"messages": [{"role": "user", "content": prompt}]},
+            config={"recursion_limit": sub_config.max_turns},
+        )
+
+        messages = result.get("messages", [])
+
+        # Extract tools actually invoked during the subagent run.
+        tools_used: list[str] = []
+        for msg in messages:
+            # AIMessage tool_calls: [{"name": ..., "args": ..., "id": ...}]
+            for tc in getattr(msg, "tool_calls", []) or []:
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                if name and name not in tools_used:
+                    tools_used.append(name)
+
+        body = None
+        for msg in reversed(messages):
+            if hasattr(msg, "content") and msg.content:
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                if content and not content.startswith("Error"):
+                    body = content
+                    break
+
+        if body is None:
+            return f"[{subagent_type} completed: {description}] -- no output produced."
+
+        if truncate is not None and len(body) > truncate:
+            body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
+
+        output_text = f"[{subagent_type} completed: {description}]\n\n{body}"
+
+        # Emit skill-v1 artifact when opted in and config permits.
+        if emit_skill and sub_config.allow_skill_emission:
+            if not tools_used:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[skill] emit_skill=True but no tool usage metadata "
+                    "captured for subagent '%s'; skipping skill emission.",
+                    subagent_type,
+                )
+            else:
+                try:
+                    artifact = SkillV1Artifact(
+                        name=description,
+                        description=f"Captured workflow: {description}",
+                        prompt_template=prompt,
+                        tools_used=tools_used,
+                        created_at=datetime.now(timezone.utc),
+                        source_session_id=tracing.current_session_id(),
+                    )
+                    emit_skill_artifact(artifact)
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).error(
+                        "[skill] skill-v1 artifact construction failed: %s; "
+                        "skipping emission.",
+                        exc,
+                    )
+
+        return output_text
+    except Exception as e:
+        return f"Error: Subagent '{subagent_type}' failed: {e}"
+
+
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool]):
+    """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
     parent agent's. The session_id contextvar set by trace_session
-    propagates because subagents run in the same async context.
+    propagates because subagents run in the same async context. Subagents are
+    given only their allowlisted tools (which never include ``task``/
+    ``task_batch``), so delegation depth is naturally bounded to one level.
     """
+    import asyncio
+
     from langchain_core.tools import tool
 
     llm = create_llm(config)
     tool_map = {t.name: t for t in all_tools}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
+    max_concurrency = max(1, config.subagent_max_concurrency)
+    truncate = config.subagent_output_truncate
 
     @tool
     async def task(
@@ -114,7 +223,11 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
         subagent_type: str = "researcher",
         emit_skill: bool = False,
     ) -> str:
-        """Delegate a task to a specialized subagent.
+        """Delegate a single task to a specialized subagent.
+
+        Use this for one focused delegation. To run several independent
+        delegations at once, use ``task_batch`` instead — it runs them
+        concurrently rather than one after another.
 
         Args:
             description: Short description of what this task will accomplish
@@ -125,91 +238,77 @@ def _build_task_tool(config: LangGraphConfig, all_tools: list[BaseTool]):
                 Defaults to False (opt-in). No artifact is emitted on failure
                 or when the subagent config has allow_skill_emission=False.
         """
-        from datetime import datetime, timezone
-
-        import tracing
-        from graph.extensions.skills import SkillV1Artifact, emit_skill_artifact
-
-        sub_config = SUBAGENT_REGISTRY.get(subagent_type)
-        if not sub_config:
-            return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
-
-        sub_tools = [
-            tool_map[name] for name in sub_config.tools
-            if name in tool_map
-        ]
-
-        if not sub_tools:
-            return f"Error: No tools available for subagent '{subagent_type}'."
-
-        subagent = create_agent(
-            model=llm,
-            tools=sub_tools,
-            middleware=[AuditMiddleware()],
-            system_prompt=build_subagent_prompt(subagent_type),
+        return await _run_subagent(
+            llm=llm,
+            tool_map=tool_map,
+            available_subagents=available_subagents,
+            description=description,
+            prompt=prompt,
+            subagent_type=subagent_type,
+            emit_skill=emit_skill,
+            truncate=None,
         )
 
-        try:
-            result = await subagent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]},
-                config={"recursion_limit": sub_config.max_turns},
-            )
+    @tool
+    async def task_batch(tasks: list[dict]) -> str:
+        """Delegate several independent tasks to subagents concurrently.
 
-            messages = result.get("messages", [])
+        Prefer this over multiple sequential ``task`` calls whenever the
+        delegations don't depend on each other (e.g. research three topics,
+        check several sources) — they run in parallel, bounded by the
+        configured concurrency cap, so total latency is roughly the slowest
+        task rather than the sum. Use plain ``task`` for a single delegation
+        or when one task's output feeds the next.
 
-            # Extract tools actually invoked during the subagent run.
-            tools_used: list[str] = []
-            for msg in messages:
-                # AIMessage tool_calls: [{"name": ..., "args": ..., "id": ...}]
-                for tc in getattr(msg, "tool_calls", []) or []:
-                    name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-                    if name and name not in tools_used:
-                        tools_used.append(name)
+        Args:
+            tasks: A list of task specs. Each item is an object with:
+                - ``description`` (str, required): short summary of the task
+                - ``prompt`` (str, required): detailed instructions
+                - ``subagent_type`` (str, optional): defaults to "researcher"
+                - ``emit_skill`` (bool, optional): defaults to False
 
-            output_text = None
-            for msg in reversed(messages):
-                if hasattr(msg, "content") and msg.content:
-                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                    if content and not content.startswith("Error"):
-                        output_text = f"[{subagent_type} completed: {description}]\n\n{content}"
-                        break
+        Returns the results concatenated in the same order as ``tasks``, each
+        prefixed with its 1-based index. Individual failures are reported
+        inline and do not abort the batch.
+        """
+        if not tasks:
+            return "Error: task_batch called with an empty task list."
+        if not isinstance(tasks, list):
+            return "Error: 'tasks' must be a list of task objects."
 
-            if output_text is None:
-                output_text = f"[{subagent_type} completed: {description}] -- no output produced."
+        sem = asyncio.Semaphore(max_concurrency)
 
-            # Emit skill-v1 artifact when opted in and config permits.
-            if emit_skill and sub_config.allow_skill_emission:
-                if not tools_used:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "[skill] emit_skill=True but no tool usage metadata "
-                        "captured for subagent '%s'; skipping skill emission.",
-                        subagent_type,
-                    )
-                else:
-                    try:
-                        artifact = SkillV1Artifact(
-                            name=description,
-                            description=f"Captured workflow: {description}",
-                            prompt_template=prompt,
-                            tools_used=tools_used,
-                            created_at=datetime.now(timezone.utc),
-                            source_session_id=tracing.current_session_id(),
-                        )
-                        emit_skill_artifact(artifact)
-                    except Exception as exc:
-                        import logging
-                        logging.getLogger(__name__).error(
-                            "[skill] skill-v1 artifact construction failed: %s; "
-                            "skipping emission.",
-                            exc,
-                        )
+        async def _one(spec: dict) -> str:
+            if not isinstance(spec, dict):
+                return f"Error: each task must be an object, got {type(spec).__name__}."
+            desc = spec.get("description") or "(no description)"
+            prm = spec.get("prompt")
+            if not prm:
+                return f"Error: task '{desc}' is missing 'prompt'."
+            async with sem:
+                return await _run_subagent(
+                    llm=llm,
+                    tool_map=tool_map,
+                    available_subagents=available_subagents,
+                    description=desc,
+                    prompt=prm,
+                    subagent_type=spec.get("subagent_type", "researcher"),
+                    emit_skill=bool(spec.get("emit_skill", False)),
+                    truncate=truncate,
+                )
 
-            return output_text
-        except Exception as e:
-            return f"Error: Subagent '{subagent_type}' failed: {e}"
+        results = await asyncio.gather(
+            *(_one(s) for s in tasks), return_exceptions=True
+        )
 
-    return task
+        parts = []
+        for i, res in enumerate(results, start=1):
+            if isinstance(res, Exception):
+                res = f"Error: task #{i} raised {type(res).__name__}: {res}"
+            parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
+        return "\n\n".join(parts)
+
+    return [task, task_batch]
 
 
 def create_agent_graph(
@@ -228,8 +327,7 @@ def create_agent_graph(
     all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
 
     if include_subagents:
-        task_tool = _build_task_tool(config, all_tools)
-        all_tools.append(task_tool)
+        all_tools.extend(_build_task_tools(config, all_tools))
 
     middleware = _build_middleware(config, knowledge_store)
 

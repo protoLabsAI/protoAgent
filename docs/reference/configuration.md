@@ -66,6 +66,22 @@ One entry per subagent name. Each entry matches a `SubagentConfig` in `graph/sub
 | `tools` | `[]` | Allowlist. Tool names not listed here are invisible to this subagent. |
 | `max_turns` | `30` | Recursion cap. |
 
+Two `subagents`-block keys govern **fan-out** via the `task_batch` tool (concurrent delegation):
+
+| Key | Default | What |
+|---|---|---|
+| `max_concurrency` | `4` | Cap on in-flight subagents per `task_batch` call (protects the gateway + context budget). |
+| `output_truncate` | `6000` | Per-subagent returned-text cap (chars) under `task_batch`, so a wide fan-out can't blow the parent context. Single `task` is unbounded. |
+
+```yaml
+subagents:
+  max_concurrency: 4
+  output_truncate: 6000
+  researcher:
+    enabled: true
+    tools: [...]
+```
+
 Adding a new subagent name to the YAML requires matching entries in `graph/subagents/config.py::SUBAGENT_REGISTRY`, `graph/config.py::LangGraphConfig`, and the `from_yaml()` loop. See [Configure subagents](/guides/subagents).
 
 ## `middleware`

@@ -11,7 +11,16 @@ Subagents are specialized LLM workers the lead agent delegates to via the `task(
 When *not* to use:
 
 - For a single-loop agent. Adding a subagent hop for every call just wastes turns.
-- For parallel fan-out. `task()` is sequential; if you need parallelism, spawn from your tool code directly.
+- When one delegation's output feeds the next — use sequential `task()` calls (or a chain) for that. For *independent* delegations, see `task_batch` below.
+
+## Single vs. batch delegation
+
+The lead gets two delegation tools:
+
+- **`task(description, prompt, subagent_type, emit_skill)`** — one focused delegation. Unbounded output.
+- **`task_batch(tasks)`** — several *independent* delegations run **concurrently** (e.g. research three topics at once). Each `tasks` item is `{description, prompt, subagent_type?, emit_skill?}`. Results come back in input order; an individual task's failure is reported inline and doesn't abort the batch. Concurrency is capped by `subagents.max_concurrency` (default 4) and each result is truncated to `subagents.output_truncate` chars (default 6000) so a wide fan-out can't blow the parent context. Total latency is roughly the slowest task rather than the sum.
+
+Prefer `task_batch` whenever the delegations don't depend on each other.
 
 ## 1. Define the config
 
@@ -141,7 +150,7 @@ Every subagent call:
 - Emits the same `autonomous.cost.*` events on terminal completion.
 - Is rate-limited by `max_turns` (hard stop — avoids runaway recursion).
 
-`task` is on the `disallowed_tools` list by default, so subagents can't spawn further subagents. This is intentional; one level of delegation is almost always enough.
+Neither `task` nor `task_batch` is ever in a subagent's tool allowlist (subagents only get the tools named in their `tools:` list), so subagents can't spawn further subagents. This is intentional; one level of delegation is almost always enough.
 
 ## Related
 

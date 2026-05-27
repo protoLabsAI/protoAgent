@@ -59,6 +59,14 @@ class LangGraphConfig:
         max_turns=40,
     ))
 
+    # Sub-agent fan-out — the `task_batch` tool runs delegations concurrently.
+    # ``subagent_max_concurrency`` caps in-flight subagents (protects the
+    # gateway / context budget); ``subagent_output_truncate`` bounds each
+    # subagent's returned text (chars) so a fan-out can't blow the parent
+    # context. Both apply to `task_batch`; single `task` is unbounded.
+    subagent_max_concurrency: int = 4
+    subagent_output_truncate: int = 6000
+
     # Middleware / subsystem toggles. All default-on so a fresh fork has
     # a working memory loop + scheduler on day one. Forks that want a
     # purely stateless agent (no KB, no scheduled tasks) can flip these
@@ -185,6 +193,8 @@ class LangGraphConfig:
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
             compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
+            subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
+            subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),

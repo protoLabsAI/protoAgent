@@ -37,3 +37,7 @@ docs/.vitepress/cache/
 .automaker/features/
 .automaker/checkpoints/
 .automaker/trajectory/
+.automaker/projects/
+.automaker/knowledge.db
+.automaker/knowledge.db-*
+.beads/last-touched
