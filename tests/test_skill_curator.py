@@ -61,10 +61,32 @@ def _make_skill(
     return skill
 
 
-def _write_index(path: str, skills: list[dict]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        for s in skills:
-            fh.write(json.dumps(s) + "\n")
+def _seed_index(db_path: str, skills: list[dict]):
+    """Create a SkillsIndex at *db_path* and insert *skills* directly.
+
+    Inserts confidence/last_used/created_at verbatim (bypassing add_skill's
+    defaults) so curation tests can stage exact decay/prune scenarios. The
+    rowid becomes the curator's skill ``id``. Returns the SkillsIndex.
+    """
+    from graph.skills.index import SkillsIndex
+
+    idx = SkillsIndex(db_path)
+    conn = idx._open_conn()
+    for s in skills:
+        conn.execute(
+            """INSERT INTO skills_fts
+               (name, description, prompt_template, tools_used,
+                source_session_id, created_at, confidence, last_used)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                s["name"], s["description"], s.get("prompt_template", ""),
+                " ".join(s.get("tools_used", [])), "",
+                s.get("created_at", ""), s.get("confidence", 1.0),
+                s.get("last_used", s.get("created_at", "")),
+            ),
+        )
+    conn.commit()
+    return idx
 
 
 # ── _clamp ─────────────────────────────────────────────────────────────────────
@@ -121,7 +143,7 @@ class TestJaccard:
 class TestConfidenceDecay:
     def _curator(self, **kwargs) -> SkillCurator:
         return SkillCurator(
-            index_path="/dev/null",
+            db_path="/dev/null",
             audit_path="/dev/null",
             dry_run=True,
             **kwargs,
@@ -199,7 +221,7 @@ class TestConfidenceDecay:
 class TestDeduplication:
     def _curator(self, threshold: float = SIMILARITY_THRESHOLD) -> SkillCurator:
         return SkillCurator(
-            index_path="/dev/null",
+            db_path="/dev/null",
             audit_path="/dev/null",
             dry_run=True,
             similarity_threshold=threshold,
@@ -264,7 +286,7 @@ class TestDeduplication:
 class TestPruning:
     def _curator(self, threshold: float = PRUNE_THRESHOLD) -> SkillCurator:
         return SkillCurator(
-            index_path="/dev/null",
+            db_path="/dev/null",
             audit_path="/dev/null",
             dry_run=True,
             prune_threshold=threshold,
@@ -314,29 +336,31 @@ class TestPruning:
 
 
 class TestCuratorRun:
-    def test_dry_run_does_not_write_files(self, tmp_path):
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
-        skills = [_make_skill(confidence=1.0, days_ago=0)]
-        _write_index(index, skills)
+    """End-to-end runs against the live SQLite SkillsIndex (the store the
+    runtime actually writes — see #173)."""
 
-        curator = SkillCurator(
-            index_path=index,
-            audit_path=audit,
-            dry_run=True,
-        )
-        curator.run()
-        # Audit file should NOT be created in dry_run mode
+    def _audit(self, tmp_path):
+        return str(tmp_path / "audit.jsonl")
+
+    def test_dry_run_does_not_write_files(self, tmp_path):
+        idx = _seed_index(str(tmp_path / "skills.db"), [_make_skill(confidence=1.0)])
+        audit = self._audit(tmp_path)
+        SkillCurator(index=idx, audit_path=audit, dry_run=True).run()
         assert not os.path.exists(audit)
 
-    def test_full_run_writes_audit(self, tmp_path):
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
-        skills = [_make_skill(confidence=1.0)]
-        _write_index(index, skills)
+    def test_dry_run_leaves_store_unchanged(self, tmp_path):
+        # A low-confidence, long-idle skill would be pruned on a real run.
+        idx = _seed_index(str(tmp_path / "skills.db"), [
+            _make_skill(name="stale", description="old thing",
+                        confidence=1.0, last_used_days_ago=400),
+        ])
+        SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=True).run()
+        assert len(idx.all_skills()) == 1  # nothing deleted in dry-run
 
-        curator = SkillCurator(index_path=index, audit_path=audit, dry_run=False)
-        curator.run()
+    def test_full_run_writes_audit(self, tmp_path):
+        idx = _seed_index(str(tmp_path / "skills.db"), [_make_skill(confidence=1.0)])
+        audit = self._audit(tmp_path)
+        SkillCurator(index=idx, audit_path=audit, dry_run=False).run()
 
         assert os.path.exists(audit)
         with open(audit) as fh:
@@ -344,25 +368,16 @@ class TestCuratorRun:
         assert "run_id" in entry
         assert entry["dry_run"] is False
 
-    def test_missing_index_produces_empty_run(self, tmp_path):
-        audit = str(tmp_path / "audit.jsonl")
-        curator = SkillCurator(
-            index_path=str(tmp_path / "nonexistent.jsonl"),
-            audit_path=audit,
-            dry_run=False,
-        )
-        entry = curator.run()
+    def test_empty_store_produces_empty_run(self, tmp_path):
+        idx = _seed_index(str(tmp_path / "skills.db"), [])
+        entry = SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=False).run()
         assert entry["skills_before"] == 0
         assert entry["skills_after"] == 0
 
     def test_decay_then_prune_pipeline(self, tmp_path):
-        """A skill idle for >300 days should be pruned in a full run."""
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
-
-        # After 300 days: 0.5^(300/90) ≈ 0.099 < 0.2 → should be pruned.
-        # Distinct name/description so dedup doesn't collapse the pair before
-        # prune runs — this test exercises the decay→prune path specifically.
+        """A skill idle >300 days decays below threshold and is pruned from
+        the SQLite store; the fresh one survives. Distinct names so dedup
+        doesn't collapse the pair before prune runs."""
         old_skill = _make_skill(
             name="stale crawler", description="scrapes an old feed",
             confidence=1.0, last_used_days_ago=300,
@@ -371,57 +386,41 @@ class TestCuratorRun:
             name="active summarizer", description="summarizes recent docs",
             confidence=0.9, last_used_days_ago=5,
         )
-        _write_index(index, [old_skill, fresh_skill])
+        idx = _seed_index(str(tmp_path / "skills.db"), [old_skill, fresh_skill])
 
-        curator = SkillCurator(index_path=index, audit_path=audit, dry_run=False)
-        entry = curator.run()
+        entry = SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=False).run()
 
         assert entry["skills_before"] == 2
         assert entry["skills_after"] == 1
         assert len(entry["pruned"]) == 1
-        assert entry["pruned"][0]["id"] == old_skill["id"]
+        remaining = idx.all_skills()
+        assert len(remaining) == 1
+        assert remaining[0]["name"] == "active summarizer"
 
     def test_audit_entry_structure(self, tmp_path):
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
-        _write_index(index, [_make_skill()])
-
-        curator = SkillCurator(index_path=index, audit_path=audit, dry_run=False)
-        entry = curator.run()
-
+        idx = _seed_index(str(tmp_path / "skills.db"), [_make_skill()])
+        entry = SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=False).run()
         required_keys = {
             "run_id", "timestamp", "dry_run", "skills_before",
             "skills_after", "decay_applied", "deduplicated", "pruned",
         }
         assert required_keys.issubset(entry.keys())
 
-    def test_malformed_index_lines_are_skipped(self, tmp_path):
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
+    def test_store_persisted_after_run(self, tmp_path):
+        old_skill = _make_skill(
+            name="stale crawler", description="scrapes an old feed",
+            confidence=1.0, last_used_days_ago=300,
+        )
+        fresh_skill = _make_skill(
+            name="active summarizer", description="summarizes recent docs",
+            confidence=0.9, last_used_days_ago=2,
+        )
+        idx = _seed_index(str(tmp_path / "skills.db"), [old_skill, fresh_skill])
 
-        with open(index, "w") as fh:
-            fh.write("not json\n")
-            fh.write(json.dumps(_make_skill()) + "\n")
-            fh.write("{incomplete\n")
+        SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=False).run()
 
-        curator = SkillCurator(index_path=index, audit_path=audit, dry_run=True)
-        entry = curator.run()
-        # Only the valid skill should be loaded
-        assert entry["skills_before"] == 1
-
-    def test_index_persisted_after_run(self, tmp_path):
-        index = str(tmp_path / "index.jsonl")
-        audit = str(tmp_path / "audit.jsonl")
-
-        # Create two skills; one will be pruned (low confidence, old)
-        old_skill = _make_skill(confidence=1.0, last_used_days_ago=300)
-        fresh_skill = _make_skill(confidence=0.9, last_used_days_ago=2)
-        _write_index(index, [old_skill, fresh_skill])
-
-        curator = SkillCurator(index_path=index, audit_path=audit, dry_run=False)
-        curator.run()
-
-        with open(index) as fh:
-            remaining = [json.loads(l) for l in fh if l.strip()]
+        remaining = idx.all_skills()
         assert len(remaining) == 1
-        assert remaining[0]["id"] == fresh_skill["id"]
+        assert remaining[0]["name"] == "active summarizer"
+        # Survivor's decayed confidence was written back (< its seeded 0.9).
+        assert remaining[0]["confidence"] < 0.9
