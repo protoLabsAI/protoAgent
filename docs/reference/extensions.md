@@ -50,6 +50,38 @@ When the model self-reports a `<confidence>` tag in its final output, the termin
 
 The model emits the tags after `</output>` (see the protocol in `graph/output_format.py::OUTPUT_FORMAT_INSTRUCTIONS`); the server parses them with `extract_confidence()` and the A2A handler records them via `set_confidence()`, clamping to `[0, 1]`. The DataPart is omitted entirely when the model didn't report a score. `success` reflects the terminal state (`COMPLETED` only) — a high `confidence` on a non-success run is the "high-confidence failure" calibration signal.
 
+## `blast-v1`
+
+**URI**: `https://proto-labs.ai/a2a/ext/blast-v1`
+**Direction**: declared by this agent
+**Declared on card**: no (commented template stanza — fill per fork)
+
+Declares the **scope of effect** of each skill so a consumer can gate higher-impact work. `radius` is `self` (affects only this agent), `project`, or `repo`.
+
+```json
+{
+  "uri": "https://proto-labs.ai/a2a/ext/blast-v1",
+  "params": {"skills": {"my_skill": {"radius": "self"}}}
+}
+```
+
+Purely declarative — keep the declared radius honest with what each skill handler actually does. Uncomment the stanza in `server.py::_build_agent_card` and use your real skill IDs.
+
+## `hitl-mode-v1`
+
+**URI**: `https://proto-labs.ai/a2a/ext/hitl-mode-v1`
+**Direction**: declared by this agent
+**Declared on card**: no (commented template stanza — fill per fork)
+
+Declares a human-in-the-loop **approval policy** per skill: `autonomous` (run without approval) or `notification` (surface the action). Composes with `blast-v1` so higher-blast skills can be gated independently of goal-level config.
+
+```json
+{
+  "uri": "https://proto-labs.ai/a2a/ext/hitl-mode-v1",
+  "params": {"skills": {"my_skill": {"mode": "autonomous"}}}
+}
+```
+
 ## `effect-domain-v1`
 
 **URI**: `https://proto-labs.ai/a2a/ext/effect-domain-v1`

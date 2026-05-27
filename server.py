@@ -965,6 +965,23 @@ def _build_agent_card(host: str) -> dict:
                 # <confidence> tag (see graph/output_format.py::extract_confidence
                 # and the confidence handler in _run_task_background).
                 {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"},
+                # ── Per-skill policy metadata (optional; declarative only) ──────
+                # Uncomment and fill with YOUR real skill IDs once you've replaced
+                # the placeholder card below. A consumer (e.g. Workstacean) reads
+                # these to gate execution; the template makes no claims for you.
+                #
+                # blast-v1 — scope of effect per skill (self | project | repo),
+                # so higher-blast work can be policy-gated:
+                # {
+                #     "uri": "https://proto-labs.ai/a2a/ext/blast-v1",
+                #     "params": {"skills": {"my_skill": {"radius": "self"}}},
+                # },
+                # hitl-mode-v1 — human-in-the-loop approval per skill
+                # (autonomous | notification). Composes with blast-v1:
+                # {
+                #     "uri": "https://proto-labs.ai/a2a/ext/hitl-mode-v1",
+                #     "params": {"skills": {"my_skill": {"mode": "autonomous"}}},
+                # },
             ],
         },
         "defaultInputModes": ["text/plain"],
