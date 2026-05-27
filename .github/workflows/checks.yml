@@ -1,0 +1,46 @@
+name: Checks
+
+# PR + main gate: enforce the fleet workspace-config standard and run the
+# Python test suite. Replaces the prior collect-only smoke in docker-publish.yml
+# with a real `pytest` run, and catches .beads/.automaker/runner drift in CI
+# instead of as a mid-run failure.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-config:
+    name: Verify workspace config
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify workspace config (.beads / .automaker / owned runners)
+        run: npx --yes -p @protolabsai/release-tools verify-workspace-config
+
+  tests:
+    name: Python tests
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Run tests
+        run: python -m pytest tests/ -q

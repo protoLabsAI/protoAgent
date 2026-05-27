@@ -147,8 +147,8 @@ The included GitHub Actions pipeline is optional but opinionated.
   semver tag.
 - **When a semver tag lands** → `release.yml` builds and pushes
   the stable semver Docker tags, creates a GitHub release with
-  filtered notes, and posts a Discord embed via
-  `scripts/post-release-notes.mjs`.
+  filtered notes, and posts a Discord embed via the shared
+  [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action.
 
 All three workflows gate on `github.repository ==
 'protoLabsAI/<name>'` so they no-op on clones that haven't
