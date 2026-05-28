@@ -727,6 +727,8 @@ async def _chat_langgraph_stream(
     import tracing
     from langchain_core.messages import HumanMessage
 
+    from graph.goals.continuation import goal_continuation_turn
+
     trace_meta: dict = {"message_preview": message[:100]}
     if caller_trace:
         if caller_trace.get("traceId"):
@@ -817,11 +819,12 @@ async def _chat_langgraph_stream(
                     if decision.action == "done":
                         break
                     cont_raw = ""
-                    async for kind, payload in _run_turn_stream(decision.message, session_id, config):
-                        if kind == "__raw__":
-                            cont_raw = payload
-                        else:
-                            yield (kind, payload)
+                    with goal_continuation_turn():
+                        async for kind, payload in _run_turn_stream(decision.message, session_id, config):
+                            if kind == "__raw__":
+                                cont_raw = payload
+                            else:
+                                yield (kind, payload)
                     cont_text = extract_output(cont_raw)
                     if cont_text:
                         final_text, final_raw = cont_text, cont_raw
@@ -862,6 +865,8 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
     """Non-streaming LangGraph entry — used by Gradio + OpenAI-compat."""
     import tracing
     from langchain_core.messages import HumanMessage, AIMessage
+
+    from graph.goals.continuation import goal_continuation_turn
 
     async with tracing.trace_session(
         session_id=session_id,
@@ -904,10 +909,11 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                     note = decision.note
                     if decision.action == "done":
                         break
-                    result = await _graph.ainvoke(
-                        {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
-                        config=config,
-                    )
+                    with goal_continuation_turn():
+                        result = await _graph.ainvoke(
+                            {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
+                            config=config,
+                        )
                     nxt = extract_output(_last_ai(result))
                     if nxt:
                         response = nxt
