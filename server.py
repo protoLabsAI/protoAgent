@@ -727,6 +727,8 @@ async def _chat_langgraph_stream(
     import tracing
     from langchain_core.messages import HumanMessage
 
+    from graph.goals.goal_turn import goal_turn
+
     trace_meta: dict = {"message_preview": message[:100]}
     if caller_trace:
         if caller_trace.get("traceId"):
@@ -761,15 +763,24 @@ async def _chat_langgraph_stream(
             if _checkpointer:
                 config["checkpointer"] = _checkpointer
 
+            # When a goal is already active, the whole turn is goal-driven —
+            # suppress cross-session prior_sessions on the initial turn (and the
+            # kicker retry below), matching the continuation turns.
+            goal_active = (
+                _goal_controller is not None
+                and _goal_controller.active_goal(session_id) is not None
+            )
+
             # One graph turn (model tokens accumulated silently; A2A consumers
             # get progress from tool_start/tool_end). Final text is extracted
             # once via extract_output().
             accumulated_raw = ""
-            async for kind, payload in _run_turn_stream(message, session_id, config):
-                if kind == "__raw__":
-                    accumulated_raw = payload
-                else:
-                    yield (kind, payload)
+            with goal_turn(goal_active):
+                async for kind, payload in _run_turn_stream(message, session_id, config):
+                    if kind == "__raw__":
+                        accumulated_raw = payload
+                    else:
+                        yield (kind, payload)
 
             final_text = extract_output(accumulated_raw)
             final_raw = accumulated_raw
@@ -785,11 +796,12 @@ async def _chat_langgraph_stream(
                 )
                 yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
                 retry_raw = ""
-                async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config):
-                    if kind == "__raw__":
-                        retry_raw = payload
-                    else:
-                        yield (kind, payload)
+                with goal_turn(goal_active):
+                    async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config):
+                        if kind == "__raw__":
+                            retry_raw = payload
+                        else:
+                            yield (kind, payload)
                 recovered = extract_output(retry_raw)
                 if recovered:
                     final_text, final_raw = recovered, retry_raw
@@ -806,23 +818,31 @@ async def _chat_langgraph_stream(
             # iteration budget is spent, or it's flagged unachievable.
             if _goal_controller is not None and _goal_controller.active_goal(session_id):
                 guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+                note = ""
                 while guard < hard_cap:
                     guard += 1
                     decision = await _goal_controller.evaluate(session_id, last_text=final_text)
                     if decision is None:
                         break
+                    note = decision.note
                     yield ("tool_start", f"🎯 {decision.note}")
                     if decision.action == "done":
                         break
                     cont_raw = ""
-                    async for kind, payload in _run_turn_stream(decision.message, session_id, config):
-                        if kind == "__raw__":
-                            cont_raw = payload
-                        else:
-                            yield (kind, payload)
+                    with goal_turn():
+                        async for kind, payload in _run_turn_stream(decision.message, session_id, config):
+                            if kind == "__raw__":
+                                cont_raw = payload
+                            else:
+                                yield (kind, payload)
                     cont_text = extract_output(cont_raw)
                     if cont_text:
                         final_text, final_raw = cont_text, cont_raw
+                # Append the terminal goal outcome to the answer so the A2A
+                # terminal artifact carries it, matching the non-streaming path
+                # (the 🎯 status frames above are transient and can coalesce).
+                if note:
+                    final_text = f"{final_text}\n\n---\n{note}"
 
             # Self-reported confidence (from whichever pass produced the answer),
             # yielded before "done" so the A2A handler records it on the
@@ -856,6 +876,8 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
     import tracing
     from langchain_core.messages import HumanMessage, AIMessage
 
+    from graph.goals.goal_turn import goal_turn
+
     async with tracing.trace_session(
         session_id=session_id,
         name="chat",
@@ -878,10 +900,17 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                         return msg.content if isinstance(msg.content, str) else str(msg.content)
                 return ""
 
-            result = await _graph.ainvoke(
-                {"messages": [HumanMessage(content=message)], "session_id": session_id},
-                config=config,
+            # When a goal is already active, the whole turn is goal-driven —
+            # suppress cross-session prior_sessions on the initial turn too.
+            goal_active = (
+                _goal_controller is not None
+                and _goal_controller.active_goal(session_id) is not None
             )
+            with goal_turn(goal_active):
+                result = await _graph.ainvoke(
+                    {"messages": [HumanMessage(content=message)], "session_id": session_id},
+                    config=config,
+                )
             response = extract_output(_last_ai(result))
 
             # Goal mode: verify after the agent stops; re-invoke with a
@@ -897,10 +926,11 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                     note = decision.note
                     if decision.action == "done":
                         break
-                    result = await _graph.ainvoke(
-                        {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
-                        config=config,
-                    )
+                    with goal_turn():
+                        result = await _graph.ainvoke(
+                            {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
+                            config=config,
+                        )
                     nxt = extract_output(_last_ai(result))
                     if nxt:
                         response = nxt

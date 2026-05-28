@@ -129,6 +129,37 @@ async def test_trace_session_enters_context_and_exposes_trace_id():
 
 
 @pytest.mark.asyncio
+async def test_disabled_trace_session_swallows_cross_context_reset_error():
+    """Regression: with Langfuse disabled (the local default), an SSE client
+    disconnecting mid-stream tears down the async generator in a different
+    context, so ``_session_id_ctx.reset(token)`` raises ``ValueError: ... was
+    created in a different Context``. trace_session's finally must swallow it
+    instead of letting it escape as an unretrieved task exception."""
+    tracing = _reload_tracing()
+    assert tracing.is_enabled() is False
+
+    real = tracing._session_id_ctx
+
+    class _ResetBoom:
+        def set(self, value):
+            return real.set(value)
+
+        def get(self):
+            return real.get()
+
+        def reset(self, _token):
+            raise ValueError("was created in a different Context")
+
+    tracing._session_id_ctx = _ResetBoom()
+    try:
+        # Must not raise despite reset() blowing up in the finally block.
+        async with tracing.trace_session("s-boom", name="x") as span:
+            assert span is None
+    finally:
+        tracing._session_id_ctx = real
+
+
+@pytest.mark.asyncio
 async def test_trace_session_exception_is_swallowed_so_agent_keeps_running():
     """If Langfuse itself raises, the agent must not crash. trace_session
     yields None and the caller proceeds unscoped."""

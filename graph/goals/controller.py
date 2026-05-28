@@ -117,13 +117,9 @@ class GoalController:
         if state is None:
             return None
 
-        # 1. The agent may explicitly declare the goal unreachable.
-        giveup = _GIVEUP_RE.search(last_text or "")
-        if giveup:
-            reason = (giveup.group(1) or "agent flagged the goal unachievable").strip()
-            return self._finish(state, "unachievable", reason)
-
-        # 2. Run the verifier.
+        # 1. Run the verifier first — ground truth overrides the model's
+        # self-assessment. If the external world already satisfies the goal,
+        # a same-turn <goal_unachievable> give-up must not mask that.
         ctx = VerifyContext(
             config=self._config,
             condition=state.condition,
@@ -136,6 +132,12 @@ class GoalController:
         if result.met:
             return self._finish(state, "achieved", result.reason or "verifier passed",
                                 evidence=result.evidence)
+
+        # 2. Verifier not met — honour an explicit give-up from the agent.
+        giveup = _GIVEUP_RE.search(last_text or "")
+        if giveup:
+            reason = (giveup.group(1) or "agent flagged the goal unachievable").strip()
+            return self._finish(state, "unachievable", reason)
 
         # 3. Not met — refresh checklist, track progress, decide continue vs stop.
         plan = _GOAL_PLAN_RE.search(last_text or "")

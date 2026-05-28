@@ -113,12 +113,24 @@ async def test_evaluate_no_progress_flags_unachievable(tmp_path):
 
 @pytest.mark.asyncio
 async def test_model_giveup_flags_unachievable(tmp_path):
+    # Verifier fails (exit 1), so the agent's give-up is honoured.
     c = _ctrl(tmp_path)
-    await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 0"}}', "s")
+    await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 1"}}', "s")
     decision = await c.evaluate("s", last_text='cannot do this <goal_unachievable reason="needs prod access"/>')
     assert decision.action == "done"
     assert decision.state.status == "unachievable"
     assert "prod access" in decision.state.last_reason
+
+
+@pytest.mark.asyncio
+async def test_verifier_overrides_giveup(tmp_path):
+    # Ground truth wins: when the verifier passes, a same-turn give-up tag
+    # must NOT mask the achievement.
+    c = _ctrl(tmp_path)
+    await c.parse_control('/goal {"condition": "done", "verifier": {"type": "command", "command": "exit 0"}}', "s")
+    decision = await c.evaluate("s", last_text='giving up <goal_unachievable reason="cannot proceed"/>')
+    assert decision.action == "done"
+    assert decision.state.status == "achieved"
 
 
 @pytest.mark.asyncio

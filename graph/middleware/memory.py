@@ -31,10 +31,28 @@ MEMORY_PATH = os.environ.get("MEMORY_PATH", "/sandbox/memory/")
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 
+# How long the <prior_sessions> block is cached before a disk reload (bounds
+# staleness vs per-turn I/O). Mirrors KnowledgeMiddleware's constant.
+_PRIOR_SESSIONS_TTL_S = 60.0
+
 if _PERSISTENCE_DISABLED:
     log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")
 else:
     log.info("[memory] session persistence enabled — path: %s", MEMORY_PATH)
+
+
+def _in_goal_turn() -> bool:
+    """Whether the current turn is a goal-driven invocation.
+
+    Lazy import keeps memory decoupled from the goals package and fail-safe
+    (treat as a normal turn if the marker module is unavailable).
+    """
+    try:
+        from graph.goals.goal_turn import in_goal_turn
+
+        return in_goal_turn()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +76,15 @@ def _persist_session(state: dict, trace_id: str) -> None:
     if _PERSISTENCE_DISABLED:
         return
 
+    # ``session_id`` is not a declared graph-state field, so LangGraph drops the
+    # key the chat path passes into ``ainvoke`` — ``state.get`` returns "" and
+    # every session would collapse into a single ``unknown.json`` (pooling and
+    # cross-contaminating sessions). Fall back to the tracing contextvar, which
+    # ``trace_session`` always sets, so summaries are keyed per session.
     session_id: str = state.get("session_id", "") or ""
+    if not session_id:
+        import tracing
+        session_id = tracing.current_session_id() or ""
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---
@@ -169,7 +195,10 @@ class MemoryMiddleware(AgentMiddleware):
     def __init__(self, knowledge_store=None):
         super().__init__()
         self._store = knowledge_store
+        # TTL cache (see _PRIOR_SESSIONS_TTL_S): refreshed periodically so
+        # sessions persisted after boot become visible, not frozen at first load.
         self._prior_sessions_cache: str | None = None
+        self._prior_sessions_loaded_at: float = 0.0
 
     # --- Session memory loading (only used when no KnowledgeMiddleware is active) ---
 
@@ -247,8 +276,19 @@ class MemoryMiddleware(AgentMiddleware):
         """
         if self._store is not None:
             return None
-        if self._prior_sessions_cache is None:
+        # Suppressed on goal-driven turns (see graph.goals.goal_turn):
+        # unrelated cross-session history biases the self-driving loop.
+        if _in_goal_turn():
+            return None
+        import time
+
+        now = time.monotonic()
+        if (
+            self._prior_sessions_cache is None
+            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
+        ):
             self._prior_sessions_cache = self._load_prior_sessions()
+            self._prior_sessions_loaded_at = now
         if not self._prior_sessions_cache:
             return None
         messages = state.get("messages", [])

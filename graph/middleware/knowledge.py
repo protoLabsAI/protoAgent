@@ -30,6 +30,26 @@ log = logging.getLogger(__name__)
 _SKILLS_MAX_TOKENS = 2000
 _SKILLS_CONTEXT_CHARS = 2000  # chars of recent context to include in query
 
+# How long the <prior_sessions> block is cached before a disk reload. Bounds
+# both staleness (sessions persisted after boot become visible within the TTL,
+# instead of a frozen first-request snapshot for the process lifetime) and
+# per-turn disk I/O.
+_PRIOR_SESSIONS_TTL_S = 60.0
+
+
+def _in_goal_turn() -> bool:
+    """Whether the current turn is a goal-driven invocation.
+
+    Lazy import keeps the middleware decoupled from the goals package and
+    fail-safe (treat as a normal turn if the marker module is unavailable).
+    """
+    try:
+        from graph.goals.goal_turn import in_goal_turn
+
+        return in_goal_turn()
+    except Exception:
+        return False
+
 
 class KnowledgeMiddleware(AgentMiddleware):
     """Inject knowledge store context before each LLM call.
@@ -51,8 +71,11 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._top_k = top_k
         self._skills_index = skills_index
         self._skills_top_k = skills_top_k
-        # Lazily loaded on first before_model call; None = not yet loaded
+        # Lazily loaded on first before_model call; None = not yet loaded.
+        # Refreshed after _PRIOR_SESSIONS_TTL_S so sessions persisted after boot
+        # become visible (the cache is otherwise frozen for the process life).
         self._prior_sessions_cache: str | None = None
+        self._prior_sessions_loaded_at: float = 0.0
 
     # ---------------------------------------------------------------------------
     # Session memory loading
@@ -296,10 +319,19 @@ class KnowledgeMiddleware(AgentMiddleware):
         """
         parts: list[str] = []
 
-        # Load prior sessions once per middleware instance (lazy cache)
-        if self._prior_sessions_cache is None:
+        # Load prior sessions with a TTL cache (lazy + periodic refresh).
+        # Suppressed on goal-driven turns: unrelated cross-session history
+        # biases the self-driving loop (see graph.goals.goal_turn).
+        import time
+
+        now = time.monotonic()
+        if (
+            self._prior_sessions_cache is None
+            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
+        ):
             self._prior_sessions_cache = self.load_memory()
-        if self._prior_sessions_cache:
+            self._prior_sessions_loaded_at = now
+        if self._prior_sessions_cache and not _in_goal_turn():
             parts.append(self._prior_sessions_cache)
 
         # Hot memory — always-on operator facts (domain="hot"). Loaded per turn
