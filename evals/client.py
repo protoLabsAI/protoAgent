@@ -106,20 +106,28 @@ class AgentClient:
 
     # ── message/send + poll ─────────────────────────────────────────────────
 
-    async def ask(self, prompt: str, *, timeout_s: int = 90) -> TaskResult:
-        """Send + poll until terminal. Returns TaskResult with extracted text."""
+    async def ask(self, prompt: str, *, timeout_s: int = 90, context_id: str | None = None) -> TaskResult:
+        """Send + poll until terminal. Returns TaskResult with extracted text.
+
+        ``context_id`` pins the A2A contextId (= the agent's session_id) so
+        multiple calls share one session — required for goal-mode cases that
+        set a goal on one turn and trigger the loop on the next.
+        """
         mid = str(uuid.uuid4())
+        params: dict = {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": prompt}],
+                "messageId": mid,
+            }
+        }
+        if context_id is not None:
+            params["contextId"] = context_id
         payload = {
             "jsonrpc": "2.0",
             "id": mid,
             "method": "message/send",
-            "params": {
-                "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": prompt}],
-                    "messageId": mid,
-                }
-            },
+            "params": params,
         }
         start = time.time()
         async with httpx.AsyncClient(timeout=30) as client:
@@ -163,25 +171,31 @@ class AgentClient:
 
     # ── message/stream (SSE) ────────────────────────────────────────────────
 
-    async def stream(self, prompt: str, *, timeout_s: int = 90) -> tuple[list[dict], TaskResult | None]:
+    async def stream(self, prompt: str, *, timeout_s: int = 90, context_id: str | None = None) -> tuple[list[dict], TaskResult | None]:
         """Stream a turn over SSE. Returns (event_log, final TaskResult).
 
         Each event is a dict shaped ``{kind, result}``. Use this to assert
         on the streaming protocol itself (status-update sequence, final
         flag, artifact chunks). Most cases should use ``ask()`` instead.
+
+        ``context_id`` pins the A2A contextId (= session_id) so the turn
+        runs in a known session (e.g. one a goal was set on).
         """
         mid = str(uuid.uuid4())
+        params: dict = {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": prompt}],
+                "messageId": mid,
+            }
+        }
+        if context_id is not None:
+            params["contextId"] = context_id
         payload = {
             "jsonrpc": "2.0",
             "id": mid,
             "method": "message/stream",
-            "params": {
-                "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": prompt}],
-                    "messageId": mid,
-                }
-            },
+            "params": params,
         }
         events: list[dict] = []
         final: TaskResult | None = None
@@ -222,6 +236,25 @@ class AgentClient:
                             )
                             break
         return events, final
+
+    # ── goal mode ─────────────────────────────────────────────────────────────
+
+    async def get_goal(self, session_id: str) -> dict:
+        """GET ``/api/goal/{session_id}`` → ``{enabled, goal}`` (goal is the
+        full persisted state dict, or None when no goal is set)."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{self.base_url}/api/goal/{session_id}", headers=self.headers)
+            r.raise_for_status()
+            return r.json()
+
+    async def clear_goal(self, session_id: str) -> dict:
+        """DELETE ``/api/goal/{session_id}`` → ``{enabled, cleared}``."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.request(
+                "DELETE", f"{self.base_url}/api/goal/{session_id}", headers=self.headers,
+            )
+            r.raise_for_status()
+            return r.json()
 
     # ── tasks/cancel ────────────────────────────────────────────────────────
 

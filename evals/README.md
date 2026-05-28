@@ -38,6 +38,7 @@ Reports land in `evals/results/run-<ts>.json` per run.
 | `tool` | Single-tool invocations across the starter set |
 | `chained` | Multi-step reasoning that calls 2+ tools |
 | `subsystem` | KnowledgeMiddleware retrieval, hot-memory injection |
+| `goal` | Goal mode: set a goal, trigger the loop, assert the resulting goal state + footer |
 
 ## File layout
 
@@ -79,6 +80,30 @@ Append to `tasks.json`:
 Use **unique markers** (`EVAL-MARK-XYZ`, `eval-chain-flag-q9`) in
 prompts whenever you need a verifier to disambiguate from real
 operator data.
+
+### Goal-mode cases (`kind: "goal"`)
+
+Goal cases set a goal in a pinned session, send a trigger turn, then assert
+the resulting goal state and reply footer. The goal is cleared before and
+after the case.
+
+```json
+{
+  "id": "goal_achieved",
+  "category": "goal",
+  "kind": "goal",
+  "name": "...",
+  "set_goal": {"condition": "...", "verifier": {"type": "command", "command": "true"}},
+  "prompt": "Please make progress toward the goal.",
+  "expected_goal_status": "achieved",
+  "expected_patterns": ["goal achieved"]
+}
+```
+
+Prefer deterministic `command` verifiers (`"true"` → achieved, `"false"` with
+`"max_iterations": 1` → exhausted) so the outcome is independent of model
+competence and needs no host file I/O. `expected_goal_status` is checked
+against `GET /api/goal/{session}`; `expected_patterns` against the reply.
 
 ## Why side-effect verification
 
