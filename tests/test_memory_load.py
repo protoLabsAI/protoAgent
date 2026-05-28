@@ -205,6 +205,31 @@ def test_load_memory_cache_via_before_model(tmp_path):
     )
 
 
+def test_prior_sessions_cache_refreshes_after_ttl(tmp_path):
+    """The cache is not frozen for the process lifetime — after the TTL it
+    reloads, so sessions persisted after boot become visible."""
+    _write_session(str(tmp_path), "ttl-sess", _sample_session("ttl-sess"))
+
+    mw = _make_middleware()
+    call_count = {"n": 0}
+    original = mw.load_memory
+
+    def counting_load(**kw):
+        call_count["n"] += 1
+        return original(memory_path=str(tmp_path))
+
+    mw.load_memory = counting_load
+    state = {"messages": []}
+
+    mw.before_model(state, runtime=None)
+    assert call_count["n"] == 1
+    # Simulate the TTL elapsing.
+    from graph.middleware.knowledge import _PRIOR_SESSIONS_TTL_S
+    mw._prior_sessions_loaded_at -= _PRIOR_SESSIONS_TTL_S + 1
+    mw.before_model(state, runtime=None)
+    assert call_count["n"] == 2, "cache did not refresh after TTL elapsed"
+
+
 # ---------------------------------------------------------------------------
 # 8. before_model injects prior_sessions into returned context
 # ---------------------------------------------------------------------------
@@ -213,8 +238,11 @@ def test_before_model_injects_prior_sessions(tmp_path):
     _write_session(str(tmp_path), "inject-sess", _sample_session("inject-sess"))
 
     mw = _make_middleware()
-    # Override load_memory to use tmp_path
+    # Override load_memory to use tmp_path; mark fresh so the TTL cache does
+    # not immediately reload from the default (empty) path.
+    import time
     mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
 
     from langchain_core.messages import HumanMessage
     state = {"messages": [HumanMessage(content="What did we discuss?")]}
@@ -232,7 +260,9 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
     _write_session(str(tmp_path), "leak-sess", _sample_session("leak-sess"))
 
     mw = _make_middleware()
+    import time
     mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
 
     from langchain_core.messages import HumanMessage
     from graph.goals.goal_turn import goal_turn
