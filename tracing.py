@@ -151,7 +151,15 @@ async def trace_session(
         try:
             yield None
         finally:
-            _session_id_ctx.reset(sid_token)
+            # reset can raise if the generator is torn down in a different
+            # context than the one that set the token (e.g. an SSE client
+            # disconnects mid-stream and the async generator is closed by a
+            # different task). The contextvar resets itself on context exit,
+            # so swallowing here is safe.
+            try:
+                _session_id_ctx.reset(sid_token)
+            except ValueError:
+                pass
         return
 
     ctx = None

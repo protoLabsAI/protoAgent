@@ -372,6 +372,34 @@ def test_empty_session_creates_file_with_empty_arrays(tmp_path):
     assert "timestamp" in data
 
 
+def test_persist_session_falls_back_to_contextvar_session_id(tmp_path):
+    """When state has no session_id (LangGraph drops the undeclared key),
+    the summary is keyed by tracing.current_session_id() instead of pooling
+    every session into unknown.json."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    state = {"session_id": "", "messages": [], "context": "", "captured_messages": []}
+    with patch("tracing.current_session_id", return_value="ctx-sid-42"):
+        mod._persist_session(state, "t-ctx")
+
+    assert (tmp_path / "ctx-sid-42.json").exists()
+    assert not (tmp_path / "unknown.json").exists()
+    data = json.loads((tmp_path / "ctx-sid-42.json").read_text())
+    assert data["session_id"] == "ctx-sid-42"
+
+
+def test_persist_session_unknown_only_when_no_session_id_anywhere(tmp_path):
+    """With neither a state session_id nor a contextvar value, fall back to
+    the historical unknown.json so persistence still happens."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    state = {"session_id": "", "messages": [], "context": "", "captured_messages": []}
+    with patch("tracing.current_session_id", return_value=""):
+        mod._persist_session(state, "t-none")
+
+    assert (tmp_path / "unknown.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # 9. on_session_end middleware hook
 # ---------------------------------------------------------------------------

@@ -58,7 +58,15 @@ def _persist_session(state: dict, trace_id: str) -> None:
     if _PERSISTENCE_DISABLED:
         return
 
+    # ``session_id`` is not a declared graph-state field, so LangGraph drops the
+    # key the chat path passes into ``ainvoke`` — ``state.get`` returns "" and
+    # every session would collapse into a single ``unknown.json`` (pooling and
+    # cross-contaminating sessions). Fall back to the tracing contextvar, which
+    # ``trace_session`` always sets, so summaries are keyed per session.
     session_id: str = state.get("session_id", "") or ""
+    if not session_id:
+        import tracing
+        session_id = tracing.current_session_id() or ""
     messages_raw: list = state.get("messages", []) or []
 
     # --- Extract user-visible messages ---

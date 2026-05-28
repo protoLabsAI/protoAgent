@@ -806,11 +806,13 @@ async def _chat_langgraph_stream(
             # iteration budget is spent, or it's flagged unachievable.
             if _goal_controller is not None and _goal_controller.active_goal(session_id):
                 guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+                note = ""
                 while guard < hard_cap:
                     guard += 1
                     decision = await _goal_controller.evaluate(session_id, last_text=final_text)
                     if decision is None:
                         break
+                    note = decision.note
                     yield ("tool_start", f"🎯 {decision.note}")
                     if decision.action == "done":
                         break
@@ -823,6 +825,11 @@ async def _chat_langgraph_stream(
                     cont_text = extract_output(cont_raw)
                     if cont_text:
                         final_text, final_raw = cont_text, cont_raw
+                # Append the terminal goal outcome to the answer so the A2A
+                # terminal artifact carries it, matching the non-streaming path
+                # (the 🎯 status frames above are transient and can coalesce).
+                if note:
+                    final_text = f"{final_text}\n\n---\n{note}"
 
             # Self-reported confidence (from whichever pass produced the answer),
             # yielded before "done" so the A2A handler records it on the
