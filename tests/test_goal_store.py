@@ -1,0 +1,44 @@
+"""GoalStore round-trip + path fallback — goal mode."""
+
+from graph.goals.store import GoalStore, _safe_name
+from graph.goals.types import GoalState
+
+
+def test_set_get_round_trip(tmp_path):
+    store = GoalStore(tmp_path)
+    state = GoalState(session_id="s1", condition="all tests pass",
+                      verifier={"type": "command", "command": "true"})
+    store.set(state)
+    loaded = store.get("s1")
+    assert loaded is not None
+    assert loaded.condition == "all tests pass"
+    assert loaded.verifier["command"] == "true"
+    assert loaded.active
+
+
+def test_get_missing_is_none(tmp_path):
+    assert GoalStore(tmp_path).get("nope") is None
+
+
+def test_clear(tmp_path):
+    store = GoalStore(tmp_path)
+    store.set(GoalState(session_id="s2", condition="x"))
+    assert store.clear("s2") is True
+    assert store.get("s2") is None
+    assert store.clear("s2") is False
+
+
+def test_session_id_is_sanitized(tmp_path):
+    store = GoalStore(tmp_path)
+    store.set(GoalState(session_id="a/b:c", condition="x"))
+    # written under a filesystem-safe name, still retrievable by raw id
+    assert store.get("a/b:c") is not None
+    assert "/" not in _safe_name("a/b:c")
+
+
+def test_forward_compatible_unknown_keys(tmp_path):
+    store = GoalStore(tmp_path)
+    p = store._path("s3")
+    p.write_text('{"session_id": "s3", "condition": "x", "future_key": 1}')
+    loaded = store.get("s3")
+    assert loaded is not None and loaded.condition == "x"

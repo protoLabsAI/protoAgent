@@ -73,6 +73,8 @@ _scheduler = None      # SchedulerBackend (LocalScheduler or WorkstaceanSchedule
                        # polling coroutine doesn't leak on server reload.
 _cache_warmer = None   # Optional CacheWarmer (off by default). Same start/stop
                        # lifecycle as _scheduler; keeps the prompt cache warm.
+_goal_controller = None  # Optional GoalController (goal mode). Parses /goal
+                         # control messages and runs the goal-completion loop.
 
 
 def _init_langgraph_agent():
@@ -130,6 +132,15 @@ def _init_langgraph_agent():
     _cache_warmer = CacheWarmer(
         _graph_config, knowledge_store=knowledge_store, scheduler=_scheduler,
     )
+
+    # Goal mode — parses /goal control messages and runs the goal-completion
+    # loop around graph invocations. Machinery only; no goal is active until set.
+    global _goal_controller
+    if _graph_config.goal_enabled:
+        from graph.goals import GoalController, GoalStore
+        _goal_controller = GoalController(_graph_config, GoalStore())
+    else:
+        _goal_controller = None
     log.info(
         "LangGraph agent initialized (model: %s, knowledge_db: %s, scheduler: %s)",
         _graph_config.model_name,
@@ -651,6 +662,46 @@ async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
     return await _chat_langgraph(message, session_id)
 
 
+async def _run_turn_stream(message: str, session_id: str, config: dict):
+    """Run one graph turn over ``astream_events``.
+
+    Yields the same ``(kind, payload)`` status/usage frames the A2A handler
+    consumes, then a final ``("__raw__", accumulated_raw)`` sentinel the caller
+    intercepts to get the turn's raw model text. Factored out so the initial
+    turn, the dropped-scratch kicker retry, and goal-mode continuations all
+    share one event loop instead of copy-pasting it.
+    """
+    from langchain_core.messages import HumanMessage
+
+    accumulated_raw = ""
+    async for event in _graph.astream_events(
+        {"messages": [HumanMessage(content=message)], "session_id": session_id},
+        config=config,
+        version="v2",
+    ):
+        kind = event.get("event", "")
+        name = event.get("name", "")
+        if kind == "on_tool_start":
+            tool_input = event.get("data", {}).get("input", "")
+            yield ("tool_start", f"🔧 {name}: {str(tool_input)[:200] if tool_input else ''}")
+        elif kind == "on_tool_end":
+            output = event.get("data", {}).get("output", "")
+            yield ("tool_end", f"✅ {name} → {str(output)[:300] if output else ''}")
+        elif kind == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if chunk and hasattr(chunk, "content") and chunk.content:
+                accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        elif kind == "on_chat_model_end":
+            output = event.get("data", {}).get("output")
+            usage = getattr(output, "usage_metadata", None) if output else None
+            if usage:
+                yield ("usage", {
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                })
+    yield ("__raw__", accumulated_raw)
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -693,6 +744,14 @@ async def _chat_langgraph_stream(
         metadata=trace_meta,
     ):
         try:
+            # Goal control messages (/goal ...) short-circuit the turn: set /
+            # status / clear a goal and return the reply without running the graph.
+            if _goal_controller is not None:
+                reply = await _goal_controller.parse_control(message, session_id)
+                if reply is not None:
+                    yield ("done", reply)
+                    return
+
             # thread_id prefix isolates A2A sessions from Gradio chat in the
             # shared MemorySaver checkpointer.
             config = {
@@ -702,55 +761,15 @@ async def _chat_langgraph_stream(
             if _checkpointer:
                 config["checkpointer"] = _checkpointer
 
-            # Accumulate model tokens silently — chunk-boundary tag splitting
-            # on the <scratch_pad>/<output> protocol was a state-machine
-            # rabbit hole; A2A consumers already get useful progress signal
-            # from tool_start/tool_end. Final text is extracted cleanly once
-            # on the `done` frame via extract_output().
+            # One graph turn (model tokens accumulated silently; A2A consumers
+            # get progress from tool_start/tool_end). Final text is extracted
+            # once via extract_output().
             accumulated_raw = ""
-
-            async for event in _graph.astream_events(
-                {"messages": [HumanMessage(content=message)], "session_id": session_id},
-                config=config,
-                version="v2",
-            ):
-                kind = event.get("event", "")
-                name = event.get("name", "")
-
-                if kind == "on_tool_start":
-                    tool_input = event.get("data", {}).get("input", "")
-                    preview = str(tool_input)[:200] if tool_input else ""
-                    yield ("tool_start", f"🔧 {name}: {preview}")
-
-                elif kind == "on_tool_end":
-                    output = event.get("data", {}).get("output", "")
-                    preview = str(output)[:300] if output else ""
-                    yield ("tool_end", f"✅ {name} → {preview}")
-                    # If your fork declares effect-domain-v1 on the agent card,
-                    # this is where you map successful tool calls to the
-                    # matching worldstate-delta-v1 DataPart entry. The template
-                    # ships with no declared effects — skip the yield.
-
-                elif kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        raw = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                        accumulated_raw += raw
-
-                elif kind == "on_chat_model_end":
-                    # Capture per-call token usage for the cost-v1 DataPart
-                    # the A2A handler emits on the terminal artifact.
-                    # LangChain exposes normalized usage on
-                    # `output.usage_metadata` — requires `stream_usage=True`
-                    # on the ChatOpenAI client (see graph/llm.py). Without
-                    # that flag usage_metadata is None on AIMessageChunks.
-                    output = event.get("data", {}).get("output")
-                    usage = getattr(output, "usage_metadata", None) if output else None
-                    if usage:
-                        yield ("usage", {
-                            "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                            "output_tokens": int(usage.get("output_tokens", 0) or 0),
-                        })
+            async for kind, payload in _run_turn_stream(message, session_id, config):
+                if kind == "__raw__":
+                    accumulated_raw = payload
+                else:
+                    yield (kind, payload)
 
             final_text = extract_output(accumulated_raw)
             final_raw = accumulated_raw
@@ -766,32 +785,11 @@ async def _chat_langgraph_stream(
                 )
                 yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
                 retry_raw = ""
-                async for event in _graph.astream_events(
-                    {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)],
-                     "session_id": session_id},
-                    config=config,
-                    version="v2",
-                ):
-                    kind = event.get("event", "")
-                    name = event.get("name", "")
-                    if kind == "on_tool_start":
-                        tool_input = event.get("data", {}).get("input", "")
-                        yield ("tool_start", f"🔧 {name}: {str(tool_input)[:200] if tool_input else ''}")
-                    elif kind == "on_tool_end":
-                        out = event.get("data", {}).get("output", "")
-                        yield ("tool_end", f"✅ {name} → {str(out)[:300] if out else ''}")
-                    elif kind == "on_chat_model_stream":
-                        chunk = event.get("data", {}).get("chunk")
-                        if chunk and hasattr(chunk, "content") and chunk.content:
-                            retry_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                    elif kind == "on_chat_model_end":
-                        output = event.get("data", {}).get("output")
-                        usage = getattr(output, "usage_metadata", None) if output else None
-                        if usage:
-                            yield ("usage", {
-                                "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                                "output_tokens": int(usage.get("output_tokens", 0) or 0),
-                            })
+                async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config):
+                    if kind == "__raw__":
+                        retry_raw = payload
+                    else:
+                        yield (kind, payload)
                 recovered = extract_output(retry_raw)
                 if recovered:
                     final_text, final_raw = recovered, retry_raw
@@ -801,6 +799,30 @@ async def _chat_langgraph_stream(
                         "[chat-stream] kicker retry also empty (session=%s) — falling back",
                         session_id,
                     )
+
+            # Goal mode: when an active goal exists for this session, verify the
+            # outcome after the agent stops; if not met, re-invoke on the same
+            # thread with a continuation prompt until the verifier passes, the
+            # iteration budget is spent, or it's flagged unachievable.
+            if _goal_controller is not None and _goal_controller.active_goal(session_id):
+                guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+                while guard < hard_cap:
+                    guard += 1
+                    decision = await _goal_controller.evaluate(session_id, last_text=final_text)
+                    if decision is None:
+                        break
+                    yield ("tool_start", f"🎯 {decision.note}")
+                    if decision.action == "done":
+                        break
+                    cont_raw = ""
+                    async for kind, payload in _run_turn_stream(decision.message, session_id, config):
+                        if kind == "__raw__":
+                            cont_raw = payload
+                        else:
+                            yield (kind, payload)
+                    cont_text = extract_output(cont_raw)
+                    if cont_text:
+                        final_text, final_raw = cont_text, cont_raw
 
             # Self-reported confidence (from whichever pass produced the answer),
             # yielded before "done" so the A2A handler records it on the
@@ -840,23 +862,51 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
         metadata={"message_preview": message[:100]},
     ):
         try:
+            # Goal control messages short-circuit (set / status / clear).
+            if _goal_controller is not None:
+                reply = await _goal_controller.parse_control(message, session_id)
+                if reply is not None:
+                    return [{"role": "assistant", "content": reply}]
+
             config = {"configurable": {"thread_id": f"gradio:{session_id}"}}
             if _checkpointer:
                 config["checkpointer"] = _checkpointer
+
+            def _last_ai(result) -> str:
+                for msg in reversed(result.get("messages", [])):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        return msg.content if isinstance(msg.content, str) else str(msg.content)
+                return ""
 
             result = await _graph.ainvoke(
                 {"messages": [HumanMessage(content=message)], "session_id": session_id},
                 config=config,
             )
+            response = extract_output(_last_ai(result))
 
-            messages = result.get("messages", [])
-            response = ""
-            for msg in reversed(messages):
-                if isinstance(msg, AIMessage) and msg.content:
-                    response = msg.content if isinstance(msg.content, str) else str(msg.content)
-                    break
+            # Goal mode: verify after the agent stops; re-invoke with a
+            # continuation prompt until met / exhausted / unachievable.
+            if _goal_controller is not None and _goal_controller.active_goal(session_id):
+                guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+                note = ""
+                while guard < hard_cap:
+                    guard += 1
+                    decision = await _goal_controller.evaluate(session_id, last_text=response)
+                    if decision is None:
+                        break
+                    note = decision.note
+                    if decision.action == "done":
+                        break
+                    result = await _graph.ainvoke(
+                        {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
+                        config=config,
+                    )
+                    nxt = extract_output(_last_ai(result))
+                    if nxt:
+                        response = nxt
+                if note:
+                    response = f"{response}\n\n---\n{note}"
 
-            response = extract_output(response)
             return [{"role": "assistant", "content": response}]
         except Exception as e:
             log.exception(
@@ -1095,6 +1145,23 @@ def _main():
         result = await chat(req.message, req.session_id)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result}
+
+    # --- Goal mode API ------------------------------------------------------
+    # Programmatic status/clear for a session's goal (setting is done via the
+    # `/goal ...` control message through chat/A2A). Returns 404-style payloads
+    # as plain JSON to keep the surface dependency-free.
+    @fastapi_app.get("/api/goal/{session_id}")
+    async def _api_goal_status(session_id: str):
+        if _goal_controller is None:
+            return {"enabled": False, "goal": None}
+        state = _goal_controller.store.get(session_id)
+        return {"enabled": True, "goal": state.to_dict() if state else None}
+
+    @fastapi_app.delete("/api/goal/{session_id}")
+    async def _api_goal_clear(session_id: str):
+        if _goal_controller is None:
+            return {"enabled": False, "cleared": False}
+        return {"enabled": True, "cleared": _goal_controller.store.clear(session_id)}
 
     # --- Live config / SOUL editing ----------------------------------------
     # GET returns the current config + persona so external clients (the

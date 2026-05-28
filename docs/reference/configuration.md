@@ -199,6 +199,39 @@ routing:
   fallback_models: [claude-haiku-4-5, gpt-5]
 ```
 
+## `goal`
+
+**Goal mode** (`graph/goals/`) lets you give the agent a *testable outcome* it self-drives toward. After each terminal turn (the agent stops with a final answer), the goal's **verifier** decides whether it's met; if not, the agent is re-invoked with a continuation prompt — carrying the verifier's evidence and a running `<goal_plan>` checklist — until the verifier passes, the iteration budget runs out (`exhausted`), or the goal is flagged `unachievable` (a no-progress streak, or the model emitting `<goal_unachievable reason="…"/>`). Unlike a pure-LLM "are we done?" check, completion is backed by a real verifier.
+
+The machinery is wired when `enabled`, but **no goal is active until one is set** via the `/goal` control message (works over A2A / Gradio / OpenAI-compat) or the `/api/goal/{session_id}` endpoints. State is persisted per session under `GOAL_PATH` → `/sandbox/goals` → `~/.protoagent/goals`.
+
+```yaml
+goal:
+  enabled: true            # machinery available; no goal active until set
+  max_iterations: 8        # continuation budget per goal
+  no_progress_limit: 3     # identical verifier evidence N times -> unachievable
+  eval_model: ""           # blank = main model (llm verifier / fuzzy goals)
+  verify_timeout: 120      # seconds for command/test/ci verifiers
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `true` | Wire goal mode. No goal runs until set. |
+| `max_iterations` | `8` | Max continuation turns before a goal is `exhausted`. |
+| `no_progress_limit` | `3` | Same verifier reason+evidence this many times in a row → `unachievable`. |
+| `eval_model` | `""` | Model for the `llm` verifier (blank = main model). |
+| `verify_timeout` | `120` | Wall-clock seconds for `command`/`test`/`ci` verifiers. |
+
+**Setting a goal** — `/goal <text>` (fuzzy, `llm`-verified) or a JSON spec:
+```
+/goal {"condition": "unit tests pass", "verifier": {"type": "test", "command": "python -m pytest -q"}}
+```
+`/goal` shows status; `/goal clear` (aliases: `stop`, `off`, `cancel`, `reset`, `none`) clears it.
+
+**Verifier types** (`verifier.type`): `command` (exit 0 = met), `test` (command + surfaces the runner summary), `ci` (`gh pr checks <pr>` or latest run on `branch`), `data` (a file `contains` substring, or an `expr` over parsed JSON as `data`), `llm` (transcript judgment — fuzzy fallback).
+
+> **Security:** `command`/`test`/`ci` verifiers execute on the server host. Setting a goal is an **operator** action — only accept goal specs from trusted input. See [Goal mode](/guides/goal-mode).
+
 ## `knowledge`
 
 Only read when `middleware.knowledge` is `true`.

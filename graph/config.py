@@ -134,6 +134,20 @@ class LangGraphConfig:
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
 
+    # Goal mode — testable-outcome goals the agent self-drives toward. The
+    # machinery is available when enabled, but no goal is active until one is
+    # set via `/goal` (a control message) or the /goal HTTP endpoints. After
+    # each terminal turn the goal's verifier (command/test/ci/data/llm) decides
+    # completion; on "not met" the agent is re-invoked with a continuation
+    # prompt until met, the iteration budget runs out (exhausted), or it's
+    # flagged unachievable (no-progress streak, or the model gives up). See
+    # graph/goals/ and docs/guides/goal-mode.
+    goal_enabled: bool = True
+    goal_max_iterations: int = 8          # continuation budget per goal
+    goal_no_progress_limit: int = 3       # identical verifier evidence N times -> unachievable
+    goal_eval_model: str = ""             # blank = main model (llm verifier / fuzzy goals)
+    goal_verify_timeout: float = 120.0    # seconds for command/test/ci verifiers
+
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
@@ -221,6 +235,11 @@ class LangGraphConfig:
             execute_code_tools=data.get("execute_code", {}).get("tools", []),
             execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
+            goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
+            goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
+            goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
+            goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
+            goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),

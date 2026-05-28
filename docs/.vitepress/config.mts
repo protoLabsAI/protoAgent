@@ -43,6 +43,7 @@ export default defineConfig({
             { text: "Fork checklist (fast path)", link: "/guides/fork-the-template" },
             { text: "Add a custom skill", link: "/guides/add-a-skill" },
             { text: "Configure subagents", link: "/guides/subagents" },
+            { text: "Goal mode", link: "/guides/goal-mode" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
           ],
