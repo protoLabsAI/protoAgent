@@ -283,6 +283,77 @@ async def _run_prompt_case(
             verify.apply_teardown(case["teardown"])
 
 
+async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
+    """Goal-mode case: set a goal in a pinned session, send a trigger turn,
+    then assert on the resulting goal state and the reply footer.
+
+    Case schema (in addition to id/category/name):
+      - ``set_goal``: the goal spec dict sent as ``/goal {json}`` (condition +
+        verifier + optional max_iterations). Use deterministic ``command``
+        verifiers (``"true"``/``"false"``) so the outcome is independent of
+        model competence.
+      - ``prompt``: the trigger message that runs the goal loop.
+      - ``expected_goal_status``: ``achieved`` / ``exhausted`` / ``unachievable``
+        — checked against ``GET /api/goal/{session}``.
+      - ``expected_patterns``: substrings that must appear in the reply (the
+        goal footer, e.g. ``goal achieved``).
+
+    The goal is cleared before (clean slate) and after (teardown) the case.
+    """
+    cid = case.get("id", "goal")
+    ctx = case.get("context_id") or f"eval-goal-{cid}"
+    cat, name = case.get("category", "goal"), case.get("name", cid)
+    try:
+        await client.clear_goal(ctx)
+
+        spec = case.get("set_goal")
+        if not isinstance(spec, dict):
+            return CaseResult(cid, cat, name, False, "case missing 'set_goal' spec")
+        set_reply = await client.ask("/goal " + json.dumps(spec), timeout_s=30, context_id=ctx)
+        if set_reply.state != "completed" or "goal set" not in set_reply.text.lower():
+            return CaseResult(cid, cat, name, False, f"goal not set (state={set_reply.state}): {set_reply.text[:120]!r}")
+
+        result = await client.ask(case["prompt"], timeout_s=case.get("timeout_s", 120), context_id=ctx)
+        if result is None or result.state != "completed":
+            state = result.state if result else "no-final-event"
+            return CaseResult(cid, cat, name, False, f"trigger state={state}; error={(result.error if result else None) or '(none)'}")
+
+        problems: list[str] = []
+
+        expected_status = case.get("expected_goal_status")
+        if expected_status:
+            goal_resp = await client.get_goal(ctx)
+            gstate = goal_resp.get("goal")
+            if not isinstance(gstate, dict):
+                # Fail loudly on a missing/empty goal record instead of letting
+                # a None status quietly mismatch — surfaces a backend/shape
+                # divergence rather than masking it.
+                problems.append(f"expected goal status {expected_status!r} but no goal state returned (resp={goal_resp})")
+            elif gstate.get("status") != expected_status:
+                problems.append(
+                    f"goal status={gstate.get('status')!r} expected {expected_status!r} "
+                    f"(iter={gstate.get('iteration')}, reason={str(gstate.get('last_reason',''))[:80]!r})"
+                )
+
+        text_lower = result.text.lower()
+        for pattern in case.get("expected_patterns") or []:
+            if pattern.lower() not in text_lower:
+                problems.append(f"missing pattern {pattern!r}")
+
+        detail = "; ".join(problems) if problems else f"OK ({result.duration_ms}ms)"
+        return CaseResult(
+            cid, cat, name, passed=not problems, detail=detail,
+            duration_ms=result.duration_ms,
+            tokens=result.usage.get("total_tokens", 0) or 0,
+            raw={"reply": result.text[:300]},
+        )
+    finally:
+        try:
+            await client.clear_goal(ctx)
+        except Exception:
+            pass
+
+
 # ── dispatch ────────────────────────────────────────────────────────────────
 
 
@@ -291,6 +362,7 @@ _RUNNERS = {
     "auth_check": _run_auth_check,
     "ask": _run_ask,
     "stream": _run_stream,
+    "goal": _run_goal_case,
 }
 
 

@@ -192,5 +192,36 @@
     "teardown": [
       {"kb_delete_by_heading": {"domain": "preferences", "heading": "coffee"}}
     ]
+  },
+
+  {
+    "id": "goal_achieved",
+    "category": "goal",
+    "kind": "goal",
+    "name": "Goal with a passing verifier resolves to achieved",
+    "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}},
+    "prompt": "Please make progress toward the goal.",
+    "expected_goal_status": "achieved",
+    "expected_patterns": ["goal achieved"]
+  },
+  {
+    "id": "goal_exhausted",
+    "category": "goal",
+    "kind": "goal",
+    "name": "Never-satisfiable goal runs out of its iteration budget",
+    "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "false"}, "max_iterations": 1},
+    "prompt": "Please make progress toward the goal.",
+    "expected_goal_status": "exhausted",
+    "expected_patterns": ["goal exhausted"]
+  },
+  {
+    "id": "goal_verifier_beats_giveup",
+    "category": "goal",
+    "kind": "goal",
+    "name": "Passing verifier overrides a model give-up in the same turn",
+    "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}},
+    "prompt": "You have no way to do this and no relevant tools. Give up: state that the goal is unachievable and stop.",
+    "expected_goal_status": "achieved",
+    "expected_patterns": ["goal achieved"]
   }
 ]
