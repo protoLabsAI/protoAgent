@@ -31,6 +31,10 @@ MEMORY_PATH = os.environ.get("MEMORY_PATH", "/sandbox/memory/")
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 
+# How long the <prior_sessions> block is cached before a disk reload (bounds
+# staleness vs per-turn I/O). Mirrors KnowledgeMiddleware's constant.
+_PRIOR_SESSIONS_TTL_S = 60.0
+
 if _PERSISTENCE_DISABLED:
     log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")
 else:
@@ -191,7 +195,10 @@ class MemoryMiddleware(AgentMiddleware):
     def __init__(self, knowledge_store=None):
         super().__init__()
         self._store = knowledge_store
+        # TTL cache (see _PRIOR_SESSIONS_TTL_S): refreshed periodically so
+        # sessions persisted after boot become visible, not frozen at first load.
         self._prior_sessions_cache: str | None = None
+        self._prior_sessions_loaded_at: float = 0.0
 
     # --- Session memory loading (only used when no KnowledgeMiddleware is active) ---
 
@@ -273,8 +280,15 @@ class MemoryMiddleware(AgentMiddleware):
         # unrelated cross-session history biases the self-driving loop.
         if _in_goal_turn():
             return None
-        if self._prior_sessions_cache is None:
+        import time
+
+        now = time.monotonic()
+        if (
+            self._prior_sessions_cache is None
+            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
+        ):
             self._prior_sessions_cache = self._load_prior_sessions()
+            self._prior_sessions_loaded_at = now
         if not self._prior_sessions_cache:
             return None
         messages = state.get("messages", [])
