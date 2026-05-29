@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import subprocess
+
+from operator_api.beads import BeadsService
+
+
+def _completed(args, returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_beads_status_detects_uninitialized_store(monkeypatch, tmp_path) -> None:
+    def fake_run(*args, **kwargs):
+        return _completed(
+            args[0],
+            returncode=1,
+            stderr='{"error":{"code":"NOT_INITIALIZED"}}',
+        )
+
+    monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)
+
+    assert BeadsService().status(str(tmp_path)) == {"initialized": False}
+
+
+def test_beads_list_uses_br_json_and_filters_tombstones(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _completed(
+            args[0],
+            stdout=(
+                '[{"id":"bd-1","status":"open"},'
+                '{"id":"bd-2","status":"tombstone"}]'
+            ),
+        )
+
+    monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)
+
+    issues = BeadsService().list(str(tmp_path))
+
+    assert issues == [{"id": "bd-1", "status": "open"}]
+    assert calls[0][0][0] == ["br", "list", "--all", "--json"]
+    assert calls[0][1]["cwd"] == str(tmp_path)
+    assert calls[0][1]["env"]["RUST_LOG"] == "error"
+
+
+def test_beads_create_builds_structured_command(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args[0])
+        return _completed(args[0], stdout='{"id":"bd-1","title":"Task"}')
+
+    monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)
+
+    issue = BeadsService().create(
+        str(tmp_path),
+        {
+            "title": "Task",
+            "type": "feature",
+            "priority": 1,
+            "description": "Details",
+            "assignee": "agent",
+        },
+    )
+
+    assert issue == {"id": "bd-1", "title": "Task"}
+    assert calls[0] == [
+        "br",
+        "create",
+        "Task",
+        "--json",
+        "--type",
+        "feature",
+        "--priority",
+        "1",
+        "--description",
+        "Details",
+        "--assignee",
+        "agent",
+    ]
