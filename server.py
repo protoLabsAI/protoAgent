@@ -64,6 +64,7 @@ log = logging.getLogger("protoagent.server")
 _graph = None          # LangGraph compiled graph
 _graph_config = None   # LangGraphConfig
 _checkpointer = None   # MemorySaver for session persistence
+_knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
@@ -87,7 +88,7 @@ def _init_langgraph_agent():
     clone with no model credentials — the wizard drives the user to
     provide them, then triggers a reload.
     """
-    global _graph, _graph_config, _checkpointer
+    global _graph, _graph_config, _checkpointer, _knowledge_store
 
     from graph.config import LangGraphConfig
     from graph.config_io import is_setup_complete
@@ -99,6 +100,7 @@ def _init_langgraph_agent():
 
     if not is_setup_complete():
         _graph = None
+        _knowledge_store = None
         log.info(
             "Setup wizard has not been completed — graph not compiled. "
             "Open the UI to finish setup.",
@@ -112,7 +114,7 @@ def _init_langgraph_agent():
     # bind to. Forks that don't want a store can set
     # ``middleware.knowledge: false`` and remove the memory tools from
     # the worker subagent — the store is still cheap to construct.
-    knowledge_store = _build_knowledge_store(_graph_config)
+    _knowledge_store = _build_knowledge_store(_graph_config)
 
     # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
     # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
@@ -122,7 +124,7 @@ def _init_langgraph_agent():
     _scheduler = _build_scheduler(_graph_config)
 
     _graph = create_agent_graph(
-        _graph_config, knowledge_store=knowledge_store, scheduler=_scheduler,
+        _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -130,7 +132,7 @@ def _init_langgraph_agent():
     global _cache_warmer
     from graph.cache_warmer import CacheWarmer
     _cache_warmer = CacheWarmer(
-        _graph_config, knowledge_store=knowledge_store, scheduler=_scheduler,
+        _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
     )
 
     # Goal mode — parses /goal control messages and runs the goal-completion
@@ -144,7 +146,7 @@ def _init_langgraph_agent():
     log.info(
         "LangGraph agent initialized (model: %s, knowledge_db: %s, scheduler: %s)",
         _graph_config.model_name,
-        getattr(knowledge_store, "path", "(disabled)"),
+        getattr(_knowledge_store, "path", "(disabled)"),
         getattr(_scheduler, "name", "disabled"),
     )
 
@@ -297,7 +299,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     compiling — the wizard is still in front of the user, so there
     is nothing to hot-swap yet.
     """
-    global _graph, _graph_config
+    global _graph, _graph_config, _knowledge_store
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
@@ -343,6 +345,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     else:
         next_scheduler = _scheduler
 
+    new_store = None
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
@@ -360,6 +363,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
     _graph_config = new_config
+    _knowledge_store = new_store
     try:
         from a2a_handler import set_a2a_token
 
@@ -1126,11 +1130,77 @@ def _main():
     import gradio as gr
     import uvicorn
     from fastapi import FastAPI, Request
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
     fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=(
+            r"^(tauri://localhost|http://tauri\.localhost|"
+            r"https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
+        ),
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=True,
+    )
+
+    # --- React operator-console API ----------------------------------------
+    from graph.config_io import is_setup_complete as _operator_setup_complete
+    from operator_api.routes import register_operator_routes
+    from operator_api.runtime import build_runtime_status as _build_operator_status
+    from operator_api.subagents import (
+        list_subagents as _operator_list_subagents,
+        run_manual_subagent as _operator_run_manual_subagent,
+        run_manual_subagent_batch as _operator_run_manual_subagent_batch,
+    )
+
+    def _operator_runtime_status():
+        return _build_operator_status(
+            config=_graph_config,
+            setup_complete=_operator_setup_complete(),
+            graph_loaded=_graph is not None,
+            knowledge_store=_knowledge_store,
+            scheduler=_scheduler,
+            cache_warmer=_cache_warmer,
+            goal_controller=_goal_controller,
+        )
+
+    def _operator_subagent_list():
+        return _operator_list_subagents(_graph_config)
+
+    async def _operator_subagent_run(req: dict):
+        if _graph is None:
+            raise RuntimeError("agent graph is not loaded; finish setup first")
+        return await _operator_run_manual_subagent(
+            config=_graph_config,
+            knowledge_store=_knowledge_store,
+            scheduler=_scheduler,
+            description=req.get("description", ""),
+            prompt=req.get("prompt", ""),
+            subagent_type=req.get("type") or req.get("subagent_type", "researcher"),
+            emit_skill=bool(req.get("emit_skill", False)),
+        )
+
+    async def _operator_subagent_batch(req: dict):
+        if _graph is None:
+            raise RuntimeError("agent graph is not loaded; finish setup first")
+        return await _operator_run_manual_subagent_batch(
+            config=_graph_config,
+            knowledge_store=_knowledge_store,
+            scheduler=_scheduler,
+            tasks=req.get("tasks", []),
+        )
+
+    register_operator_routes(
+        fastapi_app,
+        runtime_status=_operator_runtime_status,
+        subagent_list=_operator_subagent_list,
+        subagent_run=_operator_subagent_run,
+        subagent_batch=_operator_subagent_batch,
+    )
 
     # --- Scheduler lifecycle ------------------------------------------------
     # The local scheduler needs an asyncio polling task; the Workstacean
@@ -1368,6 +1438,13 @@ def _main():
                 return FastAPIResponse(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
         except ImportError:
             pass
+
+    # --- React operator console --------------------------------------------
+    from operator_api.web import mount_react_app
+
+    web_dist_dir = Path(__file__).parent / "apps" / "web" / "dist"
+    if mount_react_app(fastapi_app, web_dist_dir):
+        log.info("React operator console mounted at /app")
 
     # --- Static + PWA assets -----------------------------------------------
     static_dir = Path(__file__).parent / "static"

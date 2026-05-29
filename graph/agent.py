@@ -197,6 +197,90 @@ async def _run_subagent(
         return f"Error: Subagent '{subagent_type}' failed: {e}"
 
 
+async def run_manual_subagent(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    scheduler=None,
+    *,
+    description: str,
+    prompt: str,
+    subagent_type: str = "researcher",
+    emit_skill: bool = False,
+    truncate: int | None = None,
+) -> str:
+    """Run a subagent outside the lead agent's ``task`` tool.
+
+    The React operator console uses this to let a human explicitly fan out
+    work. It intentionally uses the same private runner as ``task`` so audit,
+    prompt, max-turn, and one-level delegation behavior stay aligned.
+    """
+    llm = create_llm(config)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+    tool_map = {t.name: t for t in all_tools}
+    available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
+
+    return await _run_subagent(
+        llm=llm,
+        tool_map=tool_map,
+        available_subagents=available_subagents,
+        description=description,
+        prompt=prompt,
+        subagent_type=subagent_type,
+        emit_skill=emit_skill,
+        truncate=truncate,
+    )
+
+
+async def run_manual_subagent_batch(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    scheduler=None,
+    *,
+    tasks: list[dict],
+) -> str:
+    """Run independent manual subagent jobs concurrently.
+
+    Mirrors the lead-agent ``task_batch`` tool, including stable output order
+    and per-task failure isolation, but is callable from the operator API.
+    """
+    import asyncio
+
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("tasks must be a non-empty list")
+
+    max_concurrency = max(1, config.subagent_max_concurrency)
+    truncate = config.subagent_output_truncate
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _one(spec: dict) -> str:
+        if not isinstance(spec, dict):
+            return f"Error: each task must be an object, got {type(spec).__name__}."
+        desc = spec.get("description") or "(no description)"
+        prm = spec.get("prompt")
+        if not prm:
+            return f"Error: task '{desc}' is missing 'prompt'."
+        async with sem:
+            return await run_manual_subagent(
+                config,
+                knowledge_store=knowledge_store,
+                scheduler=scheduler,
+                description=desc,
+                prompt=prm,
+                subagent_type=spec.get("subagent_type") or spec.get("type", "researcher"),
+                emit_skill=bool(spec.get("emit_skill", False)),
+                truncate=truncate,
+            )
+
+    results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
+
+    parts = []
+    for i, res in enumerate(results, start=1):
+        if isinstance(res, Exception):
+            res = f"Error: task #{i} raised {type(res).__name__}: {res}"
+        parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
+    return "\n\n".join(parts)
+
+
 def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool]):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
