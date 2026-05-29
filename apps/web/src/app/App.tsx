@@ -765,8 +765,11 @@ export function App() {
                 <Metric icon={<Bot size={16} />} label="Agent" value={runtime?.identity?.name || "protoagent"} />
                 <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime?.model?.provider || "none"} />
                 <Metric icon={<Database size={16} />} label="Knowledge" value={runtime?.knowledge.resolved_path || runtime?.knowledge.configured_path || "disabled"} />
+                <Metric icon={<Gauge size={16} />} label="Skills" value={`${runtime?.skills?.count ?? 0} loaded`} />
+                <Metric icon={<Network size={16} />} label="MCP tools" value={runtime?.mcp?.enabled ? `${runtime?.mcp?.tool_count ?? 0} from ${runtime?.mcp?.servers.length ?? 0} server${(runtime?.mcp?.servers.length ?? 0) === 1 ? "" : "s"}` : "off"} />
                 <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime?.goal.enabled))} />
               </div>
+              <p className="panel-kicker">Middleware</p>
               <div className="table-list">
                 {middleware.map(([name, enabled]) => (
                   <div className="table-row" key={name}>
@@ -775,6 +778,50 @@ export function App() {
                   </div>
                 ))}
               </div>
+
+              <p className="panel-kicker">MCP servers</p>
+              <div className="table-list">
+                {runtime?.mcp?.servers?.length ? (
+                  runtime.mcp.servers.map((server) => (
+                    <div className="table-row" key={server.name}>
+                      <span>{server.name} · {server.transport}</span>
+                      <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
+                    </div>
+                  ))
+                ) : (
+                  <div className="table-row">
+                    <span>no MCP servers</span>
+                    <StatusPill label={runtime?.mcp?.enabled ? "enabled" : "off"} tone="muted" />
+                  </div>
+                )}
+              </div>
+
+              <p className="panel-kicker">Plugins</p>
+              <div className="table-list">
+                {runtime?.plugins?.length ? (
+                  runtime.plugins.map((plugin) => (
+                    <div className="table-row" key={plugin.id}>
+                      <span>
+                        {plugin.name}
+                        {plugin.loaded && plugin.tools.length ? ` · ${plugin.tools.length} tool${plugin.tools.length === 1 ? "" : "s"}` : ""}
+                        {plugin.loaded && plugin.skills ? ` · ${plugin.skills} skill${plugin.skills === 1 ? "" : "s"}` : ""}
+                        {plugin.error ? ` · ${plugin.error}` : ""}
+                      </span>
+                      <StatusPill
+                        label={plugin.loaded ? "loaded" : plugin.error ? "error" : plugin.enabled ? "enabled" : "disabled"}
+                        tone={plugin.loaded ? "success" : plugin.error ? "error" : "muted"}
+                      />
+                    </div>
+                  ))
+                ) : (
+                  <div className="table-row">
+                    <span>no plugins</span>
+                    <StatusPill label="none" tone="muted" />
+                  </div>
+                )}
+              </div>
+
+              <p className="panel-kicker">Subagents</p>
               <div className="subagent-list">
                 {subagents.map((subagent) => (
                   <div className="subagent-row" key={subagent.name}>

@@ -39,6 +39,26 @@ export type RuntimeStatus = {
     loaded: boolean;
     interval_seconds?: number | null;
   };
+  skills?: {
+    enabled: boolean;
+    count: number;
+    top_k?: number | null;
+  };
+  mcp?: {
+    enabled: boolean;
+    servers: { name: string; transport: string; tool_count: number }[];
+    tool_count: number;
+  };
+  plugins?: {
+    id: string;
+    name: string;
+    version?: string;
+    enabled: boolean;
+    loaded: boolean;
+    tools: string[];
+    skills: number;
+    error?: string;
+  }[];
 };
 
 export type Subagent = {
