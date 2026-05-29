@@ -32,6 +32,7 @@ rename / release-pipeline wiring.
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
 | Starter tools | `tools/lg_tools.py`, `tools/github_tools.py` | Sixteen tools default-on: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 4 GitHub read tools over the `gh` CLI (`github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff`) + 5 memory (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the KB store + 3 scheduler (`schedule_task`, `list_schedules`, `cancel_schedule`) bound to the scheduler backend |
 | Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
+| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/` | Three opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, auto-retrieved), **MCP servers** (external tools over stdio/HTTP), and **plugins** (drop-in packages adding tools + bundled skills). See [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md) and [ADR 0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) |
 | Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
 | Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
@@ -170,16 +171,20 @@ on forks. Update the repo check in all three when forking.
 
 ## Skill loop — agents that learn from experience
 
-protoAgent includes an end-to-end **skill loop** where successful subagent
-workflows are captured as reusable skills, retrieved automatically on future
-tasks, and periodically optimised by the skill curator.
+protoAgent includes an end-to-end **skill loop** where the agent **learns from
+its own runs** — successful subagent workflows are captured as reusable skills,
+retrieved automatically on future tasks, and periodically optimised by the skill
+curator. The same index also serves **human-authored skills** dropped in as
+[`SKILL.md`](./docs/guides/skills.md) folders, so authored and agent-emitted
+skills are retrieved together.
 
 | Component | Where it lives | What it does |
 |---|---|---|
-| Skill emission | `graph/extensions/skills.py` | Captures `task()` results as `SkillV1Artifact` when `emit_skill=True` |
-| Skill index | `/sandbox/skills.db` | SQLite (FTS5) store of accumulated skill recipes, read by `KnowledgeMiddleware` |
-| Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as context |
-| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes the skill index |
+| `SKILL.md` skills | `config/skills/`, `<config>/skills/`, plugins | Human-authored skills (AgentSkills format) loaded into the index on boot (`source=disk`). See [Skills](./docs/guides/skills.md) |
+| Skill emission | `graph/extensions/skills.py` | Captures `task()` results as `SkillV1Artifact` when `emit_skill=True`, **persisted** to the index (`source=emitted`) |
+| Skill index | `/sandbox/skills.db` (→ `~/.protoagent`) | SQLite (FTS5) store of authored + emitted skills, queried by `KnowledgeMiddleware` |
+| Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as a `<learned_skills>` block |
+| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes *emitted* skills (disk skills are pinned) |
 
 ### Running the curator
 

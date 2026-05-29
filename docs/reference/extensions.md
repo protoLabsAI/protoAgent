@@ -1,6 +1,8 @@
 # Extensions
 
-A2A extensions the template implements. Each is either emitted, parsed, or both.
+A2A **protocol** extensions the template implements — typed `DataPart`s on the wire. Each is either emitted, parsed, or both.
+
+> Not what you're after? For *extending the agent's capabilities* — `SKILL.md` skills, MCP servers, and plugins — see the [Skills](/guides/skills), [MCP](/guides/mcp), and [Plugins](/guides/plugins) guides and [ADR 0001](/adr/). This page is about the A2A wire protocol.
 
 ## `cost-v1`
 
