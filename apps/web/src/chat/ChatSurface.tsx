@@ -274,7 +274,14 @@ function ChatSessionSlot({
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Message protoAgent"
+          onKeyDown={(event) => {
+            // Cmd/Ctrl+Enter sends; plain Enter keeps inserting newlines.
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          placeholder="Message protoAgent  (⌘/Ctrl+Enter to send)"
           rows={3}
         />
         {status === "streaming" ? (
