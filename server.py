@@ -65,6 +65,7 @@ _graph = None          # LangGraph compiled graph
 _graph_config = None   # LangGraphConfig
 _checkpointer = None   # MemorySaver for session persistence
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
+_skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
@@ -88,7 +89,7 @@ def _init_langgraph_agent():
     clone with no model credentials — the wizard drives the user to
     provide them, then triggers a reload.
     """
-    global _graph, _graph_config, _checkpointer, _knowledge_store
+    global _graph, _graph_config, _checkpointer, _knowledge_store, _skills_index
 
     from graph.config import LangGraphConfig
     from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
@@ -119,6 +120,10 @@ def _init_langgraph_agent():
     # the worker subagent — the store is still cheap to construct.
     _knowledge_store = _build_knowledge_store(_graph_config)
 
+    # Skills — human-authored SKILL.md folders seeded into the FTS index;
+    # KnowledgeMiddleware retrieves + injects them at inference.
+    _skills_index = _build_skills_index(_graph_config)
+
     # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
     # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
     # vars are set. Both backends share the same agent-tool surface
@@ -128,6 +133,7 @@ def _init_langgraph_agent():
 
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
+        skills_index=_skills_index,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -171,6 +177,59 @@ def _build_knowledge_store(config):
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
         return None
+
+
+def _build_skills_index(config):
+    """Return a ``SkillsIndex`` seeded from on-disk ``SKILL.md`` folders, or None.
+
+    Resolves a writable DB path (the configured ``/sandbox/skills.db`` →
+    ``~/.protoagent/skills.db`` fallback, mirroring the knowledge store), then
+    rebuilds the index from the bundled example skills (``config/skills``) plus
+    the operator's drop-in skills (``<config_dir>/skills`` or ``skills.dir``).
+    Best-effort: any failure logs and returns None so a bad skill never blocks
+    boot.
+    """
+    if not getattr(config, "skills_enabled", True):
+        return None
+    try:
+        from pathlib import Path
+
+        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+        from graph.skills.index import SkillsIndex
+        from graph.skills.loader import seed_skills_index
+
+        db_path = _resolve_skills_db(config.skills_db_path)
+        index = SkillsIndex(db_path=db_path)
+
+        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (
+            _live_config_dir() / "skills"
+        )
+        roots = [_BUNDLE_CONFIG_DIR / "skills", live_root]  # bundle first, live overrides
+        count = seed_skills_index(index, roots)
+        log.info("[skills] indexed %d SKILL.md skill(s) into %s", count, db_path)
+        return index
+    except Exception as exc:  # noqa: BLE001 — skills are optional, never fatal
+        log.warning("[skills] index init failed: %s; running without SKILL.md skills", exc)
+        return None
+
+
+def _resolve_skills_db(configured: str) -> str:
+    """Pick a writable skills DB path; fall back to ~/.protoagent when the
+    configured dir (default /sandbox) isn't creatable — same idea as the
+    knowledge store's ``_resolve_path``."""
+    import os
+    from pathlib import Path
+
+    candidate = Path(configured)
+    try:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        if os.access(candidate.parent, os.W_OK):
+            return str(candidate)
+    except OSError:
+        pass
+    fallback = Path.home() / ".protoagent" / "skills.db"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    return str(fallback)
 
 
 def _start_scheduler_async(backend: "SchedulerBackend") -> None:
@@ -302,7 +361,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     compiling — the wizard is still in front of the user, so there
     is nothing to hot-swap yet.
     """
-    global _graph, _graph_config, _knowledge_store
+    global _graph, _graph_config, _knowledge_store, _skills_index
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
@@ -349,11 +408,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         next_scheduler = _scheduler
 
     new_store = None
+    new_skills = None
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
+            new_skills = _build_skills_index(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
+                skills_index=new_skills,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -367,6 +429,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # same ``new_config`` so they stay consistent.
     _graph_config = new_config
     _knowledge_store = new_store
+    _skills_index = new_skills
     try:
         from a2a_handler import set_a2a_token
 
@@ -1206,6 +1269,7 @@ def _main():
             scheduler=_scheduler,
             cache_warmer=_cache_warmer,
             goal_controller=_goal_controller,
+            skills_index=_skills_index,
         )
 
     def _operator_subagent_list():

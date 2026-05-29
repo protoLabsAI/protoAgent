@@ -367,7 +367,7 @@ class KnowledgeMiddleware(AgentMiddleware):
                     )
                     break
 
-            if last_human:
+            if last_human and self._store is not None:
                 results = self._store.search(last_human, k=self._top_k)
                 if results:
                     context_parts = ["[Relevant knowledge from previous sessions:]"]

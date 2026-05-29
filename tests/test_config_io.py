@@ -129,7 +129,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # Adding a new section here without updating config_to_dict would
     # strand fork-added fields outside the drawer's round-trip.
     assert set(d.keys()) == {
-        "model", "subagents", "middleware", "knowledge",
+        "model", "subagents", "middleware", "knowledge", "skills",
         "identity", "auth", "runtime", "operator",
     }
     assert d["model"]["name"] == cfg.model_name
@@ -140,6 +140,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     assert d["subagents"]["researcher"]["tools"] == list(cfg.researcher.tools)
     assert d["middleware"]["audit"] == cfg.audit_middleware
     assert d["knowledge"]["top_k"] == cfg.knowledge_top_k
+    assert d["skills"]["enabled"] == cfg.skills_enabled
+    assert d["skills"]["db_path"] == cfg.skills_db_path
     assert d["identity"]["name"] == cfg.identity_name
     assert d["runtime"]["autostart_on_boot"] == cfg.autostart_on_boot
     assert d["operator"]["allowed_dirs"] == list(cfg.operator_allowed_dirs)
