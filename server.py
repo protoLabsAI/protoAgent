@@ -438,7 +438,10 @@ def _apply_settings_changes(
     from graph.config_io import (
         apply_updates_to_yaml,
         load_yaml_doc,
+        save_secrets,
         save_yaml_doc,
+        split_secret_updates,
+        strip_secrets_from_doc,
         validate_config_dict,
         write_soul,
     )
@@ -450,8 +453,11 @@ def _apply_settings_changes(
         if not ok:
             return False, [f"validation: {err}"]
         try:
+            main_config, secret_updates = split_secret_updates(config)
+            save_secrets(secret_updates)
             doc = load_yaml_doc()
-            apply_updates_to_yaml(doc, config)
+            apply_updates_to_yaml(doc, main_config)
+            strip_secrets_from_doc(doc)
             save_yaml_doc(doc)
             messages.append("config saved")
         except Exception as e:
@@ -531,21 +537,27 @@ def _build_settings_callbacks() -> dict[str, Any]:
         from graph.config_io import (
             apply_updates_to_yaml,
             load_yaml_doc,
+            save_secrets,
             save_yaml_doc,
+            split_secret_updates,
+            strip_secrets_from_doc,
             validate_config_dict,
             write_soul,
         )
 
         messages: list[str] = []
 
-        # 1. Persist
+        # 1. Persist (secrets to the untracked overlay, never the tracked YAML)
         if config is not None:
             ok, err = validate_config_dict(config)
             if not ok:
                 return False, f"validation: {err}"
             try:
+                main_config, secret_updates = split_secret_updates(config)
+                save_secrets(secret_updates)
                 doc = load_yaml_doc()
-                apply_updates_to_yaml(doc, config)
+                apply_updates_to_yaml(doc, main_config)
+                strip_secrets_from_doc(doc)
                 save_yaml_doc(doc)
                 messages.append("config saved")
             except Exception as e:

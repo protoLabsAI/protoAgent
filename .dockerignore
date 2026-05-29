@@ -31,6 +31,7 @@ README.md
 venv/
 .env
 .env.*
+config/secrets.yaml
 
 # Tests — not needed at runtime; image stays lean
 tests/

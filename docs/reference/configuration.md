@@ -44,7 +44,7 @@ knowledge:
 | `provider` | `openai` | LangChain LLM provider. The template's `graph/llm.py` only uses `openai` (via LiteLLM gateway). |
 | `name` | `protolabs/agent` | Gateway alias or direct model name. |
 | `api_base` | `http://gateway:4000/v1` | OpenAI-compatible endpoint. |
-| `api_key` | `""` | Falls back to the `OPENAI_API_KEY` env var. |
+| `api_key` | `""` | **Secret — not stored here.** Managed in the untracked `config/secrets.yaml` (see [Secrets](#secrets)); falls back to the `OPENAI_API_KEY` env var. |
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `50` | Upper bound on tool-call loops per task. |
@@ -55,6 +55,20 @@ knowledge:
 | `chat_template_kwargs` | _(unset)_ | Dict passed via `extra_body` to the vLLM renderer, e.g. `{preserve_thinking: true}` to keep historical `<think>`/`<scratch_pad>` blocks across turns. |
 
 All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
+
+## Secrets
+
+Two fields are secrets and are **never written to the tracked config YAML**: the model `api_key` and the A2A `auth.token`. The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
+
+```yaml
+# config/secrets.yaml — never committed
+model:
+  api_key: sk-...
+auth:
+  token: bearer-...
+```
+
+`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free. The `/api/config` endpoint redacts both fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value.
 
 ## `subagents`
 
