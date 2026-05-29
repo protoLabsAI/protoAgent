@@ -36,13 +36,44 @@ from graph.config import LangGraphConfig
 log = logging.getLogger("protoagent.config_io")
 
 REPO_ROOT = Path(__file__).parent.parent
-# Live runtime config — untracked, per-deployment. Generated from the tracked
+
+# Two config roots, normally the same directory:
+#
+# * BUNDLE  — read-only shipped defaults: the ``.example`` template, SOUL
+#   presets, the default SOUL.md. Lives next to the code (``REPO_ROOT/config``,
+#   or _MEIPASS/config inside a PyInstaller-frozen sidecar).
+# * LIVE    — writable per-deployment state: the live YAML, secrets, and the
+#   setup marker. Overridable via ``PROTOAGENT_CONFIG_DIR``.
+#
+# The desktop sidecar is a read-only frozen binary, so it points
+# ``PROTOAGENT_CONFIG_DIR`` at the per-user app-data dir — defaults are read
+# from the bundle, live state is written to app-data. Unset (local dev, the
+# Docker config volume) collapses both to ``REPO_ROOT/config`` — unchanged.
+_BUNDLE_CONFIG_DIR = REPO_ROOT / "config"
+
+
+def _live_config_dir() -> Path:
+    override = os.environ.get("PROTOAGENT_CONFIG_DIR", "").strip()
+    return Path(override).expanduser() if override else _BUNDLE_CONFIG_DIR
+
+
+_LIVE_CONFIG_DIR = _live_config_dir()
+
+# Bundled, read-only defaults.
+CONFIG_EXAMPLE_PATH = _BUNDLE_CONFIG_DIR / "langgraph-config.example.yaml"
+SOUL_SOURCE_PATH = _BUNDLE_CONFIG_DIR / "SOUL.md"
+# SOUL.md starter templates. The wizard offers these as presets the
+# user can pick then edit before saving. Adding a new file here
+# automatically makes it a choice — no registry to update.
+PRESETS_DIR = _BUNDLE_CONFIG_DIR / "soul-presets"
+
+# Writable, per-deployment state.
+#
+# Live runtime config — untracked, per-deployment. Generated from the
 # ``.example`` template on first run (see ``ensure_live_config``) and rewritten
 # by the wizard/drawer. Keeping it out of git means setup edits never dirty a
 # tracked file; the template carries the shipped defaults + comments.
-CONFIG_YAML_PATH = REPO_ROOT / "config" / "langgraph-config.yaml"
-CONFIG_EXAMPLE_PATH = REPO_ROOT / "config" / "langgraph-config.example.yaml"
-SOUL_SOURCE_PATH = REPO_ROOT / "config" / "SOUL.md"
+CONFIG_YAML_PATH = _LIVE_CONFIG_DIR / "langgraph-config.yaml"
 SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 
 # Secrets overlay. The setup wizard / drawer collect a model API key and an
@@ -50,7 +81,7 @@ SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 # configured checkout carries credentials in git. Instead they live in this
 # untracked sibling file (gitignored + dockerignored), read back by
 # ``LangGraphConfig.from_yaml`` and stripped from the main YAML on every save.
-SECRETS_YAML_PATH = CONFIG_YAML_PATH.parent / "secrets.yaml"
+SECRETS_YAML_PATH = _LIVE_CONFIG_DIR / "secrets.yaml"
 
 # (section, key) pairs that must never be written to the tracked YAML.
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
@@ -61,14 +92,9 @@ SECRET_PATHS: tuple[tuple[str, str], ...] = (
 # Setup wizard state.
 # Presence of this (empty) marker file = wizard has been run and the
 # server should boot straight into the chat UI. Absence = show the
-# wizard on first page load. Lives in ``config/`` so a Docker volume
-# mount at /opt/<agent>/config persists setup across container runs.
-SETUP_MARKER_PATH = REPO_ROOT / "config" / ".setup-complete"
-
-# SOUL.md starter templates. The wizard offers these as presets the
-# user can pick then edit before saving. Adding a new file here
-# automatically makes it a choice — no registry to update.
-PRESETS_DIR = REPO_ROOT / "config" / "soul-presets"
+# wizard on first page load. Lives in the live config dir so a Docker volume
+# mount (or the desktop app-data dir) persists setup across runs.
+SETUP_MARKER_PATH = _LIVE_CONFIG_DIR / ".setup-complete"
 
 
 # ---------------------------------------------------------------------------

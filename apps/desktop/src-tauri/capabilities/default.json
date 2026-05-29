@@ -6,6 +6,16 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/protoagent-server",
+          "sidecar": true,
+          "args": ["--headless", "--port", { "validator": "\\d+" }]
+        }
+      ]
+    }
   ]
 }
