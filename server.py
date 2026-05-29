@@ -1120,8 +1120,17 @@ def _main():
     parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
+        help="Serve only the API / A2A / React console — skip the Gradio UI. "
+             "Used by the desktop sidecar (the React console is the UI there, "
+             "and Gradio is the heaviest dependency to freeze).",
+    )
     args = parser.parse_args()
     _active_port = args.port
+    headless = args.headless
 
     # Initialize observability
     import tracing
@@ -1131,18 +1140,21 @@ def _main():
 
     _init_langgraph_agent()
 
-    # Optional Gradio chat UI — comment out if your agent is headless.
-    from chat_ui import create_chat_app
-    blocks = create_chat_app(
-        chat_fn=chat,
-        title=agent_name(),
-        subtitle="protoAgent",
-        placeholder="Send a message...",
-        pwa=True,
-        settings=_build_settings_callbacks(),
-    )
+    # Optional Gradio chat UI — skipped entirely in headless mode so the
+    # frozen sidecar never imports Gradio (its biggest, PyInstaller-hostile
+    # dependency). The React console is the UI in that mode.
+    blocks = None
+    if not headless:
+        from chat_ui import create_chat_app
+        blocks = create_chat_app(
+            chat_fn=chat,
+            title=agent_name(),
+            subtitle="protoAgent",
+            placeholder="Send a message...",
+            pwa=True,
+            settings=_build_settings_callbacks(),
+        )
 
-    import gradio as gr
     import uvicorn
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
@@ -1495,14 +1507,20 @@ def _main():
 
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # --- Mount Gradio at root -----------------------------------------------
-    app = gr.mount_gradio_app(
-        fastapi_app, blocks, path="/",
-        footer_links=[],
-        favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
-    )
+    # --- Mount Gradio at root (skipped when headless) -----------------------
+    if headless:
+        app = fastapi_app
+        log.info("Starting %s (headless — no Gradio) on http://0.0.0.0:%d", agent_name(), args.port)
+    else:
+        import gradio as gr
 
-    log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
+        app = gr.mount_gradio_app(
+            fastapi_app, blocks, path="/",
+            footer_links=[],
+            favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
+        )
+        log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
+
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 
