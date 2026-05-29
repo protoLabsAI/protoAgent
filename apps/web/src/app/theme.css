@@ -212,6 +212,15 @@ h2 {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+/* Scrollable body for panels whose content is a top-down stack (Schedule,
+   Runtime) rather than a single fill-the-space element. Occupies the panel's
+   1fr row and scrolls; block layout so children keep their natural height
+   instead of stretching to fill empty space. */
+.stage-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .side-panel {
   height: 100%;
   display: grid;
