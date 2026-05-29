@@ -129,7 +129,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # Adding a new section here without updating config_to_dict would
     # strand fork-added fields outside the drawer's round-trip.
     assert set(d.keys()) == {
-        "model", "subagents", "middleware", "knowledge", "skills", "mcp",
+        "model", "subagents", "middleware", "knowledge", "skills", "mcp", "plugins",
         "identity", "auth", "runtime", "operator",
     }
     assert d["model"]["name"] == cfg.model_name

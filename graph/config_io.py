@@ -226,6 +226,10 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "timeout_seconds": config.mcp_timeout_seconds,
             "denylist": list(config.mcp_denylist),
         },
+        "plugins": {
+            "enabled": list(config.plugins_enabled),
+            "dir": config.plugins_dir,
+        },
         "identity": {
             "name": config.identity_name,
             "operator": config.identity_operator,

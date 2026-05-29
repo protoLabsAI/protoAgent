@@ -1,0 +1,13 @@
+id: hello
+name: Hello Plugin
+version: 0.1.0
+description: >-
+  A minimal example plugin: contributes one tool (`hello`) and bundles one
+  SKILL.md skill. Copy this as a starting point. Shipped disabled — enable it
+  with `plugins: { enabled: [hello] }` in config (or set `enabled: true` here
+  in your own copy).
+enabled: false
+# Declarative only (not yet enforced) — surfaced in the console for transparency.
+capabilities:
+  network: []
+  filesystem: none
