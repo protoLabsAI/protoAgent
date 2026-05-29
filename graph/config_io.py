@@ -214,6 +214,12 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "embed_model": config.embed_model,
             "top_k": config.knowledge_top_k,
         },
+        "skills": {
+            "enabled": config.skills_enabled,
+            "db_path": config.skills_db_path,
+            "top_k": config.skills_top_k,
+            "dir": config.skills_dir,
+        },
         "identity": {
             "name": config.identity_name,
             "operator": config.identity_operator,

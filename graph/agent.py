@@ -18,7 +18,7 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 from tools.lg_tools import get_all_tools
 
 
-def _build_middleware(config: LangGraphConfig, knowledge_store=None):
+def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None):
     middleware = []
 
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
@@ -42,9 +42,16 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None):
             rate_limits=config.enforcement_rate_limits,
         ))
 
-    if config.knowledge_middleware and knowledge_store:
+    # KnowledgeMiddleware also carries human-authored skill retrieval (the
+    # <learned_skills> injection). Build it when knowledge OR skills is active,
+    # so skills work even on a KB-less agent (the store is None-tolerant).
+    _skills_index = skills_index if config.skills_enabled else None
+    if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
         middleware.append(KnowledgeMiddleware(
-            knowledge_store, top_k=config.knowledge_top_k,
+            knowledge_store if config.knowledge_middleware else None,
+            top_k=config.knowledge_top_k,
+            skills_index=_skills_index,
+            skills_top_k=config.skills_top_k,
         ))
 
     if config.audit_middleware:
@@ -399,6 +406,7 @@ def create_agent_graph(
     config: LangGraphConfig,
     knowledge_store=None,
     scheduler=None,
+    skills_index=None,
     include_subagents: bool = True,
 ):
     """Create the protoAgent LangGraph agent.
@@ -419,7 +427,7 @@ def create_agent_graph(
         from tools.execute_code import build_execute_code_tool
         all_tools.append(build_execute_code_tool(all_tools, config=config))
 
-    middleware = _build_middleware(config, knowledge_store)
+    middleware = _build_middleware(config, knowledge_store, skills_index=skills_index)
 
     system_prompt = build_system_prompt(
         include_subagents=include_subagents,
