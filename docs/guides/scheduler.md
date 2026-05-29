@@ -39,20 +39,24 @@ not "do that thing we discussed").
    `middleware.memory` — drawer/wizard editable.)
 2. `SCHEDULER_DISABLED=1` env → no scheduler. Runtime escape hatch
    for fleet operators who can't edit config.
-3. `WORKSTACEAN_API_BASE` + `WORKSTACEAN_API_KEY` set →
-   **`WorkstaceanScheduler`**.
-4. Otherwise → **`LocalScheduler`** (sqlite, asyncio polling).
+3. `SCHEDULER_BACKEND=workstacean` **and** `WORKSTACEAN_API_BASE` +
+   `WORKSTACEAN_API_KEY` set → **`WorkstaceanScheduler`** (opt-in).
+4. Otherwise → **`LocalScheduler`** (sqlite, asyncio polling) — the default.
 
-Both backends honor the same `SchedulerBackend` protocol; the agent
-loop never knows which one is wired up. The scheduler is **default
-on** — explicitly opt out via either config path above when a fork
-wants a stateless agent with no scheduling surface.
+The bundled **`LocalScheduler` is the default**; the remote
+`WorkstaceanScheduler` is **opt-in**. Setting the Workstacean env vars alone
+no longer switches the backend — you must explicitly set
+`SCHEDULER_BACKEND=workstacean` (if you opt in without the creds, it logs and
+falls back to local). Both backends honor the same `SchedulerBackend` protocol;
+the agent loop never knows which one is wired up. The scheduler is **default
+on** — opt out via either config path above for a stateless agent.
 
 ```bash
-# Solo / local dev — falls through to LocalScheduler automatically.
+# Solo / local dev — LocalScheduler (the default).
 python server.py
 
-# Workstacean install — set both env vars and restart.
+# Workstacean install — opt in explicitly AND set the creds.
+export SCHEDULER_BACKEND=workstacean
 export WORKSTACEAN_API_BASE=http://your-workstacean-host:3000
 export WORKSTACEAN_API_KEY=<key>
 python server.py
@@ -62,6 +66,24 @@ python server.py
 > `ava` node; `WORKSTACEAN_API_KEY` is in the org's secrets manager
 > under `secret-management → workstacean`. Coordinate with the team
 > for the exact URL.
+
+## Manage from the console
+
+The agent schedules jobs via its tools, but operators can also view and manage
+them directly from the React console's **Schedule** surface — list current
+jobs, create one (a prompt + a `when` that's a cron expression or ISO
+datetime), and cancel one. It's backed by these operator-API endpoints over the
+active backend:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
+| `POST` | `/api/scheduler/jobs` | Create — `{prompt, schedule, job_id?}` → `{job}` |
+| `DELETE` | `/api/scheduler/jobs/{id}` | Cancel → `{canceled}` |
+
+A malformed `schedule` returns `400`. With a remote backend (`WorkstaceanScheduler`),
+`list_jobs` may be empty even when jobs exist — they're managed on the bus, and
+the console notes this.
 
 ## Multi-agent isolation
 

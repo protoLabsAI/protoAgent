@@ -1,6 +1,7 @@
 import {
   Bot,
   Boxes,
+  CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -24,11 +25,11 @@ import type { ReactNode } from "react";
 
 import { ChatSurface } from "../chat/ChatSurface";
 import { api } from "../lib/api";
-import type { BeadsIssue, NotesWorkspace, RuntimeStatus, Subagent } from "../lib/types";
+import type { BeadsIssue, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "runtime";
+type Surface = "chat" | "subagents" | "runtime" | "schedule";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -230,6 +231,13 @@ export function App() {
   const [beadsBusy, setBeadsBusy] = useState(false);
   const [collapsedIssueGroups, setCollapsedIssueGroups] = useState<Set<string>>(() => new Set(["closed"]));
 
+  const [scheduleJobs, setScheduleJobs] = useState<ScheduledJob[]>([]);
+  const [scheduleBackend, setScheduleBackend] = useState("local");
+  const [schedulePrompt, setSchedulePrompt] = useState("");
+  const [scheduleWhen, setScheduleWhen] = useState("");
+  const [scheduleJobId, setScheduleJobId] = useState("");
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
 
   async function refreshRuntime() {
@@ -243,6 +251,48 @@ export function App() {
       setSubagentType(subagentPayload.subagents[0]?.name || "researcher");
     }
     return runtimePayload;
+  }
+
+  async function refreshSchedules() {
+    try {
+      const payload = await api.schedules();
+      setScheduleJobs(payload.jobs);
+      setScheduleBackend(payload.backend);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  async function createSchedule() {
+    const prompt = schedulePrompt.trim();
+    const schedule = scheduleWhen.trim();
+    if (!prompt || !schedule || scheduleBusy) return;
+    setScheduleBusy(true);
+    setError("");
+    try {
+      await api.addSchedule({ prompt, schedule, job_id: scheduleJobId.trim() || undefined });
+      setSchedulePrompt("");
+      setScheduleWhen("");
+      setScheduleJobId("");
+      await refreshSchedules();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
+  async function cancelScheduleJob(jobId: string) {
+    if (scheduleBusy) return;
+    setScheduleBusy(true);
+    try {
+      await api.cancelSchedule(jobId);
+      await refreshSchedules();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setScheduleBusy(false);
+    }
   }
 
   async function refreshProjectState(path = projectPath) {
@@ -309,6 +359,10 @@ export function App() {
     }, 800);
     return () => window.clearTimeout(handle);
   }, [notesBusy, notesDirty, projectPath, workspace]);
+
+  useEffect(() => {
+    if (surface === "schedule") void refreshSchedules();
+  }, [surface]);
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -620,6 +674,12 @@ export function App() {
             onClick={() => setSurface("subagents")}
           />
           <RailButton
+            active={surface === "schedule"}
+            label="Schedule"
+            icon={<CalendarClock size={18} />}
+            onClick={() => setSurface("schedule")}
+          />
+          <RailButton
             active={surface === "runtime"}
             label="Runtime"
             icon={<Gauge size={18} />}
@@ -749,6 +809,91 @@ export function App() {
                 </button>
               </div>
               {subagentOutput ? <pre className="output-block">{subagentOutput}</pre> : null}
+            </section>
+          ) : null}
+
+          {surface === "schedule" ? (
+            <section className="panel stage-panel">
+              <div className="panel-header">
+                <div>
+                  <h1>Schedule</h1>
+                  <p className="panel-kicker">{scheduleJobs.length} job{scheduleJobs.length === 1 ? "" : "s"} · {scheduleBackend}</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => void refreshSchedules()} title="Refresh">
+                  {scheduleBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                </button>
+              </div>
+
+              <div className="subagent-grid">
+                <label className="field">
+                  <span>When (cron or ISO datetime)</span>
+                  <input
+                    value={scheduleWhen}
+                    onChange={(event) => setScheduleWhen(event.target.value)}
+                    placeholder='e.g. "0 9 * * 1-5"  or  "2026-06-01T15:00:00Z"'
+                  />
+                </label>
+                <label className="field">
+                  <span>Job id (optional)</span>
+                  <input
+                    value={scheduleJobId}
+                    onChange={(event) => setScheduleJobId(event.target.value)}
+                    placeholder="auto"
+                  />
+                </label>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void createSchedule()}
+                  disabled={scheduleBusy || !schedulePrompt.trim() || !scheduleWhen.trim()}
+                >
+                  <Plus size={16} />
+                  Schedule
+                </button>
+              </div>
+              <label className="field grow">
+                <span>Prompt (delivered to the agent when it fires)</span>
+                <textarea
+                  value={schedulePrompt}
+                  onChange={(event) => setSchedulePrompt(event.target.value)}
+                  placeholder="What the agent should do when this fires"
+                  rows={5}
+                />
+              </label>
+
+              <div className="subagent-list">
+                {scheduleJobs.length ? (
+                  scheduleJobs.map((job) => (
+                    <div className="subagent-row" key={job.id}>
+                      <div>
+                        <strong>{job.id}</strong>
+                        <span>
+                          {job.schedule}
+                          {job.next_fire ? ` · next ${job.next_fire}` : ""}
+                          {" · "}
+                          {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
+                        </span>
+                      </div>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        onClick={() => void cancelScheduleJob(job.id)}
+                        disabled={scheduleBusy}
+                        title="Cancel job"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="subagent-row">
+                    <div>
+                      <strong>No scheduled jobs</strong>
+                      <span>{scheduleBackend !== "local" && scheduleBackend !== "disabled" ? `jobs may be managed remotely by ${scheduleBackend}` : "create one above"}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </section>
           ) : null}
 

@@ -5,6 +5,7 @@ import type {
   ConfigPayload,
   NotesWorkspace,
   RuntimeStatus,
+  ScheduledJob,
   SetupStatus,
   Subagent,
 } from "./types";
@@ -201,6 +202,23 @@ export const api = {
     return request<{ ok: boolean; session_id: string; output: string }>("/api/subagents/batch", {
       method: "POST",
       body,
+    });
+  },
+
+  schedules() {
+    return request<{ jobs: ScheduledJob[]; backend: string }>("/api/scheduler/jobs");
+  },
+
+  addSchedule(body: { prompt: string; schedule: string; job_id?: string }) {
+    return request<{ job: ScheduledJob }>("/api/scheduler/jobs", {
+      method: "POST",
+      body,
+    });
+  },
+
+  cancelSchedule(jobId: string) {
+    return request<{ canceled: boolean }>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE",
     });
   },
 

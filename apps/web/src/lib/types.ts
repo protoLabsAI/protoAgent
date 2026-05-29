@@ -61,6 +61,17 @@ export type RuntimeStatus = {
   }[];
 };
 
+export type ScheduledJob = {
+  id: string;
+  prompt: string;
+  schedule: string;
+  agent_name?: string;
+  created_at?: string;
+  next_fire?: string | null;
+  last_fire?: string | null;
+  enabled?: boolean;
+};
+
 export type Subagent = {
   name: string;
   description: string;
