@@ -111,6 +111,7 @@ async def _run_subagent(
     subagent_type: str,
     emit_skill: bool,
     truncate: int | None = None,
+    skills_index=None,
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -191,6 +192,17 @@ async def _run_subagent(
                         source_session_id=tracing.current_session_id(),
                     )
                     emit_skill_artifact(artifact)
+                    # Persist to the skill index here — same async context as
+                    # emission, so task_batch (which fans out into child tasks)
+                    # doesn't lose artifacts the way a ContextVar drain would.
+                    if skills_index is not None:
+                        try:
+                            skills_index.add_emitted_skill(artifact)
+                        except Exception as exc:
+                            import logging
+                            logging.getLogger(__name__).error(
+                                "[skill] persisting emitted skill failed: %s", exc
+                            )
                 except Exception as exc:
                     import logging
                     logging.getLogger(__name__).error(
@@ -288,7 +300,7 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool]):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -338,6 +350,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool]):
             subagent_type=subagent_type,
             emit_skill=emit_skill,
             truncate=None,
+            skills_index=skills_index,
         )
 
     @tool
@@ -386,6 +399,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool]):
                     subagent_type=spec.get("subagent_type", "researcher"),
                     emit_skill=bool(spec.get("emit_skill", False)),
                     truncate=truncate,
+                    skills_index=skills_index,
                 )
 
         results = await asyncio.gather(
@@ -427,7 +441,7 @@ def create_agent_graph(
         all_tools.extend(extra_tools)
 
     if include_subagents:
-        all_tools.extend(_build_task_tools(config, all_tools))
+        all_tools.extend(_build_task_tools(config, all_tools, skills_index=skills_index))
 
     # Programmatic tool calling — opt-in. Built last so it can wrap every
     # other tool (including task/task_batch) but never itself.

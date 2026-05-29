@@ -34,7 +34,9 @@ def _build_match_query(query: str) -> str:
 
 # Bump when FTS table columns change — triggers auto-migration
 # v2: added confidence + last_used (consumed by the skill curator).
-_SCHEMA_VERSION = 2
+# v3: added `source` ('disk' = human-authored SKILL.md, re-seeded each boot;
+#     'emitted' = agent-authored via task(), persisted + curator-managed).
+_SCHEMA_VERSION = 3
 
 # Columns indexed by FTS5 (order matters for sqlite_master check)
 _FTS_CONTENT_COLUMNS = (
@@ -146,7 +148,8 @@ class SkillsIndex:
                 source_session_id,
                 created_at UNINDEXED,
                 confidence UNINDEXED,
-                last_used UNINDEXED
+                last_used UNINDEXED,
+                source UNINDEXED
             );
 
             CREATE TABLE _skills_meta (
@@ -155,7 +158,7 @@ class SkillsIndex:
             );
 
             INSERT INTO _skills_meta (key, version)
-            VALUES ('schema_version', 2);
+            VALUES ('schema_version', 3);
         """)
         conn.commit()
         log.info("[skills] schema created at %s", self._db_path)
@@ -177,12 +180,14 @@ class SkillsIndex:
 
     # ── Write path ────────────────────────────────────────────────────────────
 
-    def add_skill(self, artifact: object) -> None:
+    def add_skill(self, artifact: object, source: str = "emitted") -> None:
         """Insert a SkillV1Artifact into the FTS5 index.
 
         Accepts any object with matching attributes so this module does not
         import graph.extensions.skills (avoiding circular dependency).
-        Silently skips artifacts with empty names.
+        Silently skips artifacts with empty names. ``source`` is ``'disk'`` for
+        human-authored SKILL.md skills (re-seeded each boot) or ``'emitted'``
+        for agent-authored ones (persisted + curator-managed).
         """
         name = getattr(artifact, "name", "") or ""
         if not name:
@@ -206,16 +211,51 @@ class SkillsIndex:
                 """
                 INSERT INTO skills_fts
                     (name, description, prompt_template, tools_used,
-                     source_session_id, created_at, confidence, last_used)
-                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?)
+                     source_session_id, created_at, confidence, last_used, source)
+                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?)
                 """,
                 (name, description, prompt_template, tools_str,
-                 source_session_id, created_at, last_used),
+                 source_session_id, created_at, last_used, source),
             )
             conn.commit()
-            log.debug("[skills] indexed skill: %s", name)
+            log.debug("[skills] indexed skill: %s (source=%s)", name, source)
         except sqlite3.Error as exc:
             log.error("[skills] failed to index skill %s: %s", name, exc)
+
+    def add_emitted_skill(self, artifact: object) -> None:
+        """Persist an agent-emitted skill, de-duped by name.
+
+        Replaces any prior ``emitted`` skill with the same name so repeated runs
+        of the same workflow refresh rather than accumulate. Disk skills (same
+        name) are left untouched — they're a separate, pinned source.
+        """
+        name = getattr(artifact, "name", "") or ""
+        if not name:
+            return
+        conn = self._open_conn()
+        try:
+            conn.execute(
+                "DELETE FROM skills_fts WHERE name = ? AND source = 'emitted'", (name,)
+            )
+            conn.commit()
+        except sqlite3.Error as exc:
+            log.error("[skills] failed to de-dupe emitted skill %s: %s", name, exc)
+        self.add_skill(artifact, source="emitted")
+
+    def replace_disk_skills(self, artifacts: list[object]) -> None:
+        """Reset the ``disk`` source to exactly *artifacts*, leaving ``emitted``
+        skills intact. Used to (re)seed human-authored SKILL.md skills on boot
+        without clobbering the agent's persisted procedural memory."""
+        conn = self._open_conn()
+        try:
+            conn.execute("DELETE FROM skills_fts WHERE source = 'disk'")
+            conn.commit()
+        except sqlite3.Error as exc:
+            log.error("[skills] failed to clear disk skills for re-seed: %s", exc)
+            return
+        for artifact in artifacts:
+            self.add_skill(artifact, source="disk")
+        log.info("[skills] seeded %d disk skill(s)", len(artifacts))
 
     # ── Read path ─────────────────────────────────────────────────────────────
 
@@ -279,7 +319,7 @@ class SkillsIndex:
             cur = conn.execute(
                 """
                 SELECT rowid AS id, name, description, prompt_template, tools_used,
-                       created_at, confidence, last_used
+                       created_at, confidence, last_used, source
                 FROM skills_fts
                 """
             )
@@ -293,6 +333,7 @@ class SkillsIndex:
                     "created_at": row["created_at"],
                     "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
                     "last_used": row["last_used"],
+                    "source": (row["source"] if "source" in row.keys() else "emitted") or "emitted",
                 }
                 for row in cur.fetchall()
             ]

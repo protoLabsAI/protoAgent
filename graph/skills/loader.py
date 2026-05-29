@@ -125,15 +125,15 @@ def load_skills_from_disk(roots: list[Path]) -> list[SkillV1Artifact]:
 
 
 def seed_skills_index(index, roots: list[Path]) -> int:
-    """Rebuild the skill index from the ``SKILL.md`` files under *roots*.
+    """(Re)seed the ``disk`` source of the skill index from the ``SKILL.md``
+    files under *roots*. Returns the number of disk skills indexed.
 
-    Returns the number of skills indexed. ``rebuild_index`` is safe here because
-    in this slice the index holds only disk-authored skills; agent-emitted
-    skills (a later slice) will introduce a source column before they share it.
+    Uses ``replace_disk_skills`` so re-seeding on boot/reload refreshes the
+    human-authored skills without clobbering agent-``emitted`` ones.
     """
     artifacts = load_skills_from_disk(roots)
     try:
-        index.rebuild_index(artifacts)
+        index.replace_disk_skills(artifacts)
     except Exception as exc:  # noqa: BLE001 — seeding must never be fatal
         log.warning("[skills] index seed failed: %s", exc)
         return 0

@@ -230,9 +230,14 @@ class SkillCurator:
     # ── Loading / saving ───────────────────────────────────────────────────────
 
     def _load_index(self) -> list[dict]:
-        """Load every skill from the live SQLite index as curator dicts."""
-        skills = self._get_index().all_skills()
-        log.info("[curator] loaded %d skills from %s", len(skills), self.db_path)
+        """Load curatable skills from the live SQLite index.
+
+        Disk-sourced skills (human-authored SKILL.md) are pinned — they're
+        re-seeded from disk each boot, so the curator must not decay/dedupe/
+        prune them. Only agent-``emitted`` skills are curated.
+        """
+        skills = [s for s in self._get_index().all_skills() if s.get("source") != "disk"]
+        log.info("[curator] loaded %d curatable skill(s) from %s", len(skills), self.db_path)
         return skills
 
     def _save_index(self, kept: list[dict]) -> None:
@@ -245,6 +250,10 @@ class SkillCurator:
         kept_by_id = {s["id"]: s for s in kept if s.get("id") is not None}
         deleted = 0
         for current in index.all_skills():
+            # Never delete pinned disk skills — they aren't curated and aren't
+            # in *kept* (see _load_index), so they'd otherwise be reaped here.
+            if current.get("source") == "disk":
+                continue
             if current["id"] not in kept_by_id:
                 index.delete_skill(current["id"])
                 deleted += 1
