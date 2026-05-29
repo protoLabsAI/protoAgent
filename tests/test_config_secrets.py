@@ -93,6 +93,18 @@ def test_from_yaml_overlays_secrets_file(tmp_path: Path) -> None:
     assert cfg.auth_token == "bearer-overlay"
 
 
+def test_live_config_dir_honors_env_override(monkeypatch, tmp_path: Path) -> None:
+    # The desktop sidecar points PROTOAGENT_CONFIG_DIR at a writable app-data
+    # dir so a read-only frozen binary can still persist setup.
+    from graph import config_io
+
+    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(tmp_path / "appdata"))
+    assert config_io._live_config_dir() == tmp_path / "appdata"
+
+    monkeypatch.delenv("PROTOAGENT_CONFIG_DIR", raising=False)
+    assert config_io._live_config_dir() == config_io._BUNDLE_CONFIG_DIR
+
+
 def test_from_yaml_without_secrets_leaves_blank_for_env_fallback(tmp_path: Path) -> None:
     # No secrets.yaml and a blank YAML key → config stays "" so create_llm /
     # set_a2a_token fall back to OPENAI_API_KEY / A2A_AUTH_TOKEN.
