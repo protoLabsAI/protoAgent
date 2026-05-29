@@ -708,6 +708,7 @@ export function App() {
                 </div>
                 <StatusPill label={subagentBusy ? "running" : "ready"} tone={subagentBusy ? "warning" : "muted"} />
               </div>
+              <div className="stage-body">
               <div className="subagent-mode segmented">
                 <button type="button" className={subagentMode === "single" ? "active" : ""} onClick={() => setSubagentMode("single")}>
                   Single
@@ -809,6 +810,7 @@ export function App() {
                 </button>
               </div>
               {subagentOutput ? <pre className="output-block">{subagentOutput}</pre> : null}
+              </div>
             </section>
           ) : null}
 
