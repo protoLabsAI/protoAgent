@@ -1130,11 +1130,22 @@ def _main():
     import gradio as gr
     import uvicorn
     from fastapi import FastAPI, Request
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
     fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=(
+            r"^(tauri://localhost|http://tauri\.localhost|"
+            r"https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
+        ),
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=True,
+    )
 
     # --- React operator-console API ----------------------------------------
     from graph.config_io import is_setup_complete as _operator_setup_complete

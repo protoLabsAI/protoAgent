@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/desktop"
   ],
   "scripts": {
     "docs:dev": "vitepress dev docs",
@@ -11,7 +12,9 @@
     "docs:preview": "vitepress preview docs",
     "web:dev": "npm --workspace @protoagent/web run dev",
     "web:build": "npm --workspace @protoagent/web run build",
-    "web:preview": "npm --workspace @protoagent/web run preview"
+    "web:preview": "npm --workspace @protoagent/web run preview",
+    "desktop:dev": "npm --workspace @protoagent/desktop run dev",
+    "desktop:build": "npm --workspace @protoagent/desktop run build"
   },
   "devDependencies": {
     "vitepress": "^1.6.4"

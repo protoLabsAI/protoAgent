@@ -42,6 +42,29 @@ type A2AFrame = {
   };
 };
 
+function defaultApiBase() {
+  if (typeof window === "undefined") return "";
+  let savedBase = "";
+  try {
+    savedBase = window.localStorage.getItem("protoagent.apiBase") || "";
+  } catch {
+    savedBase = "";
+  }
+  if (savedBase) return savedBase.replace(/\/$/, "");
+
+  const { hostname, protocol } = window.location;
+  if (protocol === "tauri:" || protocol === "file:" || hostname === "tauri.localhost") {
+    return "http://127.0.0.1:7870";
+  }
+  return "";
+}
+
+function apiUrl(path: string) {
+  if (/^https?:\/\//.test(path)) return path;
+  const base = defaultApiBase();
+  return base ? `${base}${path.startsWith("/") ? path : `/${path}`}` : path;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   let body: BodyInit | undefined;
@@ -50,7 +73,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     headers,
     body,
@@ -200,7 +223,7 @@ export const api = {
     } = {},
   ) {
     const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const response = await fetch("/a2a", {
+    const response = await fetch(apiUrl("/a2a"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: handlers.signal,
