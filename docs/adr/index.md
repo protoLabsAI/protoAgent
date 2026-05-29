@@ -9,4 +9,4 @@ decision, numbered, never deleted (supersede instead).
 
 | # | Title | Status |
 |---|---|---|
-| [0001](./0001-extensibility-and-plugin-architecture.md) | Extensibility & Plugin Architecture | Proposed |
+| [0001](./0001-extensibility-and-plugin-architecture.md) | Extensibility & Plugin Architecture | Accepted |

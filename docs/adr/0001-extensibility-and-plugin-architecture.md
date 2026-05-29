@@ -1,15 +1,15 @@
 # ADR 0001 — Extensibility & Plugin Architecture
 
-- **Status:** Proposed (exploratory — no implementation commitment)
+- **Status:** Accepted (2026-05-29) — execution underway, slice by slice
 - **Date:** 2026-05-29
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, extensibility, plugins, skills, tools, mcp, marketplace, security
 - **Supersedes / Superseded by:** —
 
-> This ADR is a thought experiment. It records the decision *space* for making
-> protoAgent user-extensible (tools, subagents, skills, personas) and a
-> recommended direction, so a future build starts from a considered baseline
-> rather than ad-hoc. Nothing here is scheduled or built.
+> Accepted. This ADR records the decision to make protoAgent user-extensible
+> (tools, subagents, skills, personas) by adopting the converging standards
+> (AgentSkills, MCP) over bespoke formats, delivered in independently-shippable
+> slices. Progress: Slice 1 (`SKILL.md` skills) landed; Slice 2 (MCP client) next.
 
 ---
 
