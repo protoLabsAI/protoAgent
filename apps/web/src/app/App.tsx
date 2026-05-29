@@ -12,16 +12,15 @@ import {
   Play,
   RefreshCw,
   Save,
-  Send,
   Settings2,
   Sparkles,
-  TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { ChatSurface } from "../chat/ChatSurface";
 import { api } from "../lib/api";
-import type { BeadsIssue, ChatMessage, NotesWorkspace, RuntimeStatus, Subagent } from "../lib/types";
+import type { BeadsIssue, NotesWorkspace, RuntimeStatus, Subagent } from "../lib/types";
 import { SetupWizard } from "../setup/SetupWizard";
 
 type Surface = "chat" | "subagents" | "runtime";
@@ -69,10 +68,6 @@ export function App() {
   const [beadsReady, setBeadsReady] = useState<boolean | null>(null);
   const [status, setStatus] = useState("ready");
   const [error, setError] = useState("");
-
-  const [chatDraft, setChatDraft] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatBusy, setChatBusy] = useState(false);
 
   const [subagentType, setSubagentType] = useState("researcher");
   const [subagentDescription, setSubagentDescription] = useState("");
@@ -131,26 +126,6 @@ export function App() {
   useEffect(() => {
     void refreshAll();
   }, []);
-
-  async function sendChat() {
-    const message = chatDraft.trim();
-    if (!message || chatBusy) return;
-    setChatBusy(true);
-    setError("");
-    setChatDraft("");
-    setChatMessages((items) => [...items, { role: "user", content: message }]);
-    try {
-      const response = await api.chat(message, sessionId);
-      setChatMessages((items) => [
-        ...items,
-        { role: "assistant", content: response.response || "(no response)" },
-      ]);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setChatBusy(false);
-    }
-  }
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -315,48 +290,7 @@ export function App() {
           ) : null}
 
           {surface === "chat" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <div>
-                  <h1>Chat</h1>
-                  <p className="panel-kicker">{sessionId}</p>
-                </div>
-                <StatusPill label={chatBusy ? "running" : "idle"} tone={chatBusy ? "warning" : "muted"} />
-              </div>
-              <div className="message-list">
-                {chatMessages.length === 0 ? (
-                  <div className="empty-state">
-                    <TerminalSquare size={18} />
-                    <span>No messages in this session.</span>
-                  </div>
-                ) : (
-                  chatMessages.map((message, index) => (
-                    <article className={`message message-${message.role}`} key={`${message.role}-${index}`}>
-                      <div className="message-role">{message.role}</div>
-                      <div className="message-body">{message.content}</div>
-                    </article>
-                  ))
-                )}
-              </div>
-              <form
-                className="composer"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void sendChat();
-                }}
-              >
-                <textarea
-                  value={chatDraft}
-                  onChange={(event) => setChatDraft(event.target.value)}
-                  placeholder="Message protoAgent"
-                  rows={3}
-                />
-                <button className="primary-button" type="submit" disabled={!chatDraft.trim() || chatBusy}>
-                  {chatBusy ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-                  Send
-                </button>
-              </form>
-            </section>
+            <ChatSurface onError={setError} />
           ) : null}
 
           {surface === "subagents" ? (
