@@ -15,6 +15,25 @@ from pathlib import Path
 
 import yaml
 
+# Secrets (model API key, A2A bearer) live in an untracked ``secrets.yaml``
+# sibling of the main config, never in the tracked YAML. See graph/config_io
+# for the write side. ``from_yaml`` overlays them below; both still fall back
+# to env (OPENAI_API_KEY / A2A_AUTH_TOKEN) when the file is absent, so
+# infisical/env-injected deployments are unaffected.
+SECRETS_FILENAME = "secrets.yaml"
+
+
+def _load_secrets_doc(config_dir: Path) -> dict:
+    """Load the untracked secrets overlay sitting next to the config YAML."""
+    secrets_path = config_dir / SECRETS_FILENAME
+    if not secrets_path.exists():
+        return {}
+    try:
+        with open(secrets_path) as f:
+            return yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
 
 @dataclass
 class SubagentDef:
@@ -195,6 +214,8 @@ class LangGraphConfig:
         with open(p) as f:
             data = yaml.safe_load(f) or {}
 
+        secrets = _load_secrets_doc(p.parent)
+
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -204,11 +225,17 @@ class LangGraphConfig:
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
 
+        # Secret overlay wins when present; otherwise the (now secret-free)
+        # main YAML value, otherwise the dataclass default — and a blank
+        # value still lets create_llm / set_a2a_token fall back to env.
+        secret_api_key = secrets.get("model", {}).get("api_key")
+        secret_auth_token = secrets.get("auth", {}).get("token")
+
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
             model_name=model.get("name", cls.model_name),
             api_base=model.get("api_base", cls.api_base),
-            api_key=model.get("api_key", cls.api_key),
+            api_key=secret_api_key or model.get("api_key", cls.api_key),
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
             max_iterations=model.get("max_iterations", cls.max_iterations),
@@ -256,7 +283,7 @@ class LangGraphConfig:
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
-            auth_token=auth.get("token", cls.auth_token),
+            auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
         )

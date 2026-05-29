@@ -134,11 +134,13 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
+    # Secrets are redacted out of the UI-facing dict.
+    assert d["model"]["api_key"] == ""
+    assert d["auth"]["token"] == ""
     assert d["subagents"]["researcher"]["tools"] == list(cfg.researcher.tools)
     assert d["middleware"]["audit"] == cfg.audit_middleware
     assert d["knowledge"]["top_k"] == cfg.knowledge_top_k
     assert d["identity"]["name"] == cfg.identity_name
-    assert d["auth"]["token"] == cfg.auth_token
     assert d["runtime"]["autostart_on_boot"] == cfg.autostart_on_boot
     assert d["operator"]["allowed_dirs"] == list(cfg.operator_allowed_dirs)
 

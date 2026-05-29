@@ -6,6 +6,10 @@ __pycache__/
 .venv-*/
 venv/
 
+# Secrets overlay — the wizard/drawer write the model API key + A2A bearer
+# here instead of the tracked config YAML. Never commit it.
+config/secrets.yaml
+
 # Local-run artifacts — autostart stdout/stderr logs + memory middleware
 # fallback directory when /sandbox is not available.
 logs/

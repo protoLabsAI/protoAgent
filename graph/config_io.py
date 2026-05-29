@@ -40,6 +40,19 @@ CONFIG_YAML_PATH = REPO_ROOT / "config" / "langgraph-config.yaml"
 SOUL_SOURCE_PATH = REPO_ROOT / "config" / "SOUL.md"
 SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 
+# Secrets overlay. The setup wizard / drawer collect a model API key and an
+# A2A bearer token; persisting those into the tracked config YAML means every
+# configured checkout carries credentials in git. Instead they live in this
+# untracked sibling file (gitignored + dockerignored), read back by
+# ``LangGraphConfig.from_yaml`` and stripped from the main YAML on every save.
+SECRETS_YAML_PATH = CONFIG_YAML_PATH.parent / "secrets.yaml"
+
+# (section, key) pairs that must never be written to the tracked YAML.
+SECRET_PATHS: tuple[tuple[str, str], ...] = (
+    ("model", "api_key"),
+    ("auth", "token"),
+)
+
 # Setup wizard state.
 # Presence of this (empty) marker file = wizard has been run and the
 # server should boot straight into the chat UI. Absence = show the
@@ -111,13 +124,19 @@ def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
 def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     """Serialize a LangGraphConfig into the nested dict shape the UI
     works with. Mirrors the YAML schema so round-tripping is trivial.
+
+    Secret fields (model API key, A2A bearer) are redacted to ``""`` — the
+    UI never needs the value back, only whether one is set (runtime status
+    carries that as a boolean). Combined with the blank-means-unchanged save
+    semantics in ``split_secret_updates``, a save that echoes the blank back
+    leaves the stored secret intact.
     """
     return {
         "model": {
             "provider": config.model_provider,
             "name": config.model_name,
             "api_base": config.api_base,
-            "api_key": config.api_key,
+            "api_key": "",
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "max_iterations": config.max_iterations,
@@ -145,7 +164,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "operator": config.identity_operator,
         },
         "auth": {
-            "token": config.auth_token,
+            "token": "",
         },
         "runtime": {
             "autostart_on_boot": config.autostart_on_boot,
@@ -179,6 +198,98 @@ def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
             else:
                 doc[section][key] = val
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Secrets overlay
+# ---------------------------------------------------------------------------
+
+
+def split_secret_updates(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a UI config dict into (non-secret, secret) halves.
+
+    Secret fields (``SECRET_PATHS``) are pulled out of the returned
+    non-secret dict so they never reach the tracked YAML. Only *non-blank*
+    secret values are routed to the secret half — a blank value means "leave
+    the stored secret unchanged" (the UI sends blank when the user didn't
+    re-enter a key), so it's dropped entirely rather than clobbering.
+    """
+    import copy
+
+    main = copy.deepcopy(config)
+    secrets: dict[str, Any] = {}
+    for section, key in SECRET_PATHS:
+        sect = main.get(section)
+        if not isinstance(sect, dict) or key not in sect:
+            continue
+        value = sect.pop(key)
+        if isinstance(value, str) and value.strip():
+            secrets.setdefault(section, {})[key] = value.strip()
+        # Drop the section entirely if popping the secret emptied it, so we
+        # don't write an empty `auth: {}` block to the main YAML.
+        if not sect:
+            main.pop(section, None)
+    return main, secrets
+
+
+def strip_secrets_from_doc(doc: Any) -> Any:
+    """Remove any secret keys already present in the main YAML document.
+
+    Belt-and-suspenders alongside ``split_secret_updates``: even if an older
+    YAML still carries an ``api_key`` (or a hand-edit reintroduces one), every
+    save scrubs it so the tracked file converges to secret-free.
+    """
+    for section, key in SECRET_PATHS:
+        sect = doc.get(section) if hasattr(doc, "get") else None
+        if isinstance(sect, dict) and key in sect:
+            del sect[key]
+        if isinstance(sect, dict) and not sect:
+            try:
+                del doc[section]
+            except (KeyError, TypeError):
+                pass
+    return doc
+
+
+def load_secrets() -> dict[str, Any]:
+    """Load the untracked secrets overlay (empty dict if absent/unreadable)."""
+    if not SECRETS_YAML_PATH.exists():
+        return {}
+    import yaml as _yaml
+
+    try:
+        with open(SECRETS_YAML_PATH) as f:
+            data = _yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except (OSError, _yaml.YAMLError):
+        return {}
+
+
+def save_secrets(secret_updates: dict[str, Any]) -> None:
+    """Merge non-blank secret updates into the untracked secrets file.
+
+    Written with mode 0600 (owner-only). Merges rather than overwrites so a
+    save that only changes the API key doesn't drop a stored bearer token.
+    """
+    if not secret_updates:
+        return
+    import os
+    import yaml as _yaml
+
+    current = load_secrets()
+    for section, values in secret_updates.items():
+        if not isinstance(values, dict):
+            continue
+        dest = current.setdefault(section, {})
+        for key, val in values.items():
+            dest[key] = val
+
+    SECRETS_YAML_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SECRETS_YAML_PATH.with_suffix(".yaml.tmp")
+    with open(tmp, "w") as f:
+        _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, SECRETS_YAML_PATH)
 
 
 def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
