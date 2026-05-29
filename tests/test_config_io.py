@@ -202,6 +202,47 @@ def test_from_yaml_operator_allowed_dirs_defaults_empty(tmp_path: Path) -> None:
     assert cfg.operator_allowed_dirs == []
 
 
+# ── ensure_live_config (template → live bootstrap) ───────────────────────────
+
+
+def test_ensure_live_config_seeds_from_example(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    example = tmp_path / "langgraph-config.example.yaml"
+    live = tmp_path / "langgraph-config.yaml"
+    example.write_text("model:\n  name: from-template\n")
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+
+    assert config_io.ensure_live_config() is True
+    assert live.exists()
+    assert live.read_text() == example.read_text()
+
+
+def test_ensure_live_config_does_not_clobber_existing(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    example = tmp_path / "langgraph-config.example.yaml"
+    live = tmp_path / "langgraph-config.yaml"
+    example.write_text("model:\n  name: from-template\n")
+    live.write_text("model:\n  name: user-edited\n")
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+
+    assert config_io.ensure_live_config() is False
+    assert "user-edited" in live.read_text()  # untouched
+
+
+def test_ensure_live_config_noop_without_example(monkeypatch, tmp_path: Path) -> None:
+    from graph import config_io
+
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", tmp_path / "absent.example.yaml")
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", tmp_path / "langgraph-config.yaml")
+
+    assert config_io.ensure_live_config() is False
+    assert not (tmp_path / "langgraph-config.yaml").exists()
+
+
 # ── SOUL.md dual-path ────────────────────────────────────────────────────────
 
 

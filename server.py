@@ -91,9 +91,11 @@ def _init_langgraph_agent():
     global _graph, _graph_config, _checkpointer, _knowledge_store
 
     from graph.config import LangGraphConfig
-    from graph.config_io import is_setup_complete
+    from graph.config_io import ensure_live_config, is_setup_complete
     from langgraph.checkpoint.memory import MemorySaver
 
+    # Seed the untracked live config from the .example template on first run.
+    ensure_live_config()
     config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
     _graph_config = LangGraphConfig.from_yaml(config_path)
     _checkpointer = MemorySaver()
@@ -303,8 +305,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
-    from graph.config_io import is_setup_complete
+    from graph.config_io import ensure_live_config, is_setup_complete
 
+    ensure_live_config()
     config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
     try:
         new_config = LangGraphConfig.from_yaml(config_path)

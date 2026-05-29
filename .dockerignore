@@ -32,6 +32,9 @@ venv/
 .env
 .env.*
 config/secrets.yaml
+# Live config is generated from the .example template at runtime in the
+# config volume — never bake a developer's local copy into the image.
+config/langgraph-config.yaml
 
 # Tests — not needed at runtime; image stays lean
 tests/

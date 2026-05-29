@@ -36,7 +36,12 @@ from graph.config import LangGraphConfig
 log = logging.getLogger("protoagent.config_io")
 
 REPO_ROOT = Path(__file__).parent.parent
+# Live runtime config — untracked, per-deployment. Generated from the tracked
+# ``.example`` template on first run (see ``ensure_live_config``) and rewritten
+# by the wizard/drawer. Keeping it out of git means setup edits never dirty a
+# tracked file; the template carries the shipped defaults + comments.
 CONFIG_YAML_PATH = REPO_ROOT / "config" / "langgraph-config.yaml"
+CONFIG_EXAMPLE_PATH = REPO_ROOT / "config" / "langgraph-config.example.yaml"
 SOUL_SOURCE_PATH = REPO_ROOT / "config" / "SOUL.md"
 SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 
@@ -81,6 +86,28 @@ except ImportError:
     _HAS_RUAMEL = False
 
 
+def ensure_live_config() -> bool:
+    """Seed the live config from the tracked ``.example`` template on first run.
+
+    The live ``langgraph-config.yaml`` is untracked, so a fresh clone / a new
+    container volume won't have one. Copy the template (comments + shipped
+    defaults intact) into place when it's missing. Idempotent — does nothing
+    once the live file exists, so wizard/drawer edits are never clobbered.
+    Returns True only when it created the file.
+    """
+    if CONFIG_YAML_PATH.exists() or not CONFIG_EXAMPLE_PATH.exists():
+        return False
+    import shutil
+
+    CONFIG_YAML_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(CONFIG_EXAMPLE_PATH, CONFIG_YAML_PATH)
+    log.info(
+        "[config] seeded live config %s from %s",
+        CONFIG_YAML_PATH, CONFIG_EXAMPLE_PATH.name,
+    )
+    return True
+
+
 def load_yaml_doc(path: Path = CONFIG_YAML_PATH) -> Any:
     """Load the config YAML as a mutable document.
 
@@ -89,6 +116,8 @@ def load_yaml_doc(path: Path = CONFIG_YAML_PATH) -> Any:
     comments are lost on next save (a warning is logged once per
     save so the operator knows).
     """
+    if path == CONFIG_YAML_PATH:
+        ensure_live_config()
     if not path.exists():
         return {} if not _HAS_RUAMEL else _ruamel.load("{}\n")
 
