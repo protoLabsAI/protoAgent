@@ -66,6 +66,9 @@ _graph_config = None   # LangGraphConfig
 _checkpointer = None   # MemorySaver for session persistence
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
+_mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
+_mcp_tools = []          # MCP-server tools appended to the active graph.
+_mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
 _active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
@@ -90,6 +93,7 @@ def _init_langgraph_agent():
     provide them, then triggers a reload.
     """
     global _graph, _graph_config, _checkpointer, _knowledge_store, _skills_index
+    global _mcp_clients, _mcp_tools, _mcp_meta
 
     from graph.config import LangGraphConfig
     from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
@@ -124,6 +128,10 @@ def _init_langgraph_agent():
     # KnowledgeMiddleware retrieves + injects them at inference.
     _skills_index = _build_skills_index(_graph_config)
 
+    # MCP — external Model Context Protocol servers; their tools become agent
+    # tools (namespaced <server>__<tool>). Off unless mcp.enabled.
+    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(_graph_config)
+
     # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
     # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
     # vars are set. Both backends share the same agent-tool surface
@@ -133,7 +141,7 @@ def _init_langgraph_agent():
 
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
-        skills_index=_skills_index,
+        skills_index=_skills_index, extra_tools=_mcp_tools,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -211,6 +219,25 @@ def _build_skills_index(config):
     except Exception as exc:  # noqa: BLE001 — skills are optional, never fatal
         log.warning("[skills] index init failed: %s; running without SKILL.md skills", exc)
         return None
+
+
+def _build_mcp(config):
+    """Discover tools from configured MCP servers. Returns (clients, tools, meta).
+
+    Best-effort and per-server isolated (see tools/mcp_tools.build_mcp_tools):
+    a bad/unreachable server is logged and skipped, never fatal. Returns empty
+    lists when MCP is disabled.
+    """
+    try:
+        from tools.mcp_tools import build_mcp_tools
+
+        clients, tools, meta = build_mcp_tools(config)
+        if tools:
+            log.info("[mcp] %d tool(s) from %d server(s)", len(tools), len(meta))
+        return clients, tools, meta
+    except Exception as exc:  # noqa: BLE001 — MCP is optional, never fatal
+        log.warning("[mcp] init failed: %s; running without MCP tools", exc)
+        return [], [], []
 
 
 def _resolve_skills_db(configured: str) -> str:
@@ -362,6 +389,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     is nothing to hot-swap yet.
     """
     global _graph, _graph_config, _knowledge_store, _skills_index
+    global _mcp_clients, _mcp_tools, _mcp_meta
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
@@ -409,13 +437,15 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     new_store = None
     new_skills = None
+    new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
             new_skills = _build_skills_index(new_config)
+            new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
-                skills_index=new_skills,
+                skills_index=new_skills, extra_tools=new_mcp_tools,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -430,6 +460,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     _graph_config = new_config
     _knowledge_store = new_store
     _skills_index = new_skills
+    _mcp_clients, _mcp_tools, _mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
     try:
         from a2a_handler import set_a2a_token
 
@@ -1270,6 +1301,11 @@ def _main():
             cache_warmer=_cache_warmer,
             goal_controller=_goal_controller,
             skills_index=_skills_index,
+            mcp={
+                "enabled": bool(getattr(_graph_config, "mcp_enabled", False)) if _graph_config else False,
+                "servers": _mcp_meta,
+                "tool_count": len(_mcp_tools),
+            },
         )
 
     def _operator_subagent_list():

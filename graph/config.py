@@ -187,6 +187,16 @@ class LangGraphConfig:
     skills_top_k: int = 5
     skills_dir: str = ""
 
+    # MCP — Model Context Protocol client. Connect to external MCP servers
+    # (stdio or streamable-HTTP); their tools become agent tools, namespaced
+    # ``<server>__<tool>`` so they can't shadow core tools. OFF by default —
+    # configuring a server is the opt-in. ``servers`` entries are
+    # ``{name, transport, command/args/env | url/headers}``. See tools/mcp_tools.py.
+    mcp_enabled: bool = False
+    mcp_servers: list[dict] = field(default_factory=list)
+    mcp_timeout_seconds: float = 20.0
+    mcp_denylist: list[str] = field(default_factory=list)
+
     # Identity — captured by the setup wizard, editable via the drawer.
     # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
     # the YAML value wins when both are set so per-fork customization
@@ -232,6 +242,7 @@ class LangGraphConfig:
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
         skills = data.get("skills", {})
+        mcp = data.get("mcp", {})
         identity = data.get("identity", {})
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
@@ -297,6 +308,10 @@ class LangGraphConfig:
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),
             skills_dir=skills.get("dir", cls.skills_dir),
+            mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
+            mcp_servers=list(mcp.get("servers", []) or []),
+            mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
+            mcp_denylist=list(mcp.get("denylist", []) or []),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),

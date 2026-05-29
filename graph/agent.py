@@ -407,9 +407,14 @@ def create_agent_graph(
     knowledge_store=None,
     scheduler=None,
     skills_index=None,
+    extra_tools=None,
     include_subagents: bool = True,
 ):
     """Create the protoAgent LangGraph agent.
+
+    ``extra_tools`` are additional LangChain tools to expose to the lead agent
+    (e.g. MCP-server tools discovered at startup). Appended before subagent /
+    middleware assembly so they're in the tool map and visible to the model.
 
     Returns a compiled graph that can be invoked with:
         graph.ainvoke({"messages": [HumanMessage(content="...")]})
@@ -417,6 +422,9 @@ def create_agent_graph(
     llm = create_llm(config)
 
     all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+
+    if extra_tools:
+        all_tools.extend(extra_tools)
 
     if include_subagents:
         all_tools.extend(_build_task_tools(config, all_tools))

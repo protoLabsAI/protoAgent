@@ -275,6 +275,19 @@ Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) forma
 
 Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.
 
+## `mcp`
+
+Connect external [Model Context Protocol](../guides/mcp.md) servers; their tools become agent tools (namespaced `<server>__<tool>`). Off by default — adding a server is the opt-in. Built on `langchain-mcp-adapters`.
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Connect the configured servers and expose their tools. |
+| `timeout_seconds` | `20` | Per-server discovery timeout. A slow/unreachable server is skipped, never fatal. |
+| `denylist` | `[]` | Namespaced tool names to drop (e.g. `filesystem__write_file`). |
+| `servers` | `[]` | List of `{name, transport, …}`. `stdio` → `command`/`args`/`env`/`cwd`; `streamable_http`/`sse` → `url`/`headers`. |
+
+Servers are discovered at startup/reload. `GET /api/runtime/status` reports `mcp.servers` and `mcp.tool_count`. See the [MCP guide](../guides/mcp.md) and `examples/mcp/echo_server.py`.
+
 ## Scheduler
 
 Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.

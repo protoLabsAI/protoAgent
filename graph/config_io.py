@@ -220,6 +220,12 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "top_k": config.skills_top_k,
             "dir": config.skills_dir,
         },
+        "mcp": {
+            "enabled": config.mcp_enabled,
+            "servers": list(config.mcp_servers),
+            "timeout_seconds": config.mcp_timeout_seconds,
+            "denylist": list(config.mcp_denylist),
+        },
         "identity": {
             "name": config.identity_name,
             "operator": config.identity_operator,
