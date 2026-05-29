@@ -58,8 +58,9 @@ The bundled scheduler is enabled by default. See [Schedule future work](/guides/
 
 | Variable | Default | What |
 |---|---|---|
-| `WORKSTACEAN_API_BASE` | (unset) | When set together with `WORKSTACEAN_API_KEY`, swaps the bundled `LocalScheduler` for the `WorkstaceanScheduler` HTTP adapter. |
-| `WORKSTACEAN_API_KEY` | (unset) | Auth token sent as `X-API-Key` to Workstacean's `/publish`. |
+| `SCHEDULER_BACKEND` | `local` | Set to `workstacean` to **opt in** to the remote `WorkstaceanScheduler` (also requires the `WORKSTACEAN_*` vars below). Any other value / unset → the bundled `LocalScheduler`. |
+| `WORKSTACEAN_API_BASE` | (unset) | Workstacean base URL. Used only when `SCHEDULER_BACKEND=workstacean`; on its own it no longer switches the backend. |
+| `WORKSTACEAN_API_KEY` | (unset) | Auth token sent as `X-API-Key` to Workstacean's `/publish`. Required (with the base) when opting in to Workstacean. |
 | `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
 | `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |

@@ -31,6 +31,12 @@ class NotesSaveRequest(BaseModel):
     workspace: dict[str, Any]
 
 
+class ScheduleAddRequest(BaseModel):
+    prompt: str
+    schedule: str  # 5-field cron expression OR an ISO-8601 datetime
+    job_id: str | None = None
+
+
 class BeadsInitRequest(BaseModel):
     project_path: str
     prefix: str | None = None
@@ -86,6 +92,9 @@ def register_operator_routes(
     beads_service: BeadsService | None = None,
     notes_service: NotesService | None = None,
     allowed_dirs: Callable[[], list[str]] | None = None,
+    scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -191,3 +200,34 @@ def register_operator_routes(
             return await asyncio.to_thread(beads.delete, project_path, issue_id)
         except Exception as exc:
             raise _http_error(exc) from exc
+
+    # --- Scheduler -----------------------------------------------------------
+    # Registered only when the accessors are wired (server.py passes them over
+    # the live scheduler backend). Lets the console list/create/cancel the jobs
+    # the agent would otherwise only reach through its schedule_* tools.
+    if scheduler_list is not None:
+
+        @app.get("/api/scheduler/jobs")
+        async def _scheduler_jobs():
+            try:
+                return await scheduler_list()
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if scheduler_add is not None:
+
+        @app.post("/api/scheduler/jobs")
+        async def _scheduler_add(req: ScheduleAddRequest):
+            try:
+                return {"job": await scheduler_add(_model_payload(req))}
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if scheduler_cancel is not None:
+
+        @app.delete("/api/scheduler/jobs/{job_id}")
+        async def _scheduler_cancel(job_id: str):
+            try:
+                return await scheduler_cancel(job_id)
+            except Exception as exc:
+                raise _http_error(exc) from exc
