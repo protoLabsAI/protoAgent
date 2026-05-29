@@ -17,6 +17,7 @@ def build_runtime_status(
     cache_warmer: Any = None,
     goal_controller: Any = None,
     skills_index: Any = None,
+    mcp: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -35,6 +36,8 @@ def build_runtime_status(
         except Exception:  # noqa: BLE001 — status must never raise
             skill_count = 0
 
+    mcp_block = mcp or {"enabled": False, "servers": [], "tool_count": 0}
+
     if config is None:
         return {
             "setup_complete": bool(setup_complete),
@@ -45,6 +48,7 @@ def build_runtime_status(
             "middleware": {},
             "knowledge": {"enabled": False, "configured_path": None, "resolved_path": None},
             "skills": {"enabled": False, "count": skill_count, "configured_path": None},
+            "mcp": mcp_block,
             "scheduler": {"enabled": False, "backend": "disabled"},
             "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
@@ -90,6 +94,7 @@ def build_runtime_status(
             "configured_path": getattr(config, "skills_db_path", None),
             "top_k": getattr(config, "skills_top_k", None),
         },
+        "mcp": mcp_block,
         "scheduler": {
             "enabled": bool(getattr(config, "scheduler_enabled", False)),
             "backend": getattr(scheduler, "name", "disabled") if scheduler else "disabled",
