@@ -280,7 +280,26 @@ export function App() {
   }
 
   useEffect(() => {
-    void refreshAll();
+    let cancelled = false;
+    (async () => {
+      // The desktop app launches the server as a bundled sidecar, which can
+      // take a few seconds to boot. Probe with backoff before the first load
+      // so the startup gap doesn't surface as an error. In browser mode the
+      // server is already up, so the first probe succeeds immediately.
+      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
+        try {
+          await api.runtimeStatus();
+          break;
+        } catch {
+          if (attempt === 0) setStatus("starting server…");
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        }
+      }
+      if (!cancelled) void refreshAll();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

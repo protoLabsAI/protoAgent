@@ -54,3 +54,8 @@ docs/.vitepress/cache/
 .automaker/knowledge.db
 .automaker/knowledge.db-*
 .beads/last-touched
+
+# Built Tauri sidecar binaries (produced by apps/desktop/sidecar/build_sidecar.py)
+apps/desktop/src-tauri/binaries/
+# PyInstaller sidecar build workdir
+/build/sidecar/

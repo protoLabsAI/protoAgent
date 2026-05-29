@@ -13,6 +13,7 @@
     "web:dev": "npm --workspace @protoagent/web run dev",
     "web:build": "npm --workspace @protoagent/web run build",
     "web:preview": "npm --workspace @protoagent/web run preview",
+    "desktop:sidecar": "python apps/desktop/sidecar/build_sidecar.py",
     "desktop:dev": "npm --workspace @protoagent/desktop run dev",
     "desktop:build": "npm --workspace @protoagent/desktop run build"
   },

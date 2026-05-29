@@ -91,13 +91,14 @@ def _init_langgraph_agent():
     global _graph, _graph_config, _checkpointer, _knowledge_store
 
     from graph.config import LangGraphConfig
-    from graph.config_io import ensure_live_config, is_setup_complete
+    from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
     from langgraph.checkpoint.memory import MemorySaver
 
     # Seed the untracked live config from the .example template on first run.
+    # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
+    # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
-    config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
-    _graph_config = LangGraphConfig.from_yaml(config_path)
+    _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
     _checkpointer = MemorySaver()
 
     if not is_setup_complete():
@@ -305,12 +306,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
-    from graph.config_io import ensure_live_config, is_setup_complete
+    from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
 
     ensure_live_config()
-    config_path = Path(__file__).parent / "config" / "langgraph-config.yaml"
     try:
-        new_config = LangGraphConfig.from_yaml(config_path)
+        new_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
     except Exception as e:
         log.exception("[reload] config load failed")
         return False, f"config load failed: {e}"
@@ -1120,8 +1120,17 @@ def _main():
     parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
+        help="Serve only the API / A2A / React console — skip the Gradio UI. "
+             "Used by the desktop sidecar (the React console is the UI there, "
+             "and Gradio is the heaviest dependency to freeze).",
+    )
     args = parser.parse_args()
     _active_port = args.port
+    headless = args.headless
 
     # Initialize observability
     import tracing
@@ -1131,18 +1140,21 @@ def _main():
 
     _init_langgraph_agent()
 
-    # Optional Gradio chat UI — comment out if your agent is headless.
-    from chat_ui import create_chat_app
-    blocks = create_chat_app(
-        chat_fn=chat,
-        title=agent_name(),
-        subtitle="protoAgent",
-        placeholder="Send a message...",
-        pwa=True,
-        settings=_build_settings_callbacks(),
-    )
+    # Optional Gradio chat UI — skipped entirely in headless mode so the
+    # frozen sidecar never imports Gradio (its biggest, PyInstaller-hostile
+    # dependency). The React console is the UI in that mode.
+    blocks = None
+    if not headless:
+        from chat_ui import create_chat_app
+        blocks = create_chat_app(
+            chat_fn=chat,
+            title=agent_name(),
+            subtitle="protoAgent",
+            placeholder="Send a message...",
+            pwa=True,
+            settings=_build_settings_callbacks(),
+        )
 
-    import gradio as gr
     import uvicorn
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
@@ -1495,14 +1507,20 @@ def _main():
 
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # --- Mount Gradio at root -----------------------------------------------
-    app = gr.mount_gradio_app(
-        fastapi_app, blocks, path="/",
-        footer_links=[],
-        favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
-    )
+    # --- Mount Gradio at root (skipped when headless) -----------------------
+    if headless:
+        app = fastapi_app
+        log.info("Starting %s (headless — no Gradio) on http://0.0.0.0:%d", agent_name(), args.port)
+    else:
+        import gradio as gr
 
-    log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
+        app = gr.mount_gradio_app(
+            fastapi_app, blocks, path="/",
+            footer_links=[],
+            favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
+        )
+        log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
+
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 
