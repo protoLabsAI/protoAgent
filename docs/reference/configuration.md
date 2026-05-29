@@ -262,6 +262,19 @@ The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 is
 
 **Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
 
+## `skills`
+
+Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) format — a folder with YAML frontmatter (`name` + `description`) and a markdown body. Loaded from disk into an FTS5 index on boot and retrieved + injected (`<learned_skills>`) at inference by `KnowledgeMiddleware`.
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `true` | Load `SKILL.md` skills and activate skill retrieval. |
+| `db_path` | `/sandbox/skills.db` | FTS5 index path. Falls back to `~/.protoagent/skills.db` when the configured path isn't writable. |
+| `top_k` | `5` | Max skills injected per turn (ranked by BM25 relevance to the message). |
+| `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` honors `PROTOAGENT_CONFIG_DIR`). |
+
+Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.
+
 ## Scheduler
 
 Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.

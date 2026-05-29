@@ -16,6 +16,7 @@ def build_runtime_status(
     scheduler: Any = None,
     cache_warmer: Any = None,
     goal_controller: Any = None,
+    skills_index: Any = None,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -26,6 +27,14 @@ def build_runtime_status(
     populate the project-path picker; the server still enforces it.
     """
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
+
+    skill_count = 0
+    if skills_index is not None:
+        try:
+            skill_count = len(skills_index.all_skills())
+        except Exception:  # noqa: BLE001 — status must never raise
+            skill_count = 0
+
     if config is None:
         return {
             "setup_complete": bool(setup_complete),
@@ -35,6 +44,7 @@ def build_runtime_status(
             "identity": None,
             "middleware": {},
             "knowledge": {"enabled": False, "configured_path": None, "resolved_path": None},
+            "skills": {"enabled": False, "count": skill_count, "configured_path": None},
             "scheduler": {"enabled": False, "backend": "disabled"},
             "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
@@ -73,6 +83,12 @@ def build_runtime_status(
             "configured_path": getattr(config, "knowledge_db_path", None),
             "resolved_path": str(getattr(knowledge_store, "path", "") or "") or None,
             "top_k": getattr(config, "knowledge_top_k", None),
+        },
+        "skills": {
+            "enabled": bool(getattr(config, "skills_enabled", False)),
+            "count": skill_count,
+            "configured_path": getattr(config, "skills_db_path", None),
+            "top_k": getattr(config, "skills_top_k", None),
         },
         "scheduler": {
             "enabled": bool(getattr(config, "scheduler_enabled", False)),

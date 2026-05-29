@@ -176,6 +176,17 @@ class LangGraphConfig:
     embed_model: str = "nomic-embed-text"
     knowledge_top_k: int = 5
 
+    # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
+    # loaded from disk into the FTS5 skill index and retrieved at inference by
+    # KnowledgeMiddleware. ``db_path`` follows the same /sandbox→~/.protoagent
+    # writable fallback as the knowledge store (resolved in server.py).
+    # ``dir`` optionally overrides the writable skills root (default:
+    # ``<config_dir>/skills``); shipped example skills live in ``config/skills``.
+    skills_enabled: bool = True
+    skills_db_path: str = "/sandbox/skills.db"
+    skills_top_k: int = 5
+    skills_dir: str = ""
+
     # Identity — captured by the setup wizard, editable via the drawer.
     # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
     # the YAML value wins when both are set so per-fork customization
@@ -220,6 +231,7 @@ class LangGraphConfig:
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
+        skills = data.get("skills", {})
         identity = data.get("identity", {})
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
@@ -281,6 +293,10 @@ class LangGraphConfig:
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
+            skills_enabled=skills.get("enabled", cls.skills_enabled),
+            skills_db_path=skills.get("db_path", cls.skills_db_path),
+            skills_top_k=skills.get("top_k", cls.skills_top_k),
+            skills_dir=skills.get("dir", cls.skills_dir),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
