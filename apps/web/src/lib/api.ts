@@ -13,6 +13,35 @@ type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
 };
 
+type A2AFrame = {
+  jsonrpc?: string;
+  id?: string;
+  result?: {
+    kind?: string;
+    id?: string;
+    taskId?: string;
+    contextId?: string;
+    status?: {
+      state?: string;
+      message?: {
+        parts?: Array<{ kind?: string; text?: string }>;
+      };
+    };
+    artifact?: {
+      parts?: Array<{ kind?: string; text?: string }>;
+    };
+    artifacts?: Array<{
+      parts?: Array<{ kind?: string; text?: string }>;
+    }>;
+    append?: boolean;
+    lastChunk?: boolean;
+    final?: boolean;
+  };
+  error?: {
+    message?: string;
+  };
+};
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   let body: BodyInit | undefined;
@@ -39,6 +68,53 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   return (await response.json()) as T;
+}
+
+function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
+  return (parts || [])
+    .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
+    .map((part) => part.text)
+    .join("");
+}
+
+function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
+  return (result.artifacts || [])
+    .flatMap((artifact) => artifact.parts || [])
+    .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
+    .map((part) => part.text)
+    .join("");
+}
+
+async function consumeSse(
+  response: Response,
+  onFrame: (frame: A2AFrame) => void,
+): Promise<void> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("streaming response has no body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+
+      const data = rawEvent
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      if (!data) continue;
+      onFrame(JSON.parse(data) as A2AFrame);
+    }
+  }
 }
 
 export const api = {
@@ -93,6 +169,78 @@ export const api = {
     return request<{ response: string; messages: ChatMessage[] }>("/api/chat", {
       method: "POST",
       body: { message, session_id: sessionId },
+    });
+  },
+
+  async streamChat(
+    message: string,
+    sessionId: string,
+    handlers: {
+      signal?: AbortSignal;
+      onTaskId?: (taskId: string) => void;
+      onStatus?: (status: string) => void;
+      onText?: (text: string, append: boolean) => void;
+      onDone?: () => void;
+    } = {},
+  ) {
+    const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const response = await fetch("/a2a", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: handlers.signal,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: rpcId,
+        method: "message/stream",
+        params: {
+          contextId: sessionId,
+          message: {
+            role: "user",
+            parts: [{ kind: "text", text: message }],
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+
+    await consumeSse(response, (frame) => {
+      if (frame.error?.message) throw new Error(frame.error.message);
+      const result = frame.result;
+      if (!result) return;
+
+      if (result.kind === "task" && result.id) {
+        handlers.onTaskId?.(result.id);
+        const terminalText = textFromTerminalTask(result);
+        if (terminalText) handlers.onText?.(terminalText, false);
+      }
+
+      if (result.kind === "status-update") {
+        const state = result.status?.state || "";
+        const messageText = textFromParts(result.status?.message?.parts);
+        handlers.onStatus?.(messageText || state);
+        if (result.final) handlers.onDone?.();
+      }
+
+      if (result.kind === "artifact-update") {
+        const text = textFromParts(result.artifact?.parts);
+        if (text) handlers.onText?.(text, result.append !== false);
+        if (result.lastChunk) handlers.onDone?.();
+      }
+    });
+  },
+
+  cancelTask(taskId: string) {
+    return request<{ result?: unknown; error?: unknown }>("/a2a", {
+      method: "POST",
+      body: {
+        jsonrpc: "2.0",
+        id: `cancel-${Date.now()}`,
+        method: "tasks/cancel",
+        params: { id: taskId },
+      },
     });
   },
 

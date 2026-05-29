@@ -49,8 +49,11 @@ export type Subagent = {
 };
 
 export type ChatMessage = {
+  id?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  createdAt?: number;
+  status?: "streaming" | "done" | "error";
 };
 
 export type NotesWorkspace = {
