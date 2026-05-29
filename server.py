@@ -342,13 +342,12 @@ def _stop_scheduler_async(backend: "SchedulerBackend") -> None:
 def _build_scheduler(config) -> "SchedulerBackend | None":
     """Return the active scheduler backend, or ``None`` when disabled.
 
-    Selection order:
-
-    1. ``WORKSTACEAN_API_BASE`` + ``WORKSTACEAN_API_KEY`` set →
-       ``WorkstaceanScheduler``. Forks running on the protoLabs fleet
-       infrastructure get this for free.
-    2. Otherwise → ``LocalScheduler`` with sqlite at
-       ``/sandbox/scheduler/<agent_name>/jobs.db``.
+    **The bundled ``LocalScheduler`` (sqlite) is the default.** The remote
+    ``WorkstaceanScheduler`` is **opt-in**: it's used only when
+    ``SCHEDULER_BACKEND=workstacean`` is set *and* ``WORKSTACEAN_API_BASE`` +
+    ``WORKSTACEAN_API_KEY`` are present. Having the Workstacean env vars alone
+    no longer switches the backend — local stays the default unless explicitly
+    opted in.
 
     Returns ``None`` when explicitly disabled via ``SCHEDULER_DISABLED=1``
     so a fork can ship without a scheduler at all.
@@ -372,21 +371,30 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         return None
 
     name = agent_name()
+    # Workstacean is opt-in: require an explicit SCHEDULER_BACKEND=workstacean,
+    # not merely the presence of the API env vars (default stays local).
+    workstacean_opt_in = os.environ.get("SCHEDULER_BACKEND", "").strip().lower() == "workstacean"
     workstacean_base = os.environ.get("WORKSTACEAN_API_BASE", "").strip()
     workstacean_key = os.environ.get("WORKSTACEAN_API_KEY", "").strip()
-    if workstacean_base and workstacean_key:
-        try:
-            from scheduler import WorkstaceanScheduler
-            return WorkstaceanScheduler(
-                agent_name=name,
-                base_url=workstacean_base,
-                api_key=workstacean_key,
-                topic_prefix=os.environ.get("WORKSTACEAN_TOPIC_PREFIX") or None,
-            )
-        except Exception as exc:
+    if workstacean_opt_in:
+        if workstacean_base and workstacean_key:
+            try:
+                from scheduler import WorkstaceanScheduler
+                return WorkstaceanScheduler(
+                    agent_name=name,
+                    base_url=workstacean_base,
+                    api_key=workstacean_key,
+                    topic_prefix=os.environ.get("WORKSTACEAN_TOPIC_PREFIX") or None,
+                )
+            except Exception as exc:
+                log.warning(
+                    "[server] WorkstaceanScheduler init failed: %s; falling back to local",
+                    exc,
+                )
+        else:
             log.warning(
-                "[server] WorkstaceanScheduler init failed: %s; falling back to local",
-                exc,
+                "[server] SCHEDULER_BACKEND=workstacean but WORKSTACEAN_API_BASE/"
+                "API_KEY missing; falling back to local scheduler",
             )
 
     try:
@@ -1392,6 +1400,38 @@ def _main():
             tasks=req.get("tasks", []),
         )
 
+    async def _operator_scheduler_list() -> dict:
+        import asyncio
+        if _scheduler is None:
+            return {"jobs": [], "backend": "disabled"}
+        jobs = await asyncio.to_thread(_scheduler.list_jobs)
+        return {
+            "jobs": [j.as_dict() for j in jobs],
+            "backend": getattr(_scheduler, "name", "local"),
+        }
+
+    async def _operator_scheduler_add(req: dict) -> dict:
+        import asyncio
+        if _scheduler is None:
+            raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+        prompt = (req.get("prompt") or "").strip()
+        schedule = (req.get("schedule") or "").strip()
+        if not prompt:
+            raise ValueError("prompt is required")
+        if not schedule:
+            raise ValueError("schedule is required")
+        job = await asyncio.to_thread(
+            _scheduler.add_job, prompt, schedule, job_id=req.get("job_id") or None
+        )
+        return job.as_dict()
+
+    async def _operator_scheduler_cancel(job_id: str) -> dict:
+        import asyncio
+        if _scheduler is None:
+            raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+        canceled = await asyncio.to_thread(_scheduler.cancel_job, job_id)
+        return {"canceled": bool(canceled)}
+
     register_operator_routes(
         fastapi_app,
         runtime_status=_operator_runtime_status,
@@ -1399,6 +1439,9 @@ def _main():
         subagent_run=_operator_subagent_run,
         subagent_batch=_operator_subagent_batch,
         allowed_dirs=_operator_allowed_dirs,
+        scheduler_list=_operator_scheduler_list,
+        scheduler_add=_operator_scheduler_add,
+        scheduler_cancel=_operator_scheduler_cancel,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

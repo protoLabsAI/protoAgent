@@ -368,3 +368,41 @@ async def test_fire_returns_bool(tmp_path, monkeypatch):
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_ErrResponse()))
     assert await s._fire(job) is False
+
+
+# ── backend selection: Workstacean is opt-in (local is the default) ──────────
+
+
+def test_workstacean_is_opt_in(monkeypatch):
+    """Workstacean env vars alone must NOT switch the backend; only an explicit
+    SCHEDULER_BACKEND=workstacean does. Otherwise the default stays local."""
+    import server
+    from graph.config import LangGraphConfig
+    from scheduler import LocalScheduler, WorkstaceanScheduler
+
+    cfg = LangGraphConfig()  # scheduler_enabled defaults True
+    monkeypatch.setenv("WORKSTACEAN_API_BASE", "https://example.com")
+    monkeypatch.setenv("WORKSTACEAN_API_KEY", "k")
+    monkeypatch.delenv("SCHEDULER_BACKEND", raising=False)
+    monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+
+    backend = server._build_scheduler(cfg)
+    assert isinstance(backend, LocalScheduler)  # env present but not opted in → local
+
+    monkeypatch.setenv("SCHEDULER_BACKEND", "workstacean")
+    backend = server._build_scheduler(cfg)
+    assert isinstance(backend, WorkstaceanScheduler)  # explicit opt-in honored
+
+
+def test_workstacean_opt_in_without_creds_falls_back_local(monkeypatch):
+    import server
+    from graph.config import LangGraphConfig
+    from scheduler import LocalScheduler
+
+    cfg = LangGraphConfig()
+    monkeypatch.setenv("SCHEDULER_BACKEND", "workstacean")
+    monkeypatch.delenv("WORKSTACEAN_API_BASE", raising=False)
+    monkeypatch.delenv("WORKSTACEAN_API_KEY", raising=False)
+    monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+
+    assert isinstance(server._build_scheduler(cfg), LocalScheduler)
