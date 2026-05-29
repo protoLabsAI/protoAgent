@@ -69,6 +69,9 @@ _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
 _mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
+_plugin_tools = []       # Tools contributed by enabled plugins.
+_plugin_skill_dirs = []  # SKILL.md dirs bundled by enabled plugins.
+_plugin_meta = []        # Per-plugin {id, name, enabled, loaded, tools, skills} for status.
 _active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
@@ -94,6 +97,7 @@ def _init_langgraph_agent():
     """
     global _graph, _graph_config, _checkpointer, _knowledge_store, _skills_index
     global _mcp_clients, _mcp_tools, _mcp_meta
+    global _plugin_tools, _plugin_skill_dirs, _plugin_meta
 
     from graph.config import LangGraphConfig
     from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
@@ -116,6 +120,7 @@ def _init_langgraph_agent():
         return
 
     from graph.agent import create_agent_graph
+    from tools.lg_tools import get_all_tools
 
     # Construct the default KnowledgeStore so memory tools (memory_ingest,
     # memory_recall, daily_log) and KnowledgeMiddleware have something to
@@ -124,14 +129,6 @@ def _init_langgraph_agent():
     # the worker subagent — the store is still cheap to construct.
     _knowledge_store = _build_knowledge_store(_graph_config)
 
-    # Skills — human-authored SKILL.md folders seeded into the FTS index;
-    # KnowledgeMiddleware retrieves + injects them at inference.
-    _skills_index = _build_skills_index(_graph_config)
-
-    # MCP — external Model Context Protocol servers; their tools become agent
-    # tools (namespaced <server>__<tool>). Off unless mcp.enabled.
-    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(_graph_config)
-
     # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
     # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
     # vars are set. Both backends share the same agent-tool surface
@@ -139,9 +136,27 @@ def _init_langgraph_agent():
     global _scheduler
     _scheduler = _build_scheduler(_graph_config)
 
+    # MCP — external Model Context Protocol servers; their tools become agent
+    # tools (namespaced <server>__<tool>). Off unless mcp.enabled.
+    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(_graph_config)
+
+    # Plugins — drop-in packages (tools + bundled skills). Loaded after the
+    # core + MCP tools so plugin tools that would shadow them are skipped.
+    _plugins = _build_plugins(
+        _graph_config,
+        existing_tools=get_all_tools(_knowledge_store, scheduler=_scheduler) + _mcp_tools,
+    )
+    _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
+        _plugins.tools, _plugins.skill_dirs, _plugins.meta,
+    )
+
+    # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
+    # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
+    _skills_index = _build_skills_index(_graph_config, extra_skill_dirs=_plugin_skill_dirs)
+
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
-        skills_index=_skills_index, extra_tools=_mcp_tools,
+        skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -187,8 +202,11 @@ def _build_knowledge_store(config):
         return None
 
 
-def _build_skills_index(config):
+def _build_skills_index(config, extra_skill_dirs=None):
     """Return a ``SkillsIndex`` seeded from on-disk ``SKILL.md`` folders, or None.
+
+    ``extra_skill_dirs`` are additional roots (e.g. skill dirs bundled by
+    enabled plugins) seeded alongside the bundle + live skill roots.
 
     Resolves a writable DB path (the configured ``/sandbox/skills.db`` →
     ``~/.protoagent/skills.db`` fallback, mirroring the knowledge store), then
@@ -213,6 +231,7 @@ def _build_skills_index(config):
             _live_config_dir() / "skills"
         )
         roots = [_BUNDLE_CONFIG_DIR / "skills", live_root]  # bundle first, live overrides
+        roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
         count = seed_skills_index(index, roots)
         log.info("[skills] indexed %d SKILL.md skill(s) into %s", count, db_path)
         return index
@@ -238,6 +257,31 @@ def _build_mcp(config):
     except Exception as exc:  # noqa: BLE001 — MCP is optional, never fatal
         log.warning("[mcp] init failed: %s; running without MCP tools", exc)
         return [], [], []
+
+
+def _build_plugins(config, existing_tools=None):
+    """Load enabled drop-in plugins. Returns the PluginLoadResult (tools +
+    bundled skill dirs + per-plugin meta). Best-effort — never fatal.
+
+    ``existing_tools`` (core + MCP tools already assembled) are passed so a
+    plugin tool that would shadow them is skipped.
+    """
+    try:
+        from graph.plugins import load_plugins
+
+        core_names = {getattr(t, "name", None) for t in (existing_tools or [])}
+        core_names.discard(None)
+        result = load_plugins(config, core_tool_names=core_names)
+        loaded = [m for m in result.meta if m.get("loaded")]
+        if loaded:
+            log.info("[plugins] loaded %d plugin(s): %s",
+                     len(loaded), ", ".join(m["id"] for m in loaded))
+        return result
+    except Exception as exc:  # noqa: BLE001 — plugins are optional, never fatal
+        log.warning("[plugins] init failed: %s; running without plugins", exc)
+        from graph.plugins.loader import PluginLoadResult
+
+        return PluginLoadResult()
 
 
 def _resolve_skills_db(configured: str) -> str:
@@ -390,10 +434,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     """
     global _graph, _graph_config, _knowledge_store, _skills_index
     global _mcp_clients, _mcp_tools, _mcp_meta
+    global _plugin_tools, _plugin_skill_dirs, _plugin_meta
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
     from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
+    from tools.lg_tools import get_all_tools
 
     ensure_live_config()
     try:
@@ -438,14 +484,22 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     new_store = None
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
+    new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
-            new_skills = _build_skills_index(new_config)
             new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(new_config)
+            new_plugins = _build_plugins(
+                new_config,
+                existing_tools=get_all_tools(new_store, scheduler=next_scheduler) + new_mcp_tools,
+            )
+            new_plugin_tools = new_plugins.tools
+            new_plugin_skill_dirs = new_plugins.skill_dirs
+            new_plugin_meta = new_plugins.meta
+            new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
-                skills_index=new_skills, extra_tools=new_mcp_tools,
+                skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -461,6 +515,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     _knowledge_store = new_store
     _skills_index = new_skills
     _mcp_clients, _mcp_tools, _mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
+    _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
+        new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta,
+    )
     try:
         from a2a_handler import set_a2a_token
 
@@ -1306,6 +1363,7 @@ def _main():
                 "servers": _mcp_meta,
                 "tool_count": len(_mcp_tools),
             },
+            plugins=_plugin_meta,
         )
 
     def _operator_subagent_list():

@@ -288,6 +288,17 @@ Connect external [Model Context Protocol](../guides/mcp.md) servers; their tools
 
 Servers are discovered at startup/reload. `GET /api/runtime/status` reports `mcp.servers` and `mcp.tool_count`. See the [MCP guide](../guides/mcp.md) and `examples/mcp/echo_server.py`.
 
+## `plugins`
+
+Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools and bundled skills. They run **in-process** with the agent's privileges, so they're **disabled by default** — only enable plugins you trust.
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `[]` | Plugin `id`s to load. A plugin also loads if its own manifest has `enabled: true`. |
+| `dir` | `""` | Override the writable plugins root (default `<config-dir>/plugins`). |
+
+Plugins load from two roots — bundled (`plugins/`, e.g. the `hello` example) and writable (`<config-dir>/plugins/`); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`). See the [Plugins guide](../guides/plugins.md).
+
 ## Scheduler
 
 Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) so the drawer can flip it without a restart. Backend **selection and runtime knobs** (which backend, where to write the sqlite, where to publish, etc.) are env-driven so the same container image can run under either backend without a rebuild. See [Schedule future work](/guides/scheduler) for the full guide.

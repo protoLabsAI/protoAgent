@@ -197,6 +197,15 @@ class LangGraphConfig:
     mcp_timeout_seconds: float = 20.0
     mcp_denylist: list[str] = field(default_factory=list)
 
+    # Plugins — drop-in packages (manifest + register()) that contribute tools
+    # and bundled skills. Run IN-PROCESS with the agent's privileges, so a
+    # plugin loads only when enabled: listed here, or ``enabled: true`` in its
+    # own manifest. ``dir`` overrides the live plugins root (default
+    # ``<config_dir>/plugins``); shipped examples live in ``plugins/``.
+    # See graph/plugins/ and docs/guides/plugins.md.
+    plugins_enabled: list[str] = field(default_factory=list)
+    plugins_dir: str = ""
+
     # Identity — captured by the setup wizard, editable via the drawer.
     # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
     # the YAML value wins when both are set so per-fork customization
@@ -243,6 +252,7 @@ class LangGraphConfig:
         knowledge = data.get("knowledge", {})
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
+        plugins = data.get("plugins", {})
         identity = data.get("identity", {})
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
@@ -312,6 +322,8 @@ class LangGraphConfig:
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
             mcp_denylist=list(mcp.get("denylist", []) or []),
+            plugins_enabled=list(plugins.get("enabled", []) or []),
+            plugins_dir=plugins.get("dir", cls.plugins_dir),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),

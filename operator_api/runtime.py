@@ -18,6 +18,7 @@ def build_runtime_status(
     goal_controller: Any = None,
     skills_index: Any = None,
     mcp: dict[str, Any] | None = None,
+    plugins: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -37,6 +38,7 @@ def build_runtime_status(
             skill_count = 0
 
     mcp_block = mcp or {"enabled": False, "servers": [], "tool_count": 0}
+    plugins_block = list(plugins or [])
 
     if config is None:
         return {
@@ -49,6 +51,7 @@ def build_runtime_status(
             "knowledge": {"enabled": False, "configured_path": None, "resolved_path": None},
             "skills": {"enabled": False, "count": skill_count, "configured_path": None},
             "mcp": mcp_block,
+            "plugins": plugins_block,
             "scheduler": {"enabled": False, "backend": "disabled"},
             "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
@@ -95,6 +98,7 @@ def build_runtime_status(
             "top_k": getattr(config, "skills_top_k", None),
         },
         "mcp": mcp_block,
+        "plugins": plugins_block,
         "scheduler": {
             "enabled": bool(getattr(config, "scheduler_enabled", False)),
             "backend": getattr(scheduler, "name", "disabled") if scheduler else "disabled",
