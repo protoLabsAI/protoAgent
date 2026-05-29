@@ -26,6 +26,7 @@ def test_runtime_status_redacts_secret_values() -> None:
         config=cfg,
         setup_complete=True,
         graph_loaded=True,
+        project_path="/tmp/protoagent",
         knowledge_store=_Store(),
         scheduler=_Scheduler(),
         cache_warmer=object(),
@@ -35,6 +36,7 @@ def test_runtime_status_redacts_secret_values() -> None:
     assert status["model"]["name"] == "protolabs/reasoning"
     assert status["model"]["api_key_configured"] is True
     assert status["model"]["api_base"] == "https://api.proto-labs.ai/v1"
+    assert status["project"]["path"] == "/tmp/protoagent"
     assert status["knowledge"]["resolved_path"] == "/tmp/protoagent/knowledge.db"
     assert status["scheduler"]["backend"] == "local"
     assert "sk-secret" not in repr(status)

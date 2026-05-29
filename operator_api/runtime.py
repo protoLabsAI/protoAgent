@@ -10,6 +10,7 @@ def build_runtime_status(
     config: Any,
     setup_complete: bool,
     graph_loaded: bool,
+    project_path: str = "",
     knowledge_store: Any = None,
     scheduler: Any = None,
     cache_warmer: Any = None,
@@ -24,6 +25,7 @@ def build_runtime_status(
         return {
             "setup_complete": bool(setup_complete),
             "graph_loaded": False,
+            "project": {"path": project_path},
             "model": None,
             "identity": None,
             "middleware": {},
@@ -36,6 +38,7 @@ def build_runtime_status(
     return {
         "setup_complete": bool(setup_complete),
         "graph_loaded": bool(graph_loaded),
+        "project": {"path": project_path},
         "model": {
             "provider": getattr(config, "model_provider", ""),
             "name": getattr(config, "model_name", ""),

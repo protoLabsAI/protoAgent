@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,7 @@ class BeadsService:
 
     def __init__(self, *, timeout_s: float = 15.0):
         self.timeout_s = timeout_s
+        self._lock = threading.Lock()
 
     def status(self, project_path: str) -> dict[str, bool]:
         result = self._run_allow_fail(project_path, ["list", "--json"])
@@ -116,15 +118,16 @@ class BeadsService:
     def _run_allow_fail(self, project_path: str, args: list[str]) -> subprocess.CompletedProcess:
         cwd = resolve_project_path(project_path)
         try:
-            return subprocess.run(
-                ["br", *args],
-                cwd=str(cwd),
-                env={**os.environ, "RUST_LOG": "error"},
-                text=True,
-                capture_output=True,
-                timeout=self.timeout_s,
-                check=False,
-            )
+            with self._lock:
+                return subprocess.run(
+                    ["br", *args],
+                    cwd=str(cwd),
+                    env={**os.environ, "RUST_LOG": "error"},
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout_s,
+                    check=False,
+                )
         except FileNotFoundError as exc:
             raise RuntimeError("`br` (beads_rust) is not installed or not on PATH") from exc
 

@@ -1162,6 +1162,7 @@ def _main():
             config=_graph_config,
             setup_complete=_operator_setup_complete(),
             graph_loaded=_graph is not None,
+            project_path=str(Path(__file__).parent.resolve()),
             knowledge_store=_knowledge_store,
             scheduler=_scheduler,
             cache_warmer=_cache_warmer,

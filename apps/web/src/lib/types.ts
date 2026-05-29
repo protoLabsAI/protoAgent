@@ -1,6 +1,9 @@
 export type RuntimeStatus = {
   setup_complete: boolean;
   graph_loaded: boolean;
+  project: {
+    path: string;
+  };
   model: null | {
     provider: string;
     name: string;
@@ -85,6 +88,9 @@ export type BeadsIssue = {
   issue_type?: string;
   type?: string;
   assignee?: string;
+  created_at?: string;
+  updated_at?: string;
+  closed_at?: string | null;
 };
 
 export type AgentConfig = {

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 from operator_api.beads import BeadsService
 
@@ -133,3 +136,28 @@ def test_beads_update_close_delete_build_commands(monkeypatch, tmp_path) -> None
         ["br", "close", "bd-1", "--json", "--reason", "done"],
         ["br", "delete", "bd-1", "--json"],
     ]
+
+
+def test_beads_service_serializes_br_calls(monkeypatch, tmp_path) -> None:
+    active = 0
+    overlapped = False
+    guard = Lock()
+
+    def fake_run(*args, **kwargs):
+        nonlocal active, overlapped
+        with guard:
+            active += 1
+            overlapped = overlapped or active > 1
+        time.sleep(0.01)
+        with guard:
+            active -= 1
+        return _completed(args[0], stdout="[]")
+
+    monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)
+
+    service = BeadsService()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: service.status(str(tmp_path)), range(6)))
+
+    assert results == [{"initialized": True}] * 6
+    assert overlapped is False
