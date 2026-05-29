@@ -9,7 +9,11 @@
 > Accepted. This ADR records the decision to make protoAgent user-extensible
 > (tools, subagents, skills, personas) by adopting the converging standards
 > (AgentSkills, MCP) over bespoke formats, delivered in independently-shippable
-> slices. Progress: Slice 1 (`SKILL.md` skills) landed; Slice 2 (MCP client) next.
+> slices. Progress: ✅ Slice 1 (`SKILL.md` skills, #251), ✅ Slice 2 (MCP client,
+> #254), ✅ agent-emitted-skill persistence (#256), ✅ Slice 4 (plugin system,
+> #258). Remaining: Slice 5 (registry/marketplace index). Slice 3's tool-registry
+> refactor was folded into the MCP/plugin `extra_tools` seam; capability
+> *enforcement* (declared-but-not-enforced today) is a follow-up.
 
 ---
 
