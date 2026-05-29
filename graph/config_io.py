@@ -150,6 +150,9 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
         "runtime": {
             "autostart_on_boot": config.autostart_on_boot,
         },
+        "operator": {
+            "allowed_dirs": list(config.operator_allowed_dirs),
+        },
     }
 
 
@@ -210,6 +213,12 @@ def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
             top_k = int(knowledge.get("top_k", 5))
             if top_k < 1:
                 return False, f"knowledge.top_k must be >= 1, got {top_k}"
+
+        operator = updates.get("operator", {})
+        if operator:
+            allowed = operator.get("allowed_dirs", [])
+            if not isinstance(allowed, list) or not all(isinstance(d, str) for d in allowed):
+                return False, "operator.allowed_dirs must be a list of strings"
     except (TypeError, ValueError) as e:
         return False, f"config validation: {e}"
     return True, ""

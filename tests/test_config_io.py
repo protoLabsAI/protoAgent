@@ -130,7 +130,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # strand fork-added fields outside the drawer's round-trip.
     assert set(d.keys()) == {
         "model", "subagents", "middleware", "knowledge",
-        "identity", "auth", "runtime",
+        "identity", "auth", "runtime", "operator",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
@@ -140,6 +140,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     assert d["identity"]["name"] == cfg.identity_name
     assert d["auth"]["token"] == cfg.auth_token
     assert d["runtime"]["autostart_on_boot"] == cfg.autostart_on_boot
+    assert d["operator"]["allowed_dirs"] == list(cfg.operator_allowed_dirs)
 
 
 # ── validate_config_dict ─────────────────────────────────────────────────────
@@ -153,6 +154,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     ({"subagents": {"researcher": {"max_turns": 0}}}, "max_turns"),
     ({"subagents": {"researcher": {"tools": "not-a-list"}}}, "list"),
     ({"knowledge": {"top_k": 0}}, "top_k"),
+    ({"operator": {"allowed_dirs": "not-a-list"}}, "allowed_dirs"),
+    ({"operator": {"allowed_dirs": [1, 2]}}, "allowed_dirs"),
 ])
 def test_validate_rejects_bad_values(bad_value, expected_error_fragment):
     from graph.config_io import validate_config_dict
@@ -167,6 +170,34 @@ def test_validate_accepts_happy_path():
 
     ok, err = validate_config_dict(config_to_dict(LangGraphConfig()))
     assert ok, err
+
+
+def test_from_yaml_reads_operator_allowed_dirs(tmp_path: Path) -> None:
+    """The operator allowlist round-trips through the YAML schema so a
+    settings reload (not just first-run setup) can change it."""
+    from graph.config import LangGraphConfig
+
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_text(
+        "operator:\n"
+        "  allowed_dirs:\n"
+        "    - /home/kj/projects/foo\n"
+        "    - /home/kj/projects/bar\n"
+    )
+    cfg = LangGraphConfig.from_yaml(p)
+    assert cfg.operator_allowed_dirs == [
+        "/home/kj/projects/foo",
+        "/home/kj/projects/bar",
+    ]
+
+
+def test_from_yaml_operator_allowed_dirs_defaults_empty(tmp_path: Path) -> None:
+    from graph.config import LangGraphConfig
+
+    p = tmp_path / "langgraph-config.yaml"
+    p.write_text("model:\n  name: test\n")
+    cfg = LangGraphConfig.from_yaml(p)
+    assert cfg.operator_allowed_dirs == []
 
 
 # ── SOUL.md dual-path ────────────────────────────────────────────────────────

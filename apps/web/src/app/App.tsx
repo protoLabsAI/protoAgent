@@ -777,7 +777,13 @@ export function App() {
               value={projectPath}
               onChange={(event) => setProjectPath(event.target.value)}
               placeholder="Project path"
+              list="operator-allowed-dirs"
             />
+            <datalist id="operator-allowed-dirs">
+              {(runtime?.project.allowed_dirs || []).map((dir) => (
+                <option key={dir} value={dir} />
+              ))}
+            </datalist>
             <button className="icon-button" type="button" onClick={() => void loadProject()} title="Load project">
               {notesBusy || beadsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
             </button>

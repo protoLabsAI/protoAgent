@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,12 @@ def create_default_workspace() -> dict[str, Any]:
 class NotesService:
     """Load/save a ProtoMaker-compatible notes workspace."""
 
+    def __init__(self, *, allowed_dirs: Callable[[], list[str]] | None = None):
+        self._allowed_dirs = allowed_dirs
+
     def workspace_path(self, project_path: str) -> Path:
-        return resolve_project_path(project_path) / ".automaker" / "notes" / "workspace.json"
+        allowed = self._allowed_dirs() if self._allowed_dirs is not None else None
+        return resolve_project_path(project_path, allowed) / ".automaker" / "notes" / "workspace.json"
 
     def load_workspace(self, project_path: str) -> dict[str, Any]:
         path = self.workspace_path(project_path)

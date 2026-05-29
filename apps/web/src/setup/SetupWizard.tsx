@@ -36,6 +36,7 @@ type WizardState = {
   researcherTurns: number;
   knowledgePath: string;
   knowledgeTopK: number;
+  allowedDirs: string;
   initBeads: boolean;
 };
 
@@ -60,6 +61,7 @@ function defaultState(): WizardState {
     researcherTurns: 40,
     knowledgePath: "/sandbox/knowledge/agent.db",
     knowledgeTopK: 5,
+    allowedDirs: "",
     initBeads: false,
   };
 }
@@ -86,6 +88,7 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
     researcherTurns: Number(config.subagents.researcher.max_turns ?? 40),
     knowledgePath: config.knowledge.db_path || "/sandbox/knowledge/agent.db",
     knowledgeTopK: Number(config.knowledge.top_k ?? 5),
+    allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
     initBeads: false,
   };
 }
@@ -221,6 +224,12 @@ export function SetupWizard({
             db_path: state.knowledgePath.trim(),
             embed_model: "nomic-embed-text",
             top_k: Number(state.knowledgeTopK),
+          },
+          operator: {
+            allowed_dirs: state.allowedDirs
+              .split("\n")
+              .map((dir) => dir.trim())
+              .filter(Boolean),
           },
         },
         state.soul,
@@ -394,6 +403,18 @@ export function SetupWizard({
                   <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
                 </label>
               </div>
+              <label className="field">
+                <span>Allowed project directories</span>
+                <textarea
+                  rows={3}
+                  value={state.allowedDirs}
+                  onChange={(event) => update({ allowedDirs: event.target.value })}
+                  placeholder={"One path per line.\nThe protoAgent directory is always allowed."}
+                />
+                <span className="field-hint">
+                  Beads and notes may only read/write inside these directories. One per line.
+                </span>
+              </label>
               <label className="checkbox-field setup-checkbox">
                 <input type="checkbox" checked={state.initBeads} onChange={(event) => update({ initBeads: event.target.checked })} />
                 <span>Initialize beads</span>

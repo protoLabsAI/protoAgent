@@ -11,6 +11,7 @@ def build_runtime_status(
     setup_complete: bool,
     graph_loaded: bool,
     project_path: str = "",
+    allowed_dirs: list[str] | None = None,
     knowledge_store: Any = None,
     scheduler: Any = None,
     cache_warmer: Any = None,
@@ -20,12 +21,16 @@ def build_runtime_status(
 
     Secrets are represented as booleans only. The React setup/runtime screens
     need to know whether auth/model credentials exist, not what they are.
+
+    ``allowed_dirs`` is the operator-console sandbox the client uses to
+    populate the project-path picker; the server still enforces it.
     """
+    project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
     if config is None:
         return {
             "setup_complete": bool(setup_complete),
             "graph_loaded": False,
-            "project": {"path": project_path},
+            "project": project,
             "model": None,
             "identity": None,
             "middleware": {},
@@ -38,7 +43,7 @@ def build_runtime_status(
     return {
         "setup_complete": bool(setup_complete),
         "graph_loaded": bool(graph_loaded),
-        "project": {"path": project_path},
+        "project": project,
         "model": {
             "provider": getattr(config, "model_provider", ""),
             "name": getattr(config, "model_name", ""),

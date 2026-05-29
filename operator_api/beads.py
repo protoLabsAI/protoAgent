@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,8 +32,14 @@ class BeadsService:
     locking, JSONL flushes, and store-discovery semantics.
     """
 
-    def __init__(self, *, timeout_s: float = 15.0):
+    def __init__(
+        self,
+        *,
+        timeout_s: float = 15.0,
+        allowed_dirs: Callable[[], list[str]] | None = None,
+    ):
         self.timeout_s = timeout_s
+        self._allowed_dirs = allowed_dirs
         self._lock = threading.Lock()
 
     def status(self, project_path: str) -> dict[str, bool]:
@@ -116,7 +123,8 @@ class BeadsService:
         return result.stdout
 
     def _run_allow_fail(self, project_path: str, args: list[str]) -> subprocess.CompletedProcess:
-        cwd = resolve_project_path(project_path)
+        allowed = self._allowed_dirs() if self._allowed_dirs is not None else None
+        cwd = resolve_project_path(project_path, allowed)
         try:
             with self._lock:
                 return subprocess.run(

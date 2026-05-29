@@ -177,6 +177,14 @@ class LangGraphConfig:
     # whether the plist should exist.
     autostart_on_boot: bool = False
 
+    # Operator-console directory allowlist — the extra directories the
+    # React console's beads/notes APIs may read and write. The protoAgent
+    # repo root is always allowed implicitly (it's the default project);
+    # add other project roots here to operate on them. Empty = repo root
+    # only. The client sends a free-text project path, so this server-side
+    # list — not the UI — is the security boundary. See operator_api/paths.
+    operator_allowed_dirs: list[str] = field(default_factory=list)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
         """Load config from YAML file. Falls back to defaults if absent."""
@@ -194,6 +202,7 @@ class LangGraphConfig:
         identity = data.get("identity", {})
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
+        operator = data.get("operator", {})
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -249,6 +258,7 @@ class LangGraphConfig:
             identity_operator=identity.get("operator", cls.identity_operator),
             auth_token=auth.get("token", cls.auth_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
+            operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
         )
 
         for name in ("researcher",):

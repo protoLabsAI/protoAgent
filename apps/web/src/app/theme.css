@@ -564,6 +564,12 @@ textarea {
   padding: 0 12px;
 }
 
+.field-hint {
+  color: var(--fg-subtle, var(--fg-muted));
+  font-size: 11px;
+  opacity: 0.75;
+}
+
 .subagent-grid {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;

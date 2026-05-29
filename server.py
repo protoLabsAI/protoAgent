@@ -1157,12 +1157,24 @@ def _main():
         run_manual_subagent_batch as _operator_run_manual_subagent_batch,
     )
 
+    _operator_repo_root = str(Path(__file__).parent.resolve())
+
+    def _operator_allowed_dirs() -> list[str]:
+        # The repo root is always operable (it's the default project);
+        # config adds any extra project roots. Read live so a settings
+        # reload takes effect without restarting the server.
+        roots = [_operator_repo_root]
+        if _graph_config is not None:
+            roots.extend(getattr(_graph_config, "operator_allowed_dirs", []) or [])
+        return roots
+
     def _operator_runtime_status():
         return _build_operator_status(
             config=_graph_config,
             setup_complete=_operator_setup_complete(),
             graph_loaded=_graph is not None,
-            project_path=str(Path(__file__).parent.resolve()),
+            project_path=_operator_repo_root,
+            allowed_dirs=_operator_allowed_dirs(),
             knowledge_store=_knowledge_store,
             scheduler=_scheduler,
             cache_warmer=_cache_warmer,
@@ -1201,6 +1213,7 @@ def _main():
         subagent_list=_operator_subagent_list,
         subagent_run=_operator_subagent_run,
         subagent_batch=_operator_subagent_batch,
+        allowed_dirs=_operator_allowed_dirs,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

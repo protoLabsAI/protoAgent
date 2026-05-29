@@ -271,6 +271,21 @@ block React UI validation.
 7. **Tauri shell**: wrap `/app`, add tray/hotkey/hide-on-close.
 8. **Gradio retirement**: remove only after React covers setup, config, chat, diagnostics.
 
+## Directory Allowlist
+
+The beads and notes APIs take a `project_path` from the (free-text) UI, so the
+server — not the client — decides which directories they may read and write.
+`operator.allowed_dirs` in `config/langgraph-config.yaml` is that boundary:
+
+- The protoAgent repo root is always allowed (the default project).
+- Add other project roots you operate on to `operator.allowed_dirs`, or edit
+  the list in-app from the setup wizard's **Workspace** step.
+- An out-of-allowlist path is rejected with a 400 before any subprocess or file
+  I/O. `resolve_project_path` resolves symlinks and `..` *before* the
+  containment check, so neither can escape an allowed root.
+- The runtime-status `project.allowed_dirs` field feeds the project-path
+  picker's suggestions; it does not relax the server-side check.
+
 ## Risks
 
 - A2A streaming events are not AI SDK data-stream events; the first chat UI

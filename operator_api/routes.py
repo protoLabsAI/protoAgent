@@ -85,10 +85,17 @@ def register_operator_routes(
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
     beads_service: BeadsService | None = None,
     notes_service: NotesService | None = None,
+    allowed_dirs: Callable[[], list[str]] | None = None,
 ) -> None:
-    """Register React operator-console routes on a FastAPI app."""
-    beads = beads_service or BeadsService()
-    notes = notes_service or NotesService()
+    """Register React operator-console routes on a FastAPI app.
+
+    ``allowed_dirs`` is an accessor returning the directories the operator
+    console may read/write (beads + notes). It's a callable, not a static
+    list, so it re-reads live config after a settings reload. Injected
+    services keep their own allowlist; it only wires the defaults.
+    """
+    beads = beads_service or BeadsService(allowed_dirs=allowed_dirs)
+    notes = notes_service or NotesService(allowed_dirs=allowed_dirs)
 
     @app.get("/api/runtime/status")
     async def _runtime_status():

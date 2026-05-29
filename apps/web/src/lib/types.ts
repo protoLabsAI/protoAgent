@@ -3,6 +3,7 @@ export type RuntimeStatus = {
   graph_loaded: boolean;
   project: {
     path: string;
+    allowed_dirs?: string[];
   };
   model: null | {
     provider: string;
@@ -130,6 +131,9 @@ export type AgentConfig = {
   };
   runtime: {
     autostart_on_boot: boolean;
+  };
+  operator?: {
+    allowed_dirs: string[];
   };
 };
 
