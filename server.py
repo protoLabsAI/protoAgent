@@ -1428,6 +1428,13 @@ def _main():
         except ImportError:
             pass
 
+    # --- React operator console --------------------------------------------
+    from operator_api.web import mount_react_app
+
+    web_dist_dir = Path(__file__).parent / "apps" / "web" / "dist"
+    if mount_react_app(fastapi_app, web_dist_dir):
+        log.info("React operator console mounted at /app")
+
     # --- Static + PWA assets -----------------------------------------------
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

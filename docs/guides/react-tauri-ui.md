@@ -109,6 +109,18 @@ Do not remove Gradio in the first slice. Mount React under `/app` or serve it
 when enabled by an env flag, keep `/` Gradio until the React app covers setup,
 chat, config, and diagnostics.
 
+Web scaffold commands:
+
+```bash
+npm run web:dev
+npm run web:build
+npm run web:preview
+```
+
+The built app lives under `apps/web/dist/`. `server.py` serves it at `/app`
+when that directory contains `index.html`; otherwise the server boots without
+mounting the React surface.
+
 ## Required Backend Contracts
 
 The current backend already has useful pieces:
