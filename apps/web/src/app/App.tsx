@@ -765,8 +765,6 @@ export function App() {
                 <Metric icon={<Bot size={16} />} label="Agent" value={runtime?.identity?.name || "protoagent"} />
                 <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime?.model?.provider || "none"} />
                 <Metric icon={<Database size={16} />} label="Knowledge" value={runtime?.knowledge.resolved_path || runtime?.knowledge.configured_path || "disabled"} />
-                <Metric icon={<Gauge size={16} />} label="Skills" value={`${runtime?.skills?.count ?? 0} loaded`} />
-                <Metric icon={<Network size={16} />} label="MCP tools" value={runtime?.mcp?.enabled ? `${runtime?.mcp?.tool_count ?? 0} from ${runtime?.mcp?.servers.length ?? 0} server${(runtime?.mcp?.servers.length ?? 0) === 1 ? "" : "s"}` : "off"} />
                 <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime?.goal.enabled))} />
               </div>
               <p className="panel-kicker">Middleware</p>
@@ -777,6 +775,17 @@ export function App() {
                     <StatusPill label={formatBool(enabled)} tone={enabled ? "success" : "muted"} />
                   </div>
                 ))}
+              </div>
+
+              <p className="panel-kicker">Skills</p>
+              <div className="table-list">
+                <div className="table-row">
+                  <span>SKILL.md skills loaded</span>
+                  <StatusPill
+                    label={`${runtime?.skills?.count ?? 0}`}
+                    tone={(runtime?.skills?.count ?? 0) > 0 ? "success" : "muted"}
+                  />
+                </div>
               </div>
 
               <p className="panel-kicker">MCP servers</p>
