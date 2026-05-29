@@ -205,6 +205,18 @@ export function SetupWizard({
       if (state.apiKey.trim()) {
         model.api_key = state.apiKey.trim();
       }
+      // The project you're setting up should be operable, so fold its path
+      // into the allowlist automatically — otherwise picking a project path
+      // outside the (empty) allowlist silently makes beads/notes unusable
+      // for it. Extra dirs from the textarea are merged and de-duped.
+      const allowedDirs = Array.from(
+        new Set(
+          [
+            ...state.allowedDirs.split("\n").map((dir) => dir.trim()),
+            projectPath.trim(),
+          ].filter(Boolean),
+        ),
+      );
       const response = await api.finishSetup(
         {
           model,
@@ -226,10 +238,7 @@ export function SetupWizard({
             top_k: Number(state.knowledgeTopK),
           },
           operator: {
-            allowed_dirs: state.allowedDirs
-              .split("\n")
-              .map((dir) => dir.trim())
-              .filter(Boolean),
+            allowed_dirs: allowedDirs,
           },
         },
         state.soul,
@@ -238,6 +247,9 @@ export function SetupWizard({
         setError(response.message);
         return;
       }
+      // `br` ships in the container, so init is expected to succeed — surface
+      // a failure rather than swallowing it. The allowlist no longer blocks it
+      // (the project path is folded into allowed_dirs above).
       if (state.initBeads && projectPath.trim()) {
         await api.initBeads(projectPath);
       }
@@ -413,6 +425,7 @@ export function SetupWizard({
                 />
                 <span className="field-hint">
                   Beads and notes may only read/write inside these directories. One per line.
+                  The protoAgent directory and the project path above are always allowed.
                 </span>
               </label>
               <label className="checkbox-field setup-checkbox">

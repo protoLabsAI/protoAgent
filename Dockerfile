@@ -17,6 +17,30 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# beads_rust (`br`) — the agent-first issue tracker the operator console's
+# beads panel and the setup wizard's "Initialize beads" shell out to. It must
+# be present in the image so beads init genuinely works rather than failing at
+# runtime. We pull a pinned, checksum-verified prebuilt binary instead of
+# installing the Rust toolchain, keeping the slim base small. dpkg's amd64 /
+# arm64 map straight onto the release asset arch names; bump BEADS_VERSION to
+# upgrade. Source: https://github.com/Dicklesworthstone/beads_rust
+ARG BEADS_VERSION=v0.1.23
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64|arm64) ;; \
+      *) echo "unsupported arch for br: $arch" >&2; exit 1 ;; \
+    esac; \
+    asset="br-${BEADS_VERSION}-linux_${arch}.tar.gz"; \
+    base="https://github.com/Dicklesworthstone/beads_rust/releases/download/${BEADS_VERSION}"; \
+    curl -fsSL -o "/tmp/${asset}" "${base}/${asset}"; \
+    curl -fsSL -o "/tmp/${asset}.sha256" "${base}/${asset}.sha256"; \
+    (cd /tmp && sha256sum -c "${asset}.sha256"); \
+    tar -xzf "/tmp/${asset}" -C /usr/local/bin br; \
+    chmod +x /usr/local/bin/br; \
+    rm -f "/tmp/${asset}" "/tmp/${asset}.sha256"; \
+    br --version
+
 # Non-root sandbox user
 ARG SANDBOX_UID=1001
 RUN useradd -m -s /bin/bash -u ${SANDBOX_UID} sandbox
