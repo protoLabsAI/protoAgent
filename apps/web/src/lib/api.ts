@@ -289,10 +289,52 @@ export const api = {
     return request<{ issues: BeadsIssue[] }>(`/api/beads/issues?${params}`);
   },
 
-  createIssue(projectPath: string, title: string) {
+  createIssue(
+    projectPath: string,
+    issue: {
+      title: string;
+      type?: string;
+      priority?: number;
+      description?: string;
+      assignee?: string;
+    },
+  ) {
     return request<{ issue: BeadsIssue }>("/api/beads/issues", {
       method: "POST",
-      body: { project_path: projectPath, title },
+      body: { project_path: projectPath, ...issue },
     });
+  },
+
+  updateIssue(
+    projectPath: string,
+    issueId: string,
+    update: {
+      title?: string;
+      description?: string;
+      status?: string;
+      priority?: number;
+      type?: string;
+      assignee?: string;
+    },
+  ) {
+    return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}`, {
+      method: "PATCH",
+      body: { project_path: projectPath, ...update },
+    });
+  },
+
+  closeIssue(projectPath: string, issueId: string, reason?: string) {
+    return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}/close`, {
+      method: "POST",
+      body: { project_path: projectPath, reason },
+    });
+  },
+
+  deleteIssue(projectPath: string, issueId: string) {
+    const params = new URLSearchParams({ project_path: projectPath });
+    return request<{ deleted?: string; project_path?: string }>(
+      `/api/beads/issues/${encodeURIComponent(issueId)}?${params}`,
+      { method: "DELETE" },
+    );
   },
 };

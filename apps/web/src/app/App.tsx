@@ -28,6 +28,7 @@ import { SetupWizard } from "../setup/SetupWizard";
 type Surface = "chat" | "subagents" | "runtime";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
+type StatusTone = "success" | "warning" | "error" | "muted";
 
 type BatchTask = {
   id: string;
@@ -36,7 +37,22 @@ type BatchTask = {
   prompt: string;
 };
 
+type IssueDraft = {
+  title: string;
+  description: string;
+  type: string;
+  priority: number;
+};
+
 const sessionId = "operator-default";
+const emptyIssueDraft: IssueDraft = {
+  title: "",
+  description: "",
+  type: "task",
+  priority: 2,
+};
+
+const issueStatusOrder = ["in_progress", "open", "blocked", "deferred", "closed"];
 
 function createBatchTask(type = "researcher"): BatchTask {
   return {
@@ -93,6 +109,51 @@ function statusTone(ok?: boolean) {
   return ok ? "success" : "error";
 }
 
+function issueStatus(issue: BeadsIssue) {
+  return issue.status || "open";
+}
+
+function issueType(issue: BeadsIssue) {
+  return issue.issue_type || issue.type || "task";
+}
+
+function issueStatusLabel(status: string) {
+  return status.replace(/_/g, " ");
+}
+
+function issueStatusTone(status: string): StatusTone {
+  if (status === "closed") return "success";
+  if (status === "blocked") return "error";
+  if (status === "in_progress" || status === "deferred") return "warning";
+  return "muted";
+}
+
+function priorityLabel(priority: BeadsIssue["priority"]) {
+  if (priority === undefined || priority === null || priority === "") return "P-";
+  const value = String(priority);
+  return value.toUpperCase().startsWith("P") ? value.toUpperCase() : `P${value}`;
+}
+
+function groupIssues(issues: BeadsIssue[]) {
+  const buckets = new Map<string, BeadsIssue[]>();
+  for (const issue of issues) {
+    const status = issueStatus(issue);
+    const bucket = buckets.get(status);
+    if (bucket) {
+      bucket.push(issue);
+    } else {
+      buckets.set(status, [issue]);
+    }
+  }
+
+  const ordered = issueStatusOrder.filter((status) => buckets.has(status));
+  const rest = [...buckets.keys()].filter((status) => !issueStatusOrder.includes(status)).sort();
+  return [...ordered, ...rest].map((status) => ({
+    status,
+    issues: buckets.get(status) || [],
+  }));
+}
+
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -116,7 +177,7 @@ export function App() {
 
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesDirty, setNotesDirty] = useState(false);
-  const [issueDraft, setIssueDraft] = useState("");
+  const [issueDraft, setIssueDraft] = useState<IssueDraft>(emptyIssueDraft);
   const [beadsBusy, setBeadsBusy] = useState(false);
 
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
@@ -358,14 +419,66 @@ export function App() {
   }
 
   async function createIssue() {
-    const title = issueDraft.trim();
+    const title = issueDraft.title.trim();
     if (!projectPath.trim() || !title || beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.createIssue(projectPath, title);
+      const response = await api.createIssue(projectPath, {
+        title,
+        type: issueDraft.type,
+        priority: issueDraft.priority,
+        description: issueDraft.description.trim() || undefined,
+      });
       setBeadsIssues((items) => [response.issue, ...items]);
-      setIssueDraft("");
+      setIssueDraft(emptyIssueDraft);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBeadsBusy(false);
+    }
+  }
+
+  function replaceIssue(issue: BeadsIssue) {
+    setBeadsIssues((items) => items.map((item) => (item.id === issue.id ? { ...item, ...issue } : item)));
+  }
+
+  async function updateIssueStatus(issue: BeadsIssue, nextStatus: string) {
+    if (!projectPath.trim() || beadsBusy) return;
+    setBeadsBusy(true);
+    setError("");
+    try {
+      const response = await api.updateIssue(projectPath, issue.id, { status: nextStatus });
+      replaceIssue(response.issue.id ? response.issue : { ...issue, status: nextStatus });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBeadsBusy(false);
+    }
+  }
+
+  async function closeIssue(issue: BeadsIssue) {
+    if (!projectPath.trim() || beadsBusy) return;
+    setBeadsBusy(true);
+    setError("");
+    try {
+      const response = await api.closeIssue(projectPath, issue.id);
+      replaceIssue(response.issue.id ? response.issue : { ...issue, status: "closed" });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBeadsBusy(false);
+    }
+  }
+
+  async function deleteIssue(issue: BeadsIssue) {
+    if (!projectPath.trim() || beadsBusy) return;
+    if (!window.confirm(`Delete ${issue.id}?`)) return;
+    setBeadsBusy(true);
+    setError("");
+    try {
+      await api.deleteIssue(projectPath, issue.id);
+      setBeadsIssues((items) => items.filter((item) => item.id !== issue.id));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -377,6 +490,8 @@ export function App() {
     if (!runtime) return [];
     return Object.entries(runtime.middleware).sort(([a], [b]) => a.localeCompare(b));
   }, [runtime]);
+
+  const groupedIssues = useMemo(() => groupIssues(beadsIssues), [beadsIssues]);
 
   return (
     <div className="app-shell">
@@ -686,7 +801,9 @@ export function App() {
               <div className="panel-header compact">
                 <div>
                   <h2>Beads</h2>
-                  <p className="panel-kicker">{beadsReady === null ? "not checked" : beadsReady ? "initialized" : "not initialized"}</p>
+                  <p className="panel-kicker">
+                    {beadsReady === null ? "not checked" : beadsReady ? `${beadsIssues.length} task${beadsIssues.length === 1 ? "" : "s"}` : "not initialized"}
+                  </p>
                 </div>
                 {beadsReady === false ? (
                   <button className="icon-button" type="button" onClick={() => void initBeads()} title="Initialize beads">
@@ -702,31 +819,126 @@ export function App() {
                 }}
               >
                 <input
-                  value={issueDraft}
-                  onChange={(event) => setIssueDraft(event.target.value)}
+                  value={issueDraft.title}
+                  onChange={(event) => setIssueDraft((draft) => ({ ...draft, title: event.target.value }))}
                   placeholder="New issue title"
                   disabled={!beadsReady}
                 />
-                <button className="primary-button" type="submit" disabled={!beadsReady || !issueDraft.trim() || beadsBusy}>
+                <button className="primary-button" type="submit" disabled={!beadsReady || !issueDraft.title.trim() || beadsBusy}>
                   {beadsBusy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
                   Add
                 </button>
+                <div className="issue-create-meta">
+                  <select
+                    value={issueDraft.type}
+                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, type: event.target.value }))}
+                    disabled={!beadsReady}
+                    aria-label="Issue type"
+                  >
+                    <option value="task">task</option>
+                    <option value="bug">bug</option>
+                    <option value="feature">feature</option>
+                    <option value="chore">chore</option>
+                  </select>
+                  <select
+                    value={issueDraft.priority}
+                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, priority: Number(event.target.value) }))}
+                    disabled={!beadsReady}
+                    aria-label="Issue priority"
+                  >
+                    <option value={0}>P0</option>
+                    <option value={1}>P1</option>
+                    <option value={2}>P2</option>
+                    <option value={3}>P3</option>
+                    <option value={4}>P4</option>
+                  </select>
+                  <input
+                    value={issueDraft.description}
+                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, description: event.target.value }))}
+                    placeholder="Description"
+                    disabled={!beadsReady}
+                  />
+                </div>
               </form>
               <div className="issue-list">
-                {beadsIssues.length === 0 ? (
-                  <div className="empty-state">
+                {beadsReady === null ? (
+                  <div className="empty-state stacked">
+                    <Boxes size={18} />
+                    <span>Load a project to check beads.</span>
+                  </div>
+                ) : beadsReady === false ? (
+                  <div className="empty-state stacked">
+                    <Boxes size={18} />
+                    <span>Beads is not initialized.</span>
+                    <button className="secondary-button" type="button" onClick={() => void initBeads()} disabled={beadsBusy}>
+                      <CheckCircle2 size={16} />
+                      Initialize
+                    </button>
+                  </div>
+                ) : beadsIssues.length === 0 ? (
+                  <div className="empty-state stacked">
                     <Boxes size={18} />
                     <span>No beads loaded.</span>
                   </div>
                 ) : (
-                  beadsIssues.map((issue) => (
-                    <div className="issue-row" key={issue.id}>
-                      <div>
-                        <strong>{issue.title}</strong>
-                        <span>{issue.id}</span>
+                  groupedIssues.map((group) => (
+                    <section className="issue-group" key={group.status}>
+                      <div className="issue-group-header">
+                        <span>{issueStatusLabel(group.status)}</span>
+                        <StatusPill label={String(group.issues.length)} tone="muted" />
                       </div>
-                      <StatusPill label={issue.status || "open"} tone={issue.status === "closed" ? "success" : "warning"} />
-                    </div>
+                      {group.issues.map((issue) => {
+                        const status = issueStatus(issue);
+                        const isClosed = status === "closed";
+                        const isActive = status === "in_progress";
+                        return (
+                          <div className="issue-row" key={issue.id}>
+                            <div className="issue-main">
+                              <div className="issue-titleline">
+                                <strong>{issue.title}</strong>
+                                <StatusPill label={issueStatusLabel(status)} tone={issueStatusTone(status)} />
+                              </div>
+                              <div className="issue-meta">
+                                <span>{issue.id}</span>
+                                <span>{issueType(issue)}</span>
+                                <span>{priorityLabel(issue.priority)}</span>
+                                {issue.assignee ? <span>{issue.assignee}</span> : null}
+                              </div>
+                              {issue.description ? <p className="issue-description">{issue.description}</p> : null}
+                            </div>
+                            <div className="issue-actions">
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() => void updateIssueStatus(issue, isActive ? "open" : "in_progress")}
+                                disabled={beadsBusy || isClosed}
+                                title={isActive ? "Mark open" : "Start issue"}
+                              >
+                                {isActive ? <CircleAlert size={15} /> : <Play size={15} />}
+                              </button>
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() => void (isClosed ? updateIssueStatus(issue, "open") : closeIssue(issue))}
+                                disabled={beadsBusy}
+                                title={isClosed ? "Reopen issue" : "Close issue"}
+                              >
+                                {isClosed ? <Play size={15} /> : <CheckCircle2 size={15} />}
+                              </button>
+                              <button
+                                className="icon-button danger"
+                                type="button"
+                                onClick={() => void deleteIssue(issue)}
+                                disabled={beadsBusy}
+                                title="Delete issue"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </section>
                   ))
                 )}
               </div>
@@ -744,7 +956,7 @@ export function App() {
   );
 }
 
-function StatusPill({ label, tone }: { label: string; tone: "success" | "warning" | "error" | "muted" }) {
+function StatusPill({ label, tone }: { label: string; tone: StatusTone }) {
   return <span className={`status-pill ${tone}`}>{label}</span>;
 }
 

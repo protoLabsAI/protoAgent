@@ -403,9 +403,9 @@ h2 {
 
 .primary-button {
   padding: 0 12px;
-  background: var(--brand-violet);
-  border-color: var(--brand-violet);
-  color: white;
+  background: transparent;
+  border-color: var(--fg);
+  color: var(--fg);
   font-weight: 500;
 }
 
@@ -416,8 +416,14 @@ h2 {
 }
 
 .primary-button:hover {
-  background: #6d28d9;
-  border-color: #6d28d9;
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+
+.icon-button.danger:hover {
+  border-color: var(--error);
+  color: #f4b09f;
 }
 
 .icon-button:disabled,
@@ -639,14 +645,14 @@ textarea {
 }
 
 .subagent-row > div,
-.issue-row > div {
+.issue-main {
   min-width: 0;
   display: grid;
   gap: 2px;
 }
 
 .subagent-row strong,
-.issue-row strong {
+.issue-titleline strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -754,6 +760,88 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+.issue-create-meta {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 104px 82px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.issue-list {
+  display: grid;
+  align-content: start;
+}
+
+.issue-group {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.issue-group:last-child {
+  border-bottom: 0;
+}
+
+.issue-group-header {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: #0c0c0f;
+  padding: 6px 10px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.issue-row {
+  align-items: flex-start;
+  padding: 10px;
+}
+
+.issue-titleline {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.issue-meta span {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+}
+
+.issue-description {
+  margin-top: 4px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.issue-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.issue-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
 .empty-state {
   min-height: 96px;
   display: flex;
@@ -761,6 +849,12 @@ textarea {
   justify-content: center;
   gap: 8px;
   color: var(--fg-muted);
+}
+
+.empty-state.stacked {
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
 }
 
 .setup-overlay {
@@ -1026,6 +1120,7 @@ textarea {
   .subagent-grid,
   .batch-task-fields,
   .issue-create,
+  .issue-create-meta,
   .notes-meta,
   .setup-grid.two,
   .setup-grid.three,

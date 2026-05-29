@@ -100,6 +100,18 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
         "/api/beads/issues",
         json={"project_path": notes_path, "title": "Task"},
     ).json()["issue"]["id"] == "bd-2"
+    assert client.patch(
+        "/api/beads/issues/bd-1",
+        json={"project_path": notes_path, "status": "in_progress"},
+    ).json()["issue"] == {"id": "bd-1", "status": "in_progress", "project_path": notes_path}
+    assert client.post(
+        "/api/beads/issues/bd-1/close",
+        json={"project_path": notes_path, "reason": "done"},
+    ).json()["issue"] == {"id": "bd-1", "status": "closed", "reason": "done"}
+    assert client.delete(
+        "/api/beads/issues/bd-1",
+        params={"project_path": notes_path},
+    ).json() == {"deleted": "bd-1", "project_path": notes_path}
 
 
 def test_operator_routes_map_value_errors_to_400() -> None:

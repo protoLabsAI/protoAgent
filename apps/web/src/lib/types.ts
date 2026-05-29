@@ -80,7 +80,8 @@ export type BeadsIssue = {
   id: string;
   title: string;
   status?: string;
-  priority?: number;
+  description?: string;
+  priority?: number | string;
   issue_type?: string;
   type?: string;
   assignee?: string;

@@ -80,3 +80,56 @@ def test_beads_create_builds_structured_command(monkeypatch, tmp_path) -> None:
         "--assignee",
         "agent",
     ]
+
+
+def test_beads_update_close_delete_build_commands(monkeypatch, tmp_path) -> None:
+    calls = []
+    outputs = iter(
+        [
+            '{"id":"bd-1","status":"in_progress"}',
+            '{"id":"bd-1","status":"closed"}',
+            '{"deleted":"bd-1"}',
+        ]
+    )
+
+    def fake_run(*args, **kwargs):
+        calls.append(args[0])
+        return _completed(args[0], stdout=next(outputs))
+
+    monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)
+
+    service = BeadsService()
+    assert service.update(
+        str(tmp_path),
+        "bd-1",
+        {
+            "title": "Next",
+            "status": "in_progress",
+            "priority": 1,
+            "type": "task",
+            "assignee": "agent",
+        },
+    ) == {"id": "bd-1", "status": "in_progress"}
+    assert service.close(str(tmp_path), "bd-1", "done") == {"id": "bd-1", "status": "closed"}
+    assert service.delete(str(tmp_path), "bd-1") == {"deleted": "bd-1"}
+
+    assert calls == [
+        [
+            "br",
+            "update",
+            "bd-1",
+            "--json",
+            "--title",
+            "Next",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--type",
+            "task",
+            "--assignee",
+            "agent",
+        ],
+        ["br", "close", "bd-1", "--json", "--reason", "done"],
+        ["br", "delete", "bd-1", "--json"],
+    ]
