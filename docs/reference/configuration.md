@@ -1,6 +1,8 @@
 # Configuration
 
-`config/langgraph-config.yaml` is the canonical runtime config. Loaded at server boot by `graph/config.py::LangGraphConfig.from_yaml()`. All fields have defaults; the YAML only needs to override what's changing.
+`config/langgraph-config.yaml` is the runtime config. Loaded at server boot by `graph/config.py::LangGraphConfig.from_yaml()`. All fields have defaults; the YAML only needs to override what's changing.
+
+**Template vs. live file.** The repo tracks `config/langgraph-config.example.yaml` (the shipped template, with defaults + comments). The live `config/langgraph-config.yaml` is **untracked** — it's per-deployment state, written by the setup wizard / settings drawer. On first run the server copies the template into place (`config_io.ensure_live_config`), so edits never dirty a tracked file. Secrets are split out further into `config/secrets.yaml` (see [Secrets](#secrets)).
 
 ## Full example
 

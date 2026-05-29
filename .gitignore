@@ -10,6 +10,15 @@ venv/
 # here instead of the tracked config YAML. Never commit it.
 config/secrets.yaml
 
+# Live runtime config — generated from langgraph-config.example.yaml on first
+# run and rewritten by the wizard/drawer. The tracked file is the .example
+# template; the live copy is per-deployment state, so it stays out of git.
+config/langgraph-config.yaml
+
+# Setup-wizard completion marker — per-deployment runtime state, written once
+# the wizard has been run. Not config to commit.
+config/.setup-complete
+
 # Local-run artifacts — autostart stdout/stderr logs + memory middleware
 # fallback directory when /sandbox is not available.
 logs/
