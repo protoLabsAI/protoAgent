@@ -158,6 +158,7 @@ def _init_langgraph_agent():
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
         skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
+        checkpointer=_checkpointer,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -509,6 +510,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
+                checkpointer=_checkpointer,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -983,14 +985,13 @@ async def _chat_langgraph_stream(
                     yield ("done", reply)
                     return
 
-            # thread_id prefix isolates A2A sessions from Gradio chat in the
-            # shared MemorySaver checkpointer.
+            # thread_id keys this session's history in the checkpointer (bound
+            # at compile time in create_agent_graph). The prefix isolates A2A
+            # sessions from Gradio chat in the shared MemorySaver.
             config = {
                 "configurable": {"thread_id": f"a2a:{session_id}"},
                 "recursion_limit": 200,
             }
-            if _checkpointer:
-                config["checkpointer"] = _checkpointer
 
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn (and the
@@ -1120,8 +1121,6 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                     return [{"role": "assistant", "content": reply}]
 
             config = {"configurable": {"thread_id": f"gradio:{session_id}"}}
-            if _checkpointer:
-                config["checkpointer"] = _checkpointer
 
             def _last_ai(result) -> str:
                 for msg in reversed(result.get("messages", [])):
