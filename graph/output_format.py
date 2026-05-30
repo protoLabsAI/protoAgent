@@ -66,11 +66,13 @@ Optionally, after `</output>`, you may self-report confidence:
 """.strip()
 
 
-# The closing tag must NOT be preceded by a backtick: a self-describing answer
-# mentions the protocol in inline code (`` `</output>` ``), and a non-greedy
-# match would otherwise close on that literal mention and truncate the reply.
-# The real closer ends normal prose, never a backtick.
-_OUTPUT_RE = re.compile(r"<output>([\s\S]*?)(?<!`)</output>", re.IGNORECASE)
+# Neither the opening nor closing tag may be preceded by a backtick. A reply
+# (or its scratch_pad reasoning) often names the protocol in inline code —
+# ``answer in `<output>` format``, ``confidence after `</output>` ``. Without
+# the guards the matcher would open on a backticked `<output>` mention inside
+# the scratch_pad (leaking reasoning) or close on a backticked `</output>`
+# (truncating the answer). The real tags are never backtick-wrapped.
+_OUTPUT_RE = re.compile(r"(?<!`)<output>([\s\S]*?)(?<!`)</output>", re.IGNORECASE)
 _SCRATCH_RE = re.compile(r"<scratch_pad>[\s\S]*?</scratch_pad>", re.IGNORECASE)
 _ORPHAN_SCRATCH_OPEN_RE = re.compile(r"<scratch_pad>[\s\S]*$", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
@@ -126,7 +128,7 @@ def _strip_reasoning_balanced(text: str) -> str:
     return text
 
 
-_ORPHAN_OUTPUT_OPEN_RE = re.compile(r"<output>([\s\S]*)$", re.IGNORECASE)
+_ORPHAN_OUTPUT_OPEN_RE = re.compile(r"(?<!`)<output>([\s\S]*)$", re.IGNORECASE)
 
 
 def stream_visible_output(raw: str) -> str:
@@ -145,11 +147,13 @@ def stream_visible_output(raw: str) -> str:
     as ``raw`` grows, the result only ever extends (until ``</output>`` closes
     it), so a caller can emit ``result[already_emitted:]`` each step.
     """
-    low = raw.lower()
-    start = low.find("<output>")
-    if start == -1:
+    # Open on the first real <output> — skip backticked mentions in the
+    # scratch_pad (e.g. ``answer in `<output>` format``) so reasoning that
+    # names the tag never starts the stream early.
+    open_m = re.search(r"(?<!`)<output>", raw, re.IGNORECASE)
+    if open_m is None:
         return ""  # still in scratch_pad — nothing user-facing yet
-    after = raw[start + len("<output>") :]
+    after = raw[open_m.end() :]
     # Close on the first real </output> — skip backtick-wrapped literal mentions
     # (`` `</output>` ``) so a self-describing answer isn't cut short.
     m = re.search(r"(?<!`)</output>", after, re.IGNORECASE)

@@ -165,6 +165,26 @@ def test_extract_output_keeps_literal_scratch_pad_mention():
     assert "<scratch_pad>" in out  # the literal mention survives
 
 
+def test_extract_output_ignores_backticked_open_tag_in_scratch():
+    """Regression: the model commonly explains the protocol *in its scratch_pad*
+    ("answer in `<output>` format"). The matcher must open on the real
+    <output>, not the backticked mention — otherwise scratch reasoning leaks
+    into the user-facing answer."""
+    raw = (
+        "<scratch_pad>\nI reason in `<scratch_pad>`, answer in `<output>` format "
+        "with optional confidence.\nThis is a template, so I'll give an overview.\n"
+        "</scratch_pad>\n\n<output>\n# What I Can Do\nSearch, calculate, remember.\n</output>"
+    )
+    assert extract_output(raw) == "# What I Can Do\nSearch, calculate, remember."
+
+
+def test_stream_visible_ignores_backticked_open_in_scratch():
+    """The same guard for streaming: while still in scratch_pad (which names the
+    tag in backticks), nothing user-facing is streamed."""
+    mid = "<scratch_pad>plan: answer in `<output>` format, then finish"
+    assert stream_visible_output(mid) == ""
+
+
 def test_extract_output_keeps_literal_close_tag_mention():
     """Regression: a backtick-wrapped `</output>` mention in the answer must not
     close the block early. The real closer ends prose, not a backtick."""
