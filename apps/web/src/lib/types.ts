@@ -111,6 +111,8 @@ export type ToolCall = {
   startedAt?: number;
   /** Elapsed start→end, stamped client-side when the end frame arrives. */
   durationMs?: number;
+  /** id of the enclosing `task` tool, if this call ran inside a subagent. */
+  parentId?: string;
 };
 
 /** Wire shape of a single tool event streamed over the A2A tool-call DataPart. */
