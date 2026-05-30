@@ -25,6 +25,19 @@ test("calculator renders expression = result", async ({ page }) => {
   await expect(calc.locator("code")).toHaveText("19 * 23");
   await expect(calc.locator("strong")).toHaveText("437");
   await expect(body.locator("pre")).toHaveCount(0);
+  // Header shows the tool-specific icon (not the generic wrench).
+  await expect(page.locator(".tool-card-head .tool-card-icon.lucide-calculator")).toBeVisible();
+});
+
+test("each tool gets its own header icon", async ({ page }) => {
+  for (const [prompt, icon] of [
+    ["TIME now", "lucide-clock"],
+    ["FETCH it", "lucide-globe"],
+    ["search for things", "lucide-search"],
+  ] as const) {
+    await run(page, prompt);
+    await expect(page.locator(`.tool-card-head .tool-card-icon.${icon}`).first()).toBeVisible();
+  }
 });
 
 test("current_time renders the timestamp and human line", async ({ page }) => {
