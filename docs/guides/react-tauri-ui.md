@@ -147,6 +147,7 @@ Add these before the React UI depends on them:
 | `GET/POST /api/notes/workspace` | load/save the notes workspace file |
 | `GET/POST /api/scheduler/jobs`, `DELETE /api/scheduler/jobs/{id}` | list/create/cancel scheduled jobs over the active `SchedulerBackend` |
 | `GET /api/goals`, `DELETE /api/goals/{session_id}` | list goals across sessions / clear one (goals are *set* in chat via `/goal`) |
+| `GET /api/chat/commands` | registered slash commands (`{name, description, usage}`) for the composer's `/` autocomplete |
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

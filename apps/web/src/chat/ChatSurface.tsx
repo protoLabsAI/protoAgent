@@ -10,7 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, SlashCommand } from "../lib/types";
 import { chatStore, MAX_ACTIVE_SESSIONS, useChatState } from "./chat-store";
 import { Markdown } from "./Markdown";
 
@@ -99,7 +99,42 @@ function ChatSessionSlot({
   const [taskId, setTaskId] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const status = chat.sessionStatusMap[sessionId] || "idle";
+
+  // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
+  // fetched once; the dropdown is active while typing "/name" (before a space).
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+
+  useEffect(() => {
+    api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
+  }, []);
+
+  const slashQuery = useMemo(() => {
+    if (slashDismissed || !draft.startsWith("/")) return null;
+    const after = draft.slice(1);
+    return after.includes(" ") ? null : after; // closes once a space is typed
+  }, [draft, slashDismissed]);
+
+  const slashMatches = useMemo(() => {
+    if (slashQuery === null) return [];
+    const q = slashQuery.toLowerCase();
+    return commands.filter(
+      (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+    );
+  }, [slashQuery, commands]);
+
+  const slashActive = slashMatches.length > 0;
+  const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+
+  function completeCommand(cmd: SlashCommand) {
+    setDraft(`/${cmd.name} `);
+    setSlashIndex(0);
+    setSlashDismissed(true); // a space follows, so it would close anyway
+    textareaRef.current?.focus();
+  }
 
   useEffect(() => {
     if (!visible) return;
@@ -271,24 +306,70 @@ function ChatSessionSlot({
         )}
       </div>
 
-      <form
-        className="composer"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
+      <div className="composer-wrap">
+        {slashActive ? (
+          <div className="slash-menu" role="listbox">
+            {slashMatches.map((cmd, index) => (
+              <button
+                type="button"
+                key={cmd.name}
+                role="option"
+                aria-selected={index === slashSel}
+                className={`slash-item${index === slashSel ? " active" : ""}`}
+                onMouseEnter={() => setSlashIndex(index)}
+                onClick={() => completeCommand(cmd)}
+              >
+                <span className="slash-name">/{cmd.name}</span>
+                <span className="slash-desc">{cmd.usage || cmd.description}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <form
+          className="composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
+          }}
+        >
         <textarea
+          ref={textareaRef}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setSlashDismissed(false); // re-open the menu when the input changes
+          }}
           onKeyDown={(event) => {
+            // Slash-command navigation takes priority while the menu is open.
+            if (slashActive) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setSlashIndex((i) => (i + 1) % slashMatches.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                event.preventDefault();
+                completeCommand(slashMatches[slashSel]);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setSlashDismissed(true);
+                return;
+              }
+            }
             // Cmd/Ctrl+Enter sends; plain Enter keeps inserting newlines.
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
               void send();
             }
           }}
-          placeholder="Message protoAgent  (⌘/Ctrl+Enter to send)"
+          placeholder="Message protoAgent  (/ for commands · ⌘/Ctrl+Enter to send)"
           rows={3}
         />
         {status === "streaming" ? (
@@ -302,7 +383,8 @@ function ChatSessionSlot({
             Send
           </button>
         )}
-      </form>
+        </form>
+      </div>
     </div>
   );
 }

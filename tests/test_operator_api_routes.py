@@ -178,3 +178,32 @@ def test_goals_routes_absent_when_not_wired() -> None:
         subagent_batch=lambda r: None,
     )
     assert TestClient(app).get("/api/goals").status_code == 404
+
+
+# ── slash commands ───────────────────────────────────────────────────────────
+
+
+def test_chat_commands_endpoint() -> None:
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        chat_commands=lambda: {"commands": [{"name": "goal", "description": "set a goal", "usage": "/goal ..."}]},
+    )
+    body = TestClient(app).get("/api/chat/commands").json()
+    assert body["commands"][0]["name"] == "goal"
+
+
+def test_chat_commands_absent_when_not_wired() -> None:
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+    )
+    assert TestClient(app).get("/api/chat/commands").status_code == 404
