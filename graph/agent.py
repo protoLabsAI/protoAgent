@@ -328,7 +328,7 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None, workflow_registry=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -440,7 +440,65 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
             parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
         return "\n\n".join(parts)
 
-    return [task, task_batch]
+    tools = [task, task_batch]
+
+    # Reusable declarative workflows (ADR 0002) — run a saved multi-step recipe
+    # over subagents. Only the lead agent gets this; subagents don't, so
+    # workflows can't recurse.
+    if getattr(config, "workflows_enabled", False) and workflow_registry is not None:
+        from graph.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
+
+        @tool
+        async def run_workflow(name: str = "", inputs: dict | None = None) -> str:
+            """Run a saved multi-step workflow recipe over subagents.
+
+            Workflows chain subagent steps (some in parallel), threading each
+            step's output into the next — for repeatable jobs like
+            research→synthesize→write. Pass an empty ``name`` to list the
+            available workflows and their inputs.
+
+            Args:
+                name: The workflow name (see the list with an empty name).
+                inputs: Mapping of the workflow's declared inputs to values.
+            """
+            if not name.strip():
+                summaries = workflow_registry.list()
+                if not summaries:
+                    return "No workflows are available."
+                lines = ["Available workflows:"]
+                for s in summaries:
+                    req = [i["name"] for i in s["inputs"] if i["required"]]
+                    lines.append(f"- {s['name']}: {s['description']} (inputs: {', '.join(req) or 'none required'})")
+                return "\n".join(lines)
+            recipe = workflow_registry.get(name)
+            if recipe is None:
+                return f"No workflow named {name!r}. Available: {', '.join(workflow_registry.names()) or '(none)'}."
+            errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
+            if errs:
+                return f"Workflow {name!r} is invalid: " + "; ".join(errs)
+            resolved, missing = resolve_inputs(recipe, inputs or {})
+            if missing:
+                return f"Workflow {name!r} needs input(s): {', '.join(missing)}."
+
+            async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+                return await _run_subagent(
+                    config=config,
+                    tool_map=tool_map,
+                    available_subagents=available_subagents,
+                    description=f"workflow {name}:{step_id}",
+                    prompt=prompt,
+                    subagent_type=subagent_type,
+                    emit_skill=False,
+                    truncate=truncate,
+                    skills_index=skills_index,
+                )
+
+            result = await execute_workflow(recipe, resolved, run_step=_run_step, max_concurrency=max_concurrency)
+            return result["output"]
+
+        tools.append(run_workflow)
+
+    return tools
 
 
 def create_agent_graph(
@@ -451,6 +509,7 @@ def create_agent_graph(
     extra_tools=None,
     include_subagents: bool = True,
     checkpointer=None,
+    workflow_registry=None,
 ):
     """Create the protoAgent LangGraph agent.
 
@@ -476,7 +535,9 @@ def create_agent_graph(
         all_tools.extend(extra_tools)
 
     if include_subagents:
-        all_tools.extend(_build_task_tools(config, all_tools, skills_index=skills_index))
+        all_tools.extend(_build_task_tools(
+            config, all_tools, skills_index=skills_index, workflow_registry=workflow_registry,
+        ))
 
     # Programmatic tool calling — opt-in. Built last so it can wrap every
     # other tool (including task/task_batch) but never itself.
