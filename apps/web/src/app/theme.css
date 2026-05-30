@@ -1766,3 +1766,107 @@ textarea {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ── Settings surface ─────────────────────────────────────────────────────── */
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: var(--radius);
+  background: rgba(212, 189, 79, 0.14);
+  border: 1px solid rgba(212, 189, 79, 0.32);
+  color: #eadf9a;
+  font-size: 0.82rem;
+}
+.settings-banner svg { flex: none; }
+.settings-status {
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+.settings-group {
+  margin-bottom: 18px;
+}
+.settings-group-title {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand-violet-light);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 14px;
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row.dirty {
+  /* subtle marker that this field has unsaved edits */
+  box-shadow: inset 2px 0 0 var(--brand-violet);
+  padding-left: 8px;
+}
+.setting-meta { min-width: 0; }
+.setting-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.86rem;
+  color: var(--fg);
+}
+.setting-restart {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(212, 189, 79, 0.16);
+  border: 1px solid rgba(212, 189, 79, 0.3);
+  color: #eadf9a;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.setting-desc {
+  margin: 3px 0 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.setting-control { min-width: 0; }
+.setting-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.setting-input:focus {
+  outline: none;
+  border-color: var(--brand-violet);
+}
+.setting-textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+.setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}

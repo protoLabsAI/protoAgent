@@ -67,6 +67,23 @@ export type SlashCommand = {
   usage?: string;
 };
 
+export type SettingsField = {
+  key: string;
+  label: string;
+  type: "string" | "number" | "bool" | "select" | "string_list" | "secret";
+  section: string;
+  description?: string;
+  restart: boolean;
+  options: string[];
+  default?: unknown;
+  value?: unknown; // absent for secrets
+  is_set?: boolean; // secrets only
+  minimum?: number;
+  maximum?: number;
+};
+
+export type SettingsGroup = { section: string; fields: SettingsField[] };
+
 export type GoalState = {
   session_id: string;
   condition: string;

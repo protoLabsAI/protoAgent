@@ -297,6 +297,20 @@ server — not the client — decides which directories they may read and write.
 - The runtime-status `project.allowed_dirs` field feeds the project-path
   picker's suggestions; it does not relax the server-side check.
 
+## Settings surface
+
+The **Settings** rail surface lets an operator manage every config field from
+the UI. It's **schema-driven**: `GET /api/settings/schema` returns the fields
+grouped by section with their type, current value, default, description, and a
+`restart` flag; the React surface (`apps/web/src/settings/SettingsSurface.tsx`)
+renders the inputs generically, so new config fields appear automatically
+without a UI change. Saving POSTs only the changed fields to `POST
+/api/settings`, which validates, writes the YAML (secrets split into
+`secrets.yaml`), and **hot-reloads the agent** in-process — most changes apply
+without a restart. The rare fields that need a process restart carry a `restart`
+badge and raise a banner when edited. Secrets are never echoed back (shown as
+`(set)` / `unset`). The field registry lives in `graph/settings_schema.py`.
+
 ## E2E smoke harness
 
 The console has a Playwright smoke suite under `apps/web/e2e/` that drives the
