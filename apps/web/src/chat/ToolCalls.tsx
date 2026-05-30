@@ -3,6 +3,7 @@ import {
   Check,
   ChevronRight,
   Clock,
+  Copy,
   Database,
   Globe,
   Loader2,
@@ -77,20 +78,60 @@ function ToolCard({ call }: { call: ToolCall }) {
       {open && hasDetail ? (
         <div className="tool-card-body">
           {call.input ? (
-            <div className="tool-card-section">
-              <span className="tool-card-label">input</span>
-              <ToolValue raw={call.input} role="input" tool={call.name} />
-            </div>
+            <ToolSection label="input" raw={call.input} role="input" tool={call.name} />
           ) : null}
           {call.output ? (
-            <div className="tool-card-section">
-              <span className="tool-card-label">result</span>
-              <ToolValue raw={call.output} role="output" tool={call.name} />
-            </div>
+            <ToolSection label="result" raw={call.output} role="output" tool={call.name} />
           ) : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ToolSection({
+  label,
+  raw,
+  role,
+  tool,
+}: {
+  label: string;
+  raw: string;
+  role: "input" | "output";
+  tool: string;
+}) {
+  return (
+    <div className="tool-card-section">
+      <div className="tool-section-head">
+        <span className="tool-card-label">{label}</span>
+        <CopyButton text={raw} />
+      </div>
+      <ToolValue raw={raw} role={role} tool={tool} />
+    </div>
+  );
+}
+
+/** Copies the raw value to the clipboard, flashing a check on success. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="tool-copy"
+      title="Copy to clipboard"
+      aria-label={copied ? "Copied" : "Copy"}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          // Clipboard unavailable (insecure context / denied) — no-op.
+        }
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+    </button>
   );
 }
 

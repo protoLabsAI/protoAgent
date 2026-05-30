@@ -633,6 +633,30 @@ select:disabled {
   text-transform: uppercase;
   color: var(--fg-muted);
 }
+.tool-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.tool-copy:hover {
+  opacity: 1;
+  color: var(--fg);
+  background: var(--bg-hover);
+}
 .tool-card-body pre {
   margin: 0;
   padding: 6px 8px;
