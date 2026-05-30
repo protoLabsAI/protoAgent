@@ -7,10 +7,10 @@ Covers the three shapes of traffic we see live:
 3. Native thinking — provider (MiniMax, DeepSeek, Qwen3) leaks
    `<think>...</think>` regions that the filter must also strip.
 
-We no longer parse mid-stream — ``_chat_langgraph_stream`` accumulates
-the model's tokens silently and passes the complete text through
-``extract_output`` exactly once on the terminal frame. So only the
-one-shot path is tested.
+The one-shot terminal path runs the complete text through ``extract_output``.
+The incremental path (``stream_visible_output``) streams the user-facing
+``<output>`` region token-by-token without leaking ``<scratch_pad>``; the
+terminal ``extract_output`` reconciles any held-back tail. Both are covered.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from graph.output_format import (
     OUTPUT_FORMAT_INSTRUCTIONS,
     _strip_reasoning,
     extract_output,
+    stream_visible_output,
 )
 
 
@@ -144,3 +145,59 @@ def test_not_dropped_when_no_reasoning_markers():
 def test_kicker_is_actionable():
     k = DROPPED_SCRATCH_KICKER.lower()
     assert "<output>" in k and ("tool" in k)
+
+
+# ── stream_visible_output (incremental token streaming) ──────────────────────
+
+
+def test_stream_visible_empty_while_in_scratch():
+    """Before <output> opens, nothing user-facing is streamed — the scratch_pad
+    must never leak token-by-token."""
+    assert stream_visible_output("<scratch_pad>still thinking about") == ""
+    assert stream_visible_output("") == ""
+    assert stream_visible_output("no tags yet") == ""
+
+
+def test_stream_visible_orphan_open_streams_content():
+    """An open <output> with no close yet (mid-stream) surfaces its content."""
+    assert stream_visible_output("<scratch_pad>x</scratch_pad><output>Hello there") == "Hello there"
+
+
+def test_stream_visible_closed_output():
+    assert stream_visible_output("<output>the answer</output>") == "the answer"
+
+
+def test_stream_visible_holds_back_partial_closing_tag():
+    """A half-written </output> must not flash on screen."""
+    assert stream_visible_output("<output>done </out") == "done "
+    assert stream_visible_output("<output>done<") == "done"
+
+
+def test_stream_visible_holds_back_partial_confidence_tag():
+    assert stream_visible_output("<output>answer</output><conf") == "answer"
+
+
+def test_stream_visible_strips_think_regions():
+    assert stream_visible_output("<output>A<think>noise</think>B</output>") == "AB"
+    assert stream_visible_output("<output>A<think>partial reasoning") == "A"
+
+
+def test_stream_visible_keeps_legit_angle_brackets():
+    """A '<' followed later by '>' is real content, not a partial tag."""
+    assert stream_visible_output("<output>a < b > c") == "a < b > c"
+
+
+def test_stream_visible_is_monotonic_prefix():
+    """As raw grows, the visible result only extends — so a caller can safely
+    emit result[already_emitted:] each step."""
+    chunks = ["<output>", "Hel", "lo wor", "ld</output><confidence>0.9</confidence>"]
+    raw = ""
+    seen = ""
+    for c in chunks:
+        raw += c
+        vis = stream_visible_output(raw)
+        assert vis.startswith(seen) or seen.startswith(vis)  # never diverges
+        seen = vis
+    assert seen == "Hello world"
+    # The terminal extractor agrees with the final streamed text.
+    assert extract_output(raw) == "Hello world"
