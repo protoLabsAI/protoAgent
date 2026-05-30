@@ -59,3 +59,9 @@ docs/.vitepress/cache/
 apps/desktop/src-tauri/binaries/
 # PyInstaller sidecar build workdir
 /build/sidecar/
+
+# Playwright E2E artifacts (apps/web smoke harness)
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
+apps/web/.playwright/

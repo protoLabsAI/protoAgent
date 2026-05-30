@@ -297,6 +297,28 @@ server — not the client — decides which directories they may read and write.
 - The runtime-status `project.allowed_dirs` field feeds the project-path
   picker's suggestions; it does not relax the server-side check.
 
+## E2E smoke harness
+
+The console has a Playwright smoke suite under `apps/web/e2e/` that drives the
+**built** SPA against a deterministic mock backend — no Python, langgraph,
+model, or network. It exists so the rendering contract (the part most likely to
+regress) is verifiable in CI.
+
+- `apps/web/e2e/mock-server.mjs` serves the built `dist/` *and* the subset of
+  the operator API + the `/a2a` SSE stream the console calls, with canned data
+  from `apps/web/e2e/fixtures.mjs`. The A2A scenario is chosen from the prompt
+  text (`MARKDOWN`, `OVERFLOW`, default) so specs can drive different paths.
+- Specs: `chat.spec.ts` (tool-call cards — collapsed-by-default, pretty-printed
+  JSON on expand, markdown answers, no horizontal overflow), `commands.spec.ts`
+  (slash-command autocomplete), `navigation.spec.ts` (every surface mounts; the
+  Runtime panel shows skills / MCP / plugins).
+- Run locally: `npm run test:e2e --workspace @protoagent/web` (builds first,
+  boots the mock server, runs headless). `test:e2e:ui` opens the Playwright UI.
+- CI: the **Web E2E smoke** job in `.github/workflows/checks.yml`.
+
+When you add a console feature, extend the mock fixtures + a spec rather than
+reaching for a live backend — keep the harness deterministic.
+
 ## Risks
 
 - A2A streaming events are not AI SDK data-stream events; the first chat UI
