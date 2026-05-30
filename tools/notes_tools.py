@@ -129,8 +129,9 @@ async def notes_write(tab: str, content: str, mode: str = "append", project_path
     else:
         new_content = f"{existing}\n{content}" if existing else content
 
-    found["content"] = new_content
     meta = found.setdefault("metadata", {})
+    _push_history(meta, existing)  # snapshot the pre-write content for undo
+    found["content"] = new_content
     meta["updatedAt"] = int(time.time() * 1000)
     meta["characterCount"] = len(new_content)
     meta["wordCount"] = len(new_content.split())
@@ -143,6 +144,58 @@ async def notes_write(tab: str, content: str, mode: str = "append", project_path
     return f"Updated the {found.get('name')!r} tab ({mode}). It now has {len(new_content)} chars."
 
 
+@tool
+async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str:
+    """Undo recent writes to a Notes tab, restoring an earlier version.
+
+    Use when asked to undo/revert a change to a tab. Reverts ``steps`` versions
+    back (default 1) from the per-tab history that ``notes_write`` records.
+
+    Args:
+        tab: Tab name (case-insensitive).
+        steps: How many versions to roll back (default 1).
+        project_path: Project whose notes to revert. Defaults to the current project.
+    """
+    proj = _project(project_path)
+    ws = _notes.load_workspace(proj)
+    _tid, found = _find_tab(ws, tab)
+    if found is None:
+        return f"No notes tab named {tab!r}. Use notes_list to see available tabs."
+    if not (found.get("permissions") or {}).get("agentWrite"):
+        return f"The {found.get('name')!r} tab is read-only for the agent (Agent write is off)."
+
+    meta = found.setdefault("metadata", {})
+    history = meta.get("history") or []
+    if not history:
+        return f"No earlier version of the {found.get('name')!r} tab to revert to."
+
+    steps = max(1, min(steps, len(history)))
+    restored = history[-steps]["content"]
+    meta["history"] = history[:-steps]  # drop the versions we rolled past
+    found["content"] = restored
+    meta["updatedAt"] = int(time.time() * 1000)
+    meta["characterCount"] = len(restored)
+    meta["wordCount"] = len(restored.split())
+    ws["workspaceVersion"] = int(ws.get("workspaceVersion", 0)) + 1
+
+    try:
+        _notes.save_workspace(proj, ws)
+    except Exception as e:  # noqa: BLE001
+        return f"Error: could not save notes: {e}"
+    return f"Reverted the {found.get('name')!r} tab {steps} version(s) back ({len(restored)} chars)."
+
+
+# Keep a short undo history per tab (newest last), capped.
+_MAX_NOTE_HISTORY = 10
+
+
+def _push_history(meta: dict, prev_content: str) -> None:
+    history = meta.setdefault("history", [])
+    history.append({"content": prev_content, "at": int(time.time() * 1000)})
+    if len(history) > _MAX_NOTE_HISTORY:
+        del history[: len(history) - _MAX_NOTE_HISTORY]
+
+
 def get_notes_tools() -> list:
     """The project-notes tools, gated per-tab by the operator's read/write toggles."""
-    return [notes_list, notes_read, notes_write]
+    return [notes_list, notes_read, notes_write, notes_revert]
