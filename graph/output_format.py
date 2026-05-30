@@ -66,7 +66,11 @@ Optionally, after `</output>`, you may self-report confidence:
 """.strip()
 
 
-_OUTPUT_RE = re.compile(r"<output>([\s\S]*?)</output>", re.IGNORECASE)
+# The closing tag must NOT be preceded by a backtick: a self-describing answer
+# mentions the protocol in inline code (`` `</output>` ``), and a non-greedy
+# match would otherwise close on that literal mention and truncate the reply.
+# The real closer ends normal prose, never a backtick.
+_OUTPUT_RE = re.compile(r"<output>([\s\S]*?)(?<!`)</output>", re.IGNORECASE)
 _SCRATCH_RE = re.compile(r"<scratch_pad>[\s\S]*?</scratch_pad>", re.IGNORECASE)
 _ORPHAN_SCRATCH_OPEN_RE = re.compile(r"<scratch_pad>[\s\S]*$", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
@@ -101,6 +105,27 @@ def _strip_reasoning(text: str) -> str:
     return text
 
 
+def _strip_reasoning_balanced(text: str) -> str:
+    """Strip only *balanced* reasoning blocks — no orphan eat-to-end variants.
+
+    For content inside a properly-closed ``<output>...</output>`` block, where
+    the text is the finished answer. The orphan strippers
+    (``<scratch_pad>[\\s\\S]*$``) would treat a literal tag *mention* in the
+    answer — e.g. the agent describing its own protocol ("I think in
+    ``<scratch_pad>`` then write ``<output>``") — as real leaked reasoning and
+    delete everything from that point to the end, silently truncating the
+    reply. A closed ``<output>`` can't have been truncated mid-reasoning, so
+    only balanced blocks are stripped here; the orphan eaters stay reserved for
+    the truncation-recovery tiers below.
+    """
+    text = _THINK_RE.sub("", text)
+    text = _ORPHAN_THINK_CLOSE_RE.sub("", text)
+    text = _SCRATCH_RE.sub("", text)
+    text = _CONFIDENCE_EXPL_BLOCK_RE.sub("", text)
+    text = _CONFIDENCE_BLOCK_RE.sub("", text)
+    return text
+
+
 _ORPHAN_OUTPUT_OPEN_RE = re.compile(r"<output>([\s\S]*)$", re.IGNORECASE)
 
 
@@ -125,9 +150,11 @@ def stream_visible_output(raw: str) -> str:
     if start == -1:
         return ""  # still in scratch_pad — nothing user-facing yet
     after = raw[start + len("<output>") :]
-    close = after.lower().find("</output>")
-    if close != -1:
-        after = after[:close]
+    # Close on the first real </output> — skip backtick-wrapped literal mentions
+    # (`` `</output>` ``) so a self-describing answer isn't cut short.
+    m = re.search(r"(?<!`)</output>", after, re.IGNORECASE)
+    if m:
+        after = after[: m.start()]
     # Strip provider reasoning that can appear inside the output region.
     after = _THINK_RE.sub("", after)
     after = _ORPHAN_THINK_OPEN_RE.sub("", after)
@@ -180,10 +207,12 @@ def extract_output(text: str) -> str:
     if not text or not text.strip():
         return ""
 
-    # 1. Closed <output>...</output>
+    # 1. Closed <output>...</output> — balanced-only stripping so a literal
+    #    tag mention in the answer (self-describing replies) isn't treated as
+    #    leaked reasoning and truncated.
     m = _OUTPUT_RE.search(text)
     if m:
-        cleaned = _strip_reasoning(m.group(1)).strip()
+        cleaned = _strip_reasoning_balanced(m.group(1)).strip()
         if cleaned:
             return cleaned
 

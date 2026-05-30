@@ -147,6 +147,57 @@ def test_kicker_is_actionable():
     assert "<output>" in k and ("tool" in k)
 
 
+# ── self-referential answers (literal tag mentions) ──────────────────────────
+
+
+def test_extract_output_keeps_literal_scratch_pad_mention():
+    """Regression: when the answer *describes the protocol* (e.g. "what can you
+    do?"), it names the tags in prose. A closed <output> must NOT treat a
+    literal `<scratch_pad>` mention as leaked reasoning and truncate the reply
+    at it — that silently cut answers off mid-sentence."""
+    raw = (
+        "<output>Here's what I can do: search and calculate.\n\n"
+        "My Approach\nI think in `<scratch_pad>` tags, then write the answer "
+        "in `<output>`.</output>"
+    )
+    out = extract_output(raw)
+    assert out.endswith("write the answer in `<output>`.")
+    assert "<scratch_pad>" in out  # the literal mention survives
+
+
+def test_extract_output_keeps_literal_close_tag_mention():
+    """Regression: a backtick-wrapped `</output>` mention in the answer must not
+    close the block early. The real closer ends prose, not a backtick."""
+    raw = (
+        "<output>How I work:\n1. Reason in `<scratch_pad>`\n"
+        "2. Answer in `<output>`\n3. Confidence goes after `</output>`.\n\n"
+        "That is the whole protocol.</output>"
+    )
+    out = extract_output(raw)
+    assert out.endswith("That is the whole protocol.")
+    assert "`</output>`" in out
+
+
+def test_extract_output_still_takes_first_of_two_real_blocks():
+    """The backtick guard must not change multi-block behavior: two real
+    (non-backticked) <output> blocks still resolve to the first."""
+    assert extract_output("<output>first</output> junk <output>second</output>") == "first"
+
+
+def test_extract_output_still_strips_balanced_reasoning_inside_output():
+    """The fix is scoped: balanced <think>/<scratch_pad> blocks inside a closed
+    <output> are still stripped (real provider leakage)."""
+    raw = "<output>before <scratch_pad>leaked plan</scratch_pad> after</output>"
+    assert extract_output(raw) == "before  after"
+
+
+def test_extract_output_orphan_tier_still_strips_truncated_scratch():
+    """An *orphan-open* <output> (max_tokens truncation) still uses the
+    eat-to-end stripper — that case really is truncated mid-reasoning."""
+    raw = "<output>partial answer <scratch_pad>then it got cut off mid-think"
+    assert extract_output(raw) == "partial answer"
+
+
 # ── stream_visible_output (incremental token streaming) ──────────────────────
 
 
