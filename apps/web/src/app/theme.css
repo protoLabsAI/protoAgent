@@ -365,13 +365,14 @@ h2 {
 
 .status-pill {
   min-height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  max-width: 240px;
+  display: inline-block;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 4px 8px;
   color: var(--fg-muted);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -538,9 +539,13 @@ select:disabled {
   flex-direction: column;
   gap: 6px;
   margin: 0 0 0.6em;
+  min-width: 0;
+  max-width: 100%;
   white-space: normal;
 }
 .tool-card {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-raised);

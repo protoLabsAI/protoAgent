@@ -425,5 +425,12 @@ function ChatSessionSlot({
 }
 
 function StatusPill({ label, tone }: { label: string; tone: "warning" | "error" | "muted" }) {
-  return <span className={`status-pill ${tone}`}>{label}</span>;
+  // Tool status lines can be long (e.g. "🔧 web_search: {…}"); keep the pill
+  // compact and surface the full text on hover. CSS also clamps the width.
+  const short = label.length > 56 ? `${label.slice(0, 55)}…` : label;
+  return (
+    <span className={`status-pill ${tone}`} title={label}>
+      {short}
+    </span>
+  );
 }
