@@ -6,6 +6,7 @@ Sixteen tools ship by default:
 - Four **GitHub read tools** — `github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff` (`tools/github_tools.py`) — over the `gh` CLI. Each requires an explicit `repo` (`owner/name`, no default); they degrade to a readable error if `gh`/auth is missing. Auth via `GITHUB_TOKEN`/`GH_TOKEN` env, else gh's ambient login.
 - Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
+- Three **project-notes tools** — `notes_list`, `notes_read`, `notes_write` — bridge the operator console's Notes panel tabs to the agent, gated per-tab by the operator's Agent-read/write toggles.
 
 `get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
 
@@ -200,6 +201,31 @@ async def cancel_schedule(job_id: str) -> str
 Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."`.
 
 Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path or a Workstacean install.
+
+## `notes_list` / `notes_read` / `notes_write`
+
+Read and write the **operator console's Notes panel** tabs — the human-curated
+notes the operator keeps in the UI, distinct from the agent's private
+`memory_*` store. Each tab carries `agentRead` / `agentWrite` permission
+toggles in the panel; these tools **honor them per tab**:
+
+```python
+@tool
+async def notes_list(project_path: str = "") -> str          # tabs + read/write flags
+async def notes_read(tab: str = "", project_path: str = "") -> str   # agent-readable tabs only
+async def notes_write(tab: str, content: str, mode: str = "append", project_path: str = "") -> str
+```
+
+- `notes_read` returns only tabs with **Agent read** on (a named tab with it off
+  reports "not shared", never the content); blank `tab` returns every readable tab.
+- `notes_write` only writes tabs with **Agent write** on, to an existing tab
+  (`append` or `replace`), and updates the tab's word/char counts.
+- `project_path` defaults to the current project (the repo root the Notes panel
+  shows); notes live at `<project>/.automaker/notes/workspace.json`.
+
+These bridge the Notes panel's permission toggles to the agent — without them,
+"what's on my Todo tab?" never reaches the notes (the agent would only see its
+`memory_*` store).
 
 ## Adding your own
 

@@ -521,6 +521,11 @@ def get_all_tools(knowledge_store=None, scheduler=None):
     # included — they degrade to a readable error if gh/auth is missing.
     from tools.github_tools import get_github_tools
     tools.extend(get_github_tools())
+    # Project-notes tools — read/write the operator console's Notes panel tabs,
+    # gated per-tab by the operator's Agent-read/write toggles. Always included
+    # so "what's on my Todo tab?" reaches the notes, not the memory store.
+    from tools.notes_tools import get_notes_tools
+    tools.extend(get_notes_tools())
     # A2A peer-consult tools — only when at least one PEER_<HANDLE>_URL is set,
     # so agents with no federation peers aren't cluttered.
     from tools.peer_tools import get_peer_tools, list_env_peers
