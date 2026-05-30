@@ -186,6 +186,13 @@ class LangGraphConfig:
     embed_model: str = "nomic-embed-text"
     knowledge_top_k: int = 5
 
+    # Conversation checkpointer — persists each chat session's history per
+    # thread_id so multi-turn chats survive a server restart. A path → durable
+    # SQLite (same /sandbox→~/.protoagent writable fallback as the stores);
+    # blank → in-memory (history cleared on restart). Bound at graph-compile
+    # time (see graph/checkpointer.py); changing the path needs a restart.
+    checkpoint_db_path: str = "/sandbox/checkpoints.db"
+
     # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
     # loaded from disk into the FTS5 skill index and retrieved at inference by
     # KnowledgeMiddleware. ``db_path`` follows the same /sandbox→~/.protoagent
@@ -323,6 +330,7 @@ class LangGraphConfig:
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
+            checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             skills_enabled=skills.get("enabled", cls.skills_enabled),

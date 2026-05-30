@@ -95,6 +95,9 @@ FIELDS: list[Field] = [
           minimum=1),
     Field("knowledge.embed_model", "embed_model", "Embedding model", "string", "Knowledge"),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
+    Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
+          "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
+          restart=True),
 
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),

@@ -85,6 +85,13 @@ compaction:
   keep_messages: 20
   # model: protolabs/fast
 
+# Conversation checkpointer — persists each chat session's history per
+# thread_id so multi-turn chats survive a server restart. Same
+# /sandbox→~/.protoagent writable fallback as the stores. Blank = in-memory
+# (history cleared on restart).
+checkpoint:
+  db_path: /sandbox/checkpoints.db
+
 # Model routing / failover.
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context
 #     summarization, goal verification, and subagent delegation all fall back

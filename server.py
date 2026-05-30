@@ -102,14 +102,16 @@ def _init_langgraph_agent():
 
     from graph.config import LangGraphConfig
     from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
-    from langgraph.checkpoint.memory import MemorySaver
 
     # Seed the untracked live config from the .example template on first run.
     # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
     # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
     _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
-    _checkpointer = MemorySaver()
+    # Conversation checkpointer: durable SQLite when a path is configured (chat
+    # history survives restarts), else in-memory. Bound into the graph at
+    # compile time below — a checkpointer in the invoke config is ignored.
+    _checkpointer = _build_checkpointer(_graph_config)
 
     if not is_setup_complete():
         _graph = None
@@ -284,6 +286,43 @@ def _build_plugins(config, existing_tools=None):
         from graph.plugins.loader import PluginLoadResult
 
         return PluginLoadResult()
+
+
+def _resolve_checkpoint_db(configured: str) -> str:
+    """Pick a writable checkpoint DB path; fall back to ~/.protoagent when the
+    configured dir (default /sandbox) isn't creatable (e.g. local dev)."""
+    import os
+    from pathlib import Path
+
+    candidate = Path(configured).expanduser()
+    try:
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        if os.access(candidate.parent, os.W_OK):
+            return str(candidate)
+    except OSError:
+        pass
+    fallback = Path.home() / ".protoagent" / "checkpoints.db"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    return str(fallback)
+
+
+def _build_checkpointer(config):
+    """Durable SQLite checkpointer when ``checkpoint_db_path`` is set, else an
+    in-memory saver (history cleared on restart). Falls back to in-memory if the
+    SQLite saver can't be built so a bad path never blocks boot."""
+    if not getattr(config, "checkpoint_db_path", ""):
+        from langgraph.checkpoint.memory import MemorySaver
+        return MemorySaver()
+    try:
+        from graph.checkpointer import build_sqlite_checkpointer
+        path = _resolve_checkpoint_db(config.checkpoint_db_path)
+        saver = build_sqlite_checkpointer(path)
+        log.info("[checkpointer] persistent chat history at %s", path)
+        return saver
+    except Exception:
+        log.exception("[checkpointer] SQLite init failed; using in-memory (history won't persist)")
+        from langgraph.checkpoint.memory import MemorySaver
+        return MemorySaver()
 
 
 def _resolve_skills_db(configured: str) -> str:
