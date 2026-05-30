@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type { ChatMessage } from "../lib/types";
 import { chatStore, MAX_ACTIVE_SESSIONS, useChatState } from "./chat-store";
+import { Markdown } from "./Markdown";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -257,7 +258,13 @@ function ChatSessionSlot({
             <article className={`message message-${message.role}`} key={message.id || `${message.role}-${message.createdAt}`}>
               <div className="message-role">{message.role}</div>
               <div className="message-body">
-                {message.content || (message.status === "streaming" ? <Loader2 className="spin" size={15} /> : null)}
+                {message.content
+                  ? message.role === "assistant"
+                    ? <Markdown>{message.content}</Markdown>
+                    : message.content
+                  : message.status === "streaming"
+                    ? <Loader2 className="spin" size={15} />
+                    : null}
               </div>
             </article>
           ))
