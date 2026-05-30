@@ -450,6 +450,7 @@ def create_agent_graph(
     skills_index=None,
     extra_tools=None,
     include_subagents: bool = True,
+    checkpointer=None,
 ):
     """Create the protoAgent LangGraph agent.
 
@@ -457,8 +458,15 @@ def create_agent_graph(
     (e.g. MCP-server tools discovered at startup). Appended before subagent /
     middleware assembly so they're in the tool map and visible to the model.
 
+    ``checkpointer`` persists conversation state per ``thread_id``: pass one so
+    multi-turn chats keep their history (the agent sees prior turns instead of
+    starting fresh each message). Compaction middleware summarizes the old part
+    of that history near the context limit. A checkpointer set only in the
+    invoke ``config`` is ignored by LangGraph — it must be bound at compile time.
+
     Returns a compiled graph that can be invoked with:
-        graph.ainvoke({"messages": [HumanMessage(content="...")]})
+        graph.ainvoke({"messages": [HumanMessage(content="...")]},
+                      config={"configurable": {"thread_id": "..."}})
     """
     llm = create_llm(config)
 
@@ -487,6 +495,7 @@ def create_agent_graph(
         tools=all_tools,
         middleware=middleware,
         system_prompt=system_prompt,
+        checkpointer=checkpointer,
     )
 
     return agent
