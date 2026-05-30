@@ -47,6 +47,8 @@ export default defineConfig({
             { text: "MCP servers", link: "/guides/mcp" },
             { text: "Plugins", link: "/guides/plugins" },
             { text: "Goal mode", link: "/guides/goal-mode" },
+            { text: "Scheduler", link: "/guides/scheduler" },
+            { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
           ],

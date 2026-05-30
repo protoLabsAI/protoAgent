@@ -199,6 +199,14 @@ For streaming, prefer A2A `message/stream` first because it already emits task
 state and tool progress. A later pass can add an AI-SDK-compatible `/api/chat`
 stream if we want to use `@ai-sdk/react` directly.
 
+The shipped chat surface already renders assistant markdown
+(`apps/web/src/chat/Markdown.tsx`), slash-command autocomplete from
+`GET /api/chat/commands`, and **live tool-call cards**: each tool the agent
+invokes streams in as a collapsible card (name, running→done/error state,
+input/result preview) via the `tool-call-v1` DataPart on `status-update`
+frames — see [Extensions § tool-call-v1](/reference/extensions#tool-call-v1)
+for the wire contract and `apps/web/src/chat/ToolCalls.tsx` for the renderer.
+
 ### 4. Manual Subagents
 
 Add a panel next to chat:
