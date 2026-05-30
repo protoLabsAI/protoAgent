@@ -104,6 +104,41 @@ def _strip_reasoning(text: str) -> str:
 _ORPHAN_OUTPUT_OPEN_RE = re.compile(r"<output>([\s\S]*)$", re.IGNORECASE)
 
 
+def stream_visible_output(raw: str) -> str:
+    """The portion of the user-facing ``<output>`` that's safe to show mid-stream.
+
+    Given a *partial* (still-streaming) raw response, returns only the text
+    inside the first (possibly still-open) ``<output>`` block, with reasoning
+    stripped and any partial trailing tag held back — so a half-written
+    ``</output>`` or ``<confidence>`` never flashes on screen. Returns ``""``
+    while the model is still in ``<scratch_pad>`` (before ``<output>`` opens),
+    so internal reasoning is never streamed.
+
+    This is the incremental counterpart to ``extract_output``: callers stream
+    the growing prefix of this, and the terminal artifact (full
+    ``extract_output``) reconciles any held-back tail at the end. Monotonic —
+    as ``raw`` grows, the result only ever extends (until ``</output>`` closes
+    it), so a caller can emit ``result[already_emitted:]`` each step.
+    """
+    low = raw.lower()
+    start = low.find("<output>")
+    if start == -1:
+        return ""  # still in scratch_pad — nothing user-facing yet
+    after = raw[start + len("<output>") :]
+    close = after.lower().find("</output>")
+    if close != -1:
+        after = after[:close]
+    # Strip provider reasoning that can appear inside the output region.
+    after = _THINK_RE.sub("", after)
+    after = _ORPHAN_THINK_OPEN_RE.sub("", after)
+    # Hold back a partial trailing tag ("</outp", "<conf", a lone "<") so it
+    # never flashes; the terminal replace delivers the full, clean text.
+    lt = after.rfind("<")
+    if lt != -1 and ">" not in after[lt:]:
+        after = after[:lt]
+    return after
+
+
 def extract_confidence(text: str) -> tuple[float | None, str | None]:
     """Parse an optional self-reported ``<confidence>`` (and explanation).
 

@@ -157,6 +157,16 @@ function scenarioFor(prompt) {
     return { name: "web_search", input: { query: "x" }, output: "Error: DuckDuckGo search failed: rate limited", answer: "Search failed." };
   if (t.includes("OVERFLOW"))
     return { name: "web_search", input: { token: "x".repeat(400) }, output: "y".repeat(400), answer: "done" };
+  if (t.includes("STREAM"))
+    return {
+      name: "web_search",
+      input: { query: "stream" },
+      output: DEFAULT_SEARCH_OUTPUT,
+      // Streamed token-by-token as append:true deltas, then reconciled by the
+      // terminal append:false frame (mirrors the real output-streaming path).
+      streamChunks: ["Testing ", "catches bugs ", "before users do."],
+      answer: "Testing catches bugs before users do.",
+    };
   if (t.includes("MARKDOWN"))
     return { name: "web_search", input: { query: "md" }, output: DEFAULT_SEARCH_OUTPUT, answer: MARKDOWN_ANSWER };
   return { name: "web_search", input: { max_results: 8, query: "AI coding agents latest news" }, output: DEFAULT_SEARCH_OUTPUT, answer: "Done — found 8 results." };
@@ -205,6 +215,20 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+  }
+  // Stream the answer as append:true deltas when the scenario asks for it,
+  // then always send the authoritative append:false terminal artifact.
+  for (const chunk of scenario.streamChunks || []) {
+    frames.push(
+      wrap({
+        kind: "artifact-update",
+        taskId,
+        contextId,
+        artifact: { artifactId: taskId, parts: [{ kind: "text", text: chunk }] },
+        append: true,
+        lastChunk: false,
+      }),
+    );
   }
   frames.push(
     wrap({
