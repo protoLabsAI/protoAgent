@@ -9,7 +9,7 @@ test("copy button writes the raw value to the clipboard", async ({ page }) => {
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill("CALC compute it");
-  await composer.press("Control+Enter");
+  await composer.press("Enter");
 
   const card = page.locator(".tool-card").first();
   await expect(card.locator(".tool-card-status.done")).toBeVisible();

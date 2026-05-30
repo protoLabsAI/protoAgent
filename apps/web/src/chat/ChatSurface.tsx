@@ -414,13 +414,32 @@ function ChatSessionSlot({
                 return;
               }
             }
-            // Cmd/Ctrl+Enter sends; plain Enter keeps inserting newlines.
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              void send();
+            // Enter sends; Cmd/Ctrl+Enter (and Shift+Enter) insert a newline.
+            if (event.key === "Enter") {
+              if (event.metaKey || event.ctrlKey) {
+                // Ctrl/Cmd+Enter → newline at the caret (the textarea wouldn't
+                // insert one for this combo on its own).
+                event.preventDefault();
+                const ta = textareaRef.current;
+                if (ta) {
+                  const start = ta.selectionStart;
+                  const end = ta.selectionEnd;
+                  const next = `${draft.slice(0, start)}\n${draft.slice(end)}`;
+                  setDraft(next);
+                  requestAnimationFrame(() => {
+                    ta.selectionStart = ta.selectionEnd = start + 1;
+                  });
+                }
+                return;
+              }
+              if (!event.shiftKey) {
+                // Plain Enter → send. (Shift+Enter falls through to a newline.)
+                event.preventDefault();
+                void send();
+              }
             }
           }}
-          placeholder="Message protoAgent  (/ for commands · ⌘/Ctrl+Enter to send)"
+          placeholder="Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
           rows={3}
         />
         {status === "streaming" ? (

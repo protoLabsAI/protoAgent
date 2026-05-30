@@ -10,7 +10,7 @@ test("assistant answer streams in and reconciles to the final text", async ({ pa
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill("STREAM the answer");
-  await composer.press("Control+Enter");
+  await composer.press("Enter");
 
   const answer = page.locator(".message-assistant .markdown");
   // Partial text appears before the full answer (append:true delta).

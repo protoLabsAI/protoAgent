@@ -9,7 +9,7 @@ test("subagent child tools nest under the task card", async ({ page }) => {
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill("SUBAGENT delegate this");
-  await composer.press("Control+Enter");
+  await composer.press("Enter");
 
   // The parent task card is top-level inside a group.
   const group = page.locator(".tool-calls > .tool-card-group");
