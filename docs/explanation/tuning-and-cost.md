@@ -102,7 +102,16 @@ a clean one.
 ```yaml
 checkpoint:
   db_path: /sandbox/checkpoints.db   # blank = in-memory
+  keep_per_thread: 5                 # latest checkpoints kept per session
+  max_age_days: 30                   # drop sessions idle longer than this (0 = never)
+  prune_interval_hours: 6            # sweep cadence (0 disables)
 ```
+
+A background **pruner** keeps the DB bounded: LangGraph writes ~3 checkpoint
+rows per turn and retains them all, but only the latest is needed to resume — so
+the sweep keeps the latest `keep_per_thread` per session and drops whole sessions
+idle past `max_age_days` (age decoded from the checkpoint's UUIDv6). The DB runs
+in WAL mode so the sweep coexists with live writes.
 
 ## What's already optimal
 

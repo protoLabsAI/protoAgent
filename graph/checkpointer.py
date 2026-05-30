@@ -47,6 +47,10 @@ class ThreadedSqliteSaver(SqliteSaver):
 def build_sqlite_checkpointer(db_path: str) -> ThreadedSqliteSaver:
     """Open (or create) the checkpoint DB and return a ready saver."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
+    # WAL lets the periodic pruner (separate connection) run while the agent
+    # writes; busy_timeout avoids spurious "database is locked" under contention.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     saver = ThreadedSqliteSaver(conn)
     saver.setup()  # create the checkpoint tables if absent (idempotent)
     return saver

@@ -98,6 +98,13 @@ FIELDS: list[Field] = [
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
           restart=True),
+    Field("checkpoint.keep_per_thread", "checkpoint_keep_per_thread", "History: keep N per session",
+          "number", "Knowledge", "Latest checkpoints retained per chat session.", minimum=1),
+    Field("checkpoint.max_age_days", "checkpoint_max_age_days", "History: max age (days)", "number",
+          "Knowledge", "Drop whole sessions idle longer than this (0 = never).", minimum=0),
+    Field("checkpoint.prune_interval_hours", "checkpoint_prune_interval_hours", "History: prune every (hours)",
+          "number", "Knowledge", "How often the prune sweep runs (0 disables it).", minimum=0,
+          restart=True),
 
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),

@@ -64,7 +64,9 @@ log = logging.getLogger("protoagent.server")
 
 _graph = None          # LangGraph compiled graph
 _graph_config = None   # LangGraphConfig
-_checkpointer = None   # MemorySaver for session persistence
+_checkpointer = None   # checkpointer for session persistence (sqlite or memory)
+_checkpoint_path = None  # resolved sqlite path when persistent (for the pruner)
+_checkpoint_prune_task = None  # background prune loop handle
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
@@ -315,14 +317,52 @@ def _build_checkpointer(config):
         return MemorySaver()
     try:
         from graph.checkpointer import build_sqlite_checkpointer
+        global _checkpoint_path
         path = _resolve_checkpoint_db(config.checkpoint_db_path)
         saver = build_sqlite_checkpointer(path)
+        _checkpoint_path = path
         log.info("[checkpointer] persistent chat history at %s", path)
         return saver
     except Exception:
         log.exception("[checkpointer] SQLite init failed; using in-memory (history won't persist)")
         from langgraph.checkpoint.memory import MemorySaver
         return MemorySaver()
+
+
+async def _checkpoint_prune_loop() -> None:
+    """Periodically trim the SQLite checkpoint DB (per-thread cap + age TTL).
+
+    Reads the path + knobs from the live globals each pass so a config reload
+    takes effect without restarting the loop. Failures are logged, never fatal.
+    """
+    import asyncio
+
+    from graph.checkpoint_prune import prune_checkpoints
+
+    await asyncio.sleep(60)  # let boot settle before the first sweep
+    while True:
+        cfg = _graph_config
+        path = _checkpoint_path
+        interval_h = getattr(cfg, "checkpoint_prune_interval_hours", 0) if cfg else 0
+        if path and cfg and interval_h > 0:
+            try:
+                max_age = (
+                    cfg.checkpoint_max_age_days * 86400 if cfg.checkpoint_max_age_days else None
+                )
+                res = await asyncio.to_thread(
+                    prune_checkpoints,
+                    path,
+                    keep_per_thread=cfg.checkpoint_keep_per_thread,
+                    max_age_seconds=max_age,
+                )
+                if res["threads_deleted"] or res["checkpoints_deleted"]:
+                    log.info(
+                        "[checkpoint-prune] removed %d idle thread(s), %d old checkpoint(s)",
+                        res["threads_deleted"], res["checkpoints_deleted"],
+                    )
+            except Exception:
+                log.exception("[checkpoint-prune] sweep failed")
+        await asyncio.sleep(max(1, interval_h) * 3600)
 
 
 def _resolve_skills_db(configured: str) -> str:
@@ -1584,6 +1624,15 @@ def _main():
                 await _cache_warmer.start()
             except Exception:
                 log.exception("[cache-warmer] startup failed")
+        # Checkpoint pruner — periodic sweep to keep the SQLite history DB bounded.
+        global _checkpoint_prune_task
+        if (
+            _checkpoint_path
+            and _graph_config is not None
+            and _graph_config.checkpoint_prune_interval_hours > 0
+        ):
+            import asyncio
+            _checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
@@ -1597,6 +1646,8 @@ def _main():
                 await _cache_warmer.stop()
             except Exception:
                 log.exception("[cache-warmer] shutdown failed")
+        if _checkpoint_prune_task is not None:
+            _checkpoint_prune_task.cancel()
 
     # --- Chat API -----------------------------------------------------------
     class ChatRequest(PydanticBaseModel):

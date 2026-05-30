@@ -91,6 +91,12 @@ compaction:
 # (history cleared on restart).
 checkpoint:
   db_path: /sandbox/checkpoints.db
+  # Pruning keeps the DB bounded: keep the latest N checkpoints per session,
+  # and drop whole sessions idle past max_age_days. Swept every
+  # prune_interval_hours (0 disables the sweep).
+  keep_per_thread: 5
+  max_age_days: 30
+  prune_interval_hours: 6
 
 # Model routing / failover.
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context

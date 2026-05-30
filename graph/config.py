@@ -192,6 +192,12 @@ class LangGraphConfig:
     # blank → in-memory (history cleared on restart). Bound at graph-compile
     # time (see graph/checkpointer.py); changing the path needs a restart.
     checkpoint_db_path: str = "/sandbox/checkpoints.db"
+    # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
+    # latest N checkpoints per session, and TTL whole sessions idle past
+    # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
+    checkpoint_keep_per_thread: int = 5
+    checkpoint_max_age_days: int = 30
+    checkpoint_prune_interval_hours: int = 6
 
     # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
     # loaded from disk into the FTS5 skill index and retrieved at inference by
@@ -331,6 +337,9 @@ class LangGraphConfig:
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
+            checkpoint_keep_per_thread=data.get("checkpoint", {}).get("keep_per_thread", cls.checkpoint_keep_per_thread),
+            checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
+            checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
