@@ -61,6 +61,18 @@ export type RuntimeStatus = {
   }[];
 };
 
+export type GoalState = {
+  session_id: string;
+  condition: string;
+  status: string;
+  verifier?: { type?: string } & Record<string, unknown>;
+  iteration?: number;
+  max_iterations?: number;
+  last_reason?: string;
+  started_at?: number;
+  finished_at?: number | null;
+};
+
 export type ScheduledJob = {
   id: string;
   prompt: string;

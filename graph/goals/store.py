@@ -98,3 +98,19 @@ class GoalStore:
         except OSError as exc:
             log.warning("[goal] clear failed for %s: %s", session_id, exc)
             return False
+
+    def all(self) -> list[GoalState]:
+        """Every persisted goal across sessions, newest-started first.
+
+        Best-effort: unreadable/corrupt files are skipped and logged. Used by
+        the console's Goals panel to list goals beyond the current session.
+        """
+        states: list[GoalState] = []
+        for path in self._base.glob("*.json"):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    states.append(GoalState.from_dict(json.load(fh)))
+            except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+                log.warning("[goal] skipping %s: %s", path, exc)
+        states.sort(key=lambda s: getattr(s, "started_at", 0) or 0, reverse=True)
+        return states

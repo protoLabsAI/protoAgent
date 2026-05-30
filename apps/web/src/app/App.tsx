@@ -18,6 +18,7 @@ import {
   Save,
   Settings2,
   Sparkles,
+  Target,
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -25,11 +26,11 @@ import type { ReactNode } from "react";
 
 import { ChatSurface } from "../chat/ChatSurface";
 import { api } from "../lib/api";
-import type { BeadsIssue, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
+import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "runtime" | "schedule";
+type Surface = "chat" | "subagents" | "runtime" | "schedule" | "goals";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -238,6 +239,9 @@ export function App() {
   const [scheduleJobId, setScheduleJobId] = useState("");
   const [scheduleBusy, setScheduleBusy] = useState(false);
 
+  const [goalsList, setGoalsList] = useState<GoalState[]>([]);
+  const [goalsBusy, setGoalsBusy] = useState(false);
+
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
 
   async function refreshRuntime() {
@@ -292,6 +296,28 @@ export function App() {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setScheduleBusy(false);
+    }
+  }
+
+  async function refreshGoals() {
+    try {
+      const payload = await api.goals();
+      setGoalsList(payload.goals);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  }
+
+  async function clearGoal(sessionId: string) {
+    if (goalsBusy) return;
+    setGoalsBusy(true);
+    try {
+      await api.clearGoal(sessionId);
+      await refreshGoals();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setGoalsBusy(false);
     }
   }
 
@@ -362,6 +388,7 @@ export function App() {
 
   useEffect(() => {
     if (surface === "schedule") void refreshSchedules();
+    if (surface === "goals") void refreshGoals();
   }, [surface]);
 
   async function runSubagent() {
@@ -680,6 +707,12 @@ export function App() {
             onClick={() => setSurface("schedule")}
           />
           <RailButton
+            active={surface === "goals"}
+            label="Goals"
+            icon={<Target size={18} />}
+            onClick={() => setSurface("goals")}
+          />
+          <RailButton
             active={surface === "runtime"}
             label="Runtime"
             icon={<Gauge size={18} />}
@@ -897,6 +930,67 @@ export function App() {
                   </div>
                 )}
               </div>
+              </div>
+            </section>
+          ) : null}
+
+          {surface === "goals" ? (
+            <section className="panel stage-panel">
+              <div className="panel-header">
+                <div>
+                  <h1>Goals</h1>
+                  <p className="panel-kicker">{goalsList.length} goal{goalsList.length === 1 ? "" : "s"}</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => void refreshGoals()} title="Refresh">
+                  {goalsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                </button>
+              </div>
+              <div className="stage-body">
+                <div className="subagent-list">
+                  {goalsList.length ? (
+                    goalsList.map((goal) => (
+                      <div className="subagent-row" key={goal.session_id}>
+                        <div>
+                          <strong>{goal.condition || goal.session_id}</strong>
+                          <span>
+                            {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}
+                            {goal.last_reason ? ` · ${goal.last_reason.length > 70 ? `${goal.last_reason.slice(0, 70)}…` : goal.last_reason}` : ""}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <StatusPill
+                            label={goal.status}
+                            tone={
+                              goal.status === "achieved"
+                                ? "success"
+                                : goal.status === "active"
+                                  ? "warning"
+                                  : goal.status === "unachievable"
+                                    ? "error"
+                                    : "muted"
+                            }
+                          />
+                          <button
+                            className="icon-button"
+                            type="button"
+                            onClick={() => void clearGoal(goal.session_id)}
+                            disabled={goalsBusy}
+                            title="Clear goal"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="subagent-row">
+                      <div>
+                        <strong>No goals</strong>
+                        <span>set one in chat with <code>/goal …</code></span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </section>
           ) : null}

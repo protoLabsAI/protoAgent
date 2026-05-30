@@ -95,6 +95,8 @@ def register_operator_routes(
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -229,5 +231,26 @@ def register_operator_routes(
         async def _scheduler_cancel(job_id: str):
             try:
                 return await scheduler_cancel(job_id)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # --- Goals ---------------------------------------------------------------
+    # List goals across sessions + clear one. Goals are *set* in chat (`/goal`);
+    # the console surface is a read + clear view.
+    if goal_list is not None:
+
+        @app.get("/api/goals")
+        async def _goals():
+            try:
+                return await goal_list()
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if goal_clear is not None:
+
+        @app.delete("/api/goals/{session_id}")
+        async def _goal_clear(session_id: str):
+            try:
+                return await goal_clear(session_id)
             except Exception as exc:
                 raise _http_error(exc) from exc

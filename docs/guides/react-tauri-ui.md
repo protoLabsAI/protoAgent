@@ -146,6 +146,7 @@ Add these before the React UI depends on them:
 | `GET/POST /api/beads/issues` | list/create/update/close/delete issues through `br --json` |
 | `GET/POST /api/notes/workspace` | load/save the notes workspace file |
 | `GET/POST /api/scheduler/jobs`, `DELETE /api/scheduler/jobs/{id}` | list/create/cancel scheduled jobs over the active `SchedulerBackend` |
+| `GET /api/goals`, `DELETE /api/goals/{session_id}` | list goals across sessions / clear one (goals are *set* in chat via `/goal`) |
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

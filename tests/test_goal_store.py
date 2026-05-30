@@ -42,3 +42,23 @@ def test_forward_compatible_unknown_keys(tmp_path):
     p.write_text('{"session_id": "s3", "condition": "x", "future_key": 1}')
     loaded = store.get("s3")
     assert loaded is not None and loaded.condition == "x"
+
+
+def test_all_lists_every_session(tmp_path):
+    store = GoalStore(tmp_path)
+    store.set(GoalState(session_id="s1", condition="first"))
+    store.set(GoalState(session_id="s2", condition="second"))
+    store.set(GoalState(session_id="s3", condition="third"))
+
+    states = store.all()
+    assert {s.session_id for s in states} == {"s1", "s2", "s3"}
+    assert {s.condition for s in states} == {"first", "second", "third"}
+
+
+def test_all_empty_and_skips_corrupt(tmp_path):
+    store = GoalStore(tmp_path)
+    assert store.all() == []
+    store.set(GoalState(session_id="ok", condition="c"))
+    (tmp_path / "broken.json").write_text("{ not json")  # must be skipped, not raise
+    states = store.all()
+    assert [s.session_id for s in states] == ["ok"]

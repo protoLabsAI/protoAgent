@@ -1432,6 +1432,20 @@ def _main():
         canceled = await asyncio.to_thread(_scheduler.cancel_job, job_id)
         return {"canceled": bool(canceled)}
 
+    async def _operator_goals_list() -> dict:
+        import asyncio
+        if _goal_controller is None:
+            return {"goals": [], "enabled": False}
+        states = await asyncio.to_thread(_goal_controller.store.all)
+        return {"goals": [s.to_dict() for s in states], "enabled": True}
+
+    async def _operator_goals_clear(session_id: str) -> dict:
+        import asyncio
+        if _goal_controller is None:
+            return {"cleared": False, "enabled": False}
+        cleared = await asyncio.to_thread(_goal_controller.store.clear, session_id)
+        return {"cleared": bool(cleared)}
+
     register_operator_routes(
         fastapi_app,
         runtime_status=_operator_runtime_status,
@@ -1442,6 +1456,8 @@ def _main():
         scheduler_list=_operator_scheduler_list,
         scheduler_add=_operator_scheduler_add,
         scheduler_cancel=_operator_scheduler_cancel,
+        goal_list=_operator_goals_list,
+        goal_clear=_operator_goals_clear,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

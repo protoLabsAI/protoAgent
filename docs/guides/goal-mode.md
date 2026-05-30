@@ -38,6 +38,15 @@ Send a control message through any channel (A2A, Gradio chat, OpenAI-compat):
 
 Programmatic status/clear is also available: `GET /api/goal/{session_id}` and `DELETE /api/goal/{session_id}`.
 
+## Manage from the console
+
+The React console's **Goals** surface lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), iteration count, verifier type, and the latest verifier reason — and lets you **clear** any of them. Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers, so it stays an explicit in-chat action); the panel is a read-and-clear view. Backed by:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/goals` | List all goals across sessions (`{goals, enabled}`) |
+| `DELETE` | `/api/goals/{session_id}` | Clear one (`{cleared}`) |
+
 ## Verifier types
 
 Set via `verifier.type` in the JSON spec:

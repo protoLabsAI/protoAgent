@@ -3,6 +3,7 @@ import type {
   BeadsIssue,
   ChatMessage,
   ConfigPayload,
+  GoalState,
   NotesWorkspace,
   RuntimeStatus,
   ScheduledJob,
@@ -218,6 +219,16 @@ export const api = {
 
   cancelSchedule(jobId: string) {
     return request<{ canceled: boolean }>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  goals() {
+    return request<{ goals: GoalState[]; enabled: boolean }>("/api/goals");
+  },
+
+  clearGoal(sessionId: string) {
+    return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
     });
   },

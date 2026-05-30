@@ -126,3 +126,55 @@ def test_operator_routes_map_value_errors_to_400() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "bad prompt"
+
+
+# ── goals routes (list + clear) ──────────────────────────────────────────────
+
+
+def _goals_client(*, goals=None, on_clear=None):
+    app = FastAPI()
+
+    async def glist():
+        return {"goals": goals if goals is not None else [], "enabled": True}
+
+    async def gclear(session_id):
+        if on_clear:
+            on_clear(session_id)
+        return {"cleared": True}
+
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        goal_list=glist,
+        goal_clear=gclear,
+    )
+    return TestClient(app)
+
+
+def test_goals_list_and_clear() -> None:
+    seen = {}
+    client = _goals_client(
+        goals=[{"session_id": "s1", "condition": "ship it", "status": "active", "iteration": 2}],
+        on_clear=lambda sid: seen.update(id=sid),
+    )
+    body = client.get("/api/goals").json()
+    assert body["enabled"] is True
+    assert body["goals"][0]["session_id"] == "s1" and body["goals"][0]["status"] == "active"
+
+    assert client.delete("/api/goals/s1").json() == {"cleared": True}
+    assert seen["id"] == "s1"
+
+
+def test_goals_routes_absent_when_not_wired() -> None:
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+    )
+    assert TestClient(app).get("/api/goals").status_code == 404
