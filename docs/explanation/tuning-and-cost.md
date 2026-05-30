@@ -40,16 +40,20 @@ graph — but for deterministic behavior on a profile-less model, set
 
 ## Aux-model routing
 
-Not every model call is the hard reasoning task. Summarization and goal
-verification are classification-grade work — route them to a cheaper, faster
-alias and reserve the reasoning model for the actual turn:
+Not every model call is the hard reasoning task. Context summarization, goal
+verification, and **subagent delegation** are lighter work — route them to a
+cheaper, faster alias and reserve the reasoning model for the lead turn. One
+knob covers all three:
 
 ```yaml
-compaction:
-  model: protolabs/fast
-goal:
-  eval_model: protolabs/fast
+routing:
+  aux_model: protolabs/fast
 ```
+
+Each path resolves **specific override → `routing.aux_model` → main model**, so
+you can still pin an individual path: `compaction.model`, `goal.eval_model`, or
+a per-subagent `model` (in `graph/subagents/config.py`) — e.g. keep a
+heavy-reasoning subagent on the main model while the rest run on the fast alias.
 
 ## Programmatic tool calling (`execute_code`)
 

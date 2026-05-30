@@ -157,6 +157,12 @@ class LangGraphConfig:
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
 
+    # Auxiliary model — a single cheap/fast alias for the non-reasoning calls
+    # (context summarization, goal verification, subagent delegation). Each of
+    # those paths uses its own specific override if set, else falls back to
+    # this, else the main model. Blank = everything on the main model.
+    aux_model: str = ""
+
     # Goal mode — testable-outcome goals the agent self-drives toward. The
     # machinery is available when enabled, but no goal is active until one is
     # set via `/goal` (a control message) or the /goal HTTP endpoints. After
@@ -308,6 +314,7 @@ class LangGraphConfig:
             execute_code_tools=data.get("execute_code", {}).get("tools", []),
             execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
+            aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
             goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),

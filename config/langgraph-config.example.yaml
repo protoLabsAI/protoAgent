@@ -85,14 +85,18 @@ compaction:
   keep_messages: 20
   # model: protolabs/fast
 
-# Model routing / failover — on a primary error, retry on each fallback model
-# (same gateway) in order. Empty = no failover.
+# Model routing / failover.
+#   aux_model: ONE cheap/fast alias for the non-reasoning calls — context
+#     summarization, goal verification, and subagent delegation all fall back
+#     to it unless they set a specific override. Blank = main model everywhere.
+#   fallback_models: on a primary error, retry on each in order. Empty = none.
 routing:
+  # aux_model: protolabs/fast
   fallback_models: []
   #  - claude-haiku-4-5
 
-# Goal mode — route the goal verifier (classification, not the main reasoning
-# task) to a cheaper model with `eval_model`. Blank = main model.
+# Goal mode — route the goal verifier to a cheaper model with `eval_model`
+# (else it uses routing.aux_model, else the main model).
 goal:
   # eval_model: protolabs/fast
   max_iterations: 8

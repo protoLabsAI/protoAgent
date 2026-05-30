@@ -35,6 +35,10 @@ class SubagentConfig:
     tools: list[str] = field(default_factory=list)
     disallowed_tools: list[str] = field(default_factory=lambda: ["task"])
     max_turns: int = 30
+    # Per-subagent model override. Blank = fall back to routing.aux_model, then
+    # the main model. Pin a subagent that needs heavy reasoning to the main
+    # model even when aux_model routes the others to a cheaper alias.
+    model: str = ""
     # When False, skill-v1 artifact emission is suppressed even if the caller
     # passes emit_skill=True to task(). Set to False for subagents whose
     # workflows should not be captured as reusable skills (e.g. agents that

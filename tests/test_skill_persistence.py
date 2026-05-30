@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from graph.config import LangGraphConfig
 from graph.skills.index import SkillsIndex
 
 
@@ -125,7 +126,7 @@ async def test_run_subagent_persists_emitted_skill(tmp_path, monkeypatch) -> Non
 
     idx = SkillsIndex(str(tmp_path / "s.db"))
     out = await agentmod._run_subagent(
-        llm=object(),
+        config=LangGraphConfig(),
         tool_map={"web_search": web_search},
         available_subagents="researcher",
         description="find the capital of France",
@@ -159,7 +160,7 @@ async def test_run_subagent_no_persist_without_index(tmp_path, monkeypatch) -> N
         return ""
 
     out = await agentmod._run_subagent(
-        llm=object(), tool_map={"web_search": web_search}, available_subagents="researcher",
+        config=LangGraphConfig(), tool_map={"web_search": web_search}, available_subagents="researcher",
         description="x", prompt="y", subagent_type="researcher", emit_skill=True, skills_index=None,
     )
     assert "ok" in out

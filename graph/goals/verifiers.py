@@ -176,7 +176,13 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
 
         from graph.llm import create_llm
 
-        model_name = getattr(ctx.config, "goal_eval_model", "") or None
+        # Goal verification is classification, not the main reasoning task:
+        # eval_model override → routing.aux_model → main model.
+        model_name = (
+            getattr(ctx.config, "goal_eval_model", "")
+            or getattr(ctx.config, "aux_model", "")
+            or None
+        )
         llm = create_llm(ctx.config, model_name=model_name)
         prompt = (
             f"GOAL: {spec.get('condition') or ctx.condition}\n\n"

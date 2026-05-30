@@ -69,7 +69,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     # Context compaction — summarize old history near the context limit.
     if config.compaction_enabled:
         from langchain.agents.middleware import SummarizationMiddleware
-        summ_model = create_llm(config, model_name=config.compaction_model or None)
+        summ_model = create_llm(config, model_name=_resolve_aux_model(config, config.compaction_model))
         keep = ("messages", config.compaction_keep_messages)
         try:
             mw = SummarizationMiddleware(
@@ -103,6 +103,16 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     return middleware
 
 
+def _resolve_aux_model(config, specific: str = "") -> str | None:
+    """Pick the model for an auxiliary call: a specific override, else the
+    shared ``routing.aux_model`` fast alias, else None (→ the main model)."""
+    for candidate in (specific, getattr(config, "aux_model", "")):
+        cleaned = (candidate or "").strip()
+        if cleaned:
+            return cleaned
+    return None
+
+
 def _parse_compaction_trigger(spec: str):
     """Parse 'fraction:0.8' / 'tokens:120000' / 'messages:80' → langchain trigger tuple."""
     try:
@@ -119,7 +129,7 @@ def _parse_compaction_trigger(spec: str):
 
 async def _run_subagent(
     *,
-    llm,
+    config,
     tool_map: dict,
     available_subagents: str,
     description: str,
@@ -148,8 +158,11 @@ async def _run_subagent(
     if not sub_tools:
         return f"Error: No tools available for subagent '{subagent_type}'."
 
+    # Subagent model: per-subagent override → routing.aux_model → main model.
+    sub_llm = create_llm(config, model_name=_resolve_aux_model(config, getattr(sub_config, "model", "")))
+
     subagent = create_agent(
-        model=llm,
+        model=sub_llm,
         tools=sub_tools,
         middleware=[AuditMiddleware()],
         system_prompt=build_subagent_prompt(subagent_type),
@@ -249,13 +262,12 @@ async def run_manual_subagent(
     work. It intentionally uses the same private runner as ``task`` so audit,
     prompt, max-turn, and one-level delegation behavior stay aligned.
     """
-    llm = create_llm(config)
     all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
     tool_map = {t.name: t for t in all_tools}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
     return await _run_subagent(
-        llm=llm,
+        config=config,
         tool_map=tool_map,
         available_subagents=available_subagents,
         description=description,
@@ -329,7 +341,6 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
 
     from langchain_core.tools import tool
 
-    llm = create_llm(config)
     tool_map = {t.name: t for t in all_tools}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
     max_concurrency = max(1, config.subagent_max_concurrency)
@@ -358,7 +369,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 or when the subagent config has allow_skill_emission=False.
         """
         return await _run_subagent(
-            llm=llm,
+            config=config,
             tool_map=tool_map,
             available_subagents=available_subagents,
             description=description,
@@ -407,7 +418,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 return f"Error: task '{desc}' is missing 'prompt'."
             async with sem:
                 return await _run_subagent(
-                    llm=llm,
+                    config=config,
                     tool_map=tool_map,
                     available_subagents=available_subagents,
                     description=desc,
