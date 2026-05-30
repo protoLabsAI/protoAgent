@@ -1793,29 +1793,29 @@ textarea {
   font-family: var(--font-mono);
 }
 .settings-group {
-  margin-bottom: 18px;
+  margin-bottom: 28px;
 }
 .settings-group-title {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   font-size: 0.72rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--brand-violet-light);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
+  padding-bottom: 8px;
 }
 .setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
-  gap: 14px;
-  align-items: start;
-  padding: 9px 0;
+  gap: 24px;
+  align-items: center;
+  padding: 16px 4px;
   border-bottom: 1px solid var(--border);
 }
 .setting-row.dirty {
   /* subtle marker that this field has unsaved edits */
   box-shadow: inset 2px 0 0 var(--brand-violet);
-  padding-left: 8px;
+  padding-left: 10px;
 }
 .setting-meta { min-width: 0; }
 .setting-label {
@@ -1845,7 +1845,7 @@ textarea {
 .setting-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px;
+  padding: 9px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
