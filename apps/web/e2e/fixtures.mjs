@@ -99,6 +99,45 @@ export const NOTES_WORKSPACE = {
   },
 };
 
+// Settings schema the Settings surface renders. Exercises every input type
+// plus a restart-flagged field.
+export const SETTINGS_SCHEMA = [
+  {
+    section: "Model",
+    fields: [
+      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/agent" },
+      { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2 },
+      { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true },
+    ],
+  },
+  {
+    section: "Routing",
+    fields: [
+      { key: "routing.aux_model", label: "Auxiliary (fast) model", type: "string", section: "Routing", restart: false, description: "Cheap alias for aux calls.", options: [], value: "protolabs/fast", default: "" },
+      { key: "routing.fallback_models", label: "Fallback models", type: "string_list", section: "Routing", restart: false, description: "", options: [], value: [], default: [] },
+    ],
+  },
+  {
+    section: "Compaction",
+    fields: [
+      { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true },
+    ],
+  },
+  {
+    section: "Runtime",
+    fields: [
+      { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false },
+    ],
+  },
+];
+
+/** restart_required for a flat updates payload, per the schema. */
+export function settingsRestartRequired(updates) {
+  const flagged = new Set();
+  for (const g of SETTINGS_SCHEMA) for (const f of g.fields) if (f.restart) flagged.add(f.key);
+  return Object.keys(updates || {}).filter((k) => flagged.has(k));
+}
+
 const MARKDOWN_ANSWER = [
   "## Summary",
   "",

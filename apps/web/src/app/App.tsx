@@ -25,12 +25,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ChatSurface } from "../chat/ChatSurface";
+import { SettingsSurface } from "../settings/SettingsSurface";
 import { api } from "../lib/api";
 import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "runtime" | "schedule" | "goals";
+type Surface = "chat" | "subagents" | "runtime" | "schedule" | "goals" | "settings";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -718,6 +719,12 @@ export function App() {
             icon={<Gauge size={18} />}
             onClick={() => setSurface("runtime")}
           />
+          <RailButton
+            active={surface === "settings"}
+            label="Settings"
+            icon={<Settings2 size={18} />}
+            onClick={() => setSurface("settings")}
+          />
         </aside>
 
         <main className="stage">
@@ -1089,6 +1096,8 @@ export function App() {
               </div>
             </section>
           ) : null}
+
+          {surface === "settings" ? <SettingsSurface onError={setError} /> : null}
         </main>
 
         <aside className="right-panel">

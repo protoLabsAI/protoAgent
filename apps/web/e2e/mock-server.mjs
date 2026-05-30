@@ -19,6 +19,8 @@ import {
   NOTES_WORKSPACE,
   RUNTIME_STATUS,
   SCHEDULER_JOBS,
+  SETTINGS_SCHEMA,
+  settingsRestartRequired,
   SLASH_COMMANDS,
   SUBAGENTS,
 } from "./fixtures.mjs";
@@ -76,6 +78,8 @@ function handleApiGet(pathname) {
       return { initialized: false };
     case "/api/beads/issues":
       return { issues: [] };
+    case "/api/settings/schema":
+      return { groups: SETTINGS_SCHEMA };
     default:
       return null;
   }
@@ -148,7 +152,14 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { detail: "not mocked" }, 404);
     }
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
-    await readBody(req);
+    const body = await readBody(req);
+    if (pathname === "/api/settings") {
+      return sendJson(res, {
+        ok: true,
+        messages: ["config saved", "reloaded • model=protolabs/reasoning"],
+        restart_required: settingsRestartRequired(body.updates),
+      });
+    }
     return sendJson(res, { ok: true });
   }
   if (req.method !== "GET") {

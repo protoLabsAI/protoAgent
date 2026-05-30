@@ -8,6 +8,7 @@ import type {
   RuntimeStatus,
   ScheduledJob,
   SetupStatus,
+  SettingsGroup,
   SlashCommand,
   Subagent,
   ToolEvent,
@@ -254,6 +255,17 @@ export const api = {
 
   chatCommands() {
     return request<{ commands: SlashCommand[] }>("/api/chat/commands");
+  },
+
+  settingsSchema() {
+    return request<{ groups: SettingsGroup[] }>("/api/settings/schema");
+  },
+
+  saveSettings(updates: Record<string, unknown>) {
+    return request<{ ok: boolean; messages: string[]; restart_required: string[] }>("/api/settings", {
+      method: "POST",
+      body: { updates },
+    });
   },
 
   chat(message: string, sessionId: string) {
