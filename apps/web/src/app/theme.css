@@ -221,6 +221,17 @@ h2 {
   overflow-y: auto;
 }
 
+/* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
+   Subagents) — inset to align with the inset rows (.table-row padding) below
+   them, with vertical separation from the preceding block. */
+.stage-body > .panel-kicker {
+  padding: 0 12px;
+  margin: 22px 0 8px;
+}
+.stage-body > .panel-kicker:first-child {
+  margin-top: 12px;
+}
+
 .side-panel {
   height: 100%;
   display: grid;
@@ -1793,7 +1804,7 @@ textarea {
   font-family: var(--font-mono);
 }
 .settings-group {
-  margin-bottom: 28px;
+  margin-bottom: 40px;
 }
 .settings-group-title {
   margin: 0 0 4px;
@@ -1806,10 +1817,10 @@ textarea {
 }
 .setting-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 28px;
   align-items: center;
-  padding: 16px 4px;
+  padding: 26px 6px;
   border-bottom: 1px solid var(--border);
 }
 .setting-row.dirty {
@@ -1845,7 +1856,7 @@ textarea {
 .setting-input {
   width: 100%;
   box-sizing: border-box;
-  padding: 9px 10px;
+  padding: 11px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
