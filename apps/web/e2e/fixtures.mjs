@@ -141,6 +141,18 @@ function scenarioFor(prompt) {
       output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
       answer: "Fetched example.com.",
     };
+  if (t.includes("SUBAGENT"))
+    return {
+      answer: "Delegated research to a subagent and summarized.",
+      // Explicit nested order: the child web_search starts while the `task`
+      // tool is still running, so the client groups it under the task.
+      events: [
+        { id: "task-1", name: "task", phase: "start", input: JSON.stringify({ description: "Research coding agents", prompt: "Find the major coding agents." }) },
+        { id: "child-1", name: "web_search", phase: "start", input: JSON.stringify({ query: "coding agents" }) },
+        { id: "child-1", name: "web_search", phase: "end", output: "1 result(s) for 'coding agents':\n1. Example — https://example.com/x\n   A snippet." },
+        { id: "task-1", name: "task", phase: "end", output: "Subagent finished: found 1 result." },
+      ],
+    };
   if (t.includes("TOOLERR"))
     return { name: "web_search", input: { query: "x" }, output: "Error: DuckDuckGo search failed: rate limited", answer: "Search failed." };
   if (t.includes("OVERFLOW"))
@@ -157,18 +169,10 @@ function scenarioFor(prompt) {
  */
 export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   const scenario = scenarioFor(prompt);
-  const toolInput = JSON.stringify(scenario.input);
-  const toolOutput = scenario.output;
-  const answer = scenario.answer;
-
   const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
-  const toolEvent = (phase, extra) => ({
-    id: "run-e2e-1",
-    name: scenario.name,
-    phase,
-    ...extra,
-  });
-  const statusWithTool = (stateText, phase, extra) =>
+
+  // A status-update frame carrying optional text + a tool-call DataPart.
+  const statusFrame = (text, toolEvent) =>
     wrap({
       kind: "status-update",
       taskId,
@@ -178,33 +182,40 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
         message: {
           role: "agent",
           parts: [
-            { kind: "text", text: stateText },
-            { kind: "data", data: toolEvent(phase, extra), metadata: { mimeType: TOOL_CALL_MIME } },
+            { kind: "text", text },
+            ...(toolEvent ? [{ kind: "data", data: toolEvent, metadata: { mimeType: TOOL_CALL_MIME } }] : []),
           ],
         },
       },
       final: false,
     });
 
-  return [
+  // Single-tool scenarios synthesize a start/end pair; multi-tool scenarios
+  // (e.g. SUBAGENT) provide their own ordered event list.
+  const toolEvents =
+    scenario.events || [
+      { id: "run-e2e-1", name: scenario.name, phase: "start", input: JSON.stringify(scenario.input) },
+      { id: "run-e2e-1", name: scenario.name, phase: "end", output: scenario.output },
+    ];
+
+  const frames = [
     wrap({ kind: "task", id: taskId, contextId, status: { state: "submitted" }, artifacts: [] }),
-    wrap({
-      kind: "status-update",
-      taskId,
-      contextId,
-      status: { state: "working", message: { role: "agent", parts: [{ kind: "text", text: "working…" }] } },
-      final: false,
-    }),
-    statusWithTool(`🔧 ${scenario.name}: ${toolInput}`, "start", { input: toolInput }),
-    statusWithTool(`✅ ${scenario.name} → ${toolOutput}`, "end", { output: toolOutput }),
+    statusFrame("working…", null),
+  ];
+  for (const ev of toolEvents) {
+    const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
+    frames.push(statusFrame(text, ev));
+  }
+  frames.push(
     wrap({
       kind: "artifact-update",
       taskId,
       contextId,
-      artifact: { artifactId: taskId, parts: [{ kind: "text", text: answer }] },
+      artifact: { artifactId: taskId, parts: [{ kind: "text", text: scenario.answer }] },
       append: false,
       lastChunk: true,
     }),
     wrap({ kind: "status-update", taskId, contextId, status: { state: "completed" }, final: true }),
-  ];
+  );
+  return frames;
 }

@@ -36,11 +36,45 @@ function iconFor(name: string): LucideIcon {
  * the tool-call DataPart. Mirrors ProtoMaker's chat tool-call cards.
  */
 export function ToolCalls({ calls }: { calls: ToolCall[] }) {
+  // Group children (tools that ran inside a `task` subagent) under their parent.
+  const childrenByParent = new Map<string, ToolCall[]>();
+  const top: ToolCall[] = [];
+  for (const call of calls) {
+    if (call.parentId) {
+      const arr = childrenByParent.get(call.parentId);
+      if (arr) arr.push(call);
+      else childrenByParent.set(call.parentId, [call]);
+    } else {
+      top.push(call);
+    }
+  }
   return (
     <div className="tool-calls">
-      {calls.map((call) => (
-        <ToolCard key={call.id} call={call} />
+      {top.map((call) => (
+        <ToolGroup key={call.id} call={call} childrenByParent={childrenByParent} />
       ))}
+    </div>
+  );
+}
+
+/** A tool card plus, when it's a subagent `task`, its nested child tool cards. */
+function ToolGroup({
+  call,
+  childrenByParent,
+}: {
+  call: ToolCall;
+  childrenByParent: Map<string, ToolCall[]>;
+}) {
+  const kids = childrenByParent.get(call.id);
+  if (!kids?.length) return <ToolCard call={call} />;
+  return (
+    <div className="tool-card-group">
+      <ToolCard call={call} />
+      <div className="tool-children">
+        {kids.map((kid) => (
+          <ToolGroup key={kid.id} call={kid} childrenByParent={childrenByParent} />
+        ))}
+      </div>
     </div>
   );
 }
