@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type { ChatMessage, SlashCommand, ToolCall } from "../lib/types";
 import { chatStore, MAX_ACTIVE_SESSIONS, useChatState } from "./chat-store";
-import { Markdown } from "./Markdown";
+import { Markdown } from "./LazyMarkdown";
 import { ToolCalls } from "./ToolCalls";
 
 function messageId() {
