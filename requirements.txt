@@ -14,6 +14,9 @@ langchain>=1.2.3
 langchain-core>=1.0
 langgraph>=1.1.0
 langchain-openai>=1.0
+# Durable conversation history — SQLite checkpointer so multi-turn chats
+# survive a server restart (graph/checkpointer.py).
+langgraph-checkpoint-sqlite>=2.0
 
 # MCP client — connect external Model Context Protocol servers (stdio /
 # streamable-HTTP); their tools become agent tools. See tools/mcp_tools.py.

@@ -85,6 +85,25 @@ interval so the first request after an idle gap hits a warm cache — only worth
 it for sporadic, latency-sensitive workloads on the `1h` tier; for steady
 traffic it's pure cost.
 
+## Conversation history
+
+Each chat session's history is checkpointed per `thread_id` (the chat tab's
+context id, prefixed `a2a:` / `gradio:`), so a turn sees the prior turns instead
+of starting fresh — and compaction summarizes the older part near the limit. The
+checkpointer is bound at **graph-compile time** (a checkpointer set only in the
+invoke config is ignored by LangGraph).
+
+By default it's a **durable SQLite** store (`checkpoint.db_path`, same
+`/sandbox`→`~/.protoagent` writable fallback as the other stores), so histories
+**survive a server restart**. Set `checkpoint.db_path` blank for an in-memory
+store (cleared on restart). Each tab is an independent thread; "New chat" starts
+a clean one.
+
+```yaml
+checkpoint:
+  db_path: /sandbox/checkpoints.db   # blank = in-memory
+```
+
 ## What's already optimal
 
 - **Parallel tool calls** — langchain's `create_agent` runs a turn's tool calls
