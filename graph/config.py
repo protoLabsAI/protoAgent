@@ -129,9 +129,13 @@ class LangGraphConfig:
     cache_warming_interval_seconds: int = 3300  # 55m — just under the 1h tier
 
     # Context compaction — wires langchain's SummarizationMiddleware to
-    # summarize old history near the context limit. Opt-in. trigger is
+    # summarize old history near the context limit. ON by default (a long
+    # session would otherwise overflow the window). trigger is
     # "fraction:0.8" | "tokens:120000" | "messages:80"; keep = last N messages.
-    compaction_enabled: bool = False
+    # NOTE: "fraction:"/"tokens:" triggers need the model's context-window
+    # profile; for a custom gateway alias that lacks one, the wiring falls back
+    # to a message-count trigger (see graph/agent.py) instead of crashing.
+    compaction_enabled: bool = True
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
     compaction_model: str = ""            # blank = summarize with the main model

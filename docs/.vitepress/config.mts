@@ -78,6 +78,7 @@ export default defineConfig({
             { text: "Architecture", link: "/explanation/architecture" },
             { text: "A2A protocol", link: "/explanation/a2a-protocol" },
             { text: "Cost & trace propagation", link: "/explanation/cost-and-trace" },
+            { text: "Tuning & cost", link: "/explanation/tuning-and-cost" },
             { text: "Output protocol", link: "/explanation/output-protocol" },
             { text: "LiteLLM gateway", link: "/explanation/litellm-gateway" },
             { text: "Architecture decisions (ADRs)", link: "/adr/" },
