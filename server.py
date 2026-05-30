@@ -1662,6 +1662,36 @@ def _main():
         from graph.config_io import read_soul_preset
         return {"name": name, "content": read_soul_preset(name)}
 
+    # --- Generic settings (schema-driven UI) --------------------------------
+    @fastapi_app.get("/api/settings/schema")
+    async def _api_settings_schema():
+        """All editable settings, grouped, with current values + metadata
+        (type, default, restart-vs-hot-reload, description). Drives the
+        operator console's Settings surface."""
+        from graph.config_io import list_gateway_models
+        from graph.settings_schema import build_schema
+
+        models: list[str] = []
+        if _graph_config is not None:
+            models, _ = list_gateway_models(_graph_config.api_base, _graph_config.api_key)
+        return {"groups": build_schema(_graph_config, model_options=models)}
+
+    class SettingsUpdateRequest(PydanticBaseModel):
+        updates: dict[str, Any] = {}
+
+    @fastapi_app.post("/api/settings")
+    async def _api_save_settings(req: SettingsUpdateRequest):
+        """Validate a flat {key: value} payload, persist it to YAML (secrets
+        split out), and hot-reload the graph. Returns any keys that need a
+        full process restart to take effect."""
+        from graph.settings_schema import nest_updates, restart_keys, validate_flat
+
+        ok, err = validate_flat(req.updates)
+        if not ok:
+            return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
+        ok, messages = _apply_settings_changes(config=nest_updates(req.updates))
+        return {"ok": ok, "messages": messages, "restart_required": restart_keys(req.updates)}
+
     # --- OpenAI-compatible chat completions --------------------------------
     # Lets this agent be registered as a model in the LiteLLM gateway /
     # OpenWebUI without any protocol adapter.
