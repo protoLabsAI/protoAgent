@@ -840,6 +840,38 @@ async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
     return await _chat_langgraph(message, session_id)
 
 
+# Cap tool input/output previews so a single frame stays small on the wire.
+_TOOL_PREVIEW_CHARS = 800
+
+
+def _coerce_tool_value(value) -> str:
+    """Render a tool input/output for a tool-call card.
+
+    Structured values (dict/list) become compact JSON with double quotes so
+    the console can pretty-print them — Python's ``str()`` would emit a repr
+    with single quotes that no JSON parser accepts. Everything else is
+    stringified. Always truncated to keep the SSE frame small.
+    """
+    if value is None or value == "":
+        return ""
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)[:_TOOL_PREVIEW_CHARS]
+        except (TypeError, ValueError):
+            pass
+    return str(value)[:_TOOL_PREVIEW_CHARS]
+
+
+def _coerce_tool_output(value) -> str:
+    """Unwrap a tool result to its payload.
+
+    ``on_tool_end`` hands back the LangChain ``ToolMessage``, whose ``str()``
+    leaks ``name=``/``tool_call_id=`` noise — the card wants the actual
+    ``.content``. Falls back to the raw value for plain returns.
+    """
+    return _coerce_tool_value(getattr(value, "content", value))
+
+
 async def _run_turn_stream(message: str, session_id: str, config: dict):
     """Run one graph turn over ``astream_events``.
 
@@ -866,14 +898,14 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
             yield ("tool_start", {
                 "id": event.get("run_id") or name,
                 "name": name,
-                "input": str(tool_input)[:500] if tool_input else "",
+                "input": _coerce_tool_value(tool_input),
             })
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
             yield ("tool_end", {
                 "id": event.get("run_id") or name,
                 "name": name,
-                "output": str(output)[:500] if output else "",
+                "output": _coerce_tool_output(output),
             })
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")

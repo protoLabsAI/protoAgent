@@ -19,10 +19,23 @@ export function ToolCalls({ calls }: { calls: ToolCall[] }) {
   );
 }
 
+/** Pretty-print a value the server sent as JSON; fall back to the raw text. */
+function prettyValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return raw;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
 function ToolCard({ call }: { call: ToolCall }) {
-  // Done cards collapse by default; running cards stay open so the operator
-  // can watch the input as it fires.
-  const [open, setOpen] = useState(call.status === "running");
+  // Collapsed by default and stays put — the header row (icon, name, status)
+  // is the stable at-a-glance view; expanding is an explicit, sticky choice so
+  // the message doesn't reflow as tools start and finish. The user opens the
+  // cards they care about.
+  const [open, setOpen] = useState(false);
   const hasDetail = Boolean(call.input || call.output);
 
   return (
@@ -48,13 +61,13 @@ function ToolCard({ call }: { call: ToolCall }) {
           {call.input ? (
             <div className="tool-card-section">
               <span className="tool-card-label">input</span>
-              <pre>{call.input}</pre>
+              <pre>{prettyValue(call.input)}</pre>
             </div>
           ) : null}
           {call.output ? (
             <div className="tool-card-section">
               <span className="tool-card-label">result</span>
-              <pre>{call.output}</pre>
+              <pre>{prettyValue(call.output)}</pre>
             </div>
           ) : null}
         </div>

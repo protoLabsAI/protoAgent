@@ -177,14 +177,14 @@ Fields:
 | `id` | The tool run id (langchain `run_id`) — pairs the `start` and `end` frames. Consumers dedupe/merge by it. |
 | `name` | Tool name |
 | `phase` | `"start"` or `"end"` |
-| `input` | Truncated string preview of the tool input (on `start`) |
-| `output` | Truncated string preview of the tool result (on `end`) |
+| `input` | Truncated preview of the tool input (on `start`). Structured inputs (dict/list) are rendered as **compact JSON** so the console can pretty-print them; everything else is stringified. |
+| `output` | Truncated preview of the tool result (on `end`). Unwrapped from langchain's `ToolMessage` to its `.content` — the message repr would otherwise leak `name=`/`tool_call_id=` noise into the card. |
 
-**Producer** — `server.py::_run_turn_stream` yields structured `("tool_start"|"tool_end", {...})` tuples from langchain's `astream_events`. The runner stores the latest on `TaskRecord.last_tool_event` and `_build_status_event` attaches it alongside the existing text status part (`🔧 name: input` / `✅ name → output`), so text-only consumers still see progress — the DataPart is purely additive and backward-compatible.
+**Producer** — `server.py::_run_turn_stream` yields structured `("tool_start"|"tool_end", {...})` tuples from langchain's `astream_events`. Inputs/outputs are coerced via `_coerce_tool_value` / `_coerce_tool_output` (JSON for structured values, `.content` for `ToolMessage`s) and truncated to `_TOOL_PREVIEW_CHARS`. The runner stores the latest on `TaskRecord.last_tool_event` and `_build_status_event` attaches it alongside the existing text status part (`🔧 name: input` / `✅ name → output`), so text-only consumers still see progress — the DataPart is purely additive and backward-compatible.
 
 **Coalescing caveat** — the SSE watcher (`_watch_task`) coalesces bursts of updates, so a tool that starts and ends within a single event-loop tick may only surface one frame. Real tools are slow enough (network, I/O) that `start` and `end` land on separate frames. Consumers must tolerate a missing `start` (render the `end` as a completed card) and dedupe by `(id, phase)`.
 
-**Consumer** — the console's `streamChat` (`apps/web/src/lib/api.ts`) extracts the DataPart in the `status-update` branch and merges it into the streaming assistant message's `toolCalls` by `id`; `ChatSurface` renders the `<ToolCalls>` cards. The `last_tool_event` is cleared on terminal transitions so a completed task shows a clean final state.
+**Consumer** — the console's `streamChat` (`apps/web/src/lib/api.ts`) extracts the DataPart in the `status-update` branch and merges it into the streaming assistant message's `toolCalls` by `id`; `ChatSurface` renders the `<ToolCalls>` cards. Cards default **collapsed** (a stable one-line row: icon, name, running→done status) so the message doesn't reflow as tools start and finish — expanding is an explicit, sticky choice that pretty-prints the JSON input/result. The `last_tool_event` is cleared on terminal transitions so a completed task shows a clean final state.
 
 ## `skill-v1`
 
