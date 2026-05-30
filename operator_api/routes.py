@@ -97,6 +97,7 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    chat_commands: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -252,5 +253,17 @@ def register_operator_routes(
         async def _goal_clear(session_id: str):
             try:
                 return await goal_clear(session_id)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # --- Slash commands ------------------------------------------------------
+    # The chat console fetches the registered `/`-commands the server handles
+    # (e.g. `/goal`) to drive its autocomplete. Static per server config.
+    if chat_commands is not None:
+
+        @app.get("/api/chat/commands")
+        async def _chat_commands():
+            try:
+                return chat_commands()
             except Exception as exc:
                 raise _http_error(exc) from exc

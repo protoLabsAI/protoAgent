@@ -1446,6 +1446,21 @@ def _main():
         cleared = await asyncio.to_thread(_goal_controller.store.clear, session_id)
         return {"cleared": bool(cleared)}
 
+    def _operator_chat_commands() -> dict:
+        """Slash commands the chat understands — drives the composer autocomplete.
+
+        Currently just `/goal` (when goal mode is loaded). Register a new
+        server-handled control command here and the console picks it up.
+        """
+        commands = []
+        if _goal_controller is not None:
+            commands.append({
+                "name": "goal",
+                "description": "Set, check, or clear a self-driving goal for this chat session.",
+                "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
+            })
+        return {"commands": commands}
+
     register_operator_routes(
         fastapi_app,
         runtime_status=_operator_runtime_status,
@@ -1458,6 +1473,7 @@ def _main():
         scheduler_cancel=_operator_scheduler_cancel,
         goal_list=_operator_goals_list,
         goal_clear=_operator_goals_clear,
+        chat_commands=_operator_chat_commands,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

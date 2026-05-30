@@ -61,6 +61,12 @@ export type RuntimeStatus = {
   }[];
 };
 
+export type SlashCommand = {
+  name: string;
+  description: string;
+  usage?: string;
+};
+
 export type GoalState = {
   session_id: string;
   condition: string;
