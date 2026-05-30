@@ -112,30 +112,59 @@ const MARKDOWN_ANSWER = [
   "```",
 ].join("\n");
 
+const DEFAULT_SEARCH_OUTPUT = [
+  "8 result(s) for 'AI coding agents latest news':",
+  "1. First Result — https://example.com/a",
+  "   A snippet about coding agents.",
+  "2. Second Result — https://example.com/b",
+  "   Another snippet.",
+].join("\n");
+
+// Map a prompt keyword to a tool scenario so specs drive each renderer path.
+// Each scenario's input is an object (rendered as key/value fields) and output
+// matches the real starter-tool string format the per-tool renderer expects.
+function scenarioFor(prompt) {
+  const t = (prompt || "").toUpperCase();
+  if (t.includes("CALC"))
+    return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
+  if (t.includes("TIME"))
+    return {
+      name: "current_time",
+      input: { timezone: "Asia/Tokyo" },
+      output: "2026-05-29T21:00:00+09:00 (Asia/Tokyo)\nHuman: Thursday, May 29 2026, 21:00:00 JST",
+      answer: "It is 21:00 in Tokyo.",
+    };
+  if (t.includes("FETCH"))
+    return {
+      name: "fetch_url",
+      input: { url: "https://example.com" },
+      output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
+      answer: "Fetched example.com.",
+    };
+  if (t.includes("TOOLERR"))
+    return { name: "web_search", input: { query: "x" }, output: "Error: DuckDuckGo search failed: rate limited", answer: "Search failed." };
+  if (t.includes("OVERFLOW"))
+    return { name: "web_search", input: { token: "x".repeat(400) }, output: "y".repeat(400), answer: "done" };
+  if (t.includes("MARKDOWN"))
+    return { name: "web_search", input: { query: "md" }, output: DEFAULT_SEARCH_OUTPUT, answer: MARKDOWN_ANSWER };
+  return { name: "web_search", input: { max_results: 8, query: "AI coding agents latest news" }, output: DEFAULT_SEARCH_OUTPUT, answer: "Done — found 8 results." };
+}
+
 /**
- * Build the ordered A2A SSE frames for a streamed turn. The scenario is chosen
- * from the user's prompt text so specs can drive different rendering paths:
- *   - contains "OVERFLOW" → a tool whose input is one very long unbroken token
- *   - contains "MARKDOWN" → a rich-markdown final answer
- *   - otherwise           → a web_search tool with JSON input + a short answer
+ * Build the ordered A2A SSE frames for a streamed turn. The tool scenario is
+ * chosen from the prompt text (see scenarioFor) so specs can exercise every
+ * tool-value renderer + the overflow/markdown paths off one mock server.
  */
 export function buildFrames({ rpcId, contextId, taskId, prompt }) {
-  const text = (prompt || "").toUpperCase();
-  const wantOverflow = text.includes("OVERFLOW");
-  const wantMarkdown = text.includes("MARKDOWN");
-
-  const toolInput = wantOverflow
-    ? JSON.stringify({ token: "x".repeat(400) })
-    : JSON.stringify({ max_results: 8, query: "AI coding agents latest news" });
-  const toolOutput = wantOverflow
-    ? "y".repeat(400)
-    : "8 result(s) for 'AI coding agents latest news':\n1. Example — https://example.com/a";
-  const answer = wantMarkdown ? MARKDOWN_ANSWER : "Done — found 8 results.";
+  const scenario = scenarioFor(prompt);
+  const toolInput = JSON.stringify(scenario.input);
+  const toolOutput = scenario.output;
+  const answer = scenario.answer;
 
   const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
   const toolEvent = (phase, extra) => ({
     id: "run-e2e-1",
-    name: "web_search",
+    name: scenario.name,
     phase,
     ...extra,
   });
@@ -166,8 +195,8 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       status: { state: "working", message: { role: "agent", parts: [{ kind: "text", text: "working…" }] } },
       final: false,
     }),
-    statusWithTool(`🔧 web_search: ${toolInput}`, "start", { input: toolInput }),
-    statusWithTool(`✅ web_search → ${toolOutput}`, "end", { output: toolOutput }),
+    statusWithTool(`🔧 ${scenario.name}: ${toolInput}`, "start", { input: toolInput }),
+    statusWithTool(`✅ ${scenario.name} → ${toolOutput}`, "end", { output: toolOutput }),
     wrap({
       kind: "artifact-update",
       taskId,

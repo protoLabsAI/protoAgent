@@ -18,7 +18,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
 });
 
-test("tool-call card is collapsed by default, expands to pretty-printed JSON", async ({ page }) => {
+test("tool-call card is collapsed by default and renders structured components", async ({ page }) => {
   await send(page, "search for AI coding agents");
 
   const card = page.locator(".tool-card").first();
@@ -31,21 +31,21 @@ test("tool-call card is collapsed by default, expands to pretty-printed JSON", a
   // The tool finishes → done glyph (not the running spinner).
   await expect(card.locator(".tool-card-status.done")).toBeVisible();
 
-  // Expand → input rendered as indented JSON (the bug was a Python repr).
   await card.locator(".tool-card-head").click();
   const body = card.locator(".tool-card-body");
   await expect(body).toBeVisible();
-  // Two sections in order: input then result.
-  const pres = body.locator("pre");
-  const input = await pres.nth(0).innerText();
-  expect(input).toContain('"max_results": 8'); // double-quoted, pretty-printed
-  expect(input).toContain("\n"); // multi-line indent, not a one-line blob
-  expect(input).not.toContain("'"); // no single-quoted Python repr
 
-  // Result shows the actual tool output, not a ToolMessage repr.
-  const result = await pres.nth(1).innerText();
-  expect(result).toContain("8 result(s)");
-  expect(result).not.toContain("tool_call_id=");
+  // Input renders as key/value field rows — NOT a raw JSON blob.
+  await expect(body.locator(".tool-kv-row")).toHaveCount(2);
+  await expect(body.locator(".tool-kv-key", { hasText: "query" })).toBeVisible();
+  await expect(body.locator(".tool-kv-row", { hasText: "max_results" }).locator(".tool-chip")).toHaveText("8");
+  // No raw <pre> dump anywhere in the card.
+  await expect(body.locator("pre")).toHaveCount(0);
+
+  // web_search result renders as cards with clickable title links.
+  await expect(body.locator(".tool-result")).toHaveCount(2);
+  const firstLink = body.locator(".tool-result").first().locator("a.tool-link");
+  await expect(firstLink).toHaveAttribute("href", "https://example.com/a");
 });
 
 test("expanded state is sticky and the assistant answer renders as markdown", async ({ page }) => {

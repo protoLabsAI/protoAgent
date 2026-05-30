@@ -2,6 +2,7 @@ import { Check, ChevronRight, Loader2, Wrench, X } from "lucide-react";
 import { useState } from "react";
 
 import type { ToolCall } from "../lib/types";
+import { ToolValue } from "./tool-renderers";
 
 /**
  * Renders the agent's tool activity as collapsible cards inside an assistant
@@ -17,17 +18,6 @@ export function ToolCalls({ calls }: { calls: ToolCall[] }) {
       ))}
     </div>
   );
-}
-
-/** Pretty-print a value the server sent as JSON; fall back to the raw text. */
-function prettyValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return raw;
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2);
-  } catch {
-    return raw;
-  }
 }
 
 function ToolCard({ call }: { call: ToolCall }) {
@@ -61,13 +51,13 @@ function ToolCard({ call }: { call: ToolCall }) {
           {call.input ? (
             <div className="tool-card-section">
               <span className="tool-card-label">input</span>
-              <pre>{prettyValue(call.input)}</pre>
+              <ToolValue raw={call.input} role="input" tool={call.name} />
             </div>
           ) : null}
           {call.output ? (
             <div className="tool-card-section">
               <span className="tool-card-label">result</span>
-              <pre>{prettyValue(call.output)}</pre>
+              <ToolValue raw={call.output} role="output" tool={call.name} />
             </div>
           ) : null}
         </div>

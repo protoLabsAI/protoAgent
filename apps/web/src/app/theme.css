@@ -641,6 +641,191 @@ select:disabled {
   overflow: auto;
 }
 
+/* Rendered tool values — structured components instead of a raw JSON blob.
+   The shared surface for a scalar/text value is a padded, monospace-ish box. */
+.tool-card-section .tool-text,
+.tool-fetch-body {
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  min-width: 0;
+}
+
+/* Key/value field rows for object inputs/outputs. */
+.tool-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tool-kv-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 22%) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.tool-kv-key {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--fg-muted);
+  word-break: break-word;
+}
+.tool-kv-val {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+.tool-scalar {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--brand-violet-light);
+}
+.tool-null {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.tool-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--brand-violet-light);
+  text-decoration: none;
+  word-break: break-all;
+}
+.tool-link:hover {
+  text-decoration: underline;
+}
+.tool-link svg {
+  flex: none;
+  opacity: 0.7;
+}
+.tool-vlist {
+  margin: 0;
+  padding-left: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Error result — any tool output starting with "Error:". */
+.tool-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(240, 116, 88, 0.12);
+  border: 1px solid rgba(240, 116, 88, 0.28);
+  color: #f4b09f;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.tool-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* calculator: expr = result */
+.tool-calc {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.84rem;
+}
+.tool-calc code {
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+}
+.tool-calc-eq {
+  color: var(--fg-muted);
+}
+.tool-calc strong {
+  font-family: var(--font-mono);
+  color: var(--brand-violet-light);
+}
+
+/* current_time */
+.tool-time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-time .tool-mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg);
+}
+.tool-time-human {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+
+/* fetch_url: status badge + url + body */
+.tool-fetch {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tool-fetch-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.tool-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(65, 196, 141, 0.16);
+  border: 1px solid rgba(65, 196, 141, 0.28);
+  color: #a9e8c9;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+/* web_search: result cards */
+.tool-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tool-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.tool-result-snippet {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+
 /* Rendered markdown (assistant messages). The parent keeps pre-wrap for the
    literal user text; markdown content reflows normally. */
 .markdown {
