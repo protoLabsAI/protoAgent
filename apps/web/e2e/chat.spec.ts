@@ -9,13 +9,25 @@ async function send(page, prompt: string) {
   await composer.waitFor({ state: "visible" });
   await composer.fill(prompt);
   // The composer sends on Ctrl/Cmd+Enter (checks metaKey || ctrlKey).
-  await composer.press("Control+Enter");
+  await composer.press("Enter");
 }
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/app/", { waitUntil: "networkidle" });
   // Setup wizard must not block — the mock reports setup_complete:true.
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
+
+test("Enter sends; Ctrl+Enter inserts a newline", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("line one");
+  await composer.press("Control+Enter"); // newline, not send
+  await expect(composer).toHaveValue("line one\n");
+  await expect(page.locator(".message-user")).toHaveCount(0);
+
+  await composer.fill("hello there"); // plain Enter sends
+  await composer.press("Enter");
+  await expect(page.locator(".message-user")).toHaveText(/hello there/);
 });
 
 test("tool-call card is collapsed by default and renders structured components", async ({ page }) => {
