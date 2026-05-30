@@ -531,6 +531,111 @@ select:disabled {
   word-break: break-word;
 }
 
+/* Tool-call cards — the agent's tool activity streamed into an assistant
+   message (name, running→done/error state, expandable input/result). */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 0.6em;
+  white-space: normal;
+}
+.tool-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.tool-card-running {
+  border-color: var(--warning);
+}
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 9px;
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-card-head:disabled {
+  cursor: default;
+}
+.tool-card-caret {
+  flex: none;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+.tool-card-caret.open {
+  transform: rotate(90deg);
+}
+.tool-card-caret-spacer {
+  width: 13px;
+  flex: none;
+}
+.tool-card-icon {
+  flex: none;
+  color: var(--brand-violet-light);
+}
+.tool-card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+.tool-card-status {
+  flex: none;
+}
+.tool-card-status.done {
+  color: var(--success);
+}
+.tool-card-status.error {
+  color: var(--error);
+}
+.tool-card-status.running {
+  color: var(--warning);
+}
+.tool-card-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tool-card-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.tool-card-body pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
 /* Rendered markdown (assistant messages). The parent keeps pre-wrap for the
    literal user text; markdown content reflows normally. */
 .markdown {

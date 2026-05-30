@@ -861,10 +861,20 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
         name = event.get("name", "")
         if kind == "on_tool_start":
             tool_input = event.get("data", {}).get("input", "")
-            yield ("tool_start", f"🔧 {name}: {str(tool_input)[:200] if tool_input else ''}")
+            # Structured frame (id pairs start↔end) so consumers can render a
+            # per-tool card; the A2A handler also derives a text status from it.
+            yield ("tool_start", {
+                "id": event.get("run_id") or name,
+                "name": name,
+                "input": str(tool_input)[:500] if tool_input else "",
+            })
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
-            yield ("tool_end", f"✅ {name} → {str(output)[:300] if output else ''}")
+            yield ("tool_end", {
+                "id": event.get("run_id") or name,
+                "name": name,
+                "output": str(output)[:500] if output else "",
+            })
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:

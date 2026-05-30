@@ -80,6 +80,10 @@ COST_MIME = "application/vnd.protolabs.cost-v1+json"
 # result.data.confidenceExplanation to record calibration samples.
 # Schema: {"confidence": float, "confidenceExplanation": str?, "success": bool}
 CONFIDENCE_MIME = "application/vnd.protolabs.confidence-v1+json"
+# Per-tool event ({id, name, phase, input|output}) surfaced on status frames so
+# the operator console can render live tool-call cards. Progress signal, not a
+# terminal extension — emitted on status-update, not the terminal artifact.
+TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json"
 
 # ── Data types ────────────────────────────────────────────────────────────────
 
@@ -115,6 +119,11 @@ class TaskRecord:
     # progress without being coupled to the producer's in-process event
     # stream. Cleared to None on terminal transitions.
     last_status_message: str | None = None
+    # Most recent structured tool event ({id, name, phase, input|output}),
+    # emitted as a tool-call-v1 DataPart on status frames so the console can
+    # render per-tool cards (vs. the flattened text in last_status_message).
+    # Reset to None after each frame build so a tool event is emitted once.
+    last_tool_event: dict | None = None
     # Observed world-state mutations to emit on the terminal artifact under
     # the worldstate-delta-v1 MIME type. Populated during the run whenever a
     # tool with known effects succeeds (see _chat_langgraph_stream). Shape:
@@ -179,6 +188,7 @@ class A2ATaskStore:
         accumulated_text: str | None = None,
         error: str | None = None,
         status_message: str | None = None,
+        tool_event: dict | None = None,
     ) -> TaskRecord | None:
         async with self._lock:
             record = self._tasks.get(task_id)
@@ -192,10 +202,13 @@ class A2ATaskStore:
                 record.error_message = error
             if status_message is not None:
                 record.last_status_message = status_message
-            # Terminal transitions clear the status message so post-run
+            if tool_event is not None:
+                record.last_tool_event = tool_event
+            # Terminal transitions clear the status/tool ping so post-run
             # subscribers see the final state cleanly, not a stale tool ping.
             if state in _TERMINAL:
                 record.last_status_message = None
+                record.last_tool_event = None
             old_event = record._update_event
             record._update_event = asyncio.Event()
         # Wake subscribers outside the lock so they can re-acquire it
@@ -498,10 +511,19 @@ def _build_status_event(record: TaskRecord, *, final: bool = False) -> dict:
     elif record.last_status_message and record.state not in _TERMINAL:
         # Surface tool_start / tool_end messages to SSE subscribers. Cleared
         # on terminal transitions so consumers see the final state cleanly.
-        evt["status"]["message"] = {
-            "role": "agent",
-            "parts": [{"kind": "text", "text": record.last_status_message}],
-        }
+        parts: list[dict[str, Any]] = [
+            {"kind": "text", "text": record.last_status_message},
+        ]
+        # Structured tool event → tool-call-v1 DataPart, so the console can
+        # render live tool cards. The text part above stays for text-only
+        # consumers. Clients dedupe by (id, phase).
+        if record.last_tool_event:
+            parts.append({
+                "kind": "data",
+                "data": record.last_tool_event,
+                "metadata": {"mimeType": TOOL_CALL_MIME},
+            })
+        evt["status"]["message"] = {"role": "agent", "parts": parts}
     return evt
 
 
@@ -821,13 +843,26 @@ async def _run_task_background(
                 await _store.update_state(task_id, WORKING, accumulated_text=accumulated)
 
             elif event_type in ("tool_start", "tool_end"):
-                # Status update only — preserve the tool message on the record
-                # so SSE subscribers see it (both the initial message/sendStream
-                # consumer and any :subscribe reconnect).
+                # Structured payload is {id, name, input|output}: derive a text
+                # status (back-compat for text-only consumers) AND a structured
+                # tool event for the tool-call-v1 DataPart (console cards).
+                # A plain-string payload (legacy producers) is used as the text
+                # status verbatim with no structured event.
+                if isinstance(payload, dict):
+                    if event_type == "tool_start":
+                        text = f"🔧 {payload.get('name', '')}: {str(payload.get('input', ''))[:200]}"
+                        tool_event = {**payload, "phase": "start"}
+                    else:
+                        text = f"✅ {payload.get('name', '')} → {str(payload.get('output', ''))[:300]}"
+                        tool_event = {**payload, "phase": "end"}
+                else:
+                    text = str(payload)
+                    tool_event = None
                 await _store.update_state(
                     task_id, WORKING,
                     accumulated_text=accumulated,
-                    status_message=payload,
+                    status_message=text,
+                    tool_event=tool_event,
                 )
 
             elif event_type == "delta":

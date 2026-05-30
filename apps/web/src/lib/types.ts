@@ -101,10 +101,28 @@ export type Subagent = {
   allow_skill_emission: boolean;
 };
 
+export type ToolCall = {
+  id: string;
+  name: string;
+  input?: string;
+  output?: string;
+  status: "running" | "done" | "error";
+};
+
+/** Wire shape of a single tool event streamed over the A2A tool-call DataPart. */
+export type ToolEvent = {
+  id: string;
+  name: string;
+  phase: "start" | "end";
+  input?: string;
+  output?: string;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  toolCalls?: ToolCall[];
   createdAt?: number;
   status?: "streaming" | "done" | "error";
 };
