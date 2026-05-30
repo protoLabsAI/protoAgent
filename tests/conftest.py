@@ -6,6 +6,7 @@ that pytest inserts during collection.
 """
 from __future__ import annotations
 
+import os
 import site
 import sys
 
@@ -17,3 +18,10 @@ def pytest_configure(config):  # noqa: ARG001
         if sp in sys.path:
             sys.path.remove(sp)
         sys.path.insert(0, sp)
+
+    # Default-on context compaction builds a summarizer LLM whenever the
+    # middleware stack is assembled, and ChatOpenAI requires a key at
+    # construction. Production always has one at graph-build time; provide a
+    # dummy so middleware-wiring tests don't each need to set it.
+    # `setdefault` never overrides a real key, and no test asserts key-absence.
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")

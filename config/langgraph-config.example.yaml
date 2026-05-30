@@ -72,6 +72,41 @@ skills:
   top_k: 5
   max_tokens: 2000
 
+# Context compaction — summarize old history near the context limit so long
+# sessions don't overflow the window. ON by default.
+#   trigger: "fraction:0.8" | "tokens:120000" | "messages:80"
+# NOTE: "fraction:"/"tokens:" need the model's context-window profile. A custom
+# gateway alias usually lacks one, so the wiring auto-falls back to a
+# message-count trigger (logged). Set "messages:N" explicitly to be deterministic.
+#   model: a cheaper/faster alias to summarize with (blank = main model).
+compaction:
+  enabled: true
+  trigger: "fraction:0.8"
+  keep_messages: 20
+  # model: protolabs/fast
+
+# Model routing / failover — on a primary error, retry on each fallback model
+# (same gateway) in order. Empty = no failover.
+routing:
+  fallback_models: []
+  #  - claude-haiku-4-5
+
+# Goal mode — route the goal verifier (classification, not the main reasoning
+# task) to a cheaper model with `eval_model`. Blank = main model.
+goal:
+  # eval_model: protolabs/fast
+  max_iterations: 8
+
+# Programmatic tool calling — let the model write ONE Python script that
+# composes several tools in a single turn (collapses long tool-call chains).
+# SECURITY: runs model-authored code in a subprocess (scrubbed env + hard
+# timeout). OFF by default — only enable for trusted models or inside a
+# hardened container. `tools: []` exposes all tools except execute_code itself.
+execute_code:
+  enabled: false
+  timeout: 30
+  tools: []
+
 # React operator console — the beads/notes APIs accept a project path from
 # the (free-text) UI, so the server, not the client, decides which
 # directories they may touch. The protoAgent repo root is always allowed;

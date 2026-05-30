@@ -70,11 +70,27 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     if config.compaction_enabled:
         from langchain.agents.middleware import SummarizationMiddleware
         summ_model = create_llm(config, model_name=config.compaction_model or None)
-        middleware.append(SummarizationMiddleware(
-            model=summ_model,
-            trigger=_parse_compaction_trigger(config.compaction_trigger),
-            keep=("messages", config.compaction_keep_messages),
-        ))
+        keep = ("messages", config.compaction_keep_messages)
+        try:
+            mw = SummarizationMiddleware(
+                model=summ_model,
+                trigger=_parse_compaction_trigger(config.compaction_trigger),
+                keep=keep,
+            )
+        except ValueError:
+            # `fraction:`/`tokens:` triggers need the model's context-window
+            # profile, which custom gateway aliases don't expose — langchain
+            # raises here. Fall back to a message-count trigger so compaction
+            # still runs instead of taking down the whole graph at load.
+            import logging
+            fallback = max(config.compaction_keep_messages * 3, 60)
+            logging.getLogger(__name__).warning(
+                "[compaction] trigger %r needs a model profile that %r lacks; "
+                "falling back to messages:%d",
+                config.compaction_trigger, config.model_name, fallback,
+            )
+            mw = SummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
+        middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).
     if config.routing_fallback_models:
