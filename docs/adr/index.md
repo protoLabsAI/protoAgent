@@ -10,3 +10,4 @@ decision, numbered, never deleted (supersede instead).
 | # | Title | Status |
 |---|---|---|
 | [0001](./0001-extensibility-and-plugin-architecture.md) | Extensibility & Plugin Architecture | Accepted |
+| [0002](./0002-reusable-subagent-workflows.md) | Reusable Subagent Workflows | Accepted |
