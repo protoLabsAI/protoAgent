@@ -36,6 +36,10 @@ Send a control message through any channel (A2A, Gradio chat, OpenAI-compat):
 - **Status:** `/goal`
 - **Clear:** `/goal clear` (aliases: `stop`, `off`, `cancel`, `reset`, `none`)
 
+In the React console, typing `/` in the chat composer opens a command
+autocomplete (served from `GET /api/chat/commands`) so `/goal` is discoverable;
+↑/↓ to pick, Enter/Tab to insert.
+
 Programmatic status/clear is also available: `GET /api/goal/{session_id}` and `DELETE /api/goal/{session_id}`.
 
 ## Manage from the console

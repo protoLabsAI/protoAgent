@@ -8,6 +8,7 @@ import type {
   RuntimeStatus,
   ScheduledJob,
   SetupStatus,
+  SlashCommand,
   Subagent,
 } from "./types";
 
@@ -231,6 +232,10 @@ export const api = {
     return request<{ cleared: boolean }>(`/api/goals/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
     });
+  },
+
+  chatCommands() {
+    return request<{ commands: SlashCommand[] }>("/api/chat/commands");
   },
 
   chat(message: string, sessionId: string) {

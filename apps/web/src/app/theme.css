@@ -622,6 +622,51 @@ select:disabled {
   border-top: 1px solid var(--border);
 }
 
+/* Slash-command autocomplete (floats above the composer). */
+.composer-wrap {
+  position: relative;
+}
+.slash-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.slash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.slash-item:last-child {
+  border-bottom: 0;
+}
+.slash-item.active {
+  background: var(--bg-hover);
+}
+.slash-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--brand-violet-light);
+}
+.slash-desc {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 input,
 textarea,
 select {
