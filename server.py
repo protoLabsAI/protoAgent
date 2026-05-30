@@ -38,6 +38,7 @@ from graph.output_format import (
     extract_confidence,
     extract_output,
     is_dropped_scratch_turn,
+    stream_visible_output,
 )
 
 if TYPE_CHECKING:
@@ -884,6 +885,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
     from langchain_core.messages import HumanMessage
 
     accumulated_raw = ""
+    streamed_len = 0  # chars of visible <output> already emitted as text frames
     async for event in _graph.astream_events(
         {"messages": [HumanMessage(content=message)], "session_id": session_id},
         config=config,
@@ -911,6 +913,13 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
                 accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                # Stream only the user-facing <output> region, token by token —
+                # never the scratch_pad. The terminal artifact (extract_output)
+                # reconciles any partial tail held back here.
+                visible = stream_visible_output(accumulated_raw)
+                if len(visible) > streamed_len:
+                    yield ("text", visible[streamed_len:])
+                    streamed_len = len(visible)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             usage = getattr(output, "usage_metadata", None) if output else None
