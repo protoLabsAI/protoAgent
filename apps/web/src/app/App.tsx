@@ -19,6 +19,7 @@ import {
   Settings2,
   Sparkles,
   Target,
+  Undo2,
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -244,6 +245,9 @@ export function App() {
   const [goalsBusy, setGoalsBusy] = useState(false);
 
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
+  const canUndoNote = Boolean(
+    ((activeTab?.metadata as Record<string, unknown> | undefined)?.history as unknown[] | undefined)?.length,
+  );
 
   async function refreshRuntime() {
     const [runtimePayload, subagentPayload] = await Promise.all([
@@ -478,6 +482,34 @@ export function App() {
   function updateWorkspace(nextWorkspace: NotesWorkspace) {
     setWorkspace(nextWorkspace);
     setNotesDirty(true);
+  }
+
+  // Undo the last write to the active tab, restoring the previous version from
+  // the per-tab history that notes_write / the editor record.
+  function undoActiveNote() {
+    if (!workspace || !activeTab) return;
+    const meta = (activeTab.metadata || {}) as Record<string, unknown>;
+    const history = (meta.history as Array<{ content: string }> | undefined) || [];
+    if (!history.length) return;
+    const restored = history[history.length - 1].content;
+    updateWorkspace({
+      ...workspace,
+      workspaceVersion: workspace.workspaceVersion + 1,
+      tabs: {
+        ...workspace.tabs,
+        [activeTab.id]: {
+          ...activeTab,
+          content: restored,
+          metadata: {
+            ...meta,
+            history: history.slice(0, -1),
+            updatedAt: Date.now(),
+            characterCount: restored.length,
+            wordCount: restored.split(/\s+/).filter(Boolean).length,
+          },
+        },
+      },
+    });
   }
 
   function saveActiveNote(content: string) {
@@ -1165,6 +1197,9 @@ export function App() {
                   </button>
                   <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note">
                     <Trash2 size={16} />
+                  </button>
+                  <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change">
+                    <Undo2 size={16} />
                   </button>
                   <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">
                     {notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
