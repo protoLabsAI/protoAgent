@@ -69,6 +69,7 @@ _checkpoint_path = None  # resolved sqlite path when persistent (for the pruner)
 _checkpoint_prune_task = None  # background prune loop handle
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
+_workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
 _mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
@@ -99,6 +100,7 @@ def _init_langgraph_agent():
     provide them, then triggers a reload.
     """
     global _graph, _graph_config, _checkpointer, _knowledge_store, _skills_index
+    global _workflow_registry
     global _mcp_clients, _mcp_tools, _mcp_meta
     global _plugin_tools, _plugin_skill_dirs, _plugin_meta
 
@@ -159,10 +161,12 @@ def _init_langgraph_agent():
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
     _skills_index = _build_skills_index(_graph_config, extra_skill_dirs=_plugin_skill_dirs)
 
+    _workflow_registry = _build_workflow_registry(_graph_config)
+
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
         skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
-        checkpointer=_checkpointer,
+        checkpointer=_checkpointer, workflow_registry=_workflow_registry,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -405,6 +409,37 @@ async def _retire_thread(thread_id: str) -> str | None:
     return chunk_id
 
 
+def _build_workflow_registry(config):
+    """Load workflow recipes (ADR 0002) from the bundled repo ``workflows/`` dir
+    plus a writable dir (user/agent-emitted). Best-effort; never blocks boot."""
+    if not getattr(config, "workflows_enabled", True):
+        return None
+    try:
+        import os
+        from pathlib import Path
+
+        from graph.workflows.registry import WorkflowRegistry
+
+        dirs: list[str] = []
+        bundled = Path(__file__).resolve().parent / "workflows"
+        if bundled.is_dir():
+            dirs.append(str(bundled))
+        # Writable dir for user / agent-emitted recipes (same fallback shape).
+        writable = Path(config.workflow_dir).expanduser()
+        try:
+            writable.mkdir(parents=True, exist_ok=True)
+            if not os.access(writable, os.W_OK):
+                raise OSError
+        except OSError:
+            writable = Path.home() / ".protoagent" / "workflows"
+            writable.mkdir(parents=True, exist_ok=True)
+        dirs.append(str(writable))
+        return WorkflowRegistry(dirs)
+    except Exception:
+        log.exception("[workflows] registry init failed; running without workflows")
+        return None
+
+
 def _resolve_skills_db(configured: str) -> str:
     """Pick a writable skills DB path; fall back to ~/.protoagent when the
     configured dir (default /sandbox) isn't creatable — same idea as the
@@ -561,7 +596,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     compiling — the wizard is still in front of the user, so there
     is nothing to hot-swap yet.
     """
-    global _graph, _graph_config, _knowledge_store, _skills_index
+    global _graph, _graph_config, _knowledge_store, _skills_index, _workflow_registry
     global _mcp_clients, _mcp_tools, _mcp_meta
     global _plugin_tools, _plugin_skill_dirs, _plugin_meta
 
@@ -626,10 +661,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_skill_dirs = new_plugins.skill_dirs
             new_plugin_meta = new_plugins.meta
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
+            new_workflow_registry = _build_workflow_registry(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
-                checkpointer=_checkpointer,
+                checkpointer=_checkpointer, workflow_registry=new_workflow_registry,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -638,6 +674,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             return False, f"graph rebuild failed: {e}"
     else:
         new_graph = None
+        new_workflow_registry = None
 
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
@@ -657,6 +694,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # before _main wires routes) — harmless.
         pass
     _graph = new_graph
+    _workflow_registry = new_workflow_registry
     # Commit the scheduler swap. start/stop are async — fire-and-forget
     # onto the active loop so reload stays sync. We've already verified
     # the graph rebuild succeeded; if start/stop fails we log but

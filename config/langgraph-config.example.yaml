@@ -72,6 +72,14 @@ skills:
   top_k: 5
   max_tokens: 2000
 
+# Workflows — reusable declarative multi-step subagent recipes (ADR 0002),
+# run via the run_workflow tool. Bundled examples ship in the repo workflows/
+# dir; `dir` is the writable root for user/agent-emitted recipes (same
+# /sandbox→~/.protoagent fallback as the stores).
+workflows:
+  enabled: true
+  dir: /sandbox/workflows
+
 # Context compaction — summarize old history near the context limit so long
 # sessions don't overflow the window. ON by default.
 #   trigger: "fraction:0.8" | "tokens:120000" | "messages:80"

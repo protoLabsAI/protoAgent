@@ -1,0 +1,64 @@
+# Reusable workflows
+
+A **workflow** is a reusable, multi-step recipe over your subagents: research →
+extract angles → write a brief, each step feeding the next, some running in
+parallel. Define it once as YAML, run it many times with different inputs. It's
+the multi-step generalization of a single-subagent skill — see
+[ADR 0002](/adr/0002-reusable-subagent-workflows) for the design.
+
+## Anatomy
+
+```yaml
+name: research-and-brief            # unique slug (the lookup key)
+description: Research a topic and write a cited brief.
+inputs:
+  - name: topic
+    required: true
+  - name: depth
+    default: deep
+steps:
+  - id: gather
+    subagent: researcher            # a key from SUBAGENT_REGISTRY
+    prompt: "Research {{ inputs.topic }} ({{ inputs.depth }}). Find 3–5 sources."
+  - id: angles
+    subagent: researcher
+    depends_on: [gather]
+    prompt: "From this research, list the 3 key angles:\n{{ steps.gather.output }}"
+  - id: brief
+    subagent: researcher
+    depends_on: [gather, angles]
+    prompt: "Write a cited brief on {{ inputs.topic }}.\n{{ steps.gather.output }}\n{{ steps.angles.output }}"
+output: "{{ steps.brief.output }}"  # optional; default = last step's output
+```
+
+- **Templating** substitutes `inputs.<name>` and `steps.<id>.output` (double
+  curly braces). References are validated against the declared inputs + step ids.
+- **`depends_on`** forms a DAG. Steps whose dependencies are ready run **in
+  parallel** (bounded by `subagents.max_concurrency`), so latency ≈ the critical
+  path. A step failure is recorded inline so independent branches still finish.
+
+## Where recipes live
+
+- **Bundled examples**: the repo's `workflows/` dir (ships with
+  `research-and-brief.yaml`).
+- **Your recipes**: `workflows.dir` in `config/langgraph-config.yaml` (default
+  `/sandbox/workflows`, falling back to `~/.protoagent/workflows` for local dev).
+  Drop a `*.yaml` recipe there; it's loaded on the next start/reload.
+
+## Running one
+
+The lead agent has a **`run_workflow(name, inputs)`** tool:
+
+- "run the research-and-brief workflow on quantum error correction" →
+  `run_workflow("research-and-brief", {"topic": "quantum error correction"})`.
+- An empty name lists the available workflows and their inputs.
+
+Workflows only delegate to **configured subagents** (each with its own tool
+allowlist and turn cap), and subagents don't get `run_workflow` — so there's no
+recursion and the blast radius is exactly the subagent system's.
+
+## Related
+
+- [ADR 0002 — Reusable Subagent Workflows](/adr/0002-reusable-subagent-workflows)
+- [Configure subagents](/guides/subagents)
+- [Starter tools](/reference/starter-tools) — `run_workflow` lives alongside `task` / `task_batch`
