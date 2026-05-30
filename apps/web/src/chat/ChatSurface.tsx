@@ -211,12 +211,19 @@ function ChatSessionSlot({
               const idx = calls.findIndex((c) => c.id === evt.id);
               const now = Date.now();
               if (evt.phase === "start") {
+                // A tool that starts while a `task` is still running is a child
+                // of that subagent delegation — nest it. (Last open task wins,
+                // so nested task() calls group correctly.)
+                const openTask = [...calls]
+                  .reverse()
+                  .find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
                 const card: ToolCall = {
                   id: evt.id,
                   name: evt.name,
                   input: evt.input,
                   status: "running",
                   startedAt: now,
+                  parentId: openTask?.id,
                 };
                 if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
                 else calls.push(card);

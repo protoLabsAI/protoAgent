@@ -551,6 +551,22 @@ select:disabled {
   background: var(--bg-raised);
   overflow: hidden;
 }
+/* Subagent grouping: a `task` card with its children nested beneath it. */
+.tool-card-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tool-children {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
 .tool-card-running {
   border-color: var(--warning);
 }
