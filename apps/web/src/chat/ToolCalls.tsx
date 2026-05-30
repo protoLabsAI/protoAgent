@@ -1,8 +1,32 @@
-import { Check, ChevronRight, Loader2, Wrench, X } from "lucide-react";
+import {
+  Calculator,
+  Check,
+  ChevronRight,
+  Clock,
+  Database,
+  Globe,
+  Loader2,
+  Network,
+  Search,
+  Wrench,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 
 import type { ToolCall } from "../lib/types";
 import { ToolValue } from "./tool-renderers";
+
+/** Map a tool name to a recognizable icon; falls back to a generic wrench. */
+function iconFor(name: string): LucideIcon {
+  if (name === "calculator") return Calculator;
+  if (name === "web_search") return Search;
+  if (name === "fetch_url") return Globe;
+  if (name === "current_time") return Clock;
+  if (name === "task") return Network; // subagent delegation
+  if (name.startsWith("memory")) return Database;
+  return Wrench;
+}
 
 /**
  * Renders the agent's tool activity as collapsible cards inside an assistant
@@ -27,6 +51,7 @@ function ToolCard({ call }: { call: ToolCall }) {
   // cards they care about.
   const [open, setOpen] = useState(false);
   const hasDetail = Boolean(call.input || call.output);
+  const Icon = iconFor(call.name);
 
   return (
     <div className={`tool-card tool-card-${call.status}`}>
@@ -42,7 +67,7 @@ function ToolCard({ call }: { call: ToolCall }) {
         ) : (
           <span className="tool-card-caret-spacer" />
         )}
-        <Wrench size={13} className="tool-card-icon" />
+        <Icon size={13} className="tool-card-icon" />
         <span className="tool-card-name">{call.name}</span>
         <StatusGlyph status={call.status} />
       </button>
