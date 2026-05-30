@@ -97,6 +97,10 @@ checkpoint:
   keep_per_thread: 5
   max_age_days: 30
   prune_interval_hours: 6
+  # When a session is retired (aged out or deleted), summarize it into the
+  # knowledge base (searchable via memory_recall) before dropping the raw
+  # checkpoints. Needs the knowledge middleware enabled.
+  harvest_enabled: true
 
 # Model routing / failover.
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context

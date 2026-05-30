@@ -318,7 +318,12 @@ function ChatSessionSlot({
             type="button"
             title="Delete session"
             disabled={status === "streaming"}
-            onClick={() => chatStore.deleteSession(session.id)}
+            onClick={() => {
+              // Retire server-side (harvest history → knowledge, purge
+              // checkpoints), best-effort, then drop the tab locally.
+              void api.deleteChatSession(session.id).catch(() => {});
+              chatStore.deleteSession(session.id);
+            }}
           >
             <Trash2 size={16} />
           </button>

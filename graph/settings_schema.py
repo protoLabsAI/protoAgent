@@ -105,6 +105,8 @@ FIELDS: list[Field] = [
     Field("checkpoint.prune_interval_hours", "checkpoint_prune_interval_hours", "History: prune every (hours)",
           "number", "Knowledge", "How often the prune sweep runs (0 disables it).", minimum=0,
           restart=True),
+    Field("checkpoint.harvest_enabled", "checkpoint_harvest_enabled", "History: harvest to knowledge", "bool",
+          "Knowledge", "Summarize a session into the searchable knowledge base before pruning/deleting it."),
 
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),

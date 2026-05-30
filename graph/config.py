@@ -198,6 +198,10 @@ class LangGraphConfig:
     checkpoint_keep_per_thread: int = 5
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
+    # When a session is retired (aged out or deleted), summarize it into the
+    # knowledge base before dropping the raw checkpoints — so past conversations
+    # stay searchable via memory_recall. Needs the knowledge store enabled.
+    checkpoint_harvest_enabled: bool = True
 
     # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
     # loaded from disk into the FTS5 skill index and retrieved at inference by
@@ -340,6 +344,7 @@ class LangGraphConfig:
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get("keep_per_thread", cls.checkpoint_keep_per_thread),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),
+            checkpoint_harvest_enabled=data.get("checkpoint", {}).get("harvest_enabled", cls.checkpoint_harvest_enabled),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             skills_enabled=skills.get("enabled", cls.skills_enabled),

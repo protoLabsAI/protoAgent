@@ -275,6 +275,15 @@ export const api = {
     });
   },
 
+  // Retire a chat session server-side: harvest its history into knowledge (if
+  // enabled) then purge its checkpoints. Fire-and-forget on tab delete.
+  deleteChatSession(sessionId: string) {
+    return request<{ deleted: boolean; harvested: boolean }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+  },
+
   async streamChat(
     message: string,
     sessionId: string,

@@ -337,7 +337,7 @@ async def _checkpoint_prune_loop() -> None:
     """
     import asyncio
 
-    from graph.checkpoint_prune import prune_checkpoints
+    from graph.checkpoint_prune import find_aged_threads, prune_checkpoints
 
     await asyncio.sleep(60)  # let boot settle before the first sweep
     while True:
@@ -349,11 +349,24 @@ async def _checkpoint_prune_loop() -> None:
                 max_age = (
                     cfg.checkpoint_max_age_days * 86400 if cfg.checkpoint_max_age_days else None
                 )
+                harvest = bool(
+                    max_age
+                    and cfg.checkpoint_harvest_enabled
+                    and _knowledge_store is not None
+                    and _checkpointer is not None
+                )
+                if harvest:
+                    # Summarize each aged thread into knowledge, then drop it —
+                    # past conversations stay searchable, raw checkpoints freed.
+                    for thread_id in await asyncio.to_thread(find_aged_threads, path, max_age):
+                        await _retire_thread(thread_id)
+                # Per-thread cap on the survivors (SQL age-TTL is the fallback
+                # delete path when harvesting is off).
                 res = await asyncio.to_thread(
                     prune_checkpoints,
                     path,
                     keep_per_thread=cfg.checkpoint_keep_per_thread,
-                    max_age_seconds=max_age,
+                    max_age_seconds=(None if harvest else max_age),
                 )
                 if res["threads_deleted"] or res["checkpoints_deleted"]:
                     log.info(
@@ -363,6 +376,33 @@ async def _checkpoint_prune_loop() -> None:
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
         await asyncio.sleep(max(1, interval_h) * 3600)
+
+
+async def _retire_thread(thread_id: str) -> str | None:
+    """Harvest a thread to the knowledge base (best-effort) then delete its
+    checkpoints. Shared by the prune sweep and explicit tab deletion. Returns
+    the harvested knowledge chunk id, if any."""
+    import asyncio
+
+    from graph.checkpoint_prune import delete_thread
+
+    chunk_id = None
+    if _graph_config is not None and getattr(_graph_config, "checkpoint_harvest_enabled", False):
+        from graph.conversation_harvest import harvest_thread
+        chunk_id = await harvest_thread(
+            thread_id,
+            checkpointer=_checkpointer,
+            knowledge_store=_knowledge_store,
+            config=_graph_config,
+        )
+    if _checkpoint_path:
+        await asyncio.to_thread(delete_thread, _checkpoint_path, thread_id)
+    elif _checkpointer is not None and hasattr(_checkpointer, "delete_thread"):
+        try:
+            _checkpointer.delete_thread(thread_id)
+        except Exception:
+            log.exception("[retire] in-memory delete_thread failed for %s", thread_id)
+    return chunk_id
 
 
 def _resolve_skills_db(configured: str) -> str:
@@ -1659,6 +1699,15 @@ def _main():
         result = await chat(req.message, req.session_id)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result}
+
+    @fastapi_app.delete("/api/chat/sessions/{session_id}")
+    async def _api_delete_session(session_id: str):
+        """Retire a chat session: harvest its conversation into the knowledge
+        base (if enabled), then purge its checkpoints. Called when the operator
+        deletes a chat tab, so deleted conversations don't linger to the TTL —
+        their substance lives on as searchable memory instead."""
+        chunk_id = await _retire_thread(f"a2a:{session_id}")
+        return {"deleted": True, "harvested": chunk_id is not None}
 
     # --- Goal mode API ------------------------------------------------------
     # Programmatic status/clear for a session's goal (setting is done via the

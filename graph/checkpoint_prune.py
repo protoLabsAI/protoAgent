@@ -41,6 +41,43 @@ def uuidv6_unix_seconds(checkpoint_id: str) -> float | None:
     return (ticks - _GREGORIAN_OFFSET) / 1e7
 
 
+def find_aged_threads(
+    db_path: str, max_age_seconds: float, *, now: float | None = None
+) -> list[str]:
+    """Thread ids whose newest checkpoint is older than the cutoff (datable via
+    UUIDv6). Used to harvest a thread to knowledge *before* deleting it."""
+    import time as _time
+
+    cutoff = (now if now is not None else _time.time()) - max_age_seconds
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        aged: list[str] = []
+        for (thread_id,) in conn.execute("SELECT DISTINCT thread_id FROM checkpoints"):
+            rows = conn.execute(
+                "SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)
+            ).fetchall()
+            stamps = [t for t in (uuidv6_unix_seconds(r[0]) for r in rows) if t is not None]
+            if stamps and max(stamps) < cutoff:
+                aged.append(thread_id)
+        return aged
+    finally:
+        conn.close()
+
+
+def delete_thread(db_path: str, thread_id: str) -> int:
+    """Delete all checkpoints + writes for a thread. Returns checkpoints removed."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
+        conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
+        conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def prune_checkpoints(
     db_path: str,
     *,
