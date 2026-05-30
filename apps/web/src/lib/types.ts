@@ -107,6 +107,10 @@ export type ToolCall = {
   input?: string;
   output?: string;
   status: "running" | "done" | "error";
+  /** Client wall-clock when the start frame arrived (ms epoch). */
+  startedAt?: number;
+  /** Elapsed start→end, stamped client-side when the end frame arrives. */
+  durationMs?: number;
 };
 
 /** Wire shape of a single tool event streamed over the A2A tool-call DataPart. */
