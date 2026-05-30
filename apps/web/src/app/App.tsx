@@ -387,6 +387,28 @@ export function App() {
     return () => window.clearTimeout(handle);
   }, [notesBusy, notesDirty, projectPath, workspace]);
 
+  // Live notes refresh — the agent (via notes_write) or another tab can change
+  // the workspace on disk. Poll while the Notes panel is open and adopt newer
+  // server state, but never clobber the user's unsaved edits (notesDirty) and
+  // keep their active tab selection.
+  useEffect(() => {
+    if (rightPanel !== "notes" || !projectPath.trim()) return;
+    const handle = window.setInterval(async () => {
+      if (notesDirty || notesBusy) return;
+      try {
+        const { workspace: latest } = await api.getNotes(projectPath);
+        setWorkspace((current) => {
+          if (!current || latest.workspaceVersion <= current.workspaceVersion) return current;
+          const keepActive = latest.tabs[current.activeTabId] ? current.activeTabId : latest.activeTabId;
+          return { ...latest, activeTabId: keepActive };
+        });
+      } catch {
+        /* transient — retry next tick */
+      }
+    }, 4000);
+    return () => window.clearInterval(handle);
+  }, [rightPanel, projectPath, notesDirty, notesBusy]);
+
   useEffect(() => {
     if (surface === "schedule") void refreshSchedules();
     if (surface === "goals") void refreshGoals();
