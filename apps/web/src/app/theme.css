@@ -596,6 +596,13 @@ select:disabled {
   font-family: var(--font-mono);
   color: var(--fg);
 }
+.tool-card-dur {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
 .tool-card-status {
   flex: none;
 }

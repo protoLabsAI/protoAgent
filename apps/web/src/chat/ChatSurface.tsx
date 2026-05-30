@@ -209,20 +209,24 @@ function ChatSessionSlot({
               if (message.id !== assistantId) return message;
               const calls = [...(message.toolCalls || [])];
               const idx = calls.findIndex((c) => c.id === evt.id);
+              const now = Date.now();
               if (evt.phase === "start") {
                 const card: ToolCall = {
                   id: evt.id,
                   name: evt.name,
                   input: evt.input,
                   status: "running",
+                  startedAt: now,
                 };
                 if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
                 else calls.push(card);
               } else {
                 // end — flip the matching card to done (or create one if the
-                // start frame was missed).
+                // start frame was missed). Stamp elapsed when we saw the start.
+                const startedAt = idx >= 0 ? calls[idx].startedAt : undefined;
+                const durationMs = startedAt !== undefined ? now - startedAt : undefined;
                 if (idx >= 0) {
-                  calls[idx] = { ...calls[idx], output: evt.output, status: "done" };
+                  calls[idx] = { ...calls[idx], output: evt.output, status: "done", durationMs };
                 } else {
                   calls.push({ id: evt.id, name: evt.name, output: evt.output, status: "done" });
                 }

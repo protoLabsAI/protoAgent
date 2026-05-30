@@ -31,6 +31,9 @@ test("tool-call card is collapsed by default and renders structured components",
   // The tool finishes → done glyph (not the running spinner).
   await expect(card.locator(".tool-card-status.done")).toBeVisible();
 
+  // A duration pill is stamped on completion (mock gaps frames ~40ms).
+  await expect(card.locator(".tool-card-dur")).toHaveText(/^\d+ms$|^\d+\.\d+s$/);
+
   await card.locator(".tool-card-head").click();
   const body = card.locator(".tool-card-body");
   await expect(body).toBeVisible();

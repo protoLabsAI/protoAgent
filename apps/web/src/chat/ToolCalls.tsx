@@ -69,6 +69,9 @@ function ToolCard({ call }: { call: ToolCall }) {
         )}
         <Icon size={13} className="tool-card-icon" />
         <span className="tool-card-name">{call.name}</span>
+        {call.durationMs !== undefined ? (
+          <span className="tool-card-dur">{formatDuration(call.durationMs)}</span>
+        ) : null}
         <StatusGlyph status={call.status} />
       </button>
       {open && hasDetail ? (
@@ -89,6 +92,12 @@ function ToolCard({ call }: { call: ToolCall }) {
       ) : null}
     </div>
   );
+}
+
+/** Human-readable elapsed: "820ms" under a second, "1.2s" above. */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function StatusGlyph({ status }: { status: ToolCall["status"] }) {
