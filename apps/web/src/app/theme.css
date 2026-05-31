@@ -1458,22 +1458,34 @@ textarea {
 .segmented {
   height: 34px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Equal-width columns for any number of tabs (2, 3, …) — avoids overflow
+     when a tab is added. (Pattern shared with pwnDeck's right panel.) */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
 }
 
 .segmented button {
+  position: relative; /* anchor for an absolutely-positioned tab badge */
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 12px;
+  white-space: nowrap;
   border: 0;
   border-right: 1px solid var(--border);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
+}
+
+.segmented button svg {
+  flex: 0 0 auto;
 }
 
 .segmented button:last-child {
