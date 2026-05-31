@@ -283,3 +283,35 @@ async def test_message_stream_carries_tool_call_datapart():
     phases = {p["data"]["phase"] for p in tool_parts}
     assert names == {"current_time"}
     assert "start" in phases or "end" in phases
+
+
+@pytest.mark.asyncio
+async def test_get_authenticated_extended_card_returns_card():
+    """agent/getAuthenticatedExtendedCard returns the card from card_provider."""
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    async def _fake_stream(text, session_id, **kw):
+        yield ("done", "ok")
+
+    register_a2a_routes(
+        app=app,
+        chat_stream_fn_factory=_fake_stream,
+        chat_fn=lambda *a, **k: [],
+        api_key="",
+        agent_card={},
+        card_provider=lambda host: {"name": "protoagent", "url": f"http://{host}/a2a", "capabilities": {"streaming": True}},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5.0,
+    ) as client:
+        resp = await client.post("/a2a", json={
+            "jsonrpc": "2.0", "id": "c1",
+            "method": "agent/getAuthenticatedExtendedCard", "params": {},
+        })
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert result["name"] == "protoagent"
+        assert result["capabilities"]["streaming"] is True

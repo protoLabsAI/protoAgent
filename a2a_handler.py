@@ -764,7 +764,11 @@ async def _deliver_webhook(record: TaskRecord, push_config: PushNotificationConf
 
     headers = {"Content-Type": "application/json"}
     if push_config.token:
+        # Authorization: Bearer (broad compat) + the spec-canonical
+        # X-A2A-Notification-Token header so a strict receiver can validate the
+        # notification belongs to a config it created (A2A push-notification spec).
         headers["Authorization"] = f"Bearer {push_config.token}"
+        headers["X-A2A-Notification-Token"] = push_config.token
 
     backoff = [1, 3, 9]
     async with httpx.AsyncClient(timeout=10) as client:
@@ -814,20 +818,72 @@ def _notify_terminal(record: TaskRecord) -> None:
         logger.exception("[a2a] terminal hook failed for task %s", record.id)
 
 
+# Coalescing for progress webhooks (A2A spec: fire on transitions the caller
+# cares about). SSE subscribers get every per-tool status update; webhook
+# consumers get the same progress but throttled to at most one POST per
+# _PUSH_MIN_INTERVAL_S (latest state), so a burst of tool events can't storm a
+# webhook. Terminal transitions always flush immediately.
+_PUSH_MIN_INTERVAL_S = 1.5
+_push_last: dict[str, float] = {}            # task_id → loop time of last delivery
+_push_trailing: dict[str, asyncio.Task] = {}  # task_id → scheduled trailing send
+
+
+def _spawn_webhook(record: TaskRecord, cfg: PushNotificationConfig) -> None:
+    task = asyncio.create_task(_deliver_webhook(record, cfg))
+    _pending_webhook_tasks.add(task)
+    task.add_done_callback(_pending_webhook_tasks.discard)
+
+
 async def _push(record: TaskRecord) -> None:
-    """Fire webhook delivery for *record* if a push config is currently
-    registered on it.
+    """Fire (or schedule) webhook delivery for *record*'s current state.
 
     Reads record.push_config at call time rather than closing over the
     submit-time value — otherwise a caller who registered a webhook via
     POST /tasks/{id}/pushNotificationConfigs *after* submitting would
     never receive any state transitions.
+
+    Non-terminal transitions (working / per-tool progress) are throttled to one
+    POST per ``_PUSH_MIN_INTERVAL_S`` carrying the latest state; terminal
+    transitions cancel any pending throttle and deliver immediately.
     """
     cfg = record.push_config
-    if cfg and record.state in _TERMINAL | {WORKING}:
-        task = asyncio.create_task(_deliver_webhook(record, cfg))
-        _pending_webhook_tasks.add(task)
-        task.add_done_callback(_pending_webhook_tasks.discard)
+    if cfg is None:
+        return
+
+    if record.state in _TERMINAL:
+        pending = _push_trailing.pop(record.id, None)
+        if pending is not None:
+            pending.cancel()
+        _push_last.pop(record.id, None)
+        _spawn_webhook(record, cfg)
+        return
+
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    last = _push_last.get(record.id, 0.0)
+    if now - last >= _PUSH_MIN_INTERVAL_S:
+        _push_last[record.id] = now
+        _spawn_webhook(record, cfg)
+        return
+
+    # Inside the throttle window — ensure a single trailing delivery is queued
+    # that will fire with whatever the latest state is when the window closes.
+    if record.id in _push_trailing and not _push_trailing[record.id].done():
+        return
+
+    async def _trailing() -> None:
+        try:
+            await asyncio.sleep(_PUSH_MIN_INTERVAL_S - (now - last))
+            cur = await _store.get(record.id)
+            if cur is not None and cur.push_config is not None and cur.state not in _TERMINAL:
+                _push_last[cur.id] = asyncio.get_running_loop().time()
+                _spawn_webhook(cur, cur.push_config)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _push_trailing.pop(record.id, None)
+
+    _push_trailing[record.id] = asyncio.create_task(_trailing())
 
 
 # ── Background task runner ────────────────────────────────────────────────────
@@ -875,12 +931,15 @@ async def _run_task_background(
                 else:
                     text = str(payload)
                     tool_event = None
-                await _store.update_state(
+                rec = await _store.update_state(
                     task_id, WORKING,
                     accumulated_text=accumulated,
                     status_message=text,
                     tool_event=tool_event,
                 )
+                # Mirror SSE per-tool progress to webhook consumers (throttled).
+                if rec is not None:
+                    await _push(rec)
 
             elif event_type == "delta":
                 # Worldstate-delta emitted by a tool that mutated shared state.
@@ -1073,6 +1132,7 @@ def register_a2a_routes(
     register_card_route: bool = True,
     auth_token: str = "",
     on_terminal: Callable[["TaskRecord"], None] | None = None,
+    card_provider: Callable[[str], dict] | None = None,
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
@@ -1523,6 +1583,16 @@ def register_a2a_routes(
             async with _store._lock:
                 record.push_config = None
             return _rpc_result(None)
+
+        # ── agent/getAuthenticatedExtendedCard ────────────────────────────────
+        # The request already passed _check_bearer_auth above, so the caller is
+        # authenticated; return the (extended) agent card. Falls back to the
+        # capability-mutated agent_card when no provider is wired.
+        if method == "agent/getAuthenticatedExtendedCard":
+            if card_provider is not None:
+                host = request.headers.get("host", "") or "localhost"
+                return _rpc_result(card_provider(host))
+            return _rpc_result(agent_card)
 
         return _rpc_error(-32601, f"Method not found: {method}")
 
