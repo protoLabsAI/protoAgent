@@ -71,3 +71,21 @@ test("scalar input values render inline, objects as key/value fields", async ({ 
   await expect(body.locator(".tool-kv-key", { hasText: "url" })).toBeVisible();
   await expect(body.locator(".tool-kv-val a.tool-link")).toHaveAttribute("href", "https://example.com");
 });
+
+test("a tool whose end frame never arrives still finishes when the turn completes", async ({ page }) => {
+  // Reproduces the workflow "spun on active" bug: a tool_start with no tool_end
+  // (end raced the terminal done). The card must flip running→done, not spin.
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("NOEND run the workflow");
+  await composer.press("Enter");
+
+  const card = page.locator(".tool-card").first();
+  await expect(card).toBeVisible();
+  // The assistant's final text arrives (turn completed).
+  await expect(page.getByText("Workflow finished.")).toBeVisible();
+  // The card resolved to done — no lingering spinner.
+  await expect(card).toHaveClass(/tool-card-done/);
+  await expect(card.locator(".tool-card-status.running")).toHaveCount(0);
+});
