@@ -39,8 +39,13 @@ import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "workflows" | "activity" | "runtime" | "schedule" | "goals" | "settings";
-type RightPanel = "notes" | "beads" | "inbox";
+// Consolidated nav (heavy grouping): four rail surfaces, each grouped one
+// fanning out to sub-views via an in-surface segmented control.
+type Surface = "chat" | "activity" | "studio" | "system";
+type StudioTab = "subagents" | "workflows" | "schedule" | "goals";
+type SystemTab = "runtime" | "settings";
+type ActivityTab = "thread" | "inbox";
+type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
 
@@ -216,6 +221,9 @@ function groupIssues(issues: BeadsIssue[]) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
+  const [studioTab, setStudioTab] = useState<StudioTab>("subagents");
+  const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
+  const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   const [live, setLive] = useState(false);
   const [activityUnread, setActivityUnread] = useState(0);
@@ -424,43 +432,45 @@ export function App() {
   }, [rightPanel, projectPath, notesDirty, notesBusy]);
 
   useEffect(() => {
-    if (surface === "schedule") void refreshSchedules();
-    if (surface === "goals") void refreshGoals();
-  }, [surface]);
+    if (surface === "studio" && studioTab === "schedule") void refreshSchedules();
+    if (surface === "studio" && studioTab === "goals") void refreshGoals();
+  }, [surface, studioTab]);
 
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
   useEffect(() => onConnectionChange(setLive), []);
 
-  // Unread badge on the Activity rail: count agent-initiated messages that
-  // arrive while the operator isn't looking at the Activity surface.
+  // Unread badges (Activity rail + its Inbox sub-tab): count agent-initiated
+  // messages / inbound items that arrive while the operator isn't looking at
+  // the matching view. Refs so the event handlers read the live view.
   const surfaceRef = useRef(surface);
   surfaceRef.current = surface;
+  const activityTabRef = useRef(activityTab);
+  activityTabRef.current = activityTab;
+  const viewingThread = () => surfaceRef.current === "activity" && activityTabRef.current === "thread";
+  const viewingInbox = () => surfaceRef.current === "activity" && activityTabRef.current === "inbox";
+
   useEffect(
     () =>
       onServerEvent("activity.message", () => {
-        if (surfaceRef.current !== "activity") setActivityUnread((n) => n + 1);
+        if (!viewingThread()) setActivityUnread((n) => n + 1);
       }),
     [],
   );
   useEffect(() => {
-    if (surface === "activity") setActivityUnread(0);
-  }, [surface]);
+    if (viewingThread()) setActivityUnread(0);
+  }, [surface, activityTab]);
 
-  // Unread count on the Inbox sidebar tab: inbound items that arrive while the
-  // operator isn't looking at the inbox panel.
-  const rightPanelRef = useRef(rightPanel);
-  rightPanelRef.current = rightPanel;
   useEffect(
     () =>
       onServerEvent("inbox.item", () => {
-        if (rightPanelRef.current !== "inbox") setInboxUnread((n) => n + 1);
+        if (!viewingInbox()) setInboxUnread((n) => n + 1);
       }),
     [],
   );
   useEffect(() => {
-    if (rightPanel === "inbox") setInboxUnread(0);
-  }, [rightPanel]);
+    if (viewingInbox()) setInboxUnread(0);
+  }, [surface, activityTab]);
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -802,47 +812,23 @@ export function App() {
             onClick={() => setSurface("chat")}
           />
           <RailButton
-            active={surface === "subagents"}
-            label="Subagents"
-            icon={<Network size={18} />}
-            onClick={() => setSurface("subagents")}
-          />
-          <RailButton
-            active={surface === "workflows"}
-            label="Workflows"
-            icon={<Workflow size={18} />}
-            onClick={() => setSurface("workflows")}
-          />
-          <RailButton
             active={surface === "activity"}
             label="Activity"
             icon={<Activity size={18} />}
             onClick={() => setSurface("activity")}
-            badge={activityUnread}
+            badge={activityUnread + inboxUnread}
           />
           <RailButton
-            active={surface === "schedule"}
-            label="Schedule"
-            icon={<CalendarClock size={18} />}
-            onClick={() => setSurface("schedule")}
+            active={surface === "studio"}
+            label="Studio"
+            icon={<Boxes size={18} />}
+            onClick={() => setSurface("studio")}
           />
           <RailButton
-            active={surface === "goals"}
-            label="Goals"
-            icon={<Target size={18} />}
-            onClick={() => setSurface("goals")}
-          />
-          <RailButton
-            active={surface === "runtime"}
-            label="Runtime"
+            active={surface === "system"}
+            label="System"
             icon={<Gauge size={18} />}
-            onClick={() => setSurface("runtime")}
-          />
-          <RailButton
-            active={surface === "settings"}
-            label="Settings"
-            icon={<Settings2 size={18} />}
-            onClick={() => setSurface("settings")}
+            onClick={() => setSurface("system")}
           />
         </aside>
 
@@ -854,11 +840,50 @@ export function App() {
             </div>
           ) : null}
 
+          {/* In-surface sub-nav for the grouped rail surfaces. */}
+          {surface === "activity" ? (
+            <div className="stage-subnav">
+              <button className={activityTab === "thread" ? "active" : ""} onClick={() => setActivityTab("thread")}>
+                <Activity size={15} /> Thread
+              </button>
+              <button className={activityTab === "inbox" ? "active" : ""} onClick={() => setActivityTab("inbox")}>
+                <Inbox size={15} /> Inbox
+                {inboxUnread ? <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span> : null}
+              </button>
+            </div>
+          ) : null}
+          {surface === "studio" ? (
+            <div className="stage-subnav">
+              <button className={studioTab === "subagents" ? "active" : ""} onClick={() => setStudioTab("subagents")}>
+                <Network size={15} /> Subagents
+              </button>
+              <button className={studioTab === "workflows" ? "active" : ""} onClick={() => setStudioTab("workflows")}>
+                <Workflow size={15} /> Workflows
+              </button>
+              <button className={studioTab === "schedule" ? "active" : ""} onClick={() => setStudioTab("schedule")}>
+                <CalendarClock size={15} /> Schedule
+              </button>
+              <button className={studioTab === "goals" ? "active" : ""} onClick={() => setStudioTab("goals")}>
+                <Target size={15} /> Goals
+              </button>
+            </div>
+          ) : null}
+          {surface === "system" ? (
+            <div className="stage-subnav">
+              <button className={systemTab === "runtime" ? "active" : ""} onClick={() => setSystemTab("runtime")}>
+                <Gauge size={15} /> Runtime
+              </button>
+              <button className={systemTab === "settings" ? "active" : ""} onClick={() => setSystemTab("settings")}>
+                <Settings2 size={15} /> Settings
+              </button>
+            </div>
+          ) : null}
+
           {surface === "chat" ? (
             <ChatSurface onError={setError} />
           ) : null}
 
-          {surface === "subagents" ? (
+          {surface === "studio" && studioTab === "subagents" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>
@@ -973,11 +998,12 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "workflows" ? <WorkflowsSurface onError={setError} /> : null}
+          {surface === "studio" && studioTab === "workflows" ? <WorkflowsSurface onError={setError} /> : null}
 
-          {surface === "activity" ? <ActivitySurface onError={setError} /> : null}
+          {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
+          {surface === "activity" && activityTab === "inbox" ? <InboxPanel onError={setError} /> : null}
 
-          {surface === "schedule" ? (
+          {surface === "studio" && studioTab === "schedule" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>
@@ -1064,7 +1090,7 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "goals" ? (
+          {surface === "studio" && studioTab === "goals" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>
@@ -1125,7 +1151,7 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "runtime" ? (
+          {surface === "system" && systemTab === "runtime" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>
@@ -1220,7 +1246,7 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "settings" ? <SettingsSurface onError={setError} /> : null}
+          {surface === "system" && systemTab === "settings" ? <SettingsSurface onError={setError} /> : null}
         </main>
 
         <aside className="right-panel">
@@ -1248,19 +1274,6 @@ export function App() {
             <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
               <Boxes size={15} />
               Beads
-            </button>
-            <button
-              type="button"
-              className={rightPanel === "inbox" ? "active" : ""}
-              onClick={() => setRightPanel("inbox")}
-            >
-              <Inbox size={15} />
-              Inbox
-              {inboxUnread ? (
-                <span className="rail-badge" data-testid="inbox-badge">
-                  {inboxUnread > 9 ? "9+" : inboxUnread}
-                </span>
-              ) : null}
             </button>
           </div>
 
@@ -1518,8 +1531,6 @@ export function App() {
               </ScrollArea>
             </section>
           ) : null}
-
-          {rightPanel === "inbox" ? <InboxPanel onError={setError} /> : null}
         </aside>
       </div>
       <SetupWizard

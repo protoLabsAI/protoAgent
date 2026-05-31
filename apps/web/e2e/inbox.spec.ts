@@ -1,15 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-// The Inbox sidebar panel (ADR 0003): lists pending inbound items, shows an
-// unread badge while off-panel, live-updates on `inbox.item`, and dismisses.
+// The Inbox lives under Activity (ADR 0003): inbound items, a sub-tab unread
+// badge, live updates on `inbox.item`, and dismiss.
 
 test("inbox badge appears, panel lists items, and dismiss removes one", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // inbox.item events arrive while the default (Notes) panel is showing → badge.
-  await expect(page.getByTestId("inbox-badge")).toBeVisible();
+  // Inbound events bump the Activity rail's combined unread badge.
+  await expect(page.getByTestId("activity-badge")).toBeVisible();
 
-  // Open the Inbox tab (its accessible name includes the badge count).
+  // Open Activity → its Inbox sub-tab.
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await page.getByRole("button", { name: /Inbox/ }).click();
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
@@ -18,7 +19,7 @@ test("inbox badge appears, panel lists items, and dismiss removes one", async ({
   await expect(page.getByText("new signup: acme.co")).toBeVisible();
   await expect(page.locator(".inbox-pri-now")).toBeVisible();
 
-  // Opening the panel clears the badge.
+  // Viewing the Inbox sub-tab clears its unread badge.
   await expect(page.getByTestId("inbox-badge")).toHaveCount(0);
 
   // Dismiss the first item → it leaves the list.

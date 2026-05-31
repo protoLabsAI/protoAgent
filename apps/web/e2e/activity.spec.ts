@@ -11,14 +11,12 @@ test("unread badge counts pushed messages; surface shows history + live append",
   await expect(page.getByTestId("activity-badge")).toBeVisible();
 
   await page.getByRole("button", { name: "Activity", exact: true }).click();
+  // Activity opens on its Thread sub-tab by default.
   await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
 
   // History from GET /api/activity renders.
   await expect(page.getByText("morning standup")).toBeVisible();
   await expect(page.getByText("3 PRs merged overnight, CI green.")).toBeVisible();
-
-  // Opening the surface clears the badge.
-  await expect(page.getByTestId("activity-badge")).toHaveCount(0);
 
   // A pushed event appends live while the surface is open.
   await expect(page.getByText("live activity ping").first()).toBeVisible();
