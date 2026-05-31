@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
 test("copy button writes the raw value to the clipboard", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill("CALC compute it");

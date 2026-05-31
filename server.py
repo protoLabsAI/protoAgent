@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from events import EventBus
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
     extract_confidence,
@@ -87,6 +88,10 @@ _cache_warmer = None   # Optional CacheWarmer (off by default). Same start/stop
                        # lifecycle as _scheduler; keeps the prompt cache warm.
 _goal_controller = None  # Optional GoalController (goal mode). Parses /goal
                          # control messages and runs the goal-completion loop.
+
+_event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
+                         # lifetime singleton; producers publish, /api/events
+                         # streams to connected consoles.
 
 
 def _init_langgraph_agent():
@@ -1698,6 +1703,7 @@ def _main():
         chat_commands=_operator_chat_commands,
         workflows_list=_operator_workflows_list,
         workflows_run=_operator_workflow_run,
+        events_subscribe=_event_bus.subscribe,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

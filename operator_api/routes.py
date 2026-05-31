@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from operator_api.beads import BeadsCommandError, BeadsService
@@ -70,6 +72,33 @@ class BeadsCloseRequest(BaseModel):
     reason: str | None = None
 
 
+async def _sse_event_stream(
+    subscribe: Callable[[], AsyncIterator[dict[str, Any]]],
+    *,
+    keepalive_s: float = 15.0,
+) -> AsyncIterator[str]:
+    """Frame bus events as SSE text for the ``/api/events`` response.
+
+    Emits a ``: connected`` comment up front (so the client's ``onopen`` fires),
+    then one ``event:``/``data:`` frame per published event, with periodic
+    ``: keepalive`` comments to hold the connection open through idle stretches.
+    """
+    yield ": connected\n\n"
+    agen = subscribe()
+    try:
+        while True:
+            try:
+                evt = await asyncio.wait_for(agen.__anext__(), timeout=keepalive_s)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            except StopAsyncIteration:
+                break
+            yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+    finally:
+        await agen.aclose()
+
+
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
@@ -104,6 +133,7 @@ def register_operator_routes(
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     workflows_list: Callable[[], dict[str, Any]] | None = None,
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -293,3 +323,15 @@ def register_operator_routes(
                 return await workflows_run(name, req.inputs)
             except Exception as exc:
                 raise _http_error(exc) from exc
+
+    # --- Event stream --------------------------------------------------------
+    # Server→client SSE push channel (ADR 0003). The console keeps one of these
+    # open for the app's lifetime; the server pushes unsolicited events
+    # (activity messages, inbox items) the request-scoped chat stream can't.
+    if events_subscribe is not None:
+
+        @app.get("/api/events")
+        async def _events():
+            return StreamingResponse(
+                _sse_event_stream(events_subscribe), media_type="text/event-stream"
+            )

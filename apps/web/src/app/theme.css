@@ -1139,6 +1139,21 @@ textarea {
   white-space: pre-wrap;
 }
 
+/* Live event-stream indicator (ADR 0003) ------------------------------------ */
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-tertiary, #555);
+  flex: none;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.live-dot.is-live {
+  background: var(--success, #3fb950);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #3fb950) 25%, transparent);
+}
+
 /* Workflows surface --------------------------------------------------------- */
 .workflow-desc {
   margin: 0 12px;
