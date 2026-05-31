@@ -14,6 +14,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ACTIVITY_HISTORY,
   buildFrames,
   GOALS,
   NOTES_WORKSPACE,
@@ -84,6 +85,8 @@ function handleApiGet(pathname) {
       return { groups: SETTINGS_SCHEMA };
     case "/api/workflows":
       return { workflows: WORKFLOWS };
+    case "/api/activity":
+      return ACTIVITY_HISTORY;
     default:
       return null;
   }
@@ -159,10 +162,12 @@ const server = createServer(async (req, res) => {
       connection: "keep-alive",
     });
     res.write(": connected\n\n");
-    const t = setTimeout(() => {
-      res.write('event: activity.message\ndata: {"text":"hello from mock"}\n\n');
-    }, 50);
-    req.on("close", () => clearTimeout(t));
+    // Push an activity.message periodically so both the unread badge (while off
+    // the surface) and live append (while on it) are deterministically testable.
+    const t = setInterval(() => {
+      res.write('event: activity.message\ndata: {"text":"live activity ping"}\n\n');
+    }, 500);
+    req.on("close", () => clearInterval(t));
     return;
   }
   if (pathname.startsWith("/api/")) {

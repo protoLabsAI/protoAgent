@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from events import EventBus
+from events import ACTIVITY_CONTEXT, EventBus
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
     extract_confidence,
@@ -1673,6 +1673,47 @@ def _main():
             name=name, inputs=inputs or {},
         )
 
+    def _publish_activity_terminal(record) -> None:
+        """Terminal hook (ADR 0003): when a turn in the Activity thread completes,
+        push the assistant's visible output to the event bus so connected
+        consoles append it live. No-op for every other context."""
+        if getattr(record, "context_id", "") != ACTIVITY_CONTEXT:
+            return
+        raw = getattr(record, "accumulated_text", "") or ""
+        text = extract_output(raw) or raw
+        if not text.strip():
+            return
+        _event_bus.publish(
+            "activity.message",
+            {"role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT},
+        )
+
+    async def _operator_activity_list() -> dict:
+        """Return the Activity thread's message history from the checkpointer
+        (ADR 0003). The console loads this when opening the Activity surface."""
+        messages: list[dict] = []
+        if _checkpointer is not None:
+            thread_id = f"a2a:{ACTIVITY_CONTEXT}"
+            try:
+                tup = await _checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+                raw = (tup.checkpoint or {}).get("channel_values", {}).get("messages", []) if tup else []
+            except Exception:
+                log.exception("[activity] failed to read thread %s", thread_id)
+                raw = []
+            for m in raw:
+                role = getattr(m, "type", "")
+                content = getattr(m, "content", "")
+                if not isinstance(content, str):
+                    content = str(content)
+                if role == "human":
+                    messages.append({"role": "user", "content": content})
+                elif role == "ai":
+                    visible = extract_output(content) or content
+                    if visible.strip():
+                        messages.append({"role": "assistant", "content": visible})
+                # tool/system messages are omitted from the surface view
+        return {"context_id": ACTIVITY_CONTEXT, "messages": messages}
+
     def _operator_chat_commands() -> dict:
         """Slash commands the chat understands — drives the composer autocomplete.
 
@@ -1704,6 +1745,7 @@ def _main():
         workflows_list=_operator_workflows_list,
         workflows_run=_operator_workflow_run,
         events_subscribe=_event_bus.subscribe,
+        activity_list=_operator_activity_list,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------
@@ -1979,6 +2021,7 @@ def _main():
         auth_token=yaml_bearer,
         agent_card={},
         register_card_route=False,  # card is already served above
+        on_terminal=_publish_activity_terminal,  # ADR 0003: surface Activity turns
     )
 
     # --- Prometheus metrics -------------------------------------------------

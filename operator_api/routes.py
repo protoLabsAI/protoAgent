@@ -134,6 +134,7 @@ def register_operator_routes(
     workflows_list: Callable[[], dict[str, Any]] | None = None,
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
+    activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -321,6 +322,19 @@ def register_operator_routes(
         async def _workflow_run(name: str, req: WorkflowRunRequest):
             try:
                 return await workflows_run(name, req.inputs)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # --- Activity thread -----------------------------------------------------
+    # The durable Activity thread's history (ADR 0003). Agent-initiated turns
+    # (scheduled fires, inbox items) land here; the console loads this when the
+    # Activity surface opens and appends live via the `activity.message` event.
+    if activity_list is not None:
+
+        @app.get("/api/activity")
+        async def _activity():
+            try:
+                return await activity_list()
             except Exception as exc:
                 raise _http_error(exc) from exc
 

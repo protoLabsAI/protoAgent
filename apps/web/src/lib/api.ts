@@ -1,4 +1,5 @@
 import type {
+  ActivityHistory,
   AgentConfig,
   BeadsIssue,
   ChatMessage,
@@ -261,6 +262,10 @@ export const api = {
 
   settingsSchema() {
     return request<{ groups: SettingsGroup[] }>("/api/settings/schema");
+  },
+
+  activity() {
+    return request<ActivityHistory>("/api/activity");
   },
 
   workflows() {

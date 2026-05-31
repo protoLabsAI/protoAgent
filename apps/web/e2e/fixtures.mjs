@@ -51,6 +51,14 @@ export const SUBAGENTS = [
   },
 ];
 
+export const ACTIVITY_HISTORY = {
+  context_id: "system:activity",
+  messages: [
+    { role: "user", content: "morning standup" },
+    { role: "assistant", content: "3 PRs merged overnight, CI green." },
+  ],
+};
+
 export const WORKFLOWS = [
   {
     name: "research-and-brief",

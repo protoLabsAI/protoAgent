@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bot,
   Boxes,
   CalendarClock,
@@ -23,19 +24,20 @@ import {
   Trash2,
   Workflow,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { ActivitySurface } from "../activity/ActivitySurface";
 import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
-import { onConnectionChange } from "../lib/events";
+import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "workflows" | "runtime" | "schedule" | "goals" | "settings";
+type Surface = "chat" | "subagents" | "workflows" | "activity" | "runtime" | "schedule" | "goals" | "settings";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -214,6 +216,7 @@ export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   const [live, setLive] = useState(false);
+  const [activityUnread, setActivityUnread] = useState(0);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
@@ -425,6 +428,21 @@ export function App() {
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
   useEffect(() => onConnectionChange(setLive), []);
+
+  // Unread badge on the Activity rail: count agent-initiated messages that
+  // arrive while the operator isn't looking at the Activity surface.
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
+  useEffect(
+    () =>
+      onServerEvent("activity.message", () => {
+        if (surfaceRef.current !== "activity") setActivityUnread((n) => n + 1);
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (surface === "activity") setActivityUnread(0);
+  }, [surface]);
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -778,6 +796,13 @@ export function App() {
             onClick={() => setSurface("workflows")}
           />
           <RailButton
+            active={surface === "activity"}
+            label="Activity"
+            icon={<Activity size={18} />}
+            onClick={() => setSurface("activity")}
+            badge={activityUnread}
+          />
+          <RailButton
             active={surface === "schedule"}
             label="Schedule"
             icon={<CalendarClock size={18} />}
@@ -931,6 +956,8 @@ export function App() {
           ) : null}
 
           {surface === "workflows" ? <WorkflowsSurface onError={setError} /> : null}
+
+          {surface === "activity" ? <ActivitySurface onError={setError} /> : null}
 
           {surface === "schedule" ? (
             <section className="panel stage-panel">
@@ -1481,16 +1508,23 @@ function RailButton({
   label,
   icon,
   onClick,
+  badge,
 }: {
   active: boolean;
   label: string;
   icon: ReactNode;
   onClick: () => void;
+  badge?: number;
 }) {
   return (
     <button className={active ? "active" : ""} type="button" onClick={onClick} title={label} aria-label={label}>
       {icon}
       <span>{label}</span>
+      {badge ? (
+        <span className="rail-badge" data-testid="activity-badge">
+          {badge > 9 ? "9+" : badge}
+        </span>
+      ) : null}
     </button>
   );
 }
