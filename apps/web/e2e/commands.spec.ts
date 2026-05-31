@@ -20,6 +20,8 @@ test("slash menu opens and lists the server commands", async ({ page }) => {
   // name, so scope to the name span to avoid matching twice).
   const names = await menu.locator(".slash-name").allInnerTexts();
   expect(names).toEqual(SLASH_COMMANDS.map((c) => `/${c.name}`));
+  // Workflows are listed as slash commands too (ADR 0002).
+  expect(names).toContain("/research-and-brief");
 });
 
 test("filtering narrows the menu and selecting completes the command", async ({ page }) => {
