@@ -298,6 +298,42 @@ SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
 MEMORY_TOOL_NAMES: tuple[str, ...] = (
     "memory_ingest", "memory_recall", "memory_list", "memory_stats", "daily_log",
 )
+INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox",)
+
+
+def _build_inbox_tools(inbox_store) -> list:
+    """Bind the inbox tool to an ``InboxStore`` (ADR 0003). Returns a list."""
+
+    @tool
+    async def check_inbox(priority_floor: str = "next", limit: int = 10) -> str:
+        """Pull pending inbound messages (webhooks, external systems, sister
+        agents) from the inbox and mark them delivered.
+
+        Inbound items arrive with a priority tier: ``now`` items already fired a
+        turn; ``next`` items wait for you to surface them; ``later`` items are
+        background. Call this when the operator asks "anything new?" or when the
+        conversation suggests checking for outside input.
+
+        Args:
+            priority_floor: ``"now"`` (now only), ``"next"`` (now + next, the
+                default), or ``"later"`` (everything pending).
+            limit: Max items to return (default 10).
+
+        Returns the items one per line, or ``"Inbox empty."`` when there's
+        nothing pending at that floor.
+        """
+        floor = priority_floor if priority_floor in ("now", "next", "later") else "next"
+        items = inbox_store.list(priority_floor=floor, limit=max(1, min(int(limit), 50)))
+        if not items:
+            return "Inbox empty."
+        inbox_store.mark_delivered([i["id"] for i in items])
+        lines = []
+        for i in items:
+            src = f" (from {i['source']})" if i.get("source") else ""
+            lines.append(f"[{i['priority']}]{src} {i['text']}")
+        return "\n".join(lines)
+
+    return [check_inbox]
 
 
 def _build_memory_tools(knowledge_store) -> list:
@@ -502,7 +538,7 @@ def _build_scheduler_tools(scheduler) -> list:
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
-def get_all_tools(knowledge_store=None, scheduler=None):
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
     """Return every LangChain tool the lead agent + subagents can use.
 
     Optional dependencies:
@@ -535,4 +571,6 @@ def get_all_tools(knowledge_store=None, scheduler=None):
         tools.extend(_build_memory_tools(knowledge_store))
     if scheduler is not None:
         tools.extend(_build_scheduler_tools(scheduler))
+    if inbox_store is not None:
+        tools.extend(_build_inbox_tools(inbox_store))
     return tools

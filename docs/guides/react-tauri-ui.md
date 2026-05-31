@@ -150,6 +150,7 @@ Add these before the React UI depends on them:
 | `GET /api/chat/commands` | registered slash commands (`{name, description, usage}`) for the composer's `/` autocomplete |
 | `GET /api/events` | **server→client SSE push channel** (ADR 0003). Holds open for the app's lifetime; the server pushes unsolicited events (`activity.message`, `inbox.item`) the request-scoped chat stream can't. Read-only. |
 | `GET /api/activity` | the durable **Activity thread**'s message history (ADR 0003) — `{context_id, messages:[{role, content}]}` read from the checkpointer (`a2a:system:activity`). Where agent-initiated turns (scheduled fires) land. |
+| `POST /api/inbox` | **authenticated inbound intake** (ADR 0003). `{text, priority?, source?, dedup_key?}` — `priority` is `now` \| `next` \| `later`. `now` items fire an Activity turn immediately; the rest queue for the agent's `check_inbox` tool. Bearer token required (same token as `/a2a`). |
 
 ### Event stream (push channel)
 
@@ -174,6 +175,17 @@ operator's own message is appended optimistically; the assistant's reply arrives
 via the same `activity.message` event a scheduled fire produces, so there's one
 uniform render path and no double-render. A rail **unread badge** counts events
 that land while the operator is on another surface.
+
+### Inbound inbox
+
+`POST /api/inbox` is the general inbound channel (ADR 0003) — webhooks, scripts,
+and sister agents push stimuli here. It's **authenticated** (an inbound item can
+initiate an agent turn, so it carries the same bearer token as `/a2a`). Items
+have a priority tier: `now` fires an Activity turn immediately (subject to a
+dedup window + an anti-storm rate cap), while `next`/`later` queue for the
+agent's **`check_inbox`** tool to surface on its own terms. Items live in a
+durable SQLite `inbox` table; a `dedup_key` collapses a retrying producer's
+repeats. Arrivals publish an `inbox.item` event on the bus.
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

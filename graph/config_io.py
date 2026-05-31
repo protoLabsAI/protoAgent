@@ -521,6 +521,7 @@ def list_available_tools(knowledge_store: Any = None) -> list[str]:
     knowledge store is absent.
     """
     from tools.lg_tools import (
+        INBOX_TOOL_NAMES,
         MEMORY_TOOL_NAMES,
         SCHEDULER_TOOL_NAMES,
         get_all_tools,
@@ -530,7 +531,7 @@ def list_available_tools(knowledge_store: Any = None) -> list[str]:
     # Deduplicate while preserving order: tools already present
     # (because their backend was passed in) shouldn't appear twice.
     seen = set(names)
-    for extra in (*MEMORY_TOOL_NAMES, *SCHEDULER_TOOL_NAMES):
+    for extra in (*MEMORY_TOOL_NAMES, *SCHEDULER_TOOL_NAMES, *INBOX_TOOL_NAMES):
         if extra not in seen:
             names.append(extra)
             seen.add(extra)

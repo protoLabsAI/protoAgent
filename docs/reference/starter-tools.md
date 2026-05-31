@@ -6,6 +6,7 @@ Sixteen tools ship by default:
 - Four **GitHub read tools** — `github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff` (`tools/github_tools.py`) — over the `gh` CLI. Each requires an explicit `repo` (`owner/name`, no default); they degrade to a readable error if `gh`/auth is missing. Auth via `GITHUB_TOKEN`/`GH_TOKEN` env, else gh's ambient login.
 - Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
+- One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
 - Four **project-notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent, gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
 
 `get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
@@ -201,6 +202,21 @@ async def cancel_schedule(job_id: str) -> str
 Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."`.
 
 Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path or a Workstacean install.
+
+## `check_inbox`
+
+```python
+@tool
+async def check_inbox(priority_floor: str = "next", limit: int = 10) -> str
+```
+
+Pull pending **inbound messages** (ADR 0003) — webhooks, external systems, and
+sister agents that posted to `POST /api/inbox` — and mark them delivered. Bound
+only when an `InboxStore` is configured. `priority_floor` selects the tiers:
+`now` (now only), `next` (now + next, default), or `later` (everything pending).
+`now`-priority items have already fired an Activity turn; `next`/`later` wait for
+this call so the agent decides when to surface them. Returns the items one per
+line, or `"Inbox empty."`.
 
 ## `notes_list` / `notes_read` / `notes_write`
 
