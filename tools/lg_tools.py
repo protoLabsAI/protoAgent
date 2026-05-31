@@ -54,6 +54,27 @@ from tools.fallbacks import with_fallback
 
 
 @tool
+def ask_human(question: str) -> str:
+    """Pause and ask the human operator a question, then continue with their answer.
+
+    Use this only when you genuinely need a human decision or a fact you cannot
+    determine yourself — an approval ("merge this PR?"), a missing input, or a
+    choice between options. The task pauses (surfaced to A2A callers as the
+    ``input-required`` state) until the operator answers; their reply is returned
+    from this call so you can continue. Do NOT use it for narration or status —
+    only for an answer you must wait on. Phrase ``question`` as a clear,
+    self-contained ask.
+    """
+    # LangGraph HITL: interrupt() checkpoints the graph at this exact point. On
+    # resume (Command(resume=answer)) it returns the operator's reply. Requires a
+    # checkpointer (bound at compile) — which protoAgent always has.
+    from langgraph.types import interrupt
+
+    answer = interrupt({"question": question})
+    return answer if isinstance(answer, str) else str(answer)
+
+
+@tool
 @with_fallback()
 async def current_time(timezone: str = "UTC") -> str:
     """Return the current wall-clock time in the given IANA timezone.
@@ -552,7 +573,11 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
     """
-    tools = [current_time, calculator, web_search, fetch_url]
+    # ask_human is a lead-agent HITL tool — it pauses the A2A turn via a
+    # LangGraph interrupt that only the lead turn's runner resumes. Subagents
+    # (run outside that runner) must not get it, so it's gated by allowlist:
+    # present in the full set for the lead agent, absent from subagent allowlists.
+    tools = [current_time, calculator, web_search, fetch_url, ask_human]
     # GitHub read tools (PRs/issues/commits) over the gh CLI. Always
     # included — they degrade to a readable error if gh/auth is missing.
     from tools.github_tools import get_github_tools

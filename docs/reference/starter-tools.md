@@ -7,6 +7,7 @@ Sixteen tools ship by default:
 - Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
+- One **HITL tool** — `ask_human` — pauses the turn (A2A `input-required`) to ask the operator and resumes with their answer (lead-agent only).
 - Four **project-notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent, gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
 
 `get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
@@ -202,6 +203,22 @@ async def cancel_schedule(job_id: str) -> str
 Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."`.
 
 Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path or a Workstacean install.
+
+## `ask_human`
+
+```python
+@tool
+def ask_human(question: str) -> str
+```
+
+Pause the turn and ask the human operator a question, then continue with their
+answer (human-in-the-loop, ADR 0003). Issues a LangGraph `interrupt()`, which
+checkpoints the graph at the call site; A2A callers see the task transition to
+`input-required` carrying the question, and resume it by sending a follow-up
+message with the same `taskId`. **Lead-agent only** — it's excluded from
+subagent allowlists, since the interrupt is resumed by the lead turn's runner.
+Use it only for a decision/input you genuinely must wait on (an approval, a
+missing fact), never for narration.
 
 ## `check_inbox`
 

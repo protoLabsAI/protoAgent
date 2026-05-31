@@ -315,3 +315,68 @@ async def test_get_authenticated_extended_card_returns_card():
         result = resp.json()["result"]
         assert result["name"] == "protoagent"
         assert result["capabilities"]["streaming"] is True
+
+
+@pytest.mark.asyncio
+async def test_input_required_round_trip_over_stream():
+    """HITL: a turn that pauses surfaces input-required + final:true; a follow-up
+    message with the same taskId resumes it to completed (ADR 0003)."""
+    from fastapi import FastAPI
+
+    from a2a_handler import _store
+
+    _store._tasks.clear()
+
+    # Fake producer: first turn pauses (ask_human), the resume turn completes.
+    async def _fake_stream(text, session_id, *, resume=False, caller_trace=None):
+        if resume:
+            yield ("done", f"answer: {text}")
+        else:
+            yield ("input_required", {"question": "What is your favorite color?"})
+
+    app = FastAPI()
+    register_a2a_routes(
+        app=app, chat_stream_fn_factory=_fake_stream, chat_fn=lambda *a, **k: [], api_key="", agent_card={},
+    )
+
+    async def _drive(client, params):
+        state = question = artifact = None
+        task_id = None
+        async with client.stream("POST", "/a2a", json={
+            "jsonrpc": "2.0", "id": "1", "method": "message/stream", "params": params,
+        }) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                r = json.loads(line[6:]).get("result", {})
+                if r.get("kind") == "task":
+                    task_id = r.get("id")
+                st = (r.get("status") or {}).get("state")
+                if st:
+                    state = st
+                for p in ((r.get("status") or {}).get("message", {}) or {}).get("parts", []):
+                    if p.get("kind") == "text":
+                        question = p.get("text")
+                for a in (r.get("artifacts") or ([r["artifact"]] if r.get("artifact") else [])):
+                    for p in a.get("parts", []):
+                        if p.get("kind") == "text":
+                            artifact = p.get("text")
+        return task_id, state, question, artifact
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5.0,
+    ) as client:
+        tid, state, question, _ = await _drive(client, {
+            "contextId": "c", "message": {"parts": [{"kind": "text", "text": "ask me"}]},
+        })
+        assert state == "input-required"
+        assert question == "What is your favorite color?"
+
+        _, state2, _, artifact = await _drive(client, {
+            "contextId": "c",
+            "message": {"taskId": tid, "contextId": "c", "parts": [{"kind": "text", "text": "teal"}]},
+        })
+        assert state2 == "completed"
+        assert artifact == "answer: teal"
+
+    _store._tasks.clear()
