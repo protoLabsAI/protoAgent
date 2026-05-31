@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -41,6 +41,13 @@ class ScheduleAddRequest(BaseModel):
 
 class WorkflowRunRequest(BaseModel):
     inputs: dict[str, Any] = {}
+
+
+class InboxAddRequest(BaseModel):
+    text: str
+    priority: str = "next"  # now | next | later
+    source: str = ""
+    dedup_key: str = ""
 
 
 class BeadsInitRequest(BaseModel):
@@ -135,6 +142,8 @@ def register_operator_routes(
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+    inbox_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    inbox_authorized: Callable[[str | None], bool] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -335,6 +344,25 @@ def register_operator_routes(
         async def _activity():
             try:
                 return await activity_list()
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # --- Inbound inbox -------------------------------------------------------
+    # Authenticated intake for external stimuli (ADR 0003) — webhooks, scripts,
+    # sister agents POST here. now-priority items fire an Activity turn; the
+    # rest queue for the agent's check_inbox tool. Authed because an inbound
+    # item can initiate an agent turn (and tool use).
+    if inbox_add is not None:
+
+        @app.post("/api/inbox")
+        async def _inbox(req: InboxAddRequest, request: Request):
+            if inbox_authorized is not None:
+                header = request.headers.get("Authorization", "")
+                token = header[7:].strip() if header[:7].lower() == "bearer " else None
+                if not inbox_authorized(token):
+                    raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+            try:
+                return await inbox_add(_model_payload(req))
             except Exception as exc:
                 raise _http_error(exc) from exc
 

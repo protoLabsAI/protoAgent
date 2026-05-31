@@ -71,6 +71,8 @@ _checkpoint_prune_task = None  # background prune loop handle
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
+_inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
+_storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
 _mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
@@ -168,10 +170,17 @@ def _init_langgraph_agent():
 
     _workflow_registry = _build_workflow_registry(_graph_config)
 
+    global _inbox_store, _storm_guard
+    _inbox_store = _build_inbox_store(_graph_config)
+    if _storm_guard is None:
+        from inbox import StormGuard
+        _storm_guard = StormGuard()
+
     _graph = create_agent_graph(
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
         skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
         checkpointer=_checkpointer, workflow_registry=_workflow_registry,
+        inbox_store=_inbox_store,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -414,6 +423,29 @@ async def _retire_thread(thread_id: str) -> str | None:
     return chunk_id
 
 
+def _build_inbox_store(config):
+    """Durable inbound inbox (ADR 0003). Path resolves like the other stores
+    (/sandbox → ~/.protoagent fallback), namespaced by agent name."""
+    from inbox import InboxStore
+
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
+    configured = Path(getattr(config, "inbox_db_path", "") or "/sandbox/inbox") / f"{name}.db"
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = Path.home() / ".protoagent" / "inbox" / f"{name}.db"
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        return InboxStore(path)
+    except Exception:
+        log.exception("[inbox] failed to build store at %s; inbox disabled", path)
+        return None
+
+
 def _build_workflow_registry(config):
     """Load workflow recipes (ADR 0002) from the bundled repo ``workflows/`` dir
     plus a writable dir (user/agent-emitted). Best-effort; never blocks boot."""
@@ -604,6 +636,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     global _graph, _graph_config, _knowledge_store, _skills_index, _workflow_registry
     global _mcp_clients, _mcp_tools, _mcp_meta
     global _plugin_tools, _plugin_skill_dirs, _plugin_meta
+    global _inbox_store
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
@@ -667,10 +700,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_meta = new_plugins.meta
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_workflow_registry = _build_workflow_registry(new_config)
+            new_inbox_store = _build_inbox_store(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
                 checkpointer=_checkpointer, workflow_registry=new_workflow_registry,
+                inbox_store=new_inbox_store,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
@@ -680,6 +715,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     else:
         new_graph = None
         new_workflow_registry = None
+        new_inbox_store = None
 
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
@@ -700,6 +736,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         pass
     _graph = new_graph
     _workflow_registry = new_workflow_registry
+    _inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget
     # onto the active loop so reload stays sync. We've already verified
     # the graph rebuild succeeded; if start/stop fails we log but
@@ -1714,6 +1751,68 @@ def _main():
                 # tool/system messages are omitted from the surface view
         return {"context_id": ACTIVITY_CONTEXT, "messages": messages}
 
+    def _inbox_authorized(token: str | None) -> bool:
+        """Validate the inbound bearer token (ADR 0003). Mirrors the A2A posture:
+        when no token is configured the endpoint is open (dev), else it must match."""
+        active = ((_graph_config.auth_token if _graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
+        if not active:
+            return True
+        return (token or "") == active
+
+    async def _fire_activity_from_inbox(item: dict) -> bool:
+        """Fire a now-priority inbox item as a turn into the Activity thread.
+        Self-POSTs to /a2a (parity with the scheduler), guarded against storms."""
+        import time
+        from uuid import uuid4
+        import httpx
+
+        if _storm_guard is not None and not _storm_guard.allow(time.monotonic()):
+            log.warning("[inbox] storm guard suppressed now-fire for item %s", item.get("id"))
+            return False
+        headers = {"Content-Type": "application/json"}
+        bearer = ((_graph_config.auth_token if _graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        api_key = os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", "").strip()
+        if api_key:
+            headers["X-API-Key"] = api_key
+        mid = str(uuid4())
+        body = {
+            "jsonrpc": "2.0", "id": mid, "method": "message/send",
+            "params": {
+                "contextId": ACTIVITY_CONTEXT,
+                "message": {"role": "user", "parts": [{"kind": "text", "text": item["text"]}], "messageId": mid},
+                "metadata": {"origin": "inbox", "inbox_id": item.get("id"), "inbox_source": item.get("source", "")},
+            },
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(f"http://127.0.0.1:{_active_port}/a2a", headers=headers, json=body)
+            return r.status_code < 400
+        except Exception:
+            log.exception("[inbox] now-fire failed for item %s", item.get("id"))
+            return False
+
+    async def _operator_inbox_add(payload: dict) -> dict:
+        """Ingest an inbound item (ADR 0003). now-priority fires an Activity turn;
+        others queue for check_inbox. Dedup is handled by the store."""
+        if _inbox_store is None:
+            raise RuntimeError("inbox not loaded; finish setup first")
+        item = _inbox_store.add(
+            payload.get("text", ""),
+            priority=payload.get("priority", "next") or "next",
+            source=payload.get("source", "") or "",
+            dedup_key=payload.get("dedup_key", "") or "",
+        )
+        if item is None:
+            return {"ok": True, "deduped": True}
+        _event_bus.publish("inbox.item", {
+            "id": item["id"], "priority": item["priority"],
+            "source": item.get("source") or "", "text": item["text"],
+        })
+        fired = await _fire_activity_from_inbox(item) if item["priority"] == "now" else False
+        return {"ok": True, "item": item, "fired": fired}
+
     def _operator_chat_commands() -> dict:
         """Slash commands the chat understands — drives the composer autocomplete.
 
@@ -1746,6 +1845,8 @@ def _main():
         workflows_run=_operator_workflow_run,
         events_subscribe=_event_bus.subscribe,
         activity_list=_operator_activity_list,
+        inbox_add=_operator_inbox_add,
+        inbox_authorized=_inbox_authorized,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

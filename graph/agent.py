@@ -597,6 +597,7 @@ def create_agent_graph(
     include_subagents: bool = True,
     checkpointer=None,
     workflow_registry=None,
+    inbox_store=None,
 ):
     """Create the protoAgent LangGraph agent.
 
@@ -616,7 +617,7 @@ def create_agent_graph(
     """
     llm = create_llm(config)
 
-    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler, inbox_store=inbox_store)
 
     if extra_tools:
         all_tools.extend(extra_tools)
