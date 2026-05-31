@@ -6,7 +6,7 @@ import { SLASH_COMMANDS } from "./fixtures.mjs";
 // (GET /api/chat/commands) and autocompletes them as you type "/name".
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
 });
 

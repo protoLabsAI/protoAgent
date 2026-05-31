@@ -71,7 +71,7 @@ function defaultApiBase() {
   return "";
 }
 
-function apiUrl(path: string) {
+export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
   const base = defaultApiBase();
   return base ? `${base}${path.startsWith("/") ? path : `/${path}`}` : path;

@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 // replace).
 
 test("assistant answer streams in and reconciles to the final text", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill("STREAM the answer");

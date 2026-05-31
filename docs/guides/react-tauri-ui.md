@@ -148,6 +148,20 @@ Add these before the React UI depends on them:
 | `GET/POST /api/scheduler/jobs`, `DELETE /api/scheduler/jobs/{id}` | list/create/cancel scheduled jobs over the active `SchedulerBackend` |
 | `GET /api/goals`, `DELETE /api/goals/{session_id}` | list goals across sessions / clear one (goals are *set* in chat via `/goal`) |
 | `GET /api/chat/commands` | registered slash commands (`{name, description, usage}`) for the composer's `/` autocomplete |
+| `GET /api/events` | **server→client SSE push channel** (ADR 0003). Holds open for the app's lifetime; the server pushes unsolicited events (`activity.message`, `inbox.item`) the request-scoped chat stream can't. Read-only. |
+
+### Event stream (push channel)
+
+The console opens one `EventSource` to `GET /api/events` for the app's lifetime
+(`lib/events.ts` — `onServerEvent(name, fn)` / `onConnectionChange(fn)`), backed
+server-side by an in-process `EventBus` (`events/bus.py`, bounded drop-oldest
+queues). The topbar **live dot** reflects the connection. This is the foundation
+for the reactive surfaces in ADR 0003 (the Activity thread, the inbox); producers
+call `bus.publish(event, data)` from the event loop and every connected console
+receives it. Frames are SSE `event:`/`data:` with periodic `: keepalive` comments.
+
+> **Playwright note:** a long-lived SSE connection never lets `networkidle`
+> settle — navigate with `waitUntil: "load"` in e2e, not `"networkidle"`.
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // need a process restart.
 
 async function openSettings(page) {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 }

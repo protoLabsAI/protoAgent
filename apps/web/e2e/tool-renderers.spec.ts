@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // from the prompt keyword (see e2e/fixtures.mjs).
 
 async function run(page, prompt: string) {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });
   await composer.fill(prompt);
