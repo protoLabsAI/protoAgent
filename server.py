@@ -466,6 +466,28 @@ def _build_inbox_store(config):
         return None
 
 
+def _build_a2a_task_persistence():
+    """Durable A2A task-record store (survives restart/eviction, 24h TTL,
+    instance-scoped per ADR 0004). Best-effort; failure → tasks in-memory only."""
+    from a2a_task_store import A2ATaskPersistence
+
+    configured = scope_leaf(Path("/sandbox/a2a-tasks.db"))
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = scope_leaf(Path.home() / ".protoagent" / "a2a-tasks.db")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        return A2ATaskPersistence(path)
+    except Exception:
+        log.exception("[a2a] failed to build task persistence at %s; tasks in-memory only", path)
+        return None
+
+
 def _build_a2a_push_store():
     """Durable A2A push-config store (A2A spec / ADR 0003). Path resolves like
     the other stores (/sandbox → ~/.protoagent fallback) and is instance-scoped
@@ -2342,6 +2364,7 @@ def _main():
         on_terminal=_publish_activity_terminal,  # ADR 0003: surface Activity turns
         card_provider=_build_agent_card,  # agent/getAuthenticatedExtendedCard
         push_store=_build_a2a_push_store(),  # durable push configs (24h TTL)
+        task_persistence=_build_a2a_task_persistence(),  # durable task records (24h TTL)
     )
 
     # --- Prometheus metrics -------------------------------------------------
