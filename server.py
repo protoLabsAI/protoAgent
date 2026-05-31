@@ -434,7 +434,7 @@ def _build_workflow_registry(config):
             writable = Path.home() / ".protoagent" / "workflows"
             writable.mkdir(parents=True, exist_ok=True)
         dirs.append(str(writable))
-        return WorkflowRegistry(dirs)
+        return WorkflowRegistry(dirs, writable_dir=str(writable))
     except Exception:
         log.exception("[workflows] registry init failed; running without workflows")
         return None

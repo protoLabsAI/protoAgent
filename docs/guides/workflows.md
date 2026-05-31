@@ -57,6 +57,15 @@ Workflows only delegate to **configured subagents** (each with its own tool
 allowlist and turn cap), and subagents don't get `run_workflow` — so there's no
 recursion and the blast radius is exactly the subagent system's.
 
+## The agent can author them (closed loop)
+
+The lead agent also has **`save_workflow(name, description, steps, inputs?, output?)`**.
+Once it's worked out a multi-step process ad-hoc (via `task` / `task_batch`), it
+can capture it as a reusable recipe — *"save that as a workflow called
+competitor-scan"* — which is validated, written to `workflows.dir`, and
+immediately runnable via `run_workflow`. This generalizes `skill-v1` emission
+(a single-subagent recipe) to multi-step flows.
+
 ## Related
 
 - [ADR 0002 — Reusable Subagent Workflows](/adr/0002-reusable-subagent-workflows)

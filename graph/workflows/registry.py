@@ -9,6 +9,7 @@ win on a name clash so a user copy can override a bundled example.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +18,17 @@ import yaml
 log = logging.getLogger(__name__)
 
 
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", (name or "").lower()).strip("-") or "workflow"
+
+
 class WorkflowRegistry:
-    def __init__(self, dirs: list[str] | None = None):
+    def __init__(self, dirs: list[str] | None = None, writable_dir: str | None = None):
         self._dirs = [Path(d) for d in (dirs or [])]
+        # The dir agent-emitted / user recipes are written to. Defaults to the
+        # last configured dir (which wins on a name clash, so a saved recipe can
+        # override a bundled one).
+        self._writable = Path(writable_dir) if writable_dir else (self._dirs[-1] if self._dirs else None)
         self._recipes: dict[str, dict[str, Any]] = {}
         self.reload()
 
@@ -64,3 +73,25 @@ class WorkflowRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._recipes)
+
+    def save(self, recipe: dict[str, Any]) -> str:
+        """Persist a recipe to the writable dir (agent emission / UI authoring)
+        and reload so it's immediately runnable. Returns the file path."""
+        if self._writable is None:
+            raise RuntimeError("no writable workflow directory configured")
+        self._writable.mkdir(parents=True, exist_ok=True)
+        path = self._writable / f"{_slug(recipe['name'])}.yaml"
+        path.write_text(yaml.safe_dump(recipe, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        self.reload()
+        return str(path)
+
+    def delete(self, name: str) -> bool:
+        """Remove a recipe's file from the writable dir. Returns True if removed."""
+        if self._writable is None:
+            return False
+        path = self._writable / f"{_slug(name)}.yaml"
+        if path.exists():
+            path.unlink()
+            self.reload()
+            return True
+        return False
