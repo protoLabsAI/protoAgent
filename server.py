@@ -1144,7 +1144,7 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(getattr(value, "content", value))
 
 
-async def _run_turn_stream(message: str, session_id: str, config: dict):
+async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None):
     """Run one graph turn over ``astream_events``.
 
     Yields the same ``(kind, payload)`` status/usage frames the A2A handler
@@ -1152,13 +1152,25 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
     intercepts to get the turn's raw model text. Factored out so the initial
     turn, the dropped-scratch kicker retry, and goal-mode continuations all
     share one event loop instead of copy-pasting it.
+
+    When ``resume_value`` is given, the turn resumes a graph paused at an
+    ``ask_human`` interrupt (LangGraph HITL) by feeding ``Command(resume=…)``
+    instead of a fresh user message. If the turn pauses (the agent called
+    ``ask_human``), yields a terminal ``("input_required", {"question": …})``
+    frame instead of ``__raw__`` so the A2A layer can park the task (ADR 0003).
     """
     from langchain_core.messages import HumanMessage
+    from langgraph.types import Command
 
+    graph_input = (
+        Command(resume=resume_value)
+        if resume_value is not None
+        else {"messages": [HumanMessage(content=message)], "session_id": session_id}
+    )
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
     async for event in _graph.astream_events(
-        {"messages": [HumanMessage(content=message)], "session_id": session_id},
+        graph_input,
         config=config,
         version="v2",
     ):
@@ -1199,6 +1211,24 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
                     "input_tokens": int(usage.get("input_tokens", 0) or 0),
                     "output_tokens": int(usage.get("output_tokens", 0) or 0),
                 })
+
+    # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
+    # The graph is checkpointed at the interrupt; surface the question so the A2A
+    # layer parks the task as input-required. Resume later with resume_value.
+    try:
+        snapshot = await _graph.aget_state(config)
+        pending = list(getattr(snapshot, "interrupts", None) or [])
+        if not pending:
+            for t in getattr(snapshot, "tasks", ()) or ():
+                pending.extend(getattr(t, "interrupts", ()) or ())
+    except Exception:
+        pending = []
+    if pending:
+        val = getattr(pending[0], "value", pending[0])
+        question = val.get("question") if isinstance(val, dict) else str(val)
+        yield ("input_required", {"question": question or "Input required."})
+        return
+
     yield ("__raw__", accumulated_raw)
 
 
@@ -1290,6 +1320,7 @@ async def _chat_langgraph_stream(
     session_id: str,
     *,
     caller_trace: dict | None = None,
+    resume: bool = False,
 ):
     """Async generator — yields (event_type, payload) tuples from the
     LangGraph run. Consumed by ``a2a_handler.register_a2a_routes`` to
@@ -1398,12 +1429,27 @@ async def _chat_langgraph_stream(
             # get progress from tool_start/tool_end). Final text is extracted
             # once via extract_output().
             accumulated_raw = ""
+            paused = False
             with goal_turn(goal_active):
-                async for kind, payload in _run_turn_stream(message, session_id, config):
+                async for kind, payload in _run_turn_stream(
+                    message, session_id, config,
+                    resume_value=(message if resume else None),
+                ):
                     if kind == "__raw__":
                         accumulated_raw = payload
+                    elif kind == "input_required":
+                        # Agent paused for human input — surface it and park the
+                        # turn; the A2A runner sets the task input-required and the
+                        # caller resumes via message/send on the same taskId.
+                        yield (kind, payload)
+                        paused = True
                     else:
                         yield (kind, payload)
+
+            # A paused turn produced no final answer — don't run the
+            # dropped-scratch kicker or goal verification; the task is parked.
+            if paused:
+                return
 
             final_text = extract_output(accumulated_raw)
             final_raw = accumulated_raw
@@ -1706,12 +1752,15 @@ def _build_agent_card(host: str) -> dict:
                 #     "uri": "https://proto-labs.ai/a2a/ext/blast-v1",
                 #     "params": {"skills": {"my_skill": {"radius": "self"}}},
                 # },
-                # hitl-mode-v1 — human-in-the-loop approval per skill
-                # (autonomous | notification). Composes with blast-v1:
-                # {
-                #     "uri": "https://proto-labs.ai/a2a/ext/hitl-mode-v1",
-                #     "params": {"skills": {"my_skill": {"mode": "autonomous"}}},
-                # },
+                # hitl-mode-v1 — the agent supports human-in-the-loop: it can
+                # pause a task as `input-required` (via the `ask_human` tool /
+                # LangGraph interrupt) and resume on a follow-up message to the
+                # same taskId. Add per-skill `params` once you've replaced the
+                # placeholder skill below — a consumer (e.g. Workstacean) reads
+                # them to gate execution (autonomous | notification | veto |
+                # gated | compound):
+                #   "params": {"skills": {"my_skill": {"mode": "gated"}}}
+                {"uri": "https://proto-labs.ai/a2a/ext/hitl-mode-v1"},
             ],
         },
         "defaultInputModes": ["text/plain"],

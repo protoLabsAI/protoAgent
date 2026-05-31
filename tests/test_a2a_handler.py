@@ -548,6 +548,52 @@ async def test_background_runner_success():
 
 
 @pytest.mark.asyncio
+async def test_background_runner_input_required_parks_task():
+    """An input_required event parks the task (non-terminal) carrying the
+    question, and pushes immediately — the HITL pause (ADR 0003)."""
+    from a2a_handler import INPUT_REQUIRED, _STREAM_CLOSING, _TERMINAL
+
+    assert INPUT_REQUIRED not in _TERMINAL  # parked, not finished
+    assert INPUT_REQUIRED in _STREAM_CLOSING  # but closes the stream cycle
+
+    store = A2ATaskStore()
+    await store.create(_make_record(id="bg-hitl"))
+    push_calls = []
+
+    async def _fake_push(r):
+        push_calls.append(r.state)
+
+    stream_fn = lambda: _mock_stream(
+        ("text", "thinking… "),
+        ("input_required", {"question": "Approve the merge?"}),
+        ("done", "should not reach"),  # runner must stop at input_required
+    )
+    with patch("a2a_handler._store", store), patch("a2a_handler._push", _fake_push):
+        await _run_task_background("bg-hitl", stream_fn)
+
+    rec = await store.get("bg-hitl")
+    assert rec.state == INPUT_REQUIRED
+    assert rec.last_status_message == "Approve the merge?"  # question retained
+    assert INPUT_REQUIRED in push_calls
+    assert COMPLETED not in push_calls  # the trailing done was never processed
+
+
+def test_status_event_final_on_input_required():
+    from a2a_handler import INPUT_REQUIRED, _build_status_event
+
+    rec = _make_record(id="q1", state=INPUT_REQUIRED)
+    rec.last_status_message = "What is the threshold?"
+    evt = _build_status_event(rec, final=True)
+    assert evt["kind"] == "status-update"
+    assert evt["status"]["state"] == "input-required"
+    assert evt["final"] is True
+    # The question rides in status.message (input-required isn't terminal, so
+    # the status message is preserved rather than cleared).
+    text = " ".join(p.get("text", "") for p in evt["status"]["message"]["parts"])
+    assert "threshold" in text
+
+
+@pytest.mark.asyncio
 async def test_background_runner_error():
     store = A2ATaskStore()
     record = _make_record(id="bg-err")

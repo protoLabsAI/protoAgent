@@ -68,7 +68,7 @@ Same as `message/send` but streams frames as the run progresses. One SSE event p
 | `kind` | When emitted |
 |---|---|
 | `task` | First frame — initial task state |
-| `status-update` | State transitions, tool-start / tool-end progress |
+| `status-update` | State transitions, tool-start / tool-end progress, and the `input-required` pause (with `final: true`) |
 | `artifact-update` | Streaming partial outputs |
 
 Consumers must check `kind` before interpreting fields — without it, `@a2a-js/sdk`'s `for await` loop silently skips frames.
@@ -95,6 +95,32 @@ doesn't survive a restart, so any task still non-terminal at boot is marked
 ```
 
 SSE stream of remaining frames for an in-flight task. Lets a consumer reconnect after a network blip without losing events.
+
+### Human-in-the-loop (`input-required`)
+
+The agent can pause mid-task to ask the operator a question — the spec's
+`input-required` flow (ADR 0003). It's driven by the lead-agent **`ask_human`**
+tool, which issues a LangGraph `interrupt()`; the graph checkpoints at that exact
+point.
+
+1. The task transitions to **`input-required`** — a `status-update` whose
+   `status.message` carries the question, with `final: true`, closing the SSE
+   cycle. The task is **not** terminal; it's parked (and persisted, so it
+   survives a restart). Webhook consumers get an immediate (un-throttled) push.
+2. The caller answers by sending a **`message/send`** (or `message/stream`)
+   carrying the **same `taskId`** (and `contextId`) with the reply as a text
+   part. protoAgent resumes the graph via `Command(resume=…)` from the
+   checkpoint — continuing exactly where `ask_human` paused — and drives to a
+   terminal state (or another `input-required`).
+
+```json
+{"method": "message/stream", "params": {
+  "message": {"taskId": "<parked-task-id>", "contextId": "<ctx>",
+              "parts": [{"kind": "text", "text": "approved"}]}}}
+```
+
+A message with no `taskId` (or one that isn't `input-required`) starts a fresh
+task as usual. The card advertises support via the `hitl-mode-v1` extension.
 
 ### `tasks/cancel`
 

@@ -54,8 +54,13 @@ WORKING = "working"
 COMPLETED = "completed"
 FAILED = "failed"
 CANCELED = "canceled"
+INPUT_REQUIRED = "input-required"  # HITL: paused awaiting the caller's input (non-terminal)
 
 _TERMINAL = {COMPLETED, FAILED, CANCELED}
+# States that end the current SSE stream cycle: terminal states plus
+# input-required (the turn paused — the client must answer to resume). The
+# stream closes with final:true; the task is parked, not finished.
+_STREAM_CLOSING = _TERMINAL | {INPUT_REQUIRED}
 
 # MIME type for worldstate-delta-v1 artifacts. Workstacean's effect-domain
 # interceptor extracts any DataPart carrying this type on a terminal Task
@@ -283,9 +288,11 @@ class A2ATaskStore:
         # Wake subscribers outside the lock so they can re-acquire it
         old_event.set()
         # Persist terminal state (final text + artifact inputs) so tasks/get
-        # answers after eviction/restart. Intermediate states aren't persisted —
-        # the in-memory runner is the source of truth while a task is live.
-        if state in _TERMINAL:
+        # answers after eviction/restart, and input-required (a parked task must
+        # survive so the caller can resume it). Intermediate WORKING states
+        # aren't persisted — the in-memory runner is the source of truth while
+        # a task is actively running.
+        if state in _STREAM_CLOSING:
             self._save(record)
         return record
 
@@ -826,7 +833,7 @@ async def _deliver_webhook(record: TaskRecord, push_config: PushNotificationConf
     Retries 3× with exponential backoff (1s / 3s / 9s).
     Skips retry on 4xx (client error — retrying won't help).
     """
-    payload = _build_status_event(record, final=record.state in _TERMINAL)
+    payload = _build_status_event(record, final=record.state in _STREAM_CLOSING)
     if record.state == COMPLETED:
         parts = _terminal_artifact_parts(record)
         if parts:
@@ -950,7 +957,9 @@ async def _push(record: TaskRecord) -> None:
     if cfg is None:
         return
 
-    if record.state in _TERMINAL:
+    # Terminal AND input-required flush immediately (cancel any throttle): a
+    # parked task's question must reach the caller now so they can resume.
+    if record.state in _STREAM_CLOSING:
         pending = _push_trailing.pop(record.id, None)
         if pending is not None:
             pending.cancel()
@@ -1069,6 +1078,21 @@ async def _run_task_background(
                         explanation=payload.get("explanation"),
                     )
 
+            elif event_type == "input_required":
+                # HITL pause (ADR 0003): the agent called ask_human. Park the
+                # task as input-required carrying the question, close the stream
+                # cycle (final:true), and push immediately so a webhook caller
+                # can answer. The caller resumes via message/send on this taskId.
+                question = payload.get("question", "Input required.") if isinstance(payload, dict) else str(payload)
+                record = await _store.update_state(
+                    task_id, INPUT_REQUIRED,
+                    accumulated_text=accumulated,
+                    status_message=question,
+                )
+                if record is not None:
+                    await _push(record)
+                return
+
             elif event_type == "done":
                 record = await _store.update_state(
                     task_id,
@@ -1163,7 +1187,7 @@ async def _watch_task(
         last_sent_len = len(record.accumulated_text)
         yield ("text_delta", record, delta)
 
-    if record.state in _TERMINAL:
+    if record.state in _STREAM_CLOSING:
         return
 
     while True:
@@ -1188,7 +1212,7 @@ async def _watch_task(
             last_sent_len = len(r.accumulated_text)
             yield ("text_delta", r, delta)
 
-        if r.state in _TERMINAL:
+        if r.state in _STREAM_CLOSING:
             return
 
 
@@ -1372,6 +1396,29 @@ def register_a2a_routes(
         logger.info("[a2a] task %s submitted (context=%s)", task_id, context_id)
         return record
 
+    async def _resume_task(task_id: str, text: str, caller_trace: dict | None = None):
+        """Resume a task parked at input-required, feeding the caller's answer
+        into the LangGraph interrupt (Command(resume=…)) on the same thread.
+
+        Returns the WORKING record, or None if the task isn't resumable (missing
+        or not input-required). The background runner picks up exactly where the
+        agent called ask_human and drives to a terminal — or another pause."""
+        record = await _store.get(task_id)
+        if record is None or record.state != INPUT_REQUIRED:
+            return None
+        ct = caller_trace or {}
+        ctx = record.context_id
+        await _store.update_state(task_id, WORKING)
+        bg = asyncio.create_task(
+            _run_task_background(
+                task_id,
+                lambda: chat_stream_fn_factory(text, ctx, resume=True, caller_trace=ct),
+            )
+        )
+        record._bg_task = bg
+        logger.info("[a2a] task %s resumed from input-required (context=%s)", task_id, ctx)
+        return await _store.get(task_id)
+
     # ── Streaming SSE generator ───────────────────────────────────────────────
 
     async def _stream_new_task(
@@ -1421,7 +1468,7 @@ def register_a2a_routes(
                     else:
                         yield _sse_rpc(
                             rpc_id,
-                            _build_status_event(r, final=r.state in _TERMINAL),
+                            _build_status_event(r, final=r.state in _STREAM_CLOSING),
                         )
 
                 elif kind == "text_delta":
@@ -1478,7 +1525,7 @@ def register_a2a_routes(
                     else:
                         yield _sse_rpc(
                             rpc_id,
-                            _build_status_event(r, final=r.state in _TERMINAL),
+                            _build_status_event(r, final=r.state in _STREAM_CLOSING),
                         )
                 elif kind == "text_delta":
                     if r.state not in _TERMINAL and payload:
@@ -1553,6 +1600,25 @@ def register_a2a_routes(
                     _check_origin(request)
                 except HTTPException as exc:
                     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+            # HITL resume (ADR 0003): a message carrying an existing taskId that's
+            # parked at input-required continues THAT task with the caller's
+            # answer (Command(resume=…)), rather than minting a fresh task. Any
+            # other taskId falls through to a normal new-task submit.
+            resume_task_id = message.get("taskId")
+            if resume_task_id:
+                existing = await _store.get(resume_task_id)
+                if existing is not None and existing.state == INPUT_REQUIRED:
+                    resumed = await _resume_task(resume_task_id, text, caller_trace)
+                    if resumed is None:
+                        return _rpc_error(-32002, f"Task not resumable: {resume_task_id}")
+                    if method == "message/send":
+                        return _rpc_result(_task_to_response(resumed))
+                    return StreamingResponse(
+                        _resubscribe_jsonrpc_stream(resume_task_id, rpc_id),
+                        media_type="text/event-stream",
+                        headers=_SSE_HEADERS,
+                    )
 
             if method == "message/send":
                 record = await _submit_task(text, context_id, push_config, caller_trace)
