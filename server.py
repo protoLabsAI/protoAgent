@@ -25,6 +25,7 @@ This is the main entry point. It:
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -1211,15 +1212,18 @@ def _parse_workflow_command(message: str):
     return name, _parse_workflow_inputs(recipe, rest)
 
 
-async def _run_parsed_workflow(name: str, inputs: dict) -> str:
-    """Run a workflow command and format its output as the assistant reply."""
+async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
+    """Run a workflow command and format its output as the assistant reply.
+
+    ``on_step`` is forwarded to ``run_manual_workflow`` so the caller can stream
+    per-step progress (the chat path renders a tool card per step)."""
     from graph.agent import run_manual_workflow
 
     try:
         result = await run_manual_workflow(
             _graph_config, _workflow_registry,
             knowledge_store=_knowledge_store, scheduler=_scheduler,
-            name=name, inputs=inputs,
+            name=name, inputs=inputs, on_step=on_step,
         )
     except ValueError as exc:
         return f"⚠️ {exc}"
@@ -1286,15 +1290,43 @@ async def _chat_langgraph_stream(
                     return
 
             # Workflow slash command (/<workflow-name> …) short-circuits the turn:
-            # run the recipe and return its output. A tool_start/end pair renders
-            # a card so the operator sees it running.
+            # run the recipe and return its output. Each step renders its own
+            # tool card (gather → angles → brief) so a multi-step workflow shows
+            # live progress instead of one opaque card that looks hung.
             parsed = _parse_workflow_command(message)
             if parsed is not None:
                 wf_name, wf_inputs = parsed
-                tool_id = f"workflow:{wf_name}"
-                yield ("tool_start", {"id": tool_id, "name": tool_id, "input": _coerce_tool_value(wf_inputs)})
-                wf_out = await _run_parsed_workflow(wf_name, wf_inputs)
-                yield ("tool_end", {"id": tool_id, "name": tool_id, "output": wf_out[:300]})
+                _WF_DONE = object()
+                step_q: asyncio.Queue = asyncio.Queue()
+
+                async def _on_step(event: dict) -> None:
+                    await step_q.put(event)
+
+                async def _runner() -> str:
+                    try:
+                        return await _run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
+                    finally:
+                        await step_q.put(_WF_DONE)
+
+                runner = asyncio.create_task(_runner())
+                # An umbrella card for the whole workflow, then one per step.
+                yield ("tool_start", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}",
+                                      "input": _coerce_tool_value(wf_inputs)})
+                while True:
+                    event = await step_q.get()
+                    if event is _WF_DONE:
+                        break
+                    sid = event.get("step_id", "")
+                    step_tool_id = f"workflow:{wf_name}:{sid}"
+                    label = f"{wf_name} · {sid}"
+                    if event.get("phase") == "start":
+                        yield ("tool_start", {"id": step_tool_id, "name": label,
+                                              "input": event.get("subagent", "")})
+                    else:
+                        yield ("tool_end", {"id": step_tool_id, "name": label,
+                                            "output": extract_output(event.get("output", "")) or event.get("output", "")})
+                wf_out = await runner
+                yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
                 yield ("done", wf_out)
                 return
 

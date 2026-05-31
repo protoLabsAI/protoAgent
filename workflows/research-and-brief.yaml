@@ -29,10 +29,14 @@ steps:
     subagent: researcher
     depends_on: [gather, angles]
     prompt: |
-      Write a concise, cited brief on {{inputs.topic}}.
-      Use this research:
+      Write the final brief on {{inputs.topic}} now — this is the deliverable,
+      not a plan. Produce 3–4 short paragraphs of prose (NOT a list of angles),
+      opening with a one-sentence takeaway, with inline source citations.
+      Develop the angles below into the narrative; don't just restate them.
+
+      Research:
       {{steps.gather.output}}
 
-      Cover these angles:
+      Angles to weave in:
       {{steps.angles.output}}
 output: "{{steps.brief.output}}"

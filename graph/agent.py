@@ -286,11 +286,17 @@ async def run_manual_workflow(
     scheduler=None,
     name: str,
     inputs: dict | None = None,
+    on_step=None,
 ) -> dict:
     """Run a saved workflow recipe outside the lead agent's tool (operator UI).
 
     Returns the engine result ``{"output", "steps", "failed"}``. Raises
     ``ValueError`` for an unknown / invalid recipe or missing required inputs.
+
+    ``on_step`` (optional async callback) is invoked with
+    ``{"phase": "start"|"end", "step_id", "subagent", "output"?}`` around each
+    step so a caller can stream per-step progress (e.g. the chat slash command's
+    tool cards). Errors in the callback never interrupt the run.
     """
     from graph.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
 
@@ -306,8 +312,17 @@ async def run_manual_workflow(
     if missing:
         raise ValueError(f"missing required input(s): {', '.join(missing)}")
 
+    async def _emit(event: dict) -> None:
+        if on_step is None:
+            return
+        try:
+            await on_step(event)
+        except Exception:  # noqa: BLE001 — progress is best-effort, never fatal
+            pass
+
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
-        return await run_manual_subagent(
+        await _emit({"phase": "start", "step_id": step_id, "subagent": subagent_type})
+        out = await run_manual_subagent(
             config,
             knowledge_store=knowledge_store,
             scheduler=scheduler,
@@ -315,6 +330,8 @@ async def run_manual_workflow(
             prompt=prompt,
             subagent_type=subagent_type,
         )
+        await _emit({"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
+        return out
 
     return await execute_workflow(
         recipe, resolved, run_step=_run_step, max_concurrency=config.subagent_max_concurrency,

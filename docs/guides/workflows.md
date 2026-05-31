@@ -71,6 +71,10 @@ output instead of a normal model reply. Arguments map to the recipe's inputs:
 
 Missing a required input returns a `⚠️`-prefixed error naming it.
 
+Each step streams its own tool card (e.g. `research-and-brief · gather` →
+`· angles` → `· brief`) so a multi-step workflow shows live progress instead of
+one opaque card.
+
 ## From the operator console
 
 The React console has a **Workflows** surface (the rail icon next to Subagents).
