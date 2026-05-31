@@ -81,6 +81,13 @@ Consumers must check `kind` before interpreting fields — without it, `@a2a-js/
 
 Returns the current state of a task. Use to poll when push notifications aren't wired.
 
+Task records are **persisted** (instance-scoped `a2a-tasks.db`, 24h TTL,
+write-through on create + every terminal transition), so `tasks/get` and
+`tasks/resubscribe` answer with the final state + artifacts even after the
+in-memory copy is evicted (1h) or the process restarts. The background *runner*
+doesn't survive a restart, so any task still non-terminal at boot is marked
+`failed` ("interrupted by server restart") rather than left hanging.
+
 ### `tasks/resubscribe`
 
 ```json
@@ -149,9 +156,7 @@ retry on 4xx.
 
 Registered configs are **persisted** (write-through to an instance-scoped
 `a2a-push.db`, 24h TTL) so they survive the task's terminal eviction and a
-process restart. Task *records* remain in-memory, so a restart still drops
-in-flight work — durable end-to-end resubscribe/redelivery would need task
-persistence too.
+process restart.
 
 ## REST aliases
 

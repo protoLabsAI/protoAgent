@@ -147,6 +147,52 @@ class TaskRecord:
     _bg_task: asyncio.Task | None = field(default=None, repr=False)
 
 
+# ── Task record persistence (durable across restart) ──────────────────────────
+
+
+def _record_to_row(r: TaskRecord) -> dict:
+    """Serialize the durable subset of a TaskRecord (asyncio primitives skipped)."""
+    pc = r.push_config
+    return {
+        "id": r.id,
+        "context_id": r.context_id,
+        "state": r.state,
+        "created_at": r.created_at,
+        "updated_at": r.updated_at,
+        "message_text": r.message_text,
+        "accumulated_text": r.accumulated_text,
+        "error_message": r.error_message,
+        "push_config": ({"url": pc.url, "token": pc.token, "id": pc.id} if pc else None),
+        "deltas": r.deltas,
+        "usage": r.usage,
+        "confidence": r.confidence,
+        "confidence_explanation": r.confidence_explanation,
+    }
+
+
+def _row_to_record(row: dict) -> TaskRecord:
+    """Reconstruct a TaskRecord from a persisted row (fresh asyncio primitives)."""
+    pc = row.get("push_config")
+    return TaskRecord(
+        id=row["id"],
+        context_id=row.get("context_id", ""),
+        state=row.get("state", FAILED),
+        created_at=row.get("created_at", _now_iso()),
+        updated_at=row.get("updated_at", _now_iso()),
+        message_text=row.get("message_text", ""),
+        accumulated_text=row.get("accumulated_text", "") or "",
+        error_message=row.get("error_message"),
+        push_config=(
+            PushNotificationConfig(url=pc["url"], token=pc.get("token"), id=pc.get("id") or str(uuid4()))
+            if pc else None
+        ),
+        deltas=row.get("deltas") or [],
+        usage=row.get("usage") or {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        confidence=row.get("confidence"),
+        confidence_explanation=row.get("confidence_explanation"),
+    )
+
+
 # ── Task store ────────────────────────────────────────────────────────────────
 
 
@@ -172,14 +218,37 @@ class A2ATaskStore:
         self._lock = asyncio.Lock()
         self._tasks: dict[str, TaskRecord] = {}
         self._cleanup_task: asyncio.Task | None = None
+        self._persist = None  # optional A2ATaskPersistence (durable across restart)
+
+    def attach_persistence(self, persistence) -> None:
+        self._persist = persistence
+
+    def _save(self, record: TaskRecord) -> None:
+        if self._persist is None:
+            return
+        try:
+            self._persist.save(_record_to_row(record))
+        except Exception:  # noqa: BLE001 — durability is best-effort, never fatal
+            logger.exception("[a2a] failed to persist task %s", record.id)
 
     async def create(self, record: TaskRecord) -> TaskRecord:
         async with self._lock:
             self._tasks[record.id] = record
+        self._save(record)
         return record
 
     async def get(self, task_id: str) -> TaskRecord | None:
-        return self._tasks.get(task_id)
+        record = self._tasks.get(task_id)
+        if record is not None:
+            return record
+        # Cache miss — lazy-load from the durable store (survives eviction +
+        # restart) so tasks/get and tasks/resubscribe still answer.
+        if self._persist is not None:
+            row = self._persist.get(task_id)
+            if row is not None:
+                record = _row_to_record(row)
+                self._tasks[task_id] = record
+        return record
 
     async def update_state(
         self,
@@ -213,6 +282,11 @@ class A2ATaskStore:
             record._update_event = asyncio.Event()
         # Wake subscribers outside the lock so they can re-acquire it
         old_event.set()
+        # Persist terminal state (final text + artifact inputs) so tasks/get
+        # answers after eviction/restart. Intermediate states aren't persisted —
+        # the in-memory runner is the source of truth while a task is live.
+        if state in _TERMINAL:
+            self._save(record)
         return record
 
     async def cancel(self, task_id: str) -> bool:
@@ -302,6 +376,7 @@ class A2ATaskStore:
             old_event = record._update_event
             record._update_event = asyncio.Event()
         old_event.set()
+        self._save(record)  # CANCELED is terminal — persist it
         record._cancel_event.set()
         if record._bg_task and not record._bg_task.done():
             record._bg_task.cancel()
@@ -1159,6 +1234,7 @@ def register_a2a_routes(
     on_terminal: Callable[["TaskRecord"], None] | None = None,
     card_provider: Callable[[str], dict] | None = None,
     push_store=None,
+    task_persistence=None,
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
@@ -1177,6 +1253,17 @@ def register_a2a_routes(
     # so mutations propagate to the closure below.
     _ON_TERMINAL[0] = on_terminal
     _PUSH_STORE[0] = push_store
+    if task_persistence is not None:
+        _store.attach_persistence(task_persistence)
+        try:
+            task_persistence.sweep_expired()
+            interrupted = task_persistence.fail_interrupted(
+                tuple(_TERMINAL), error="interrupted by server restart"
+            )
+            if interrupted:
+                logger.info("[a2a] marked %d interrupted task(s) failed on boot", interrupted)
+        except Exception:  # noqa: BLE001 — boot rehydrate is best-effort
+            logger.exception("[a2a] task persistence rehydrate failed")
 
     seed = (auth_token or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
     _A2A_TOKEN[0] = seed or None
