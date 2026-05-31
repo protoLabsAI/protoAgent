@@ -147,6 +147,12 @@ SSE `status-update` frame); the terminal/COMPLETED POST attaches the full
 `artifact`. Delivery retries 3× with exponential backoff (1s/3s/9s), skipping
 retry on 4xx.
 
+Registered configs are **persisted** (write-through to an instance-scoped
+`a2a-push.db`, 24h TTL) so they survive the task's terminal eviction and a
+process restart. Task *records* remain in-memory, so a restart still drops
+in-flight work — durable end-to-end resubscribe/redelivery would need task
+persistence too.
+
 ## REST aliases
 
 Thin REST wrappers are also exposed for non-JSON-RPC clients:

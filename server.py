@@ -466,6 +466,32 @@ def _build_inbox_store(config):
         return None
 
 
+def _build_a2a_push_store():
+    """Durable A2A push-config store (A2A spec / ADR 0003). Path resolves like
+    the other stores (/sandbox → ~/.protoagent fallback) and is instance-scoped
+    (ADR 0004). Best-effort; a failure leaves push configs in-memory only."""
+    from a2a_push_store import A2APushStore
+
+    configured = scope_leaf(Path("/sandbox/a2a-push.db"))
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = scope_leaf(Path.home() / ".protoagent" / "a2a-push.db")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        store = A2APushStore(path)
+        loaded = store.load()  # sweep expired + report survivors
+        log.info("[a2a] push-config store ready (%d persisted) at %s", len(loaded), path)
+        return store
+    except Exception:
+        log.exception("[a2a] failed to build push-config store at %s; configs in-memory only", path)
+        return None
+
+
 def _build_workflow_registry(config):
     """Load workflow recipes (ADR 0002) from the bundled repo ``workflows/`` dir
     plus a writable dir (user/agent-emitted). Best-effort; never blocks boot."""
@@ -2315,6 +2341,7 @@ def _main():
         register_card_route=False,  # card is already served above
         on_terminal=_publish_activity_terminal,  # ADR 0003: surface Activity turns
         card_provider=_build_agent_card,  # agent/getAuthenticatedExtendedCard
+        push_store=_build_a2a_push_store(),  # durable push configs (24h TTL)
     )
 
     # --- Prometheus metrics -------------------------------------------------

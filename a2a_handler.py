@@ -806,6 +806,31 @@ _pending_webhook_tasks: set[asyncio.Task] = set()
 # agent-initiated output (e.g. publish to the event bus for the Activity thread).
 _ON_TERMINAL: list[Callable[["TaskRecord"], None] | None] = [None]
 
+# Optional durable push-config store (A2APushStore). Set via register_a2a_routes.
+# Configs are persisted write-through so pushNotificationConfig/get|list survive
+# task eviction + a restart (within the store's TTL). No-ops when unset.
+_PUSH_STORE: list = [None]
+
+
+def _push_store_set(task_id: str, cfg: "PushNotificationConfig") -> None:
+    store = _PUSH_STORE[0]
+    if store is None:
+        return
+    try:
+        store.set(task_id, url=cfg.url, token=cfg.token or "", config_id=cfg.id or "")
+    except Exception:  # noqa: BLE001 — durability is best-effort, never fatal
+        logger.exception("[a2a] failed to persist push config for task %s", task_id)
+
+
+def _push_store_delete(task_id: str) -> None:
+    store = _PUSH_STORE[0]
+    if store is None:
+        return
+    try:
+        store.delete(task_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("[a2a] failed to delete persisted push config for task %s", task_id)
+
 
 def _notify_terminal(record: TaskRecord) -> None:
     """Best-effort fire the host's terminal hook. Never raises into the runner."""
@@ -1133,6 +1158,7 @@ def register_a2a_routes(
     auth_token: str = "",
     on_terminal: Callable[["TaskRecord"], None] | None = None,
     card_provider: Callable[[str], dict] | None = None,
+    push_store=None,
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
@@ -1150,6 +1176,7 @@ def register_a2a_routes(
     # Seed order: explicit arg > env. Stored in the module-level holder
     # so mutations propagate to the closure below.
     _ON_TERMINAL[0] = on_terminal
+    _PUSH_STORE[0] = push_store
 
     seed = (auth_token or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
     _A2A_TOKEN[0] = seed or None
@@ -1244,6 +1271,8 @@ def register_a2a_routes(
             push_config=push_config,
         )
         await _store.create(record)
+        if push_config is not None:
+            _push_store_set(task_id, push_config)  # write-through inline config
 
         ct = caller_trace or {}
         bg = asyncio.create_task(
@@ -1529,6 +1558,7 @@ def register_a2a_routes(
             )
             async with _store._lock:
                 record.push_config = cfg
+            _push_store_set(task_id, cfg)  # write-through (durable, ADR 0003)
             # Fire immediately if the task already reached terminal state
             # before the caller got around to registering — otherwise the
             # webhook would never be delivered.
@@ -1582,6 +1612,7 @@ def register_a2a_routes(
                 return _rpc_error(-32001, f"Task not found: {task_id}")
             async with _store._lock:
                 record.push_config = None
+            _push_store_delete(task_id)
             return _rpc_result(None)
 
         # ── agent/getAuthenticatedExtendedCard ────────────────────────────────
@@ -1758,6 +1789,7 @@ def register_a2a_routes(
 
         async with _store._lock:
             record.push_config = cfg
+        _push_store_set(task_id, cfg)  # write-through (durable, ADR 0003)
 
         # If task already terminal, fire webhook immediately via the tracked
         # _push path so the delivery task isn't GC'd mid-retry.
