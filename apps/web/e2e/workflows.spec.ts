@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // POST /api/workflows/{name}/run — rendering the output + per-step results.
 
 async function openWorkflows(page) {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Workflows", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
 }

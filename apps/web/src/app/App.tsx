@@ -30,6 +30,7 @@ import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
+import { onConnectionChange } from "../lib/events";
 import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
@@ -212,6 +213,7 @@ function groupIssues(issues: BeadsIssue[]) {
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
+  const [live, setLive] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
@@ -419,6 +421,10 @@ export function App() {
     if (surface === "schedule") void refreshSchedules();
     if (surface === "goals") void refreshGoals();
   }, [surface]);
+
+  // Open the server→client event stream (ADR 0003) and track its connection
+  // state for the "live" indicator. Surfaces subscribe to named events.
+  useEffect(() => onConnectionChange(setLive), []);
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -737,6 +743,14 @@ export function App() {
             tone={statusTone(runtime?.graph_loaded)}
           />
           <StatusPill label={status} tone={status === "error" ? "error" : "muted"} />
+          <span
+            className={`live-dot ${live ? "is-live" : ""}`}
+            role="status"
+            aria-label={live ? "event stream connected" : "event stream offline"}
+            title={live ? "Live — event stream connected" : "Event stream offline"}
+            data-testid="live-indicator"
+            data-live={live ? "true" : "false"}
+          />
           <button className="icon-button" type="button" onClick={() => void refreshAll()} title="Refresh">
             <RefreshCw size={16} />
           </button>

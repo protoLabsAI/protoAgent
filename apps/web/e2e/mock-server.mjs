@@ -149,6 +149,22 @@ const server = createServer(async (req, res) => {
   if (pathname === "/a2a" && req.method === "POST") {
     return handleA2AStream(req, res, await readBody(req));
   }
+  if (pathname === "/api/events" && req.method === "GET") {
+    // Server→client SSE push channel (ADR 0003). Hold the connection open so
+    // the client's EventSource fires onopen (the "live" indicator), then push
+    // one named event to exercise event delivery.
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    res.write(": connected\n\n");
+    const t = setTimeout(() => {
+      res.write('event: activity.message\ndata: {"text":"hello from mock"}\n\n');
+    }, 50);
+    req.on("close", () => clearTimeout(t));
+    return;
+  }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
       const payload = handleApiGet(pathname);

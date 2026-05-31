@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // particular reads the skills / MCP / plugins blocks.
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "networkidle" });
+  await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
 });
 
