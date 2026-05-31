@@ -144,6 +144,8 @@ def register_operator_routes(
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     inbox_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     inbox_authorized: Callable[[str | None], bool] | None = None,
+    inbox_list: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None,
+    inbox_deliver: Callable[[int], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -363,6 +365,26 @@ def register_operator_routes(
                     raise HTTPException(status_code=401, detail="invalid or missing bearer token")
             try:
                 return await inbox_add(_model_payload(req))
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # Console-side inbox views (read + dismiss). Unauthenticated like the other
+    # operator routes — only POST /api/inbox (external intake) is token-gated.
+    if inbox_list is not None:
+
+        @app.get("/api/inbox")
+        async def _inbox_get(floor: str = "later", include_delivered: bool = False):
+            try:
+                return await inbox_list(floor, include_delivered)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if inbox_deliver is not None:
+
+        @app.post("/api/inbox/{item_id}/deliver")
+        async def _inbox_deliver(item_id: int):
+            try:
+                return await inbox_deliver(item_id)
             except Exception as exc:
                 raise _http_error(exc) from exc
 

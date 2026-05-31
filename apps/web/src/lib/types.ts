@@ -97,6 +97,16 @@ export type WorkflowRunResult = {
   failed: string[];
 };
 
+export type InboxItem = {
+  id: number;
+  created_at: string;
+  priority: "now" | "next" | "later";
+  source: string | null;
+  text: string;
+  dedup_key: string | null;
+  delivered_at: string | null;
+};
+
 export type ActivityMessage = { role: "user" | "assistant"; content: string };
 
 export type ActivityHistory = {

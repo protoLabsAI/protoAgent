@@ -138,6 +138,41 @@ def test_inbox_route_rejects_bad_token():
     assert r2.status_code == 401
 
 
+def test_inbox_list_and_deliver_routes():
+    captured = {}
+
+    async def inbox_list(floor, include_delivered):
+        captured["floor"] = floor
+        captured["include_delivered"] = include_delivered
+        return {"items": [{"id": 1, "priority": "now", "text": "x"}]}
+
+    async def inbox_deliver(item_id):
+        captured["delivered_id"] = item_id
+        return {"ok": True, "delivered": 1}
+
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=_unused,
+        subagent_batch=_unused,
+        inbox_list=inbox_list,
+        inbox_deliver=inbox_deliver,
+    )
+    client = TestClient(app)
+
+    r = client.get("/api/inbox?floor=next&include_delivered=true")
+    assert r.status_code == 200
+    assert r.json()["items"][0]["id"] == 1
+    assert captured["floor"] == "next" and captured["include_delivered"] is True
+
+    r2 = client.post("/api/inbox/7/deliver")
+    assert r2.status_code == 200
+    assert r2.json() == {"ok": True, "delivered": 1}
+    assert captured["delivered_id"] == 7
+
+
 def test_inbox_route_accepts_with_token():
     seen = []
 

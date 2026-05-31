@@ -59,6 +59,13 @@ export const ACTIVITY_HISTORY = {
   ],
 };
 
+export const INBOX_ITEMS = {
+  items: [
+    { id: 1, created_at: "2026-05-30T09:00:00+00:00", priority: "now", source: "ci", text: "build failed on main", dedup_key: null, delivered_at: null },
+    { id: 2, created_at: "2026-05-30T09:05:00+00:00", priority: "next", source: "webhook", text: "new signup: acme.co", dedup_key: null, delivered_at: null },
+  ],
+};
+
 export const WORKFLOWS = [
   {
     name: "research-and-brief",

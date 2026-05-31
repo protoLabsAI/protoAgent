@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ConfigPayload,
   GoalState,
+  InboxItem,
   NotesWorkspace,
   RuntimeStatus,
   ScheduledJob,
@@ -266,6 +267,18 @@ export const api = {
 
   activity() {
     return request<ActivityHistory>("/api/activity");
+  },
+
+  inbox(floor: "now" | "next" | "later" = "later", includeDelivered = false) {
+    const q = `?floor=${floor}&include_delivered=${includeDelivered}`;
+    return request<{ items: InboxItem[] }>(`/api/inbox${q}`);
+  },
+
+  deliverInbox(id: number) {
+    return request<{ ok: boolean; delivered: number }>(`/api/inbox/${id}/deliver`, {
+      method: "POST",
+      body: {},
+    });
   },
 
   workflows() {

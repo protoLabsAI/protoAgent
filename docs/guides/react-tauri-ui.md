@@ -151,6 +151,8 @@ Add these before the React UI depends on them:
 | `GET /api/events` | **server→client SSE push channel** (ADR 0003). Holds open for the app's lifetime; the server pushes unsolicited events (`activity.message`, `inbox.item`) the request-scoped chat stream can't. Read-only. |
 | `GET /api/activity` | the durable **Activity thread**'s message history (ADR 0003) — `{context_id, messages:[{role, content}]}` read from the checkpointer (`a2a:system:activity`). Where agent-initiated turns (scheduled fires) land. |
 | `POST /api/inbox` | **authenticated inbound intake** (ADR 0003). `{text, priority?, source?, dedup_key?}` — `priority` is `now` \| `next` \| `later`. `now` items fire an Activity turn immediately; the rest queue for the agent's `check_inbox` tool. Bearer token required (same token as `/a2a`). |
+| `GET /api/inbox` | console-side list of pending inbox items (`?floor=&include_delivered=`) → `{items:[…]}`. Unauthenticated like other operator reads. |
+| `POST /api/inbox/{id}/deliver` | mark one item delivered (the console "dismiss" action). |
 
 ### Event stream (push channel)
 
@@ -186,6 +188,13 @@ dedup window + an anti-storm rate cap), while `next`/`later` queue for the
 agent's **`check_inbox`** tool to surface on its own terms. Items live in a
 durable SQLite `inbox` table; a `dedup_key` collapses a retrying producer's
 repeats. Arrivals publish an `inbox.item` event on the bus.
+
+The console exposes this as the **Inbox** tab in the right sidebar (alongside
+Notes and Beads, `inbox/InboxPanel.tsx`): it lists pending items from
+`GET /api/inbox` with their priority + source, live-updates on `inbox.item`,
+carries an unread badge while you're on another tab, and dismisses an item
+(marks it delivered) via `POST /api/inbox/{id}/deliver`. External intake stays
+token-gated on `POST /api/inbox`; the read/dismiss views are console-side.
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

@@ -1813,6 +1813,19 @@ def _main():
         fired = await _fire_activity_from_inbox(item) if item["priority"] == "now" else False
         return {"ok": True, "item": item, "fired": fired}
 
+    async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
+        if _inbox_store is None:
+            return {"items": []}
+        items = _inbox_store.list(
+            priority_floor=floor or "later", include_delivered=include_delivered, limit=200,
+        )
+        return {"items": items}
+
+    async def _operator_inbox_deliver(item_id: int) -> dict:
+        if _inbox_store is None:
+            raise RuntimeError("inbox not loaded; finish setup first")
+        return {"ok": True, "delivered": _inbox_store.mark_delivered([item_id])}
+
     def _operator_chat_commands() -> dict:
         """Slash commands the chat understands — drives the composer autocomplete.
 
@@ -1847,6 +1860,8 @@ def _main():
         activity_list=_operator_activity_list,
         inbox_add=_operator_inbox_add,
         inbox_authorized=_inbox_authorized,
+        inbox_list=_operator_inbox_list,
+        inbox_deliver=_operator_inbox_deliver,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

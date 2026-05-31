@@ -1220,6 +1220,82 @@ textarea {
   resize: none;
 }
 
+/* Inbox panel (ADR 0003) ---------------------------------------------------- */
+.inbox-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.inbox-empty {
+  color: var(--fg-secondary);
+  font-size: 12px;
+  padding: 8px;
+  line-height: 1.5;
+}
+
+.inbox-empty code {
+  font-size: 11px;
+  background: var(--bg-elevated, #111114);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.inbox-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated, #111114);
+  padding: 8px 10px;
+}
+
+.inbox-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.inbox-pri {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: #fff;
+}
+
+.inbox-pri-now {
+  background: var(--danger, #ff6b6b);
+}
+
+.inbox-pri-next {
+  background: var(--accent, #7c8cff);
+}
+
+.inbox-pri-later {
+  background: var(--fg-tertiary, #555);
+}
+
+.inbox-source {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+}
+
+.inbox-dismiss {
+  margin-left: auto;
+}
+
+.inbox-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Live event-stream indicator (ADR 0003) ------------------------------------ */
 .live-dot {
   width: 8px;

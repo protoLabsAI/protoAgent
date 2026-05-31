@@ -10,6 +10,7 @@ import {
   Database,
   FileText,
   Gauge,
+  Inbox,
   Loader2,
   MessageSquare,
   Network,
@@ -28,6 +29,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
+import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
@@ -38,7 +40,7 @@ import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
 type Surface = "chat" | "subagents" | "workflows" | "activity" | "runtime" | "schedule" | "goals" | "settings";
-type RightPanel = "notes" | "beads";
+type RightPanel = "notes" | "beads" | "inbox";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
 
@@ -217,6 +219,7 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   const [live, setLive] = useState(false);
   const [activityUnread, setActivityUnread] = useState(0);
+  const [inboxUnread, setInboxUnread] = useState(0);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
@@ -443,6 +446,21 @@ export function App() {
   useEffect(() => {
     if (surface === "activity") setActivityUnread(0);
   }, [surface]);
+
+  // Unread count on the Inbox sidebar tab: inbound items that arrive while the
+  // operator isn't looking at the inbox panel.
+  const rightPanelRef = useRef(rightPanel);
+  rightPanelRef.current = rightPanel;
+  useEffect(
+    () =>
+      onServerEvent("inbox.item", () => {
+        if (rightPanelRef.current !== "inbox") setInboxUnread((n) => n + 1);
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (rightPanel === "inbox") setInboxUnread(0);
+  }, [rightPanel]);
 
   async function runSubagent() {
     const prompt = subagentPrompt.trim();
@@ -1231,6 +1249,19 @@ export function App() {
               <Boxes size={15} />
               Beads
             </button>
+            <button
+              type="button"
+              className={rightPanel === "inbox" ? "active" : ""}
+              onClick={() => setRightPanel("inbox")}
+            >
+              <Inbox size={15} />
+              Inbox
+              {inboxUnread ? (
+                <span className="rail-badge" data-testid="inbox-badge">
+                  {inboxUnread > 9 ? "9+" : inboxUnread}
+                </span>
+              ) : null}
+            </button>
           </div>
 
           {rightPanel === "notes" ? (
@@ -1487,6 +1518,8 @@ export function App() {
               </ScrollArea>
             </section>
           ) : null}
+
+          {rightPanel === "inbox" ? <InboxPanel onError={setError} /> : null}
         </aside>
       </div>
       <SetupWizard

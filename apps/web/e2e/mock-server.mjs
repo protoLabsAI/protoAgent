@@ -17,6 +17,7 @@ import {
   ACTIVITY_HISTORY,
   buildFrames,
   GOALS,
+  INBOX_ITEMS,
   NOTES_WORKSPACE,
   RUNTIME_STATUS,
   SCHEDULER_JOBS,
@@ -87,6 +88,8 @@ function handleApiGet(pathname) {
       return { workflows: WORKFLOWS };
     case "/api/activity":
       return ACTIVITY_HISTORY;
+    case "/api/inbox":
+      return INBOX_ITEMS;
     default:
       return null;
   }
@@ -166,6 +169,7 @@ const server = createServer(async (req, res) => {
     // the surface) and live append (while on it) are deterministically testable.
     const t = setInterval(() => {
       res.write('event: activity.message\ndata: {"text":"live activity ping"}\n\n');
+      res.write('event: inbox.item\ndata: {"id":99,"priority":"next","source":"mock","text":"live inbox ping"}\n\n');
     }, 500);
     req.on("close", () => clearInterval(t));
     return;
