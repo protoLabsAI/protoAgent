@@ -119,6 +119,35 @@ def test_execute_records_failure_inline_and_continues():
     assert "Error: step 'gather'" in res["steps"]["brief"]
 
 
+def test_registry_save_roundtrip_and_override(tmp_path):
+    bundled = tmp_path / "bundled"
+    writable = tmp_path / "writable"
+    bundled.mkdir()
+    (bundled / "demo.yaml").write_text(
+        "name: demo\ndescription: bundled\nsteps:\n  - id: a\n    subagent: researcher\n    prompt: p\n",
+        encoding="utf-8",
+    )
+    reg = WorkflowRegistry([str(bundled), str(writable)], writable_dir=str(writable))
+    assert reg.get("demo")["description"] == "bundled"
+    # Save overrides (writable dir wins) + is immediately runnable.
+    reg.save({"name": "demo", "description": "saved", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p"}]})
+    assert reg.get("demo")["description"] == "saved"
+    assert (writable / "demo.yaml").exists()
+    # New recipe persists + loads.
+    reg.save({"name": "Fresh One", "description": "x", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p"}]})
+    assert "Fresh One" in reg.names()
+    assert (writable / "fresh-one.yaml").exists()  # slugified filename
+
+
+def test_registry_delete(tmp_path):
+    reg = WorkflowRegistry([str(tmp_path)], writable_dir=str(tmp_path))
+    reg.save({"name": "temp", "description": "x", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p"}]})
+    assert "temp" in reg.names()
+    assert reg.delete("temp") is True
+    assert "temp" not in reg.names()
+    assert reg.delete("temp") is False
+
+
 def test_registry_loads_and_lists(tmp_path):
     (tmp_path / "w.yaml").write_text(
         "name: wf\ndescription: d\nsteps:\n  - id: a\n    subagent: researcher\n    prompt: p\n",

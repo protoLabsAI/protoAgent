@@ -498,6 +498,50 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
 
         tools.append(run_workflow)
 
+        @tool
+        async def save_workflow(
+            name: str,
+            description: str,
+            steps: list[dict],
+            inputs: list[dict] | None = None,
+            output: str = "",
+        ) -> str:
+            """Save a reusable multi-step workflow so it can be re-run later with
+            run_workflow — capture a multi-step subagent process you just worked
+            out (the closed loop). Saving overwrites any existing workflow of the
+            same name.
+
+            Args:
+                name: Unique slug for the workflow.
+                description: One-line summary of what it does.
+                steps: Ordered list of step objects, each with ``id`` (str),
+                    ``subagent`` (a configured subagent type), ``prompt`` (str,
+                    may reference {{inputs.x}} and {{steps.<id>.output}}), and
+                    optional ``depends_on`` (list of earlier step ids that run
+                    first — independent steps run in parallel).
+                inputs: Optional list of {name, required?, default?} the workflow
+                    accepts (referenced as {{inputs.name}} in prompts).
+                output: Optional final-output template (default = last step's output).
+            """
+            recipe: dict = {"name": name, "description": description, "version": 1, "steps": steps}
+            if inputs:
+                recipe["inputs"] = inputs
+            if output:
+                recipe["output"] = output
+            errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
+            if errs:
+                return "Cannot save — the workflow is invalid: " + "; ".join(errs)
+            try:
+                path = workflow_registry.save(recipe)
+            except Exception as exc:  # noqa: BLE001 — readable tool error
+                return f"Error saving workflow: {exc}"
+            return (
+                f"Saved workflow {name!r} ({len(steps)} step(s)) to {path}. "
+                f"Run it with run_workflow({name!r}, ...)."
+            )
+
+        tools.append(save_workflow)
+
     return tools
 
 
