@@ -105,6 +105,12 @@ MY_AGENT_API_KEY=sk-abc123...
 
 If the env var is unset, the API key check is skipped entirely — useful for local dev, not appropriate for production.
 
+When an A2A bearer token is configured (`auth.token` / `A2A_AUTH_TOKEN`), the
+card adds a `bearer` scheme **and** lists it in the `security` requirement
+alongside `apiKey` (`[{"apiKey": []}, {"bearer": []}]` — either is accepted), so
+a consumer reading the card actually learns bearer is an option rather than
+seeing only `apiKey`.
+
 ## Fork this file
 
 The card lives in `server.py::_build_agent_card`. The template ships a placeholder with one `chat` skill and the cost-v1 extension declared. At a minimum, every fork should replace:

@@ -1548,12 +1548,26 @@ def agent_name() -> str:
     return AGENT_NAME_ENV
 
 
+def _bearer_configured() -> bool:
+    return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (_graph_config and _graph_config.auth_token))
+
+
 def _build_security_schemes() -> dict:
     """Return securitySchemes dict, adding bearer only when A2A_AUTH_TOKEN is set."""
     schemes: dict = {"apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}}
-    if os.environ.get("A2A_AUTH_TOKEN", "") or (_graph_config and _graph_config.auth_token):
+    if _bearer_configured():
         schemes["bearer"] = {"type": "http", "scheme": "bearer"}
     return schemes
+
+
+def _build_security_requirements() -> list[dict]:
+    """The `security` array — which schemes a caller may use. Advertises bearer
+    (as an OR alternative) when a token is configured, so the served card
+    actually tells clients bearer is accepted, not just apiKey."""
+    reqs: list[dict] = [{"apiKey": []}]
+    if _bearer_configured():
+        reqs.append({"bearer": []})
+    return reqs
 
 
 def _package_version() -> str:
@@ -1665,7 +1679,7 @@ def _build_agent_card(host: str) -> dict:
             },
         ],
         "securitySchemes": _build_security_schemes(),
-        "security": [{"apiKey": []}],
+        "security": _build_security_requirements(),
     }
 
 
@@ -2300,6 +2314,7 @@ def _main():
         agent_card={},
         register_card_route=False,  # card is already served above
         on_terminal=_publish_activity_terminal,  # ADR 0003: surface Activity turns
+        card_provider=_build_agent_card,  # agent/getAuthenticatedExtendedCard
     )
 
     # --- Prometheus metrics -------------------------------------------------

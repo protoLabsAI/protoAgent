@@ -97,9 +97,25 @@ SSE stream of remaining frames for an in-flight task. Lets a consumer reconnect 
 
 Transitions the task to `canceled` if it's still running. No-op on terminal tasks.
 
+### `agent/getAuthenticatedExtendedCard`
+
+```json
+{"method": "agent/getAuthenticatedExtendedCard", "params": {}}
+```
+
+Returns the agent card to an authenticated caller (the request has already
+passed the bearer/api-key check). Same shape as the public
+`/.well-known/agent-card.json`.
+
 ### `tasks/pushNotificationConfig/{set,get,list,delete}`
 
-Register webhooks for terminal task delivery.
+Register webhooks so a non-streaming consumer is kept updated as work
+progresses. The agent POSTs to the webhook on **every meaningful transition the
+caller cares about** — the initial `working`, each per-tool progress step, and
+the terminal state — mirroring what SSE subscribers see. Non-terminal updates
+are **throttled** to at most one POST per ~1.5s (carrying the latest state) so a
+burst of tool events can't storm the webhook; terminal transitions flush
+immediately. The COMPLETED webhook also carries the terminal `artifact`.
 
 ```json
 {
@@ -121,7 +137,15 @@ The handler accepts both token shapes the A2A spec permits:
 | Top-level `token` (what `@a2a-js/sdk` serializes by default) | `{"url": "...", "token": "..."}` |
 | Structured `authentication.credentials` (RFC-8821) | `{"url": "...", "authentication": {"schemes": ["Bearer"], "credentials": "..."}}` |
 
-Both produce `Authorization: Bearer <token>` on outgoing webhook POSTs. When both are present, top-level wins.
+Both produce `Authorization: Bearer <token>` **and** the spec-canonical
+`X-A2A-Notification-Token: <token>` header on outgoing webhook POSTs, so a
+strict receiver can validate the notification belongs to a config it created.
+When both token shapes are present, top-level wins.
+
+Webhook payload: a `TaskStatusUpdateEvent` (the same envelope as the matching
+SSE `status-update` frame); the terminal/COMPLETED POST attaches the full
+`artifact`. Delivery retries 3× with exponential backoff (1s/3s/9s), skipping
+retry on 4xx.
 
 ## REST aliases
 

@@ -75,6 +75,18 @@ def test_agent_card_bearer_when_token_set(monkeypatch) -> None:
     assert "apiKey" in schemes, "apiKey scheme must always be present"
     assert "bearer" in schemes, "bearer must appear when A2A_AUTH_TOKEN is set"
     assert schemes["bearer"] == {"type": "http", "scheme": "bearer"}
+    # The `security` requirement must also list bearer (as an OR alternative),
+    # not just apiKey — otherwise the served card never tells clients bearer works.
+    reqs = card.get("security", [])
+    assert {"apiKey": []} in reqs and {"bearer": []} in reqs
+
+
+def test_agent_card_security_requirement_apikey_only_when_token_unset(monkeypatch) -> None:
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    from server import _build_agent_card
+
+    card = _build_agent_card("protoagent:7870")
+    assert card.get("security") == [{"apiKey": []}]
 
 
 def test_agent_card_declares_cost_v1_extension() -> None:

@@ -427,6 +427,93 @@ async def test_push_retains_webhook_task_reference():
         assert task not in _pending_webhook_tasks
 
 
+@pytest.mark.asyncio
+async def test_deliver_webhook_includes_notification_token_header():
+    """Webhook carries both Authorization: Bearer and the spec-canonical
+    X-A2A-Notification-Token header so strict receivers can validate."""
+    from a2a_handler import _deliver_webhook
+
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["headers"] = headers
+            return _Resp()
+
+    rec = _make_record(state=COMPLETED, accumulated_text="done")
+    cfg = PushNotificationConfig(url="https://example.com/hook", token="sek")
+    with patch("a2a_handler.httpx.AsyncClient", _Client):
+        await _deliver_webhook(rec, cfg)
+    assert captured["headers"]["Authorization"] == "Bearer sek"
+    assert captured["headers"]["X-A2A-Notification-Token"] == "sek"
+
+
+@pytest.mark.asyncio
+async def test_push_noop_without_config():
+    from a2a_handler import _push
+
+    calls = []
+
+    async def _deliver(r, cfg):
+        calls.append(r.state)
+
+    rec = _make_record(state=WORKING)  # no push_config
+    with patch("a2a_handler._deliver_webhook", _deliver):
+        await _push(rec)
+        await asyncio.sleep(0.02)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_push_throttles_nonterminal_then_flushes_terminal(monkeypatch):
+    """Non-terminal transitions are throttled to one POST per window (latest
+    state, via a trailing send); a terminal transition flushes immediately."""
+    import a2a_handler as h
+
+    monkeypatch.setattr(h, "_PUSH_MIN_INTERVAL_S", 0.05)
+    h._push_last.clear()
+    h._push_trailing.clear()
+
+    calls: list[str] = []
+
+    async def _deliver(r, cfg):
+        calls.append(r.state)
+
+    rec = _make_record(state=WORKING)
+    rec.push_config = PushNotificationConfig(url="https://example.com/hook", token="t")
+    h._store._tasks[rec.id] = rec  # trailing send re-reads the record from the store
+
+    with patch("a2a_handler._deliver_webhook", _deliver):
+        await h._push(rec)            # leading edge → immediate
+        await asyncio.sleep(0.01)
+        await h._push(rec)            # within window → suppressed, trailing scheduled
+        await asyncio.sleep(0.01)
+        assert calls == [WORKING]     # only the immediate one so far
+
+        await asyncio.sleep(0.08)     # window closes → trailing fires with latest
+        assert calls == [WORKING, WORKING]
+
+        rec.state = COMPLETED         # terminal → immediate flush
+        await h._push(rec)
+        await asyncio.sleep(0.01)
+        assert calls == [WORKING, WORKING, COMPLETED]
+
+    h._push_last.clear()
+    h._push_trailing.clear()
+
+
 # ── Background task runner ────────────────────────────────────────────────────
 
 
