@@ -21,18 +21,20 @@ import {
   Target,
   Undo2,
   Trash2,
+  Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
+import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
 import { SetupWizard } from "../setup/SetupWizard";
 
-type Surface = "chat" | "subagents" | "runtime" | "schedule" | "goals" | "settings";
+type Surface = "chat" | "subagents" | "workflows" | "runtime" | "schedule" | "goals" | "settings";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -756,6 +758,12 @@ export function App() {
             onClick={() => setSurface("subagents")}
           />
           <RailButton
+            active={surface === "workflows"}
+            label="Workflows"
+            icon={<Workflow size={18} />}
+            onClick={() => setSurface("workflows")}
+          />
+          <RailButton
             active={surface === "schedule"}
             label="Schedule"
             icon={<CalendarClock size={18} />}
@@ -907,6 +915,8 @@ export function App() {
               </div>
             </section>
           ) : null}
+
+          {surface === "workflows" ? <WorkflowsSurface onError={setError} /> : null}
 
           {surface === "schedule" ? (
             <section className="panel stage-panel">

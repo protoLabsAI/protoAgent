@@ -12,6 +12,8 @@ import type {
   SlashCommand,
   Subagent,
   ToolEvent,
+  WorkflowRunResult,
+  WorkflowSummary,
 } from "./types";
 
 type RequestOptions = Omit<RequestInit, "body"> & {
@@ -259,6 +261,17 @@ export const api = {
 
   settingsSchema() {
     return request<{ groups: SettingsGroup[] }>("/api/settings/schema");
+  },
+
+  workflows() {
+    return request<{ workflows: WorkflowSummary[] }>("/api/workflows");
+  },
+
+  runWorkflow(name: string, inputs: Record<string, unknown>) {
+    return request<WorkflowRunResult>(`/api/workflows/${encodeURIComponent(name)}/run`, {
+      method: "POST",
+      body: { inputs },
+    });
   },
 
   saveSettings(updates: Record<string, unknown>) {

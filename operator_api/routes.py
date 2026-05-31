@@ -37,6 +37,10 @@ class ScheduleAddRequest(BaseModel):
     job_id: str | None = None
 
 
+class WorkflowRunRequest(BaseModel):
+    inputs: dict[str, Any] = {}
+
+
 class BeadsInitRequest(BaseModel):
     project_path: str
     prefix: str | None = None
@@ -98,6 +102,8 @@ def register_operator_routes(
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
+    workflows_list: Callable[[], dict[str, Any]] | None = None,
+    workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     """Register React operator-console routes on a FastAPI app.
 
@@ -265,5 +271,25 @@ def register_operator_routes(
         async def _chat_commands():
             try:
                 return chat_commands()
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # --- Workflows -----------------------------------------------------------
+    # List the registered workflow recipes and run one with inputs (ADR 0002).
+    if workflows_list is not None:
+
+        @app.get("/api/workflows")
+        async def _workflows():
+            try:
+                return workflows_list()
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if workflows_run is not None:
+
+        @app.post("/api/workflows/{name}/run")
+        async def _workflow_run(name: str, req: WorkflowRunRequest):
+            try:
+                return await workflows_run(name, req.inputs)
             except Exception as exc:
                 raise _http_error(exc) from exc

@@ -23,6 +23,8 @@ import {
   settingsRestartRequired,
   SLASH_COMMANDS,
   SUBAGENTS,
+  WORKFLOW_RUN_RESULT,
+  WORKFLOWS,
 } from "./fixtures.mjs";
 
 const PORT = Number(process.argv[2] || process.env.E2E_PORT || 4319);
@@ -80,6 +82,8 @@ function handleApiGet(pathname) {
       return { issues: [] };
     case "/api/settings/schema":
       return { groups: SETTINGS_SCHEMA };
+    case "/api/workflows":
+      return { workflows: WORKFLOWS };
     default:
       return null;
   }
@@ -159,6 +163,9 @@ const server = createServer(async (req, res) => {
         messages: ["config saved", "reloaded • model=protolabs/reasoning"],
         restart_required: settingsRestartRequired(body.updates),
       });
+    }
+    if (/^\/api\/workflows\/[^/]+\/run$/.test(pathname)) {
+      return sendJson(res, WORKFLOW_RUN_RESULT);
     }
     return sendJson(res, { ok: true });
   }

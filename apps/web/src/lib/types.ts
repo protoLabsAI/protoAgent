@@ -84,6 +84,19 @@ export type SettingsField = {
 
 export type SettingsGroup = { section: string; fields: SettingsField[] };
 
+export type WorkflowSummary = {
+  name: string;
+  description: string;
+  inputs: { name: string; required: boolean; default?: unknown }[];
+  steps: { id: string; subagent: string; depends_on: string[] }[];
+};
+
+export type WorkflowRunResult = {
+  output: string;
+  steps: Record<string, string>;
+  failed: string[];
+};
+
 export type GoalState = {
   session_id: string;
   condition: string;

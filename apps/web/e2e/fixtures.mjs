@@ -51,6 +51,30 @@ export const SUBAGENTS = [
   },
 ];
 
+export const WORKFLOWS = [
+  {
+    name: "research-and-brief",
+    description: "Research a topic, then write a brief.",
+    inputs: [
+      { name: "topic", required: true },
+      { name: "depth", required: false, default: "deep" },
+    ],
+    steps: [
+      { id: "gather", subagent: "researcher", depends_on: [] },
+      { id: "brief", subagent: "researcher", depends_on: ["gather"] },
+    ],
+  },
+];
+
+export const WORKFLOW_RUN_RESULT = {
+  output: "## Brief on AI\n\nKey findings…",
+  steps: {
+    gather: "raw research notes",
+    brief: "## Brief on AI\n\nKey findings…",
+  },
+  failed: [],
+};
+
 export const SLASH_COMMANDS = [
   { name: "goal", description: "Set a goal for this session", usage: "/goal <condition>" },
   { name: "clear", description: "Clear the conversation", usage: "/clear" },

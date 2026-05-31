@@ -57,6 +57,16 @@ Workflows only delegate to **configured subagents** (each with its own tool
 allowlist and turn cap), and subagents don't get `run_workflow` — so there's no
 recursion and the blast radius is exactly the subagent system's.
 
+## From the operator console
+
+The React console has a **Workflows** surface (the rail icon next to Subagents).
+It lists every registered recipe, shows the selected recipe's step DAG and its
+inputs, and runs it with a one-click form — the same path the agent's
+`run_workflow` tool takes. The result panel shows the final output plus a
+collapsible per-step breakdown, and flags any steps that failed (failures are
+recorded inline so the rest of the DAG still runs). It's backed by
+`GET /api/workflows` and `POST /api/workflows/{name}/run`.
+
 ## The agent can author them (closed loop)
 
 The lead agent also has **`save_workflow(name, description, steps, inputs?, output?)`**.

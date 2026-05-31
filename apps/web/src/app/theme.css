@@ -1139,6 +1139,84 @@ textarea {
   white-space: pre-wrap;
 }
 
+/* Workflows surface --------------------------------------------------------- */
+.workflow-desc {
+  margin: 0 12px;
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+.workflow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 12px;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated, #111114);
+  font-size: 13px;
+}
+
+.workflow-step svg {
+  color: var(--accent, #7c8cff);
+  flex: none;
+}
+
+.workflow-step-sub {
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.workflow-step-dep {
+  margin-left: auto;
+  color: var(--fg-tertiary, var(--fg-secondary));
+  font-size: 11px;
+}
+
+.workflow-result {
+  margin: 8px 0 0;
+}
+
+.workflow-result h2 {
+  margin: 8px 12px 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-secondary);
+}
+
+.workflow-result details {
+  margin: 0 12px 12px;
+}
+
+.workflow-result summary {
+  cursor: pointer;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.workflow-step-out strong {
+  display: block;
+  margin: 6px 12px 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.workflow-failed {
+  margin: 0 12px;
+  color: var(--danger, #ff6b6b);
+  font-size: 13px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

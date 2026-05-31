@@ -1653,6 +1653,21 @@ def _main():
         cleared = await asyncio.to_thread(_goal_controller.store.clear, session_id)
         return {"cleared": bool(cleared)}
 
+    def _operator_workflows_list() -> dict:
+        if _workflow_registry is None:
+            return {"workflows": []}
+        return {"workflows": _workflow_registry.list()}
+
+    async def _operator_workflow_run(name: str, inputs: dict) -> dict:
+        if _graph is None:
+            raise RuntimeError("agent graph is not loaded; finish setup first")
+        from graph.agent import run_manual_workflow
+        return await run_manual_workflow(
+            _graph_config, _workflow_registry,
+            knowledge_store=_knowledge_store, scheduler=_scheduler,
+            name=name, inputs=inputs or {},
+        )
+
     def _operator_chat_commands() -> dict:
         """Slash commands the chat understands — drives the composer autocomplete.
 
@@ -1681,6 +1696,8 @@ def _main():
         goal_list=_operator_goals_list,
         goal_clear=_operator_goals_clear,
         chat_commands=_operator_chat_commands,
+        workflows_list=_operator_workflows_list,
+        workflows_run=_operator_workflow_run,
     )
 
     # --- Scheduler lifecycle ------------------------------------------------

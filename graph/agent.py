@@ -278,6 +278,49 @@ async def run_manual_subagent(
     )
 
 
+async def run_manual_workflow(
+    config: LangGraphConfig,
+    registry,
+    *,
+    knowledge_store=None,
+    scheduler=None,
+    name: str,
+    inputs: dict | None = None,
+) -> dict:
+    """Run a saved workflow recipe outside the lead agent's tool (operator UI).
+
+    Returns the engine result ``{"output", "steps", "failed"}``. Raises
+    ``ValueError`` for an unknown / invalid recipe or missing required inputs.
+    """
+    from graph.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
+
+    if registry is None:
+        raise ValueError("workflows are not enabled")
+    recipe = registry.get(name)
+    if recipe is None:
+        raise ValueError(f"no workflow named {name!r}")
+    errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
+    if errs:
+        raise ValueError("invalid workflow: " + "; ".join(errs))
+    resolved, missing = resolve_inputs(recipe, inputs or {})
+    if missing:
+        raise ValueError(f"missing required input(s): {', '.join(missing)}")
+
+    async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
+        return await run_manual_subagent(
+            config,
+            knowledge_store=knowledge_store,
+            scheduler=scheduler,
+            description=f"workflow {name}:{step_id}",
+            prompt=prompt,
+            subagent_type=subagent_type,
+        )
+
+    return await execute_workflow(
+        recipe, resolved, run_step=_run_step, max_concurrency=config.subagent_max_concurrency,
+    )
+
+
 async def run_manual_subagent_batch(
     config: LangGraphConfig,
     knowledge_store=None,
