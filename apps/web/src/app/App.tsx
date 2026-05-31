@@ -13,6 +13,8 @@ import {
   Inbox,
   Loader2,
   MessageSquare,
+  PanelLeft,
+  PanelRight,
   Network,
   Play,
   Plus,
@@ -225,6 +227,12 @@ export function App() {
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
+  // Collapsible/resizable layout (persisted). Flags are "1"/"" strings; width
+  // is a px string clamped on read.
+  const [railCollapsed, setRailCollapsed] = useLocalStorageState("protoagent.railCollapsed", "");
+  const [rightCollapsed, setRightCollapsed] = useLocalStorageState("protoagent.rightCollapsed", "");
+  const [rightWidthStr, setRightWidthStr] = useLocalStorageState("protoagent.rightWidth", "360");
+  const rightWidth = Math.min(720, Math.max(280, parseInt(rightWidthStr, 10) || 360));
   const [live, setLive] = useState(false);
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
@@ -769,6 +777,27 @@ export function App() {
 
   const groupedIssues = useMemo(() => groupIssues(beadsIssues), [beadsIssues]);
 
+  // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
+  function startRightResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = rightWidth;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(720, Math.max(280, startW + (startX - ev.clientX)));
+      setRightWidthStr(String(Math.round(next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  const workspaceCols = `${railCollapsed ? "0px" : "72px"} minmax(0, 1fr) ${rightCollapsed ? "0px" : `${rightWidth}px`}`;
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -797,13 +826,36 @@ export function App() {
             data-testid="live-indicator"
             data-live={live ? "true" : "false"}
           />
+          <button
+            className={`icon-button ${railCollapsed ? "is-off" : ""}`}
+            type="button"
+            onClick={() => setRailCollapsed(railCollapsed ? "" : "1")}
+            title={railCollapsed ? "Show rail" : "Hide rail"}
+            aria-label="Toggle rail"
+            data-testid="toggle-rail"
+          >
+            <PanelLeft size={16} />
+          </button>
+          <button
+            className={`icon-button ${rightCollapsed ? "is-off" : ""}`}
+            type="button"
+            onClick={() => setRightCollapsed(rightCollapsed ? "" : "1")}
+            title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+            aria-label="Toggle side panel"
+            data-testid="toggle-right"
+          >
+            <PanelRight size={16} />
+          </button>
           <button className="icon-button" type="button" onClick={() => void refreshAll()} title="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
       </header>
 
-      <div className="workspace">
+      <div
+        className={`workspace ${railCollapsed ? "rail-collapsed" : ""} ${rightCollapsed ? "right-collapsed" : ""}`}
+        style={{ gridTemplateColumns: workspaceCols }}
+      >
         <aside className="rail" aria-label="Workspace surfaces">
           <RailButton
             active={surface === "chat"}
@@ -1250,6 +1302,16 @@ export function App() {
         </main>
 
         <aside className="right-panel">
+          {!rightCollapsed ? (
+            <div
+              className="resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize side panel"
+              onMouseDown={startRightResize}
+              data-testid="right-resize"
+            />
+          ) : null}
           <div className="project-bar">
             <input
               value={projectPath}
