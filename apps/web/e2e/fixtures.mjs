@@ -233,6 +233,16 @@ function scenarioFor(prompt) {
         { id: "task-1", name: "task", phase: "end", output: "Subagent finished: found 1 result." },
       ],
     };
+  if (t.includes("NOEND"))
+    // A tool whose `end` frame never arrives (e.g. a workflow card whose end
+    // races with the terminal `done`). The turn still completes — the client
+    // must flip the lingering card running→done, not spin forever.
+    return {
+      answer: "Workflow finished.",
+      events: [
+        { id: "wf-1", name: "workflow:research-and-brief", phase: "start", input: JSON.stringify({ topic: "quantum computing" }) },
+      ],
+    };
   if (t.includes("TOOLERR"))
     return { name: "web_search", input: { query: "x" }, output: "Error: DuckDuckGo search failed: rate limited", answer: "Search failed." };
   if (t.includes("OVERFLOW"))

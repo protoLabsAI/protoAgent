@@ -245,11 +245,26 @@ function ChatSessionSlot({
         onDone: () => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
+          const now = Date.now();
           chatStore.updateMessages(
             session.id,
-            latest.messages.map((message) =>
-              message.id === assistantId ? { ...message, status: "done" } : message,
-            ),
+            latest.messages.map((message) => {
+              if (message.id !== assistantId) return message;
+              // A completed turn can't have tools still running: a tool_end frame
+              // that races with the terminal `done` (e.g. a workflow card whose
+              // end arrives in the same tick) would otherwise leave the card
+              // spinning forever. Flip any lingering `running` cards to `done`.
+              const toolCalls = message.toolCalls?.map((c) =>
+                c.status === "running"
+                  ? {
+                      ...c,
+                      status: "done" as const,
+                      durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
+                    }
+                  : c,
+              );
+              return { ...message, status: "done", toolCalls };
+            }),
           );
         },
       });
