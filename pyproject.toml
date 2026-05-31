@@ -1,6 +1,6 @@
 [project]
 name = "protoagent"
-version = "0.3.88"
+version = "0.3.89"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 requires-python = ">=3.11"
 
