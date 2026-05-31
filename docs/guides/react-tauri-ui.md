@@ -149,6 +149,7 @@ Add these before the React UI depends on them:
 | `GET /api/goals`, `DELETE /api/goals/{session_id}` | list goals across sessions / clear one (goals are *set* in chat via `/goal`) |
 | `GET /api/chat/commands` | registered slash commands (`{name, description, usage}`) for the composer's `/` autocomplete |
 | `GET /api/events` | **server→client SSE push channel** (ADR 0003). Holds open for the app's lifetime; the server pushes unsolicited events (`activity.message`, `inbox.item`) the request-scoped chat stream can't. Read-only. |
+| `GET /api/activity` | the durable **Activity thread**'s message history (ADR 0003) — `{context_id, messages:[{role, content}]}` read from the checkpointer (`a2a:system:activity`). Where agent-initiated turns (scheduled fires) land. |
 
 ### Event stream (push channel)
 
@@ -162,6 +163,17 @@ receives it. Frames are SSE `event:`/`data:` with periodic `: keepalive` comment
 
 > **Playwright note:** a long-lived SSE connection never lets `networkidle`
 > settle — navigate with `waitUntil: "load"` in e2e, not `"networkidle"`.
+
+### Activity surface
+
+The **Activity** rail surface (`activity/ActivitySurface.tsx`) is the console
+view of the durable Activity thread (ADR 0003). It loads history from
+`GET /api/activity`, appends live as `activity.message` events arrive, and lets
+the operator reply — a normal turn into the `system:activity` context. The
+operator's own message is appended optimistically; the assistant's reply arrives
+via the same `activity.message` event a scheduled fire produces, so there's one
+uniform render path and no double-render. A rail **unread badge** counts events
+that land while the operator is on another surface.
 
 Manual subagents should reuse the existing `_run_subagent` implementation, but
 expose it through a service function instead of calling the lead agent's tool.

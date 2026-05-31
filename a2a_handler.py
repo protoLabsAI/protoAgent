@@ -797,6 +797,23 @@ async def _deliver_webhook(record: TaskRecord, push_config: PushNotificationConf
 _pending_webhook_tasks: set[asyncio.Task] = set()
 
 
+# Optional terminal hook (ADR 0003). Set via register_a2a_routes; invoked with
+# the terminal TaskRecord when a turn completes, so a host can surface
+# agent-initiated output (e.g. publish to the event bus for the Activity thread).
+_ON_TERMINAL: list[Callable[["TaskRecord"], None] | None] = [None]
+
+
+def _notify_terminal(record: TaskRecord) -> None:
+    """Best-effort fire the host's terminal hook. Never raises into the runner."""
+    cb = _ON_TERMINAL[0]
+    if cb is None:
+        return
+    try:
+        cb(record)
+    except Exception:  # noqa: BLE001
+        logger.exception("[a2a] terminal hook failed for task %s", record.id)
+
+
 async def _push(record: TaskRecord) -> None:
     """Fire webhook delivery for *record* if a push config is currently
     registered on it.
@@ -900,6 +917,7 @@ async def _run_task_background(
                     accumulated_text=payload or accumulated,
                 )
                 await _push(record)
+                _notify_terminal(record)
                 return
 
             elif event_type == "error":
@@ -1054,6 +1072,7 @@ def register_a2a_routes(
     agent_card: dict,
     register_card_route: bool = True,
     auth_token: str = "",
+    on_terminal: Callable[["TaskRecord"], None] | None = None,
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
@@ -1070,6 +1089,8 @@ def register_a2a_routes(
     # ── Bearer token authentication ───────────────────────────────────────────
     # Seed order: explicit arg > env. Stored in the module-level holder
     # so mutations propagate to the closure below.
+    _ON_TERMINAL[0] = on_terminal
+
     seed = (auth_token or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
     _A2A_TOKEN[0] = seed or None
     if _A2A_TOKEN[0] is None:

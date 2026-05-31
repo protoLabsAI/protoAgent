@@ -97,6 +97,13 @@ export type WorkflowRunResult = {
   failed: string[];
 };
 
+export type ActivityMessage = { role: "user" | "assistant"; content: string };
+
+export type ActivityHistory = {
+  context_id: string;
+  messages: ActivityMessage[];
+};
+
 export type GoalState = {
   session_id: string;
   condition: string;

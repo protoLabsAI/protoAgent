@@ -290,6 +290,13 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     # One-shot was deleted after firing
     assert s.list_jobs() == []
 
+    # Fires route into the durable Activity thread (ADR 0003) so the response
+    # surfaces, with an origin tag for the activity surface.
+    call = next(c for c in fired if "FIRED-ME" in str(c["json"]))
+    params = call["json"]["params"]
+    assert params["contextId"] == "system:activity"
+    assert params["metadata"]["origin"] == "scheduler"
+
 
 @pytest.mark.asyncio
 async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):

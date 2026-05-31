@@ -112,14 +112,22 @@ The local scheduler runs an asyncio polling task on FastAPI's
 
 1. Read jobs where `next_fire <= now()` and `enabled = 1`.
 2. For each due job: POST to `http://127.0.0.1:<active_port>/a2a` as
-   a `message/send` with the job's prompt as the message text. Bearer
-   + X-API-Key are forwarded automatically.
+   a `message/send` with the job's prompt as the message text, routed
+   into the durable **Activity thread** (`contextId: system:activity`,
+   `metadata.origin: scheduler`). Bearer + X-API-Key are forwarded
+   automatically.
 3. One-shot ISO jobs are deleted after firing. Cron jobs reschedule
    forward via `croniter`.
 
 Going through HTTP rather than calling into the graph directly buys
 parity with real callers — the audit log, cost-v1 capture, and
 push-notification path all behave identically.
+
+**Where the response lands.** The fired turn runs in the Activity thread
+(ADR 0003), so its output persists and shows up live in the console's
+**Activity** surface (pushed over `/api/events` as an `activity.message`).
+Before ADR 0003 a fired prompt minted a throwaway context and its answer
+was evicted unseen.
 
 ### Missed-fire recovery
 

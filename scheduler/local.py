@@ -38,6 +38,7 @@ from typing import Any
 
 from croniter import croniter
 
+from events import ACTIVITY_CONTEXT
 from scheduler.interface import Job, is_cron, parse_iso_to_utc
 
 log = logging.getLogger(__name__)
@@ -382,6 +383,11 @@ class LocalScheduler:
             "id": message_id,
             "method": "message/send",
             "params": {
+                # Route into the durable Activity thread (ADR 0003) so the
+                # fired turn lands somewhere visible/continuable instead of a
+                # throwaway context. Without this, a2a_handler mints a fresh
+                # context per fire and the response surfaces nowhere.
+                "contextId": ACTIVITY_CONTEXT,
                 "message": {
                     "role": "user",
                     "parts": [{"kind": "text", "text": job.prompt}],
@@ -394,6 +400,7 @@ class LocalScheduler:
                 "metadata": {
                     "scheduler_job_id": job.id,
                     "scheduler_kind": "local",
+                    "origin": "scheduler",
                 },
             },
         }
