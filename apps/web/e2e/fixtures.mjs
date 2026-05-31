@@ -93,6 +93,8 @@ export const WORKFLOW_RUN_RESULT = {
 export const SLASH_COMMANDS = [
   { name: "goal", description: "Set a goal for this session", usage: "/goal <condition>" },
   { name: "clear", description: "Clear the conversation", usage: "/clear" },
+  // Workflows surface as slash commands too (ADR 0002) — server lists them.
+  { name: "research-and-brief", description: "Research a topic, then write a brief.", usage: "/research-and-brief <topic> [depth]" },
 ];
 
 export const SCHEDULER_JOBS = {

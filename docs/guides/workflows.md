@@ -57,6 +57,20 @@ Workflows only delegate to **configured subagents** (each with its own tool
 allowlist and turn cap), and subagents don't get `run_workflow` — so there's no
 recursion and the blast radius is exactly the subagent system's.
 
+### As a slash command
+
+Every registered workflow is also runnable straight from the chat composer as
+**`/<workflow-name>`** — it autocompletes (the server lists workflows in
+`GET /api/chat/commands`) and short-circuits the turn, returning the workflow's
+output instead of a normal model reply. Arguments map to the recipe's inputs:
+
+- `` /research-and-brief quantum error correction `` — free text fills the first
+  required input (`topic`).
+- `` /research-and-brief topic="quantum error correction" depth=shallow `` —
+  explicit `key=value` tokens (quotes respected) set named inputs.
+
+Missing a required input returns a `⚠️`-prefixed error naming it.
+
 ## From the operator console
 
 The React console has a **Workflows** surface (the rail icon next to Subagents).

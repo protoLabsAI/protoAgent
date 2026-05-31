@@ -1132,6 +1132,86 @@ async def _run_turn_stream(message: str, session_id: str, config: dict):
     yield ("__raw__", accumulated_raw)
 
 
+# --- Workflow slash commands (ADR 0002) --------------------------------------
+# A chat message like ``/research-and-brief quantum computing`` runs the named
+# workflow instead of a normal model turn — the slash-command analogue of the
+# run_workflow tool. Free text maps to the first unset (required) input; explicit
+# ``key=value`` tokens set named inputs. Short-circuits the turn like /goal does.
+
+
+def _parse_slash_command(message: str) -> tuple[str, str]:
+    """Split ``/name rest`` → (name, rest). Returns ("", "") if not a slash msg."""
+    s = (message or "").strip()
+    if not s.startswith("/"):
+        return "", ""
+    parts = s[1:].split(None, 1)
+    return (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else "")
+
+
+def _parse_workflow_inputs(recipe: dict, rest: str) -> dict:
+    """Map a slash-command argument string to a workflow's named inputs.
+
+    ``key=value`` tokens (quotes respected) set inputs explicitly; any leftover
+    free text is assigned to the first not-yet-set input, preferring required
+    ones — so ``/research-and-brief quantum computing`` fills ``topic``.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(rest)
+    except ValueError:
+        tokens = rest.split()
+    inputs: dict = {}
+    leftover: list[str] = []
+    for tok in tokens:
+        if "=" in tok and tok.split("=", 1)[0].isidentifier():
+            key, val = tok.split("=", 1)
+            inputs[key] = val
+        else:
+            leftover.append(tok)
+    if leftover:
+        declared = recipe.get("inputs", []) or []
+        target = next((i["name"] for i in declared if i["name"] not in inputs and i.get("required")), None)
+        if target is None:
+            target = next((i["name"] for i in declared if i["name"] not in inputs), None)
+        if target:
+            inputs[target] = " ".join(leftover)
+    return inputs
+
+
+def _parse_workflow_command(message: str):
+    """Return (name, inputs) if ``message`` is ``/<known-workflow> …``, else None."""
+    name, rest = _parse_slash_command(message)
+    if not name or _workflow_registry is None:
+        return None
+    recipe = _workflow_registry.get(name)
+    if recipe is None:
+        return None
+    return name, _parse_workflow_inputs(recipe, rest)
+
+
+async def _run_parsed_workflow(name: str, inputs: dict) -> str:
+    """Run a workflow command and format its output as the assistant reply."""
+    from graph.agent import run_manual_workflow
+
+    try:
+        result = await run_manual_workflow(
+            _graph_config, _workflow_registry,
+            knowledge_store=_knowledge_store, scheduler=_scheduler,
+            name=name, inputs=inputs,
+        )
+    except ValueError as exc:
+        return f"⚠️ {exc}"
+    raw = result.get("output") or ""
+    # Strip subagent scratch_pad/output tags so the chat shows clean text,
+    # matching how a normal turn is rendered.
+    out = extract_output(raw) or raw or "(workflow produced no output)"
+    failed = result.get("failed") or []
+    if failed:
+        out += f"\n\n_(failed steps: {', '.join(failed)})_"
+    return out
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -1183,6 +1263,19 @@ async def _chat_langgraph_stream(
                 if reply is not None:
                     yield ("done", reply)
                     return
+
+            # Workflow slash command (/<workflow-name> …) short-circuits the turn:
+            # run the recipe and return its output. A tool_start/end pair renders
+            # a card so the operator sees it running.
+            parsed = _parse_workflow_command(message)
+            if parsed is not None:
+                wf_name, wf_inputs = parsed
+                tool_id = f"workflow:{wf_name}"
+                yield ("tool_start", {"id": tool_id, "name": tool_id, "input": _coerce_tool_value(wf_inputs)})
+                wf_out = await _run_parsed_workflow(wf_name, wf_inputs)
+                yield ("tool_end", {"id": tool_id, "name": tool_id, "output": wf_out[:300]})
+                yield ("done", wf_out)
+                return
 
             # thread_id keys this session's history in the checkpointer (bound
             # at compile time in create_agent_graph). The prefix isolates A2A
@@ -1318,6 +1411,11 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                 reply = await _goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
+
+            # Workflow slash command (/<workflow-name> …) short-circuits the turn.
+            parsed = _parse_workflow_command(message)
+            if parsed is not None:
+                return [{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}]
 
             config = {"configurable": {"thread_id": f"gradio:{session_id}"}}
 
@@ -1839,6 +1937,17 @@ def _main():
                 "description": "Set, check, or clear a self-driving goal for this chat session.",
                 "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
             })
+        # Each registered workflow is runnable as /<name> (ADR 0002).
+        if _workflow_registry is not None:
+            for wf in _workflow_registry.list():
+                declared = wf.get("inputs", []) or []
+                req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
+                opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))
+                commands.append({
+                    "name": wf["name"],
+                    "description": wf.get("description") or f"Run the {wf['name']} workflow.",
+                    "usage": f"/{wf['name']}{req}{opt}",
+                })
         return {"commands": commands}
 
     register_operator_routes(
