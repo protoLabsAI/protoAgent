@@ -51,6 +51,7 @@ export default defineConfig({
             { text: "Scheduler", link: "/guides/scheduler" },
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
+            { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
           ],
         },

@@ -248,6 +248,13 @@ class LangGraphConfig:
     identity_name: str = "protoagent"
     identity_operator: str = ""
 
+    # Instance id for multi-instance data scoping (ADR 0004). When set, every
+    # store nests under <base>/<id>/ so several instances can share one
+    # filesystem without clobbering each other. Empty = single-instance (legacy)
+    # paths, unchanged. Seeded into the PROTOAGENT_INSTANCE env at startup so the
+    # env-reading stores (knowledge/scheduler/memory) honor it too.
+    instance_id: str = ""
+
     # A2A bearer token — blank = open mode (local dev). Writing a token
     # here makes the A2A handler require ``Authorization: Bearer <token>``
     # on every request and advertises the bearer scheme on the agent card.
@@ -368,6 +375,7 @@ class LangGraphConfig:
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
+            instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),

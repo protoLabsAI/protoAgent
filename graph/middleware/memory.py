@@ -27,7 +27,11 @@ log = logging.getLogger(__name__)
 # Configuration — read once at module init
 # ---------------------------------------------------------------------------
 
-MEMORY_PATH = os.environ.get("MEMORY_PATH", "/sandbox/memory/")
+from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+
+# ``PROTOAGENT_INSTANCE`` is seeded by server init before the graph (and this
+# middleware) is built, so the instance segment applies here too.
+MEMORY_PATH = str(scope_leaf(os.environ.get("MEMORY_PATH", "/sandbox/memory/")))
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 

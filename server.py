@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from events import ACTIVITY_CONTEXT, EventBus
+from paths import scope_leaf
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
     extract_confidence,
@@ -119,6 +120,11 @@ def _init_langgraph_agent():
     # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
     _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
+    # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
+    # under the same id. Opt-in — empty config.instance_id leaves paths unchanged.
+    # Set before any store is built or the memory middleware is imported.
+    _seed_instance_env(_graph_config)
     # Conversation checkpointer: durable SQLite when a path is configured (chat
     # history survives restarts), else in-memory. Bound into the graph at
     # compile time below — a checkpointer in the invoke config is ignored.
@@ -308,6 +314,17 @@ def _build_plugins(config, existing_tools=None):
         return PluginLoadResult()
 
 
+def _seed_instance_env(config) -> None:
+    """Seed PROTOAGENT_INSTANCE from config.instance_id (ADR 0004), unless the
+    env is already set (env wins). Opt-in: no id → no scoping → legacy paths."""
+    if os.environ.get("PROTOAGENT_INSTANCE", "").strip():
+        return
+    iid = (getattr(config, "instance_id", "") or "").strip()
+    if iid:
+        os.environ["PROTOAGENT_INSTANCE"] = iid
+        log.info("[instance] data scoped to instance id %r (ADR 0004)", iid)
+
+
 def _resolve_checkpoint_db(configured: str) -> str:
     """Pick a writable checkpoint DB path; fall back to ~/.protoagent when the
     configured dir (default /sandbox) isn't creatable (e.g. local dev)."""
@@ -318,10 +335,12 @@ def _resolve_checkpoint_db(configured: str) -> str:
     try:
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if os.access(candidate.parent, os.W_OK):
-            return str(candidate)
+            scoped = scope_leaf(candidate)
+            scoped.parent.mkdir(parents=True, exist_ok=True)
+            return str(scoped)
     except OSError:
         pass
-    fallback = Path.home() / ".protoagent" / "checkpoints.db"
+    fallback = scope_leaf(Path.home() / ".protoagent" / "checkpoints.db")
     fallback.parent.mkdir(parents=True, exist_ok=True)
     return str(fallback)
 
@@ -429,14 +448,14 @@ def _build_inbox_store(config):
     from inbox import InboxStore
 
     name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
-    configured = Path(getattr(config, "inbox_db_path", "") or "/sandbox/inbox") / f"{name}.db"
+    configured = scope_leaf(Path(getattr(config, "inbox_db_path", "") or "/sandbox/inbox") / f"{name}.db")
     try:
         configured.parent.mkdir(parents=True, exist_ok=True)
         if not os.access(configured.parent, os.W_OK):
             raise OSError
         path = str(configured)
     except OSError:
-        fallback = Path.home() / ".protoagent" / "inbox" / f"{name}.db"
+        fallback = scope_leaf(Path.home() / ".protoagent" / "inbox" / f"{name}.db")
         fallback.parent.mkdir(parents=True, exist_ok=True)
         path = str(fallback)
     try:
@@ -462,13 +481,13 @@ def _build_workflow_registry(config):
         if bundled.is_dir():
             dirs.append(str(bundled))
         # Writable dir for user / agent-emitted recipes (same fallback shape).
-        writable = Path(config.workflow_dir).expanduser()
+        writable = scope_leaf(Path(config.workflow_dir).expanduser())
         try:
             writable.mkdir(parents=True, exist_ok=True)
             if not os.access(writable, os.W_OK):
                 raise OSError
         except OSError:
-            writable = Path.home() / ".protoagent" / "workflows"
+            writable = scope_leaf(Path.home() / ".protoagent" / "workflows")
             writable.mkdir(parents=True, exist_ok=True)
         dirs.append(str(writable))
         return WorkflowRegistry(dirs, writable_dir=str(writable))
@@ -488,10 +507,12 @@ def _resolve_skills_db(configured: str) -> str:
     try:
         candidate.parent.mkdir(parents=True, exist_ok=True)
         if os.access(candidate.parent, os.W_OK):
-            return str(candidate)
+            scoped = scope_leaf(candidate)
+            scoped.parent.mkdir(parents=True, exist_ok=True)
+            return str(scoped)
     except OSError:
         pass
-    fallback = Path.home() / ".protoagent" / "skills.db"
+    fallback = scope_leaf(Path.home() / ".protoagent" / "skills.db")
     fallback.parent.mkdir(parents=True, exist_ok=True)
     return str(fallback)
 

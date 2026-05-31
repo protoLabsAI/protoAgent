@@ -48,6 +48,56 @@ _POLL_INTERVAL_S = 1.0
 _MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h — matches Workstacean
 
 
+# Owner-lock interlock (ADR 0004): one live instance owns a given jobs.db. Two
+# instances sharing it would both poll and race to claim due jobs (a fired job
+# vanishes from the other's view). The in-process set catches same-process /
+# test collisions; fcntl.flock catches separate processes on a shared filesystem.
+_LOCKED_PATHS: set[str] = set()
+
+
+def _acquire_jobs_lock(path: Path):
+    """Try to take the exclusive owner-lock for ``path``'s jobs.db.
+
+    Returns the held lock file object on success, or ``None`` if another live
+    instance already owns it (caller should log + skip starting the scheduler).
+    """
+    key = str(path)
+    if key in _LOCKED_PATHS:
+        return None
+    try:
+        import fcntl
+
+        fd = open(key + ".lock", "w")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fd.close()
+            return None
+    except ImportError:  # pragma: no cover - non-POSIX; fall back to in-proc guard
+        fd = None
+    _LOCKED_PATHS.add(key)
+    return fd if fd is not None else _InProcLock(key)
+
+
+class _InProcLock:
+    """Marker returned when fcntl is unavailable — release just drops the path."""
+
+    def __init__(self, key: str):
+        self._key = key
+
+    def close(self):
+        pass
+
+
+def _release_jobs_lock(path: Path, fd) -> None:
+    _LOCKED_PATHS.discard(str(path))
+    try:
+        if fd is not None:
+            fd.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
     """Pick a writable jobs.db path namespaced by agent name.
 
@@ -57,9 +107,11 @@ def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
     cheap and prevents an exotic typo from putting a sqlite file
     outside the configured scheduler dir.
     """
+    from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+
     safe_name = _safe_segment(agent_name)
     raw = os.environ.get("SCHEDULER_DB_DIR") or db_dir or DEFAULT_DB_DIR
-    base = Path(str(raw)).expanduser() / safe_name
+    base = scope_leaf(Path(str(raw)).expanduser() / safe_name)
     try:
         base.mkdir(parents=True, exist_ok=True)
         probe = base / ".write-probe"
@@ -67,7 +119,7 @@ def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
         probe.unlink()
         return base / "jobs.db"
     except OSError:
-        fallback = Path.home() / ".protoagent" / "scheduler" / safe_name
+        fallback = scope_leaf(Path.home() / ".protoagent" / "scheduler" / safe_name)
         fallback.mkdir(parents=True, exist_ok=True)
         log.info("[scheduler] %s not writable; using %s instead", base, fallback)
         return fallback / "jobs.db"
@@ -149,6 +201,7 @@ class LocalScheduler:
         self.path = _resolve_db_path(db_dir, agent_name)
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self._lock_fd = None  # owner-lock fd (ADR 0004) held while polling
         self._init_db()
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
@@ -232,6 +285,18 @@ class LocalScheduler:
     async def start(self) -> None:
         if self._task is not None:
             return
+        # Owner-lock interlock (ADR 0004): refuse to poll a jobs.db another live
+        # instance owns, rather than silently racing it. Loud error + skip the
+        # scheduler (the rest of the agent still serves normally).
+        self._lock_fd = _acquire_jobs_lock(self.path)
+        if self._lock_fd is None:
+            log.error(
+                "[scheduler] jobs.db at %s is already owned by another live instance — "
+                "not starting the scheduler. Run each instance with a distinct "
+                "PROTOAGENT_INSTANCE (or agent name) so they don't share a jobs.db.",
+                self.path,
+            )
+            return
         self._stopping = False
         self._recover_missed_fires()
         self._task = asyncio.create_task(self._poll_loop(), name="scheduler.local.poll")
@@ -242,22 +307,25 @@ class LocalScheduler:
 
     async def stop(self) -> None:
         self._stopping = True
-        if self._task is None:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            # Expected — we just cancelled it.
-            pass
-        except Exception:  # noqa: BLE001
-            # Anything else means the polling loop crashed during
-            # shutdown. Log with traceback so we can debug; don't
-            # re-raise (caller is in shutdown path, raising would
-            # mask the original shutdown trigger).
-            log.exception("[scheduler] polling task raised during stop")
-        self._task = None
-        log.info("[scheduler] local backend stopped")
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                # Expected — we just cancelled it.
+                pass
+            except Exception:  # noqa: BLE001
+                # Anything else means the polling loop crashed during
+                # shutdown. Log with traceback so we can debug; don't
+                # re-raise (caller is in shutdown path, raising would
+                # mask the original shutdown trigger).
+                log.exception("[scheduler] polling task raised during stop")
+            self._task = None
+            log.info("[scheduler] local backend stopped")
+        # Release the owner-lock (ADR 0004) so another instance can take over.
+        if self._lock_fd is not None:
+            _release_jobs_lock(self.path, self._lock_fd)
+            self._lock_fd = None
 
     # ── polling + firing ────────────────────────────────────────────────────
 

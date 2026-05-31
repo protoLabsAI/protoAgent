@@ -73,8 +73,10 @@ class Chunk:
 
 def _resolve_path(db_path: str | Path | None) -> Path:
     """Pick a writable DB path. Env > arg > default; fall back to ~/.protoagent."""
+    from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+
     raw = os.environ.get("KNOWLEDGE_DB_PATH") or db_path or DEFAULT_DB_PATH
-    p = Path(str(raw)).expanduser()
+    p = scope_leaf(raw)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         # Probe writability
@@ -83,7 +85,7 @@ def _resolve_path(db_path: str | Path | None) -> Path:
         probe.unlink()
         return p
     except OSError:
-        fallback = Path.home() / ".protoagent" / "knowledge" / "agent.db"
+        fallback = scope_leaf(Path.home() / ".protoagent" / "knowledge" / "agent.db")
         fallback.parent.mkdir(parents=True, exist_ok=True)
         log.info(
             "[knowledge] %s not writable; using %s instead",

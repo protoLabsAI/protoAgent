@@ -1,6 +1,6 @@
 # ADR 0004 — Multi-Instance Data Scoping
 
-- **Status:** Accepted (2026-05-30) — design agreed; implementation to follow
+- **Status:** Accepted (2026-05-30) — implemented (instance scoping + scheduler owner-lock)
 - **Date:** 2026-05-30
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, deployment, state, scheduler, knowledge, multi-instance
@@ -66,11 +66,16 @@ A single **instance id** resolved once at startup, in priority order:
 
 1. `PROTOAGENT_INSTANCE` env, else
 2. `instance_id` config field, else
-3. the agent identity name when it's non-default, else
-4. empty → **legacy mode** (today's exact paths).
+3. empty → **legacy mode** (today's exact paths).
 
 When empty, nothing changes — existing single-instance deployments keep their
 current paths and data. When set, every store nests under it.
+
+> **As implemented**, scoping is strictly opt-in via the env/config id above. We
+> deliberately do **not** auto-derive it from a non-default agent identity name —
+> that would silently move data for anyone who'd named their agent, breaking the
+> zero-migration guarantee. Distinct instances on shared storage set a distinct
+> `PROTOAGENT_INSTANCE`.
 
 ### 2.2 One scoped data root + a single path helper
 
