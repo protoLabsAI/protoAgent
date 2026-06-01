@@ -86,9 +86,83 @@ h2 {
   height: 100%;
   min-height: 100vh;
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr) 28px;
   overflow: hidden;
   background: var(--bg);
+}
+
+/* Topbar health light — one dot, detail on hover, click to refresh. */
+.status-dot {
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fg-tertiary, #555);
+  cursor: pointer;
+  flex: none;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.status-dot.tone-ok {
+  background: var(--success, #3fb950);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #3fb950) 22%, transparent);
+}
+
+.status-dot.tone-warning {
+  background: var(--warning, #d29922);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning, #d29922) 22%, transparent);
+}
+
+.status-dot.tone-error {
+  background: var(--danger, #ff6b6b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger, #ff6b6b) 22%, transparent);
+}
+
+.status-dot:hover {
+  filter: brightness(1.15);
+}
+
+/* Bottom utility bar — panel collapse toggles, pinned to their sides. */
+.utility-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11px;
+}
+
+.utility-bar .util-spacer {
+  flex: 1;
+}
+
+.util-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.util-btn:hover {
+  background: var(--bg-elevated, #1a1a1f);
+  color: var(--fg);
+}
+
+.util-btn svg {
+  flex: none;
+}
+
+.util-btn.is-off {
+  color: var(--accent, #7c8cff);
 }
 
 .topbar {
