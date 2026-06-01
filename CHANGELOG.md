@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Operator primitives** (ADR 0007): a fenced multi-project filesystem toolset
+  (`tools/fs_tools.py`) + project registry — opt-in, off by default. Enables a
+  fork like Roxy; the agent's own repo is excluded by default.
+- **Sandboxing** (ADR 0008): a deny-by-default `egress.allowed_hosts` allowlist
+  enforced in `fetch_url`, and `scripts/gen_openshell_policy.py` to generate an
+  NVIDIA OpenShell sandbox policy from config (project registry → Landlock
+  paths, egress allowlist + gateway → network policy). New guides:
+  "Build an operator fork (Roxy)" and "Sandboxing & egress".
+
 ## [0.5.1] - 2026-06-01
 
 ### Added

@@ -307,6 +307,12 @@ class LangGraphConfig:
     filesystem_allow_run: bool = False
     filesystem_projects: list[dict] = field(default_factory=list)
 
+    # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
+    # enforced in ``fetch_url`` (the model-chosen-host exfil/SSRF vector). Empty
+    # = permissive (off). ``*.host`` matches subdomains. Single source of truth
+    # for the generated OpenShell network policy (scripts/gen_openshell_policy).
+    egress_allowed_hosts: list[str] = field(default_factory=list)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
         """Load config from YAML file. Falls back to defaults if absent."""
@@ -418,6 +424,7 @@ class LangGraphConfig:
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
             filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
+            egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
         )
 
         for name in ("researcher",):

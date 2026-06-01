@@ -260,6 +260,23 @@ filesystem:
 
 **Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4.
 
+## `egress`
+
+Deny-by-default outbound-host allowlist ([ADR 0008](../adr/0008-sandboxing-and-openshell.md)) enforced in `fetch_url` — the tool where the model picks an arbitrary host (the in-process exfiltration / SSRF vector). Also the single source of truth the OpenShell network policy is generated from (`scripts/gen_openshell_policy.py`).
+
+```yaml
+egress:
+  allowed_hosts:
+    - api.proto-labs.ai
+    - "*.github.com"      # wildcard: apex + any subdomain
+```
+
+| Key | Default | What |
+|---|---|---|
+| `allowed_hosts` | `[]` | Hosts `fetch_url` may reach. **Empty = permissive** (off). When set, any other host is denied. `*.host` matches subdomains + apex; case-insensitive, port-agnostic. Hot-reloads. |
+
+Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fenced by running under OpenShell (see [Sandboxing & egress](../guides/sandboxing.md)).
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).

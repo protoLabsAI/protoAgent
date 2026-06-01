@@ -237,6 +237,13 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         return f"Error: url must start with http:// or https:// — got {url!r}"
 
+    # Egress allowlist (ADR 0008) — deny-by-default when configured; permissive
+    # (no-op) otherwise. fetch_url is the model-chosen-host exfil/SSRF vector.
+    import egress
+    blocked = egress.check_url(url)
+    if blocked:
+        return blocked
+
     try:
         import httpx
     except ImportError:
