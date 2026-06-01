@@ -270,9 +270,17 @@ class KnowledgeMiddleware(AgentMiddleware):
         def _format_skill(s: "SkillRecord") -> str:
             # Truncate prompt_template to 500 chars to keep block concise
             pt = s.prompt_template[:500] if s.prompt_template else ""
+            # Surface the skill's declared tools so the model knows which of its
+            # (already-bound) tools this skill relies on — a relevance hint, not
+            # a gate. See ADR 0005 (tool pollution / progressive disclosure).
+            tools = getattr(s, "tools_used", ()) or ()
+            tools_line = (
+                f"    <relevant_tools>{', '.join(tools)}</relevant_tools>\n" if tools else ""
+            )
             return (
                 f'  <skill name="{s.name}">\n'
                 f"    <description>{s.description}</description>\n"
+                f"{tools_line}"
                 f"    <prompt_template>{pt}</prompt_template>\n"
                 f"  </skill>"
             )

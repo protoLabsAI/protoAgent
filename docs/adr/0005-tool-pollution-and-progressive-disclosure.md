@@ -1,6 +1,6 @@
 # ADR 0005 — Tool Pollution & Progressive Tool Disclosure
 
-- **Status:** Proposed (2026-05-31) — findings + ranked plan; no code yet
+- **Status:** Accepted (2026-05-31) — implementing the ranked plan (#1, #2 shipped)
 - **Date:** 2026-05-31
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, agent, tools, mcp, skills, context, prompt
@@ -144,25 +144,28 @@ directional:
    already-parsed-but-unused `tools:` frontmatter) rather than inventing a
    parallel mechanism.
 
-## 5. Ranked Plan (impact → effort) — *for a follow-up, not committed here*
+## 5. Ranked Plan (impact → effort)
 
-1. **MCP per-server allowlist + lazy connect** *(low effort, biggest win).*
-   Add `mcp.servers[].tools.include` (+ keep `exclude`/global `denylist`); filter
-   discovered tools in `build_mcp_tools` so a large server can't dump its whole
-   catalog; skip connecting a server that's disabled or contributes zero tools.
-   Pure Hermes pattern; fits the existing config shape (`graph/config.py`
-   `mcp_servers`, `mcp_denylist`).
-2. **Wire skills' `tools:` frontmatter** *(medium).* When a skill is retrieved
-   for the turn, surface/prioritize its declared tool subset (and let heavy
-   groups stay quiet otherwise). Turns the existing skill layer into the
-   per-task tool selector — the OpenClaw model.
-3. **Deferred `search_tools` meta-tool** *(medium-high; only past ~15 routinely
-   relevant tools).* Bind a names-only roster + one retrieval tool that expands
-   matching schemas and re-binds them for subsequent turns (Anthropic
-   Tool-Search / this harness's ToolSearch). Real change to how `create_agent`
-   binds tools (dynamic per-turn tool set).
-4. **Code-execution facade over MCP** *(high; only if hundreds of endpoints and
-   1–3 are insufficient).* Highest ceiling, most infrastructure.
+1. ✅ **MCP per-server allowlist + lazy connect** *(low effort, biggest win —
+   shipped).* `mcp.servers[].tools.include`/`exclude` + per-server
+   `enabled: false` filter discovered tools in `build_mcp_tools` so a large
+   server can't dump its whole catalog; the global `denylist` stays the hard
+   block. Pure Hermes pattern; no config-dataclass change (per-server dict keys).
+2. ✅ **Wire skills' `tools:` frontmatter** *(medium — shipped).* When a skill is
+   retrieved for the turn, its declared tools are surfaced to the model as a
+   `<relevant_tools>` hint inside the `<learned_skills>` block (a relevance
+   nudge, not a gate — every tool stays bound). `SkillRecord.tools_used` now
+   flows from `load_skills` through `KnowledgeMiddleware._format_learned_skills`.
+   The OpenClaw "skill points at its tools" model, adapted to a bound tool set.
+3. **Deferred `search_tools` meta-tool** *(medium-high; opt-in — only worth
+   enabling past ~15 routinely relevant tools).* Bind a names-only roster + one
+   retrieval tool that expands matching schemas and re-binds them for subsequent
+   turns (Anthropic Tool-Search / this harness's ToolSearch). Real change to how
+   `create_agent` binds tools (dynamic per-turn tool set); ship behind a config
+   flag, default off, so default behavior is unchanged.
+4. **Code-execution facade over MCP** *(high; deferred — only if hundreds of
+   endpoints and 1–3 are insufficient).* Highest ceiling, most infrastructure.
+   With #1 bounding MCP catalogs, this trigger is unlikely near-term.
 
 Subagent isolation (result pollution) already exists and needs no work.
 
