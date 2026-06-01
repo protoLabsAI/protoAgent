@@ -17,6 +17,7 @@ _llm_latency = None
 _llm_tokens = None
 _llm_cache_tokens = None
 _llm_cost = None
+_tools_deferred = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
@@ -29,7 +30,7 @@ def _prefix() -> str:
 
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
-    global _tool_calls, _tool_latency, _active_sessions
+    global _tools_deferred, _tool_calls, _tool_latency, _active_sessions
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -55,6 +56,10 @@ def init():
         _llm_cost = Counter(
             f"{p}_llm_cost_usd_total", "Estimated LLM cost in USD",
             ["model"],
+        )
+        _tools_deferred = Counter(
+            f"{p}_llm_tools_deferred_total",
+            "Tool schemas withheld from the model by deferral (ADR 0005/0006)",
         )
         _tool_calls = Counter(
             f"{p}_tool_calls_total", "Total tool executions",
@@ -97,6 +102,13 @@ def record_llm_call(model: str, finish_reason: str, latency_s: float,
         _llm_cache_tokens.labels(model=model, kind="creation").inc(cache_creation)
     if cost_usd:
         _llm_cost.labels(model=model).inc(cost_usd)
+
+
+def record_tools_deferred(count: int):
+    """Count tool schemas withheld from a model call by deferral (ADR 0006 Slice
+    4b) — proves the tool-deferral lever is reducing the per-turn schema load."""
+    if _enabled and _tools_deferred is not None and count > 0:
+        _tools_deferred.inc(count)
 
 
 def record_tool_call(tool_name: str, success: bool, latency_s: float):

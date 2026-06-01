@@ -167,7 +167,12 @@ export function TelemetrySurface({ onError }: { onError: (message: string) => vo
                   {turns.map((t) => (
                     <tr key={t.task_id} className={t.success ? "" : "turn-failed"}>
                       <td title={t.ended_at}>{(t.ended_at || "").replace("T", " ").slice(5, 19)}</td>
-                      <td>{t.model || "—"}</td>
+                      <td title={t.models || t.model}>
+                        {t.model || "—"}
+                        {t.models && t.models.split(",").filter(Boolean).length > 1
+                          ? ` +${t.models.split(",").filter(Boolean).length - 1}`
+                          : ""}
+                      </td>
                       <td>{tokens(t.input_tokens)}→{tokens(t.output_tokens)}</td>
                       <td>{t.cache_read_input_tokens ? tokens(t.cache_read_input_tokens) : "—"}</td>
                       <td>{usd(t.cost_usd)}</td>

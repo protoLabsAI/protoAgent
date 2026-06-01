@@ -94,9 +94,14 @@ class ToolDeferralMiddleware(AgentMiddleware):
         kept = [t for t in tools if (_tool_name(t) or "") in allowed or _tool_name(t) is None]
         if not kept or len(kept) == len(tools):
             return request  # nothing deferred this turn — safe no-op
-        log.debug(
-            "[tool-deferral] exposing %d/%d tools this turn", len(kept), len(tools)
-        )
+        deferred = len(tools) - len(kept)
+        log.debug("[tool-deferral] exposing %d/%d tools this turn", len(kept), len(tools))
+        # Prove the lever: count withheld tool schemas (ADR 0006 Slice 4b).
+        try:
+            import metrics
+            metrics.record_tools_deferred(deferred)
+        except Exception:  # noqa: BLE001 — telemetry must never break a model call
+            pass
         return request.override(tools=kept)
 
     def wrap_model_call(self, request, handler):

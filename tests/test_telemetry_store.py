@@ -183,6 +183,50 @@ def test_record_telemetry_writes_row_from_task_record(store, telemetry_holder):
     assert row["duration_ms"] == 3000  # 3s between created/ended
 
 
+def test_record_telemetry_uses_actual_models(store, telemetry_holder):
+    """Actual per-turn models override the configured lead, and the distinct
+    set is stored (ADR 0006 Slice 4b — routing proof)."""
+    a2a_handler = telemetry_holder
+    rec = a2a_handler.TaskRecord(
+        id="task-rt", context_id="s", state=a2a_handler.COMPLETED,
+        created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:01+00:00",
+        message_text="hi",
+    )
+    rec.usage = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110, "cost_usd": 0.001}
+    rec.models = ["protolabs/reasoning", "claude-haiku-4-5"]  # lead + aux
+    a2a_handler._record_telemetry(rec)
+    row = store.recent()[0]
+    assert row["model"] == "protolabs/reasoning"          # primary = first actual
+    assert row["models"] == "protolabs/reasoning,claude-haiku-4-5"
+
+
+def test_add_usage_collects_distinct_models():
+    """add_usage records each distinct model once, in first-seen order."""
+    import asyncio
+    import a2a_handler
+
+    async def run():
+        s = a2a_handler.A2ATaskStore()
+        rec = a2a_handler.TaskRecord(
+            id="t", context_id="c", state=a2a_handler.SUBMITTED,
+            created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:00+00:00",
+            message_text="x",
+        )
+        await s.create(rec)
+        await s.add_usage("t", 10, 5, model="m1")
+        await s.add_usage("t", 10, 5, model="m2")
+        await s.add_usage("t", 10, 5, model="m1")  # dup
+        return (await s.get("t")).models
+
+    assert asyncio.run(run()) == ["m1", "m2"]
+
+
+def test_record_tools_deferred_noop_when_disabled():
+    import metrics
+
+    metrics.record_tools_deferred(5)  # disabled in tests → no-op, no error
+
+
 def test_record_telemetry_noop_when_store_unset():
     import a2a_handler
 
