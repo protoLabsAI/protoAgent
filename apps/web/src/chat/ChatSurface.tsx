@@ -9,6 +9,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
+import { ConfirmDialog } from "../app/ConfirmDialog";
 import type { ChatMessage, SlashCommand, ToolCall } from "../lib/types";
 import { chatStore, useChatState } from "./chat-store";
 import { Markdown } from "./LazyMarkdown";
@@ -27,6 +28,8 @@ export function ChatSurface({ onError }: { onError: (message: string) => void })
   const chat = useChatState();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingClose, setPendingClose] = useState<string | null>(null);
+  const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
 
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
@@ -84,7 +87,7 @@ export function ChatSurface({ onError }: { onError: (message: string) => void })
                 className="chat-tab-close"
                 title="Close session"
                 aria-label={`Close ${session.title}`}
-                onClick={() => closeSession(session.id)}
+                onClick={() => setPendingClose(session.id)}
               >
                 <X size={12} />
               </button>
@@ -112,6 +115,22 @@ export function ChatSurface({ onError }: { onError: (message: string) => void })
           />
         ))}
       </div>
+
+      <ConfirmDialog
+        open={pendingClose !== null}
+        title="Delete this chat?"
+        message={
+          pendingCloseSession
+            ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
+            : undefined
+        }
+        confirmLabel="Delete chat"
+        onConfirm={() => {
+          if (pendingClose) closeSession(pendingClose);
+          setPendingClose(null);
+        }}
+        onCancel={() => setPendingClose(null)}
+      />
     </section>
   );
 }
