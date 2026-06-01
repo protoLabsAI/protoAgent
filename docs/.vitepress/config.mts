@@ -55,6 +55,7 @@ export default defineConfig({
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Releasing", link: "/guides/releasing" },
             { text: "Build an operator fork (Roxy)", link: "/guides/operator-fork" },
+            { text: "Sandboxing & egress", link: "/guides/sandboxing" },
           ],
         },
       ],

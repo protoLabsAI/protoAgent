@@ -122,6 +122,9 @@ def _init_langgraph_agent():
     # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
     _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
+    import egress
+    egress.set_allowed_hosts(_graph_config.egress_allowed_hosts)
     # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
     # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
     # under the same id. Opt-in — empty config.instance_id leaves paths unchanged.
@@ -824,6 +827,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
         new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta,
     )
+    try:
+        import egress
+
+        egress.set_allowed_hosts(new_config.egress_allowed_hosts)  # live-reload (ADR 0008)
+    except Exception:  # noqa: BLE001 — never block a reload on the egress update
+        pass
     try:
         from a2a_handler import set_a2a_token
 
