@@ -15,3 +15,4 @@ decision, numbered, never deleted (supersede instead).
 | [0004](./0004-multi-instance-data-scoping.md) | Multi-Instance Data Scoping | Accepted |
 | [0005](./0005-tool-pollution-and-progressive-disclosure.md) | Tool Pollution & Progressive Tool Disclosure | Accepted |
 | [0006](./0006-observability-and-the-self-improving-flywheel.md) | Observability & the Self-Improving Flywheel | Accepted |
+| [0007](./0007-directory-aware-operator-agent.md) | Directory-Aware Operator Primitives (enabling a "Roxy" fork) | Accepted |
