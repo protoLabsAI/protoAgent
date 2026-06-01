@@ -1,6 +1,6 @@
 # ADR 0007 — Directory-Aware Operator Primitives (enabling a "Roxy" fork)
 
-- **Status:** Accepted (2026-06-01) — design; implementation sliced (not started)
+- **Status:** Accepted (2026-06-01) — template primitives shipped (registry+fence, fenced fs toolset, fork guide); per-project subagent binding deferred
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, filesystem, multi-project, operator, supervisor, security, template-vs-fork
@@ -134,16 +134,21 @@ same whether it's a fork or core:
 
 ## 5. Ranked plan (template slices)
 
-1. **Project registry + fence** — config `projects`, shared enforced resolver,
-   prompt injection of the managed set; default-off = no behavior change.
-2. **Native gated fs toolset** — `tools/fs_tools.py`, opt-in, audited, fenced.
-3. **Per-project subagent binding** — `task(..., project=…)`.
-4. **Fork guide** — docs: "Build an operator fork (like Roxy)": enable the
-   primitives, write the operator `SOUL`, add a `project-operations` skill,
-   register projects, schedule the sweep. (Doc, not code.)
+1. ✅ **Project registry + fence + gated fs toolset — shipped.** `config.filesystem`
+   (`enabled`/`allow_run`/`projects[{name,path,write}]`); `tools/fs_tools.py`
+   (`list_projects`/`list_dir`/`read_file`/`find_files`/`search_files`/
+   `write_file`/`edit_file`/`run_command`) with a `ProjectRegistry` fence on
+   every path; opt-in, off by default (empty registry → no behavior change);
+   managed set injected into the prompt (`_build_projects_section`).
+2. ✅ **Fork guide — shipped.** `docs/guides/operator-fork.md` walks a monitor
+   fork (Roxy) end to end (read-only fs, persona, `project-operations` skill,
+   A2A/bus/scheduler drivers).
+3. **Per-project subagent binding** *(deferred)* — `task(..., project=…)`.
+   Not needed for a monitor-and-unblock operator (Roxy doesn't fan out coding
+   workers); revisit if a coding fork needs parallel per-project edits.
 
-The **Roxy fork** (new repo) is then a downstream effort: clone/fork the
-template, apply the guide. It is out of scope for *this* repo beyond the guide.
+The **Roxy fork** (`protoLabsAI/roxy`, new repo) applies the guide: monitor +
+unblock, not code; summoned via A2A; managed via the protoWorkstacean bus.
 
 ## 6. Consequences
 

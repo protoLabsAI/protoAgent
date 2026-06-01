@@ -54,6 +54,7 @@ export default defineConfig({
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Releasing", link: "/guides/releasing" },
+            { text: "Build an operator fork (Roxy)", link: "/guides/operator-fork" },
           ],
         },
       ],
