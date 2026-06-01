@@ -954,10 +954,16 @@ async def test_store_add_usage_accumulates(store):
     the same cost-v1 artifact."""
     record = _make_record()
     await store.create(record)
-    await store.add_usage("test-task-id", input_tokens=100, output_tokens=50)
-    await store.add_usage("test-task-id", input_tokens=200, output_tokens=80)
+    await store.add_usage("test-task-id", input_tokens=100, output_tokens=50,
+                          cache_read_input_tokens=60, cost_usd=0.001)
+    await store.add_usage("test-task-id", input_tokens=200, output_tokens=80,
+                          cache_read_input_tokens=40, cache_creation_input_tokens=10, cost_usd=0.002)
     fetched = await store.get("test-task-id")
-    assert fetched.usage == {"input_tokens": 300, "output_tokens": 130, "total_tokens": 430}
+    assert fetched.usage == {
+        "input_tokens": 300, "output_tokens": 130, "total_tokens": 430,
+        "cache_read_input_tokens": 100, "cache_creation_input_tokens": 10,
+        "cost_usd": 0.003,
+    }
 
 
 @pytest.mark.asyncio
@@ -967,7 +973,11 @@ async def test_store_add_usage_ignores_zero_payloads(store):
     await store.create(record)
     await store.add_usage("test-task-id", input_tokens=0, output_tokens=0)
     fetched = await store.get("test-task-id")
-    assert fetched.usage == {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    assert fetched.usage == {
+        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+        "cost_usd": 0.0,
+    }
 
 
 def test_task_to_response_has_kind_discriminator():

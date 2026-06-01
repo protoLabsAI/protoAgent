@@ -1167,8 +1167,12 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         if resume_value is not None
         else {"messages": [HumanMessage(content=message)], "session_id": session_id}
     )
+    import metrics
+    import pricing
+
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
+    _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     async for event in _graph.astream_events(
         graph_input,
         config=config,
@@ -1176,7 +1180,12 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     ):
         kind = event.get("event", "")
         name = event.get("name", "")
-        if kind == "on_tool_start":
+        if kind == "on_chat_model_start":
+            # Stamp the per-call start so on_chat_model_end can measure latency.
+            rid = event.get("run_id")
+            if rid:
+                _llm_started[rid] = time.monotonic()
+        elif kind == "on_tool_start":
             tool_input = event.get("data", {}).get("input", "")
             # Structured frame (id pairs start↔end) so consumers can render a
             # per-tool card; the A2A handler also derives a text status from it.
@@ -1206,11 +1215,49 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             usage = getattr(output, "usage_metadata", None) if output else None
+            rid = event.get("run_id")
+            latency_s = max(0.0, time.monotonic() - _llm_started.pop(rid, time.monotonic())) if rid else 0.0
+            model = (
+                (event.get("metadata") or {}).get("ls_model_name")
+                or getattr(output, "response_metadata", {}).get("model_name", "")
+                or "model"
+            )
             if usage:
-                yield ("usage", {
+                # Prompt-cache token details (best-effort — OpenAI-compat exposes
+                # cached reads via prompt_tokens_details; cache_creation is
+                # Anthropic-specific and may not round-trip every gateway).
+                details = usage.get("input_token_details") or {}
+                cache_read = int(details.get("cache_read", 0) or 0)
+                cache_creation = int(details.get("cache_creation", 0) or 0)
+                usage_out = {
                     "input_tokens": int(usage.get("input_tokens", 0) or 0),
                     "output_tokens": int(usage.get("output_tokens", 0) or 0),
-                })
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": cache_creation,
+                }
+                cost = pricing.cost_usd(model, usage_out)
+                finish_reason = (
+                    getattr(output, "response_metadata", {}).get("finish_reason", "")
+                    or "stop"
+                )
+                # Wire the per-call Prometheus seam (no-op when unconfigured);
+                # previously record_llm_call was defined but never called. The
+                # per-call Langfuse generation span comes from the LiteLLM
+                # gateway callback — we deliberately don't add a manual shim
+                # that would bypass trace_session's nesting (see tracing.py).
+                try:
+                    metrics.record_llm_call(
+                        model, finish_reason, latency_s,
+                        tokens_input=usage_out["input_tokens"],
+                        tokens_output=usage_out["output_tokens"],
+                        cache_read=cache_read, cache_creation=cache_creation,
+                        cost_usd=cost,
+                    )
+                except Exception:  # noqa: BLE001 — telemetry must never break a turn
+                    pass
+                # Carry cache fields + cost to the A2A handler for the cost-v1
+                # artifact (accumulated across the turn's calls).
+                yield ("usage", {**usage_out, "cost_usd": cost})
 
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A

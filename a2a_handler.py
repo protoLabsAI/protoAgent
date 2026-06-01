@@ -78,6 +78,11 @@ WORLDSTATE_DELTA_MIME = "application/vnd.protolabs.worldstate-delta+json"
 #          "costUsd": float?}
 # Ref: protoWorkstacean/docs/extensions/cost-v1.md
 COST_MIME = "application/vnd.protolabs.cost-v1+json"
+# The A2A protocol-extension URI for cost-v1. Declared in the agent card's
+# capabilities.extensions so Workstacean's ExtensionRegistry recognises the
+# extension and runs its cost interceptor (which records per-skill samples
+# from the cost-v1 DataPart). Ref: protoWorkstacean/src/executor/extensions/cost.ts.
+COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1"
 
 # Confidence-v1: the agent's self-reported confidence + optional explanation on
 # the terminal artifact. A consumer (e.g. Workstacean's confidence interceptor)
@@ -138,8 +143,13 @@ class TaskRecord:
     # Token usage accumulated across every LLM call in the run. Emitted on
     # the terminal artifact under the cost-v1 MIME so Workstacean's
     # cost interceptor (protoWorkstacean#372) can record per-skill samples.
-    # Shape: {"input_tokens": int, "output_tokens": int, "total_tokens": int}
-    usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    # Cache fields are Anthropic-shaped to match Workstacean's CostArtifactUsage
+    # (ADR 0006 Slice 1); cost_usd is the running USD total (pricing.py).
+    usage: dict = field(default_factory=lambda: {
+        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+        "cost_usd": 0.0,
+    })
     # Self-reported confidence for the confidence-v1 DataPart. Set by the
     # producer when it parses a <confidence> tag out of the model's final
     # output. Clamped to [0, 1] on write; None when the model didn't report
@@ -323,15 +333,20 @@ class A2ATaskStore:
                 return
             record.deltas.append(delta)
 
-    async def add_usage(self, task_id: str, input_tokens: int, output_tokens: int) -> None:
-        """Accumulate LLM token usage for the task.
+    async def add_usage(
+        self, task_id: str, input_tokens: int, output_tokens: int,
+        cache_read_input_tokens: int = 0, cache_creation_input_tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> None:
+        """Accumulate LLM token usage + cost for the task.
 
         Called from the producer on every ``on_chat_model_end`` event. The
         running totals are emitted on the terminal artifact under the
         ``cost-v1`` MIME so Workstacean's cost interceptor can record
-        per-skill samples (protoWorkstacean#372).
+        per-skill samples (protoWorkstacean#372). Cache fields + cost are
+        ADR 0006 Slice 1.
         """
-        if input_tokens <= 0 and output_tokens <= 0:
+        if input_tokens <= 0 and output_tokens <= 0 and cost_usd <= 0:
             return
         async with self._lock:
             record = self._tasks.get(task_id)
@@ -342,6 +357,9 @@ class A2ATaskStore:
             record.usage["total_tokens"] = (
                 record.usage["input_tokens"] + record.usage["output_tokens"]
             )
+            record.usage["cache_read_input_tokens"] += int(cache_read_input_tokens)
+            record.usage["cache_creation_input_tokens"] += int(cache_creation_input_tokens)
+            record.usage["cost_usd"] = round(record.usage.get("cost_usd", 0.0) + float(cost_usd), 6)
 
     async def set_confidence(
         self,
@@ -514,16 +532,21 @@ def _cost_payload(record: TaskRecord) -> dict | None:
     cost-relevant data is available.
 
     Always includes ``durationMs`` (cheap to compute from created_at →
-    updated_at) when usage was tracked. ``costUsd`` is omitted for now —
-    LiteLLM exposes per-call cost in its callback hooks but the runtime
-    doesn't capture it yet; consumers of cost-v1 can derive cost from
-    usage + their own per-model rates, or wait for a follow-up that
-    plumbs ``response_cost`` through.
+    updated_at) when usage was tracked. ``costUsd`` is the in-process estimate
+    accumulated across the turn's LLM calls (pricing.py, ADR 0006 Slice 1) —
+    consumers prefer it over deriving from tokens. The ``usage`` block carries
+    Workstacean's Anthropic-shaped CostArtifactUsage fields (input/output +
+    cache read/creation); the internal ``cost_usd`` accumulator is lifted out to
+    the top-level ``costUsd``.
     """
     usage = record.usage
     if not usage or usage.get("total_tokens", 0) <= 0:
         return None
-    payload: dict = {"usage": dict(usage)}
+    cost = float(usage.get("cost_usd", 0.0) or 0.0)
+    usage_block = {k: v for k, v in usage.items() if k != "cost_usd"}
+    payload: dict = {"usage": usage_block}
+    if cost > 0:
+        payload["costUsd"] = round(cost, 6)
     duration_ms = _duration_ms(record)
     if duration_ms is not None:
         payload["durationMs"] = duration_ms
@@ -1065,6 +1088,9 @@ async def _run_task_background(
                         task_id,
                         input_tokens=payload.get("input_tokens", 0),
                         output_tokens=payload.get("output_tokens", 0),
+                        cache_read_input_tokens=payload.get("cache_read_input_tokens", 0),
+                        cache_creation_input_tokens=payload.get("cache_creation_input_tokens", 0),
+                        cost_usd=payload.get("cost_usd", 0.0),
                     )
 
             elif event_type == "confidence":
@@ -1345,6 +1371,16 @@ def register_a2a_routes(
     agent_card.setdefault("capabilities", {})
     agent_card["capabilities"]["streaming"] = True
     agent_card["capabilities"]["pushNotifications"] = True
+    # Declare the cost-v1 protocol extension (ADR 0006) so consumers like
+    # Workstacean's ExtensionRegistry recognise it and run the cost interceptor
+    # on our terminal cost-v1 DataPart. Idempotent: don't duplicate on reload.
+    _exts = agent_card["capabilities"].setdefault("extensions", [])
+    if not any(isinstance(e, dict) and e.get("uri") == COST_EXT_URI for e in _exts):
+        _exts.append({
+            "uri": COST_EXT_URI,
+            "description": "Emits token usage, prompt-cache tokens, duration, and costUsd "
+                           "on the terminal task artifact (application/vnd.protolabs.cost-v1+json).",
+        })
     if _A2A_TOKEN[0]:
         agent_card.setdefault("securitySchemes", {})
         agent_card["securitySchemes"]["bearer"] = {

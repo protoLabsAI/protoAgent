@@ -100,10 +100,14 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
 ## 4. Ranked Plan (slices)
 
 1. ✅ **Measure (foundation) — ships with this ADR.** Capture cache tokens +
-   per-call latency + model in `_run_turn_stream`; add `pricing.py` →
-   cache-aware `costUsd`; wire `record_llm_call` (extended with cache + cost
-   series) and per-call Langfuse generation spans; emit cache fields + `costUsd`
-   on `cost-v1` and declare the extension URI in the card. *(fixes 1–4)*
+   per-call latency + model in `_run_turn_stream`; add `pricing.py` → `costUsd`
+   (base input/output rates, fleet-consistent; cache-discounted cost deferred
+   until gateway token semantics are validated); wire `record_llm_call`
+   (extended with cache + cost series). Per-call **Langfuse** generation spans
+   already come from the LiteLLM gateway callback — we deliberately *don't* add
+   a manual shim that would bypass `trace_session`'s nesting (guarded by
+   `test_no_legacy_shims_exist`). Emit cache fields + `costUsd` on `cost-v1` and
+   declare the extension URI in the card. *(fixes 1–4)*
 2. **Persist & aggregate.** A local telemetry SQLite (per-turn + per-call
    rollups: tokens, cache, cost, latency, model, tool counts) queryable inside
    protoAgent, scoped per instance like the other stores (ADR 0004). Survives
