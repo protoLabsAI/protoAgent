@@ -53,6 +53,7 @@ export default defineConfig({
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
+            { text: "Releasing", link: "/guides/releasing" },
           ],
         },
       ],

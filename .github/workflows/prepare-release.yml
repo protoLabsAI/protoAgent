@@ -1,16 +1,16 @@
 name: 'Prepare Release'
 
-# Runs after any non-release PR merges to main, OR manually.
-# Bumps the version in pyproject.toml, opens a prepare-release/vX.Y.Z
-# branch, commits it as "chore: release vX.Y.Z", auto-merges back to
-# main once CI passes, and pushes the semver tag. The tag push is what
-# triggers release.yml — it builds the stable semver Docker image,
-# creates the GitHub release, and posts notes to Discord.
+# Manual, on-demand releases (workflow_dispatch only). Bumps the version in
+# pyproject.toml, rolls CHANGELOG.md [Unreleased] → the new version, opens a
+# prepare-release/vX.Y.Z branch, commits it as "chore: release vX.Y.Z",
+# auto-merges back to main once the required CI checks pass, then pushes the
+# semver tag. The tag push is what triggers release.yml — it builds the stable
+# semver Docker image, creates the GitHub release, and posts notes to Discord.
+#
+# Releases are deliberately NOT cut on every merge — pick the bump level and
+# run this when a batch is ready. See docs/guides/releasing.md.
 
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       bump:
@@ -32,21 +32,8 @@ jobs:
   prepare:
     name: Prepare Release
     runs-on: namespace-profile-protolabs-linux
-    # Guards:
-    # - repo-scope: don't run in forks
-    # - workflow_dispatch always runs
-    # - PR merge runs only if merged=true AND title doesn't start with
-    #   "chore: release" — this is the self-loop cutoff. The release PR
-    #   merging its own bump must NOT kick off another bump.
-    if: >-
-      github.repository == 'protoLabsAI/protoAgent' &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event.pull_request.merged == true &&
-          !startsWith(github.event.pull_request.title, 'chore: release')
-        )
-      )
+    # Repo-scope guard: don't run in forks.
+    if: github.repository == 'protoLabsAI/protoAgent'
     permissions:
       contents: write
       pull-requests: write
@@ -78,11 +65,14 @@ jobs:
           ")
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
+      - name: Roll changelog
+        run: python scripts/changelog.py roll "${{ steps.version.outputs.version }}"
+
       - name: Preview (dry run)
         if: inputs.dry_run == true
         run: |
           echo "New version: v${{ steps.version.outputs.version }}"
-          git diff pyproject.toml
+          git --no-pager diff pyproject.toml CHANGELOG.md
 
       - name: Create release branch + PR
         if: inputs.dry_run != true
@@ -96,7 +86,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "${BRANCH}"
-          git add pyproject.toml
+          git add pyproject.toml CHANGELOG.md
           git commit -m "chore: release v${VERSION}"
           git push origin "${BRANCH}"
 
@@ -108,18 +98,13 @@ jobs:
           echo "PR: ${PR_URL}"
 
           # Merge strategy:
-          # - Try `--auto` first: GitHub waits for required checks and
-          #   merges when they pass. Happy path when CodeRabbit / other
-          #   checks are still pending.
-          # - If `--auto` fails for any reason, fall back to a direct
-          #   squash merge. GitHub rejects `--auto` in several distinct
-          #   cases that are all fine for this workflow's purposes:
-          #     * "clean status" — PR is already mergeable, no checks
-          #       to wait on
-          #     * "Protected branch rules not configured" — no branch
-          #       protection, so auto-merge has nothing to gate on
-          #     * (future) any other reason — the direct merge below
-          #       either succeeds or fails loud with a real error.
+          # - Try `--auto` first: the `main` ruleset requires the 3 CI checks,
+          #   so auto-merge waits for them and merges when they pass (the
+          #   release PR — pyproject.toml + CHANGELOG.md — passes all three).
+          # - Fallback to a direct squash only if `--auto` can't be enabled.
+          #   With the ruleset in place a direct merge is itself gated by the
+          #   required checks, so it either merges cleanly or fails loud (the
+          #   poll below then times out) — never a silent bypass.
           # - `--admin` is avoided entirely; it breaks when checks are
           #   "expected" but haven't started (protoPen PR #18 history).
           if ! gh pr merge "${PR_URL}" --squash --auto 2>/tmp/merge-err; then
