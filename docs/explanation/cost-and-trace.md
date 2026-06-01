@@ -11,30 +11,36 @@ A multi-agent fleet needs to answer: *how much is each (agent, skill) costing, a
 cost-v1 is the measurement. Every terminal task carries a DataPart with:
 
 - `usage.input_tokens`, `usage.output_tokens`, `usage.total_tokens`
+- `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens` — Anthropic-shaped prompt-cache tokens (ADR 0006), matching Workstacean's `CostArtifactUsage`
 - `durationMs`
-- (eventually) `costUsd`
+- `costUsd` — the in-process estimate accumulated across the turn's LLM calls (`pricing.py`); consumers prefer it over recomputing from tokens
 
-The consuming system (Workstacean's `defaultCostStore`) keeps a rolling window of samples per `(agent, skill)` key and uses them to rank candidates for dispatch — replacing self-advertisement with observation after 5+ samples.
+The agent also **declares the extension** in its card (`capabilities.extensions`, URI `https://proto-labs.ai/a2a/ext/cost-v1`), which is what gates Workstacean's cost interceptor.
+
+The consuming system (Workstacean's `defaultCostStore`) keeps a rolling window of samples per `(agent, skill)` key and uses them to rank candidates for dispatch — replacing self-advertisement with observation after 5+ samples. See [ADR 0006](/adr/0006-observability-and-the-self-improving-flywheel).
 
 ### Why token capture lives where it does
 
 The temptation is to hook cost capture into the A2A handler. Don't — the handler has no visibility into individual LLM calls. A task may hit the model N times (tool-call loops, subagent delegation, retries). By the time the handler sees "task done", the per-call detail is gone.
 
-The template captures in `_chat_langgraph_stream` via the `on_chat_model_end` event from `astream_events(v2)`:
+The template captures in `_run_turn_stream` via the `on_chat_model_end` event from `astream_events(v2)`. The same seam reads the prompt-cache token details, measures per-call latency (paired with `on_chat_model_start`), resolves the model, computes `costUsd` (`pricing.py`), and — this is the part that was missing — feeds Prometheus via `metrics.record_llm_call` (ADR 0006). It then yields an enriched `usage` frame:
 
 ```python
 elif kind == "on_chat_model_end":
-    output = event.get("data", {}).get("output")
-    usage = getattr(output, "usage_metadata", None) if output else None
-    if usage:
-        yield ("usage", {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0),
-        })
+    usage = getattr(output, "usage_metadata", None)
+    details = usage.get("input_token_details") or {}
+    usage_out = {
+        "input_tokens": int(usage.get("input_tokens", 0) or 0),
+        "output_tokens": int(usage.get("output_tokens", 0) or 0),
+        "cache_read_input_tokens": int(details.get("cache_read", 0) or 0),
+        "cache_creation_input_tokens": int(details.get("cache_creation", 0) or 0),
+    }
+    cost = pricing.cost_usd(model, usage_out)
+    metrics.record_llm_call(model, finish_reason, latency_s, ..., cost_usd=cost)
+    yield ("usage", {**usage_out, "cost_usd": cost})
 ```
 
-The A2A handler accumulates these onto `TaskRecord.usage` during the run, then emits them as a DataPart on the terminal artifact.
+The A2A handler accumulates these onto `TaskRecord.usage` during the run, then emits them (cache fields + the lifted-out `costUsd`) as a DataPart on the terminal artifact. Per-call **Langfuse** generation spans come from the LiteLLM gateway callback — protoAgent doesn't add a manual span that would bypass `trace_session` nesting.
 
 ### Why `stream_usage=True`
 

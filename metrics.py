@@ -15,6 +15,8 @@ _enabled = False
 _llm_calls = None
 _llm_latency = None
 _llm_tokens = None
+_llm_cache_tokens = None
+_llm_cost = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
@@ -26,7 +28,7 @@ def _prefix() -> str:
 
 
 def init():
-    global _enabled, _llm_calls, _llm_latency, _llm_tokens
+    global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tool_calls, _tool_latency, _active_sessions
 
     try:
@@ -45,6 +47,14 @@ def init():
         _llm_tokens = Counter(
             f"{p}_llm_tokens_total", "Total LLM tokens consumed",
             ["model", "direction"],
+        )
+        _llm_cache_tokens = Counter(
+            f"{p}_llm_cache_tokens_total", "Prompt-cache tokens (read vs creation)",
+            ["model", "kind"],
+        )
+        _llm_cost = Counter(
+            f"{p}_llm_cost_usd_total", "Estimated LLM cost in USD",
+            ["model"],
         )
         _tool_calls = Counter(
             f"{p}_tool_calls_total", "Total tool executions",
@@ -68,7 +78,11 @@ def is_enabled() -> bool:
 
 
 def record_llm_call(model: str, finish_reason: str, latency_s: float,
-                     tokens_input: int = 0, tokens_output: int = 0):
+                     tokens_input: int = 0, tokens_output: int = 0,
+                     cache_read: int = 0, cache_creation: int = 0,
+                     cost_usd: float = 0.0):
+    """Record one LLM call (ADR 0006 Slice 1). Wired from the per-call seam in
+    ``server._run_turn_stream`` — previously defined but never called."""
     if not _enabled:
         return
     _llm_calls.labels(model=model, finish_reason=finish_reason).inc()
@@ -77,6 +91,12 @@ def record_llm_call(model: str, finish_reason: str, latency_s: float,
         _llm_tokens.labels(model=model, direction="input").inc(tokens_input)
     if tokens_output:
         _llm_tokens.labels(model=model, direction="output").inc(tokens_output)
+    if cache_read:
+        _llm_cache_tokens.labels(model=model, kind="read").inc(cache_read)
+    if cache_creation:
+        _llm_cache_tokens.labels(model=model, kind="creation").inc(cache_creation)
+    if cost_usd:
+        _llm_cost.labels(model=model).inc(cost_usd)
 
 
 def record_tool_call(tool_name: str, success: bool, latency_s: float):

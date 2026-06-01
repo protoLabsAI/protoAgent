@@ -52,11 +52,16 @@ Every tracing helper becomes a no-op. No crashes, no latency. The rest of the ag
 Scrape `/metrics` on port 7870. Metric names are prefixed with a sanitized `AGENT_NAME`.
 
 ```
-my_agent_llm_calls_total{model="protolabs/my-agent",finish_reason="stop"} 42
-my_agent_llm_latency_seconds_bucket{model="protolabs/my-agent",le="5"} 38
+my_agent_llm_calls_total{model="claude-opus-4-8",finish_reason="stop"} 42
+my_agent_llm_latency_seconds_bucket{model="claude-opus-4-8",le="5"} 38
+my_agent_llm_tokens_total{model="claude-opus-4-8",direction="input"} 184320
+my_agent_llm_cache_tokens_total{model="claude-opus-4-8",kind="read"} 96000
+my_agent_llm_cost_usd_total{model="claude-opus-4-8"} 0.83
 my_agent_tool_calls_total{tool_name="web_search",success="True"} 17
 my_agent_active_sessions 3
 ```
+
+The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server._run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
 
 Example Prometheus scrape config:
 
