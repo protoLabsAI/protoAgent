@@ -56,6 +56,7 @@ export default defineConfig({
             { text: "Releasing", link: "/guides/releasing" },
             { text: "Build an operator fork (Roxy)", link: "/guides/operator-fork" },
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },
+            { text: "Eval your fork", link: "/guides/evals" },
           ],
         },
       ],
