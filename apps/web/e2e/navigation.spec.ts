@@ -15,15 +15,16 @@ async function openSub(page, group: string, tab: string) {
   await page.getByRole("button", { name: tab, exact: true }).click();
 }
 
-test("subagents surface lists the registered subagent", async ({ page }) => {
-  await openSub(page, "Studio", "Subagents");
-  await expect(page.getByRole("heading", { name: "Manual Subagent" })).toBeVisible();
-  // The registered-count kicker reflects the mocked subagent list.
-  await expect(page.getByText("1 registered")).toBeVisible();
+test("Studio → Run lists the registered subagent (single/batch)", async ({ page }) => {
+  await openSub(page, "Studio", "Run");
+  await expect(page.getByRole("heading", { name: "Run", exact: true })).toBeVisible();
+  // The kicker reflects the mocked subagent list; the Single/Batch toggle is here.
+  await expect(page.getByText(/1 subagent type/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Batch", exact: true })).toBeVisible();
 });
 
-test("schedule surface lists scheduled jobs", async ({ page }) => {
-  await openSub(page, "Studio", "Schedule");
+test("schedule moved to Activity → Schedule lists scheduled jobs", async ({ page }) => {
+  await openSub(page, "Activity", "Schedule");
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });

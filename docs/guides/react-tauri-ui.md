@@ -344,6 +344,16 @@ server — not the client — decides which directories they may read and write.
 - The runtime-status `project.allowed_dirs` field feeds the project-path
   picker's suggestions; it does not relax the server-side check.
 
+## Studio & Activity surfaces (the control stack)
+
+Per [ADR 0009](/adr/0009-studio-control-stack), the Studio tabs are ordered by
+altitude — **Goals** (autonomy: when to stop) → **Workflows** (orchestration: the
+order) → **Run** (execution: one focused worker, with the Single/Batch toggle).
+They're layers of one control loop, not peers. **Schedule** moved to **Activity**
+(Thread · Inbox · Schedule) — cron is a *trigger* ("when"), grouped with the
+inbox/event-bus (ADR 0003), not a Studio work-type. Skills moved to the
+**Knowledge ▸ Playbooks** surface (below) — they're retrieved memory, not work.
+
 ## Telemetry surface
 
 The **System ▸ Telemetry** sub-tab (`apps/web/src/telemetry/TelemetrySurface.tsx`,

@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delete-with-confirm. New API: `GET /api/playbooks` + `DELETE /api/playbooks/{id}`.
 
 ### Changed
+- **Studio console reshaped to the control stack** (ADR 0009): tabs ordered
+  Goals → Workflows → **Run** (Single/Batch is a mode on Run, not a tab);
+  **Schedule** moved to **Activity** (it's a trigger, not a work-type). Skills
+  now live under **Knowledge ▸ Playbooks**.
 - Default model alias is now **`protolabs/reasoning`** (was `protolabs/agent`) —
   forks point at the reasoning model out of the box (override per agent in YAML).
 

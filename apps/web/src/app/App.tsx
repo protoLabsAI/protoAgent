@@ -16,7 +16,6 @@ import {
   Loader2,
   MessageSquare,
   PanelRight,
-  Network,
   Play,
   Plus,
   RefreshCw,
@@ -48,9 +47,13 @@ import { SetupWizard } from "../setup/SetupWizard";
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
 type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
-type StudioTab = "subagents" | "workflows" | "schedule" | "goals";
+// Studio = the "make the agent do work" surface, ordered by altitude
+// (ADR 0009): goals (autonomy) → workflows (orchestration) → run (execution).
+type StudioTab = "goals" | "workflows" | "run";
 type SystemTab = "runtime" | "telemetry" | "settings";
-type ActivityTab = "thread" | "inbox";
+// Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
+// inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
+type ActivityTab = "thread" | "inbox" | "schedule";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
@@ -227,7 +230,7 @@ function groupIssues(issues: BeadsIssue[]) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
-  const [studioTab, setStudioTab] = useState<StudioTab>("subagents");
+  const [studioTab, setStudioTab] = useState<StudioTab>("goals");
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -447,9 +450,9 @@ export function App() {
   }, [rightPanel, projectPath, notesDirty, notesBusy]);
 
   useEffect(() => {
-    if (surface === "studio" && studioTab === "schedule") void refreshSchedules();
+    if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
     if (surface === "studio" && studioTab === "goals") void refreshGoals();
-  }, [surface, studioTab]);
+  }, [surface, studioTab, activityTab]);
 
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
@@ -920,21 +923,22 @@ export function App() {
                 <Inbox size={15} /> Inbox
                 {inboxUnread ? <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span> : null}
               </button>
+              <button className={activityTab === "schedule" ? "active" : ""} onClick={() => setActivityTab("schedule")}>
+                <CalendarClock size={15} /> Schedule
+              </button>
             </div>
           ) : null}
           {surface === "studio" ? (
+            // Ordered by altitude (ADR 0009): outcome → recipe → worker.
             <div className="stage-subnav">
-              <button className={studioTab === "subagents" ? "active" : ""} onClick={() => setStudioTab("subagents")}>
-                <Network size={15} /> Subagents
+              <button className={studioTab === "goals" ? "active" : ""} onClick={() => setStudioTab("goals")}>
+                <Target size={15} /> Goals
               </button>
               <button className={studioTab === "workflows" ? "active" : ""} onClick={() => setStudioTab("workflows")}>
                 <Workflow size={15} /> Workflows
               </button>
-              <button className={studioTab === "schedule" ? "active" : ""} onClick={() => setStudioTab("schedule")}>
-                <CalendarClock size={15} /> Schedule
-              </button>
-              <button className={studioTab === "goals" ? "active" : ""} onClick={() => setStudioTab("goals")}>
-                <Target size={15} /> Goals
+              <button className={studioTab === "run" ? "active" : ""} onClick={() => setStudioTab("run")}>
+                <Play size={15} /> Run
               </button>
             </div>
           ) : null}
@@ -956,12 +960,12 @@ export function App() {
             <ChatSurface onError={setError} />
           ) : null}
 
-          {surface === "studio" && studioTab === "subagents" ? (
+          {surface === "studio" && studioTab === "run" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>
-                  <h1>Manual Subagent</h1>
-                  <p className="panel-kicker">{subagents.length} registered</p>
+                  <h1>Run</h1>
+                  <p className="panel-kicker">one focused worker, now · {subagents.length} subagent type{subagents.length === 1 ? "" : "s"}</p>
                 </div>
                 <StatusPill label={subagentBusy ? "running" : "ready"} tone={subagentBusy ? "warning" : "muted"} />
               </div>
@@ -1076,7 +1080,7 @@ export function App() {
           {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel onError={setError} /> : null}
 
-          {surface === "studio" && studioTab === "schedule" ? (
+          {surface === "activity" && activityTab === "schedule" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
                 <div>

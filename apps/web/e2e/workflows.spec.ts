@@ -26,7 +26,7 @@ test("lists a recipe with its steps and inputs", async ({ page }) => {
 
 test("requires the required input before running", async ({ page }) => {
   await openWorkflows(page);
-  const run = page.getByRole("button", { name: "Run", exact: true });
+  const run = page.locator(".panel-actions").getByRole("button", { name: "Run", exact: true });
   await expect(run).toBeDisabled(); // topic is empty
 });
 
@@ -35,7 +35,7 @@ test("runs the workflow and renders the result", async ({ page }) => {
   // Fill the required input → Run enables.
   const topic = page.locator(".subagent-grid .field").first().locator("input");
   await topic.fill("AI");
-  const run = page.getByRole("button", { name: "Run", exact: true });
+  const run = page.locator(".panel-actions").getByRole("button", { name: "Run", exact: true });
   await expect(run).toBeEnabled();
   await run.click();
   // The run result output renders.
