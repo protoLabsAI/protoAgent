@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-01
+
 ### Added
 - Compaction telemetry signal (`*_compactions_total`, ADR 0006): with routing +
   tool deferral + compaction now all measured, every optimization lever the
