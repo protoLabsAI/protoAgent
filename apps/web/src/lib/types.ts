@@ -292,6 +292,7 @@ export type TelemetryTurn = {
   state: string;
   success: number;
   model: string;
+  models?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;

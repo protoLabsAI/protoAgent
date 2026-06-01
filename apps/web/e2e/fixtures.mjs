@@ -391,5 +391,5 @@ export const TELEMETRY_INSIGHTS = {
     },
     success_rate: 0.6667,
   },
-  unproven_levers: ["tool deferral (schema-token savings)", "compaction", "model routing detail"],
+  unproven_levers: ["compaction (needs a per-turn signal)"],
 };

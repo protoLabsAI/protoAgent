@@ -161,6 +161,9 @@ class TaskRecord:
     # tool_start. Live counters; written to the telemetry store at terminal time.
     llm_calls: int = 0
     tool_calls: int = 0
+    # Distinct model names actually used this turn (first-seen order) — proves
+    # routing incl. aux/fallback vs. the configured lead (ADR 0006 Slice 4b).
+    models: list[str] = field(default_factory=list)
     # ── asyncio primitives (not serialised) ──
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _update_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -345,7 +348,7 @@ class A2ATaskStore:
     async def add_usage(
         self, task_id: str, input_tokens: int, output_tokens: int,
         cache_read_input_tokens: int = 0, cache_creation_input_tokens: int = 0,
-        cost_usd: float = 0.0,
+        cost_usd: float = 0.0, model: str = "",
     ) -> None:
         """Accumulate LLM token usage + cost for the task.
 
@@ -370,6 +373,8 @@ class A2ATaskStore:
             record.usage["cache_creation_input_tokens"] += int(cache_creation_input_tokens)
             record.usage["cost_usd"] = round(record.usage.get("cost_usd", 0.0) + float(cost_usd), 6)
             record.llm_calls += 1
+            if model and model not in record.models:
+                record.models.append(model)
 
     async def note_tool_call(self, task_id: str) -> None:
         """Bump the per-turn tool-call counter (telemetry rollup, ADR 0006)."""
@@ -948,12 +953,16 @@ def _record_telemetry(record: TaskRecord) -> None:
         return
     try:
         u = record.usage or {}
+        # Primary model = the first one actually used this turn; fall back to the
+        # configured lead when no per-call model was captured (ADR 0006 Slice 4b).
+        primary_model = record.models[0] if record.models else (_TELEMETRY_MODEL[0] or "")
         store.record({
             "task_id": record.id,
             "session_id": record.context_id,
             "state": record.state,
             "success": 1 if record.state == COMPLETED else 0,
-            "model": _TELEMETRY_MODEL[0] or "",
+            "model": primary_model,
+            "models": ",".join(record.models),
             "input_tokens": int(u.get("input_tokens", 0) or 0),
             "output_tokens": int(u.get("output_tokens", 0) or 0),
             "total_tokens": int(u.get("total_tokens", 0) or 0),
@@ -1145,6 +1154,7 @@ async def _run_task_background(
                         cache_read_input_tokens=payload.get("cache_read_input_tokens", 0),
                         cache_creation_input_tokens=payload.get("cache_creation_input_tokens", 0),
                         cost_usd=payload.get("cost_usd", 0.0),
+                        model=payload.get("model", ""),
                     )
 
             elif event_type == "confidence":

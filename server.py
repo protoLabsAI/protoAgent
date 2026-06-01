@@ -1283,9 +1283,11 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                     )
                 except Exception:  # noqa: BLE001 — telemetry must never break a turn
                     pass
-                # Carry cache fields + cost to the A2A handler for the cost-v1
-                # artifact (accumulated across the turn's calls).
-                yield ("usage", {**usage_out, "cost_usd": cost})
+                # Carry cache fields + cost + the ACTUAL model to the A2A handler
+                # for the cost-v1 artifact (accumulated across the turn's calls).
+                # The model name proves routing per turn — incl. aux/fallback
+                # models — vs. the statically-configured lead (ADR 0006 Slice 4b).
+                yield ("usage", {**usage_out, "cost_usd": cost, "model": model})
 
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A
@@ -2340,8 +2342,11 @@ def _main():
                     "routing": {"by_model": by_model},
                     "success_rate": s.get("success_rate", 0.0),
                 },
-                # Levers that need extra per-turn signals before we can prove them.
-                "unproven_levers": ["tool deferral (schema-token savings)", "compaction", "model routing detail"],
+                # Routing is now proven per-turn (actual models on each row);
+                # tool deferral is proven live via Prometheus
+                # (*_llm_tools_deferred_total). Compaction still needs a
+                # per-turn signal (a SummarizationMiddleware hook) — a follow-up.
+                "unproven_levers": ["compaction (needs a per-turn signal)"],
             },
         }
 

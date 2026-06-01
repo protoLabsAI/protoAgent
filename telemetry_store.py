@@ -23,7 +23,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _COLUMNS = (
-    "task_id", "session_id", "state", "success", "model",
+    "task_id", "session_id", "state", "success", "model", "models",
     "input_tokens", "output_tokens", "total_tokens",
     "cache_read_input_tokens", "cache_creation_input_tokens",
     "cost_usd", "duration_ms", "llm_calls", "tool_calls",
@@ -53,6 +53,7 @@ class TelemetryStore:
                     state                       TEXT,
                     success                     INTEGER,
                     model                       TEXT,
+                    models                      TEXT,
                     input_tokens                INTEGER DEFAULT 0,
                     output_tokens               INTEGER DEFAULT 0,
                     total_tokens                INTEGER DEFAULT 0,
@@ -68,6 +69,12 @@ class TelemetryStore:
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_ended ON turns(ended_at)")
+            # Lightweight migration for stores created before `models` existed
+            # (ADR 0006 Slice 4b). ALTER is idempotent-guarded by the try/except.
+            try:
+                db.execute("ALTER TABLE turns ADD COLUMN models TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already present
             db.commit()
         finally:
             db.close()
