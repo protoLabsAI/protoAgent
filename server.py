@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -99,8 +100,13 @@ _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # streams to connected consoles.
 
 
-def _init_langgraph_agent():
+def _init_langgraph_agent(headless_setup: bool = False):
     """Initialize the LangGraph backend — setup-aware.
+
+    ``headless_setup`` (ADR 0010): when True (the ``none`` UI tier or
+    ``PROTOAGENT_HEADLESS_SETUP``), there is no wizard to finish setup, so a
+    validated config auto-completes setup; an invalid one fails fast (SystemExit)
+    rather than silently serving a dead graph.
 
     Always loads the config + checkpointer so the wizard and drawer
     can introspect what's on disk. The compiled graph is only built
@@ -115,7 +121,13 @@ def _init_langgraph_agent():
     global _plugin_tools, _plugin_skill_dirs, _plugin_meta
 
     from graph.config import LangGraphConfig
-    from graph.config_io import CONFIG_YAML_PATH, ensure_live_config, is_setup_complete
+    from graph.config_io import (
+        CONFIG_YAML_PATH,
+        ensure_live_config,
+        is_setup_complete,
+        mark_setup_complete,
+        validate_for_headless,
+    )
 
     # Seed the untracked live config from the .example template on first run.
     # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
@@ -136,13 +148,23 @@ def _init_langgraph_agent():
     _checkpointer = _build_checkpointer(_graph_config)
 
     if not is_setup_complete():
-        _graph = None
-        _knowledge_store = None
-        log.info(
-            "Setup wizard has not been completed — graph not compiled. "
-            "Open the UI to finish setup.",
-        )
-        return
+        if headless_setup:
+            # No wizard in this tier — auto-complete from a validated config,
+            # else fail fast (ADR 0010) rather than serve a dead graph.
+            ok, reason = validate_for_headless(_graph_config)
+            if not ok:
+                log.error("Headless setup cannot complete: %s", reason)
+                raise SystemExit(2)
+            mark_setup_complete()
+            log.info("Headless setup auto-completed from a validated config.")
+        else:
+            _graph = None
+            _knowledge_store = None
+            log.info(
+                "Setup wizard has not been completed — graph not compiled. "
+                "Open the UI to finish setup (or run headless: --ui none / --setup).",
+            )
+            return
 
     from graph.agent import create_agent_graph
     from tools.lg_tools import get_all_tools
@@ -1877,16 +1899,58 @@ def _main():
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
+        "--ui",
+        choices=["full", "console", "none"],
+        default=os.environ.get("PROTOAGENT_UI", "").lower() or None,
+        help="UI deployment tier (ADR 0010): 'full' = Gradio + React console + "
+             "API/A2A (local default); 'console' = React console + API/A2A, no "
+             "Gradio (desktop sidecar); 'none' = API + A2A + /metrics only "
+             "(headless servers / the lighter stack). Env: PROTOAGENT_UI.",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
-        help="Serve only the API / A2A / React console — skip the Gradio UI. "
-             "Used by the desktop sidecar (the React console is the UI there, "
-             "and Gradio is the heaviest dependency to freeze).",
+        help="DEPRECATED alias for --ui console.",
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Headless setup (ADR 0010): validate the live config + mark setup "
+             "complete, then exit. No wizard/UI needed.",
     )
     args = parser.parse_args()
     _active_port = args.port
-    headless = args.headless
+
+    # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
+    # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'full'.
+    if args.ui:
+        ui = args.ui
+    elif args.headless:
+        ui = "console"
+        log.warning("--headless / PROTOAGENT_HEADLESS is deprecated — use --ui console.")
+    else:
+        ui = "full"
+
+    # `--setup` one-shot: complete setup headlessly and exit.
+    if args.setup:
+        from graph.config import LangGraphConfig
+        from graph.config_io import (
+            CONFIG_YAML_PATH, ensure_live_config, mark_setup_complete, validate_for_headless,
+        )
+        ensure_live_config()
+        cfg = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+        ok, reason = validate_for_headless(cfg)
+        if not ok:
+            print(f"setup: config invalid — {reason}", file=sys.stderr)
+            raise SystemExit(2)
+        mark_setup_complete()
+        print("setup: complete — .setup-complete written; the graph will compile on next start.")
+        raise SystemExit(0)
+
+    # Headless setup applies when there is no wizard to finish it: the 'none'
+    # tier, or an explicit opt-in env (ADR 0010).
+    headless_setup = ui == "none" or os.environ.get("PROTOAGENT_HEADLESS_SETUP", "").lower() in ("1", "true", "yes")
 
     # Initialize observability
     import tracing
@@ -1894,22 +1958,29 @@ def _main():
     tracing.init()
     metrics.init()
 
-    _init_langgraph_agent()
+    _init_langgraph_agent(headless_setup=headless_setup)
 
-    # Optional Gradio chat UI — skipped entirely in headless mode so the
-    # frozen sidecar never imports Gradio (its biggest, PyInstaller-hostile
-    # dependency). The React console is the UI in that mode.
+    # Gradio chat UI — only the 'full' tier (ADR 0010). 'console'/'none' never
+    # import Gradio (its biggest, PyInstaller-hostile dep). If it's not installed
+    # in 'full' (lean deps), degrade to 'console' rather than crash.
     blocks = None
-    if not headless:
-        from chat_ui import create_chat_app
-        blocks = create_chat_app(
-            chat_fn=chat,
-            title=agent_name(),
-            subtitle="protoAgent",
-            placeholder="Send a message...",
-            pwa=True,
-            settings=_build_settings_callbacks(),
-        )
+    if ui == "full":
+        try:
+            from chat_ui import create_chat_app
+            blocks = create_chat_app(
+                chat_fn=chat,
+                title=agent_name(),
+                subtitle="protoAgent",
+                placeholder="Send a message...",
+                pwa=True,
+                settings=_build_settings_callbacks(),
+            )
+        except ImportError:
+            log.warning(
+                "gradio not installed — degrading --ui full to console. "
+                "Install it (`pip install -r requirements-ui.txt`) for the Gradio UI.",
+            )
+            ui = "console"
 
     import uvicorn
     from fastapi import FastAPI, Request
@@ -2304,6 +2375,18 @@ def _main():
             return {"enabled": False, "cleared": False}
         return {"enabled": True, "cleared": _goal_controller.store.clear(session_id)}
 
+    # --- Health / readiness (ADR 0010) -------------------------------------
+    # Reflects whether the graph actually compiled — the only readiness signal
+    # in the 'none' tier (no UI to eyeball). 503 until ready, for k8s probes.
+    @fastapi_app.get("/healthz", include_in_schema=False)
+    async def _healthz():
+        from graph.config_io import is_setup_complete
+        ready = _graph is not None
+        return JSONResponse(
+            {"ok": ready, "graph_compiled": ready, "setup_complete": is_setup_complete(), "ui": ui},
+            status_code=200 if ready else 503,
+        )
+
     # --- Playbooks (skills surface, ADR 0009) ------------------------------
     # Browse + manage the procedural-memory skill index (skills.db) the operator
     # was otherwise blind to. "Playbooks" is the operator-facing name for the
@@ -2605,16 +2688,17 @@ def _main():
         except ImportError:
             pass
 
-    # --- React operator console --------------------------------------------
-    from operator_api.web import mount_react_app
-
-    web_dist_dir = Path(__file__).parent / "apps" / "web" / "dist"
-    if mount_react_app(fastapi_app, web_dist_dir):
-        log.info("React operator console mounted at /app")
-
-    # --- Static + PWA assets -----------------------------------------------
+    # --- React operator console (tiers full/console; skipped in 'none') ------
     static_dir = Path(__file__).parent / "static"
-    if static_dir.exists():
+    if ui != "none":
+        from operator_api.web import mount_react_app
+
+        web_dist_dir = Path(__file__).parent / "apps" / "web" / "dist"
+        if mount_react_app(fastapi_app, web_dist_dir):
+            log.info("React operator console mounted at /app")
+
+    # --- Static + PWA assets (skipped in 'none') ---------------------------
+    if ui != "none" and static_dir.exists():
         manifest_path = static_dir / "manifest.json"
         if manifest_path.exists():
             @fastapi_app.get("/manifest.json", include_in_schema=False)
@@ -2632,11 +2716,8 @@ def _main():
 
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # --- Mount Gradio at root (skipped when headless) -----------------------
-    if headless:
-        app = fastapi_app
-        log.info("Starting %s (headless — no Gradio) on http://0.0.0.0:%d", agent_name(), args.port)
-    else:
+    # --- Mount Gradio at root (only the 'full' tier) ------------------------
+    if ui == "full" and blocks is not None:
         import gradio as gr
 
         app = gr.mount_gradio_app(
@@ -2644,7 +2725,10 @@ def _main():
             footer_links=[],
             favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
         )
-        log.info("Starting %s on http://0.0.0.0:%d", agent_name(), args.port)
+        log.info("Starting %s (ui=full) on http://0.0.0.0:%d", agent_name(), args.port)
+    else:
+        app = fastapi_app
+        log.info("Starting %s (ui=%s) on http://0.0.0.0:%d", agent_name(), ui, args.port)
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
