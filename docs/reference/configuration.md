@@ -239,6 +239,27 @@ telemetry:
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
 | `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
 
+## `filesystem`
+
+Fenced multi-project filesystem toolset ([ADR 0007](../adr/0007-directory-aware-operator-agent.md)) — a generic, **opt-in, off-by-default** primitive that gives the agent read/write/list/search + fenced command execution over a registry of project directories. Inert unless `enabled` **and** `projects` is non-empty. The capability a forked operator (e.g. "Roxy") composes into a multi-project manager — see the [operator-fork guide](../guides/operator-fork.md).
+
+```yaml
+filesystem:
+  enabled: true        # off by default
+  allow_run: false     # add the dual-use run_command power tool
+  projects:
+    - { name: orbis, path: /Users/kj/dev/ORBIS, write: false }   # read-only monitor
+    - { name: pixelgen, path: /Users/kj/dev/pixelgen, write: true }
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`). |
+| `allow_run` | `false` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). |
+| `projects` | `[]` | Managed workspaces: `{name, path, write}`. **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; invalid paths are skipped. |
+
+**Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4.
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).

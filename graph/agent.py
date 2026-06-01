@@ -654,6 +654,13 @@ def create_agent_graph(
             config, all_tools, skills_index=skills_index, workflow_registry=workflow_registry,
         ))
 
+    # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
+    # Opt-in; inert unless filesystem.enabled + a non-empty projects registry.
+    # Added before execute_code/deferred so they're wrappable + discoverable.
+    if config.filesystem_enabled:
+        from tools.fs_tools import build_fs_tools
+        all_tools.extend(build_fs_tools(config))
+
     # Programmatic tool calling — opt-in. Built last so it can wrap every
     # other tool (including task/task_batch) but never itself.
     if config.execute_code_enabled:
@@ -673,6 +680,7 @@ def create_agent_graph(
 
     system_prompt = build_system_prompt(
         include_subagents=include_subagents,
+        projects=(config.filesystem_projects if config.filesystem_enabled else None),
     )
 
     agent = create_agent(

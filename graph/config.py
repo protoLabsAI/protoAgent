@@ -297,6 +297,16 @@ class LangGraphConfig:
     # list — not the UI — is the security boundary. See operator_api/paths.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
+    # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
+    # OFF by default; a generic capability a fork (e.g. "Roxy") opts into. When
+    # enabled with a non-empty ``projects`` registry, the agent gets fenced
+    # read/write/list/search tools over those dirs (every path contained under a
+    # project root). ``allow_run`` adds the dual-use ``run_command`` power tool.
+    # ``projects`` entries: ``{name, path, write: true|false}``. See tools/fs_tools.
+    filesystem_enabled: bool = False
+    filesystem_allow_run: bool = False
+    filesystem_projects: list[dict] = field(default_factory=list)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
         """Load config from YAML file. Falls back to defaults if absent."""
@@ -405,6 +415,9 @@ class LangGraphConfig:
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
+            filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
+            filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
+            filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
         )
 
         for name in ("researcher",):

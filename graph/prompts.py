@@ -40,12 +40,18 @@ def build_system_prompt(
     workspace: str = "/sandbox",
     include_subagents: bool = True,
     context: str = "",
+    projects=None,
 ) -> str:
     """Build the complete system prompt for the lead agent.
 
     ``context`` is injected verbatim at the end of the prompt (before
     the response-format block) — ``KnowledgeMiddleware`` is the typical
     caller, passing in retrieved knowledge-store hits.
+
+    ``projects`` (ADR 0007) — when the fenced filesystem toolset is enabled,
+    the list of managed project workspaces ``[{name, path, write}]`` is named in
+    the prompt so the agent knows the dirs it can operate on (and which are
+    read-only). Inert when None.
     """
     parts = []
 
@@ -70,6 +76,12 @@ def build_system_prompt(
     if include_subagents:
         parts.append(_build_subagent_section())
 
+    # 2b. Managed project workspaces (ADR 0007 — fenced filesystem toolset).
+    if projects:
+        section = _build_projects_section(projects)
+        if section:
+            parts.append(section)
+
     # 3. Dynamic context (typically from KnowledgeMiddleware)
     if context:
         parts.append(f"\n# Context\n\n{context}")
@@ -93,6 +105,31 @@ def build_system_prompt(
     parts.append(OUTPUT_FORMAT_INSTRUCTIONS)
 
     return "\n\n".join(parts)
+
+
+def _build_projects_section(projects) -> str:
+    """Render the managed-project workspaces the fs tools are fenced to."""
+    lines = [
+        "# Managed projects",
+        "",
+        "You operate on these project workspaces via the filesystem tools "
+        "(`list_projects`, `read_file`, `list_dir`, `find_files`, `search_files`, "
+        "and — in read-write projects — `write_file`/`edit_file`). All paths are "
+        "fenced to these roots; you cannot read or write outside them.",
+        "",
+    ]
+    rendered = 0
+    for p in projects:
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get("name") or "").strip()
+        path = str(p.get("path") or "").strip()
+        if not name or not path:
+            continue
+        mode = "read-write" if p.get("write") else "read-only"
+        lines.append(f"- **{name}** ({mode}) — `{path}`")
+        rendered += 1
+    return "\n".join(lines) if rendered else ""
 
 
 def _build_subagent_section() -> str:
