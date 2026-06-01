@@ -36,7 +36,7 @@ tools: [web_search, fetch_url]   # optional, advisory
 |---|---|---|
 | `name` | ✅ | Unique, lowercase-with-hyphens. |
 | `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
-| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. |
+| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the skill is retrieved for a turn, these are surfaced to the agent as `<relevant_tools>` so it knows which of its (already-bound) tools this skill relies on — a relevance hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
 
 The markdown **body** is the skill's instructions — freeform; write whatever
 helps the agent perform the task.

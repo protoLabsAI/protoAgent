@@ -194,6 +194,14 @@ def test_load_skills_returns_skill_records(populated_index) -> None:
     assert isinstance(r.score, float)
 
 
+def test_load_skills_returns_tools_used(populated_index) -> None:
+    """load_skills() surfaces the skill's declared tools (ADR 0005) so the
+    middleware can hint which tools a retrieved skill relies on."""
+    results = populated_index.load_skills("web search research")
+    top = next(r for r in results if r.name == "web-research")
+    assert top.tools_used == ("web_search", "fetch_url")
+
+
 def test_retrieval_ranking(populated_index) -> None:
     """FTS5 must rank the most relevant skill first for a specific query."""
     results = populated_index.load_skills("mathematical calculation expression")
@@ -323,6 +331,31 @@ def test_format_learned_skills_basic_formatting() -> None:
     assert 'name="web-research"' in block
     assert "Research the web" in block
     assert "Search for {topic}" in block
+
+
+def test_format_learned_skills_surfaces_relevant_tools() -> None:
+    """A skill's declared tools are emitted as <relevant_tools> (ADR 0005)."""
+    km = _make_knowledge_middleware_no_store()
+    block = km._format_learned_skills([SkillRecord(
+        name="web-research",
+        description="Research the web",
+        prompt_template="Search for {topic}",
+        score=-1.5,
+        tools_used=("web_search", "fetch_url"),
+    )])
+    assert "<relevant_tools>web_search, fetch_url</relevant_tools>" in block
+
+
+def test_format_learned_skills_omits_tools_when_none() -> None:
+    """No declared tools → no <relevant_tools> line (back-compat)."""
+    km = _make_knowledge_middleware_no_store()
+    block = km._format_learned_skills([SkillRecord(
+        name="bare",
+        description="No tools declared",
+        prompt_template="do {thing}",
+        score=-1.0,
+    )])
+    assert "<relevant_tools>" not in block
 
 
 def test_token_budget_enforcement() -> None:

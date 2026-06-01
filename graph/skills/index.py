@@ -55,6 +55,7 @@ class SkillRecord(NamedTuple):
     description: str
     prompt_template: str
     score: float
+    tools_used: tuple[str, ...] = ()
 
 
 class SkillsIndex:
@@ -286,7 +287,8 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT name, description, prompt_template, bm25(skills_fts) AS score
+                SELECT name, description, prompt_template, tools_used,
+                       bm25(skills_fts) AS score
                 FROM skills_fts
                 WHERE skills_fts MATCH ?
                 ORDER BY score
@@ -301,6 +303,7 @@ class SkillsIndex:
                     description=row["description"],
                     prompt_template=row["prompt_template"],
                     score=float(row["score"]),
+                    tools_used=tuple((row["tools_used"] or "").split()),
                 )
                 for row in rows
             ]
