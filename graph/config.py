@@ -203,6 +203,12 @@ class LangGraphConfig:
     # blank → in-memory (history cleared on restart). Bound at graph-compile
     # time (see graph/checkpointer.py); changing the path needs a restart.
     checkpoint_db_path: str = "/sandbox/checkpoints.db"
+    # Local telemetry store (ADR 0006 Slice 2) — one per-turn cost/latency row
+    # per terminal A2A turn, queryable via /api/telemetry/*. ON by default
+    # (cheap, one write per turn); path follows /sandbox→~/.protoagent fallback
+    # and is instance-scoped (ADR 0004).
+    telemetry_enabled: bool = True
+    telemetry_db_path: str = "/sandbox/telemetry.db"
     # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
     # latest N checkpoints per session, and TTL whole sessions idle past
     # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
@@ -373,6 +379,8 @@ class LangGraphConfig:
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
+            telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
+            telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get("keep_per_thread", cls.checkpoint_keep_per_thread),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),

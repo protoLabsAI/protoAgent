@@ -73,6 +73,7 @@ _checkpoint_prune_task = None  # background prune loop handle
 _knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
 _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
+_telemetry_store = None  # TelemetryStore (per-turn cost/latency rollups, ADR 0006), or None.
 _inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
 _storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
@@ -511,6 +512,33 @@ def _build_a2a_push_store():
         return store
     except Exception:
         log.exception("[a2a] failed to build push-config store at %s; configs in-memory only", path)
+        return None
+
+
+def _build_telemetry_store(config):
+    """Local per-turn telemetry store (ADR 0006 Slice 2). Path resolves like the
+    other stores (/sandbox → ~/.protoagent fallback) and is instance-scoped
+    (ADR 0004). Off when ``telemetry.enabled`` is false; best-effort otherwise."""
+    if not getattr(config, "telemetry_enabled", True):
+        return None
+    from telemetry_store import TelemetryStore
+
+    configured = scope_leaf(Path(getattr(config, "telemetry_db_path", "") or "/sandbox/telemetry.db"))
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = scope_leaf(Path.home() / ".protoagent" / "telemetry.db")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        store = TelemetryStore(path)
+        log.info("[telemetry] store ready at %s", path)
+        return store
+    except Exception:
+        log.exception("[telemetry] failed to build store at %s; telemetry disabled", path)
         return None
 
 
@@ -2265,6 +2293,22 @@ def _main():
             return {"enabled": False, "cleared": False}
         return {"enabled": True, "cleared": _goal_controller.store.clear(session_id)}
 
+    # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
+    # Per-turn cost/latency rollups from the local store. Powers the operator
+    # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"
+    # queries. Read-only; returns {enabled:false} when the store is off.
+    @fastapi_app.get("/api/telemetry/summary")
+    async def _api_telemetry_summary(since: str | None = None):
+        if _telemetry_store is None:
+            return {"enabled": False, "summary": None}
+        return {"enabled": True, "summary": _telemetry_store.summary(since_iso=since)}
+
+    @fastapi_app.get("/api/telemetry/recent")
+    async def _api_telemetry_recent(limit: int = 50):
+        if _telemetry_store is None:
+            return {"enabled": False, "turns": []}
+        return {"enabled": True, "turns": _telemetry_store.recent(limit=min(max(1, limit), 500))}
+
     # --- Live config / SOUL editing ----------------------------------------
     # GET returns the current config + persona so external clients (the
     # Gradio drawer is one; curl is another) can mirror what's running.
@@ -2449,6 +2493,8 @@ def _main():
     #    want it YAML-configurable can add a field later.
     yaml_bearer = _graph_config.auth_token if _graph_config else ""
     auth_env = f"{AGENT_NAME_ENV.upper()}_API_KEY"
+    global _telemetry_store
+    _telemetry_store = _build_telemetry_store(_graph_config)
     register_a2a_routes(
         app=fastapi_app,
         chat_stream_fn_factory=_chat_langgraph_stream,
@@ -2461,6 +2507,8 @@ def _main():
         card_provider=_build_agent_card,  # agent/getAuthenticatedExtendedCard
         push_store=_build_a2a_push_store(),  # durable push configs (24h TTL)
         task_persistence=_build_a2a_task_persistence(),  # durable task records (24h TTL)
+        telemetry=_telemetry_store,  # per-turn cost/latency rollups (ADR 0006)
+        telemetry_model=(_graph_config.model_name if _graph_config else ""),
     )
 
     # --- Prometheus metrics -------------------------------------------------

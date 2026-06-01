@@ -156,6 +156,11 @@ class TaskRecord:
     # one (the DataPart is then omitted).
     confidence: float | None = None
     confidence_explanation: str | None = None
+    # Per-turn call counts for the local telemetry rollup (ADR 0006 Slice 2):
+    # llm_calls bumped on every recorded on_chat_model_end, tool_calls on every
+    # tool_start. Live counters; written to the telemetry store at terminal time.
+    llm_calls: int = 0
+    tool_calls: int = 0
     # ── asyncio primitives (not serialised) ──
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _update_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -304,6 +309,10 @@ class A2ATaskStore:
         # a task is actively running.
         if state in _STREAM_CLOSING:
             self._save(record)
+        # One telemetry row per terminal turn (completed/failed/canceled) — the
+        # single chokepoint every terminal transition flows through (ADR 0006).
+        if state in _TERMINAL:
+            _record_telemetry(record)
         return record
 
     async def cancel(self, task_id: str) -> bool:
@@ -360,6 +369,14 @@ class A2ATaskStore:
             record.usage["cache_read_input_tokens"] += int(cache_read_input_tokens)
             record.usage["cache_creation_input_tokens"] += int(cache_creation_input_tokens)
             record.usage["cost_usd"] = round(record.usage.get("cost_usd", 0.0) + float(cost_usd), 6)
+            record.llm_calls += 1
+
+    async def note_tool_call(self, task_id: str) -> None:
+        """Bump the per-turn tool-call counter (telemetry rollup, ADR 0006)."""
+        async with self._lock:
+            record = self._tasks.get(task_id)
+            if record is not None:
+                record.tool_calls += 1
 
     async def set_confidence(
         self,
@@ -916,6 +933,42 @@ _ON_TERMINAL: list[Callable[["TaskRecord"], None] | None] = [None]
 # task eviction + a restart (within the store's TTL). No-ops when unset.
 _PUSH_STORE: list = [None]
 
+# Optional local telemetry store (TelemetryStore, ADR 0006 Slice 2) + the lead
+# model name to stamp on each per-turn row. Set via register_a2a_routes; no-ops
+# when unset. One row is written per terminal turn from update_state.
+_TELEMETRY: list = [None]
+_TELEMETRY_MODEL: list[str] = [""]
+
+
+def _record_telemetry(record: TaskRecord) -> None:
+    """Write one per-turn telemetry row at terminal time. Best-effort: a failure
+    must never affect the turn's outcome."""
+    store = _TELEMETRY[0]
+    if store is None:
+        return
+    try:
+        u = record.usage or {}
+        store.record({
+            "task_id": record.id,
+            "session_id": record.context_id,
+            "state": record.state,
+            "success": 1 if record.state == COMPLETED else 0,
+            "model": _TELEMETRY_MODEL[0] or "",
+            "input_tokens": int(u.get("input_tokens", 0) or 0),
+            "output_tokens": int(u.get("output_tokens", 0) or 0),
+            "total_tokens": int(u.get("total_tokens", 0) or 0),
+            "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
+            "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
+            "cost_usd": float(u.get("cost_usd", 0.0) or 0.0),
+            "duration_ms": _duration_ms(record) or 0,
+            "llm_calls": int(record.llm_calls),
+            "tool_calls": int(record.tool_calls),
+            "created_at": record.created_at,
+            "ended_at": record.updated_at,
+        })
+    except Exception:  # noqa: BLE001 — telemetry is best-effort
+        logger.exception("[telemetry] failed to record turn %s", record.id)
+
 
 def _push_store_set(task_id: str, cfg: "PushNotificationConfig") -> None:
     store = _PUSH_STORE[0]
@@ -1055,6 +1108,7 @@ async def _run_task_background(
                 # status verbatim with no structured event.
                 if isinstance(payload, dict):
                     if event_type == "tool_start":
+                        await _store.note_tool_call(task_id)  # telemetry rollup
                         text = f"🔧 {payload.get('name', '')}: {str(payload.get('input', ''))[:200]}"
                         tool_event = {**payload, "phase": "start"}
                     else:
@@ -1285,6 +1339,8 @@ def register_a2a_routes(
     card_provider: Callable[[str], dict] | None = None,
     push_store=None,
     task_persistence=None,
+    telemetry=None,
+    telemetry_model: str = "",
 ) -> None:
     """Register all A2A routes on *app* and update *agent_card* capabilities.
 
@@ -1303,6 +1359,8 @@ def register_a2a_routes(
     # so mutations propagate to the closure below.
     _ON_TERMINAL[0] = on_terminal
     _PUSH_STORE[0] = push_store
+    _TELEMETRY[0] = telemetry
+    _TELEMETRY_MODEL[0] = telemetry_model or ""
     if task_persistence is not None:
         _store.attach_persistence(task_persistence)
         try:

@@ -224,6 +224,21 @@ tools:
 
 Every tool remains **executable** even while deferred — `create_agent` registers all executors; deferral only trims what the model *sees* per turn. The agent loads tools by calling `search_tools("github pull request")`; matches stay available for the rest of the thread. Leave off unless you have a large catalog (e.g. a chatty MCP server) — for a handful of tools it adds a discovery hop for no benefit.
 
+## `telemetry`
+
+Local per-turn cost/latency rollup ([ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md)). One row per terminal A2A turn (tokens incl. cache, USD cost, duration, LLM/tool call counts), queryable at `/api/telemetry/summary` + `/api/telemetry/recent`.
+
+```yaml
+telemetry:
+  enabled: true                 # one cheap write per turn
+  db_path: /sandbox/telemetry.db
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
+| `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).
