@@ -2342,11 +2342,10 @@ def _main():
                     "routing": {"by_model": by_model},
                     "success_rate": s.get("success_rate", 0.0),
                 },
-                # Routing is now proven per-turn (actual models on each row);
-                # tool deferral is proven live via Prometheus
-                # (*_llm_tools_deferred_total). Compaction still needs a
-                # per-turn signal (a SummarizationMiddleware hook) — a follow-up.
-                "unproven_levers": ["compaction (needs a per-turn signal)"],
+                # Every optimization lever is now measured: routing per-turn
+                # (actual models on each row); tool deferral + compaction live via
+                # Prometheus (*_llm_tools_deferred_total, *_compactions_total).
+                "unproven_levers": [],
             },
         }
 

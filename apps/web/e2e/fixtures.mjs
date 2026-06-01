@@ -391,5 +391,5 @@ export const TELEMETRY_INSIGHTS = {
     },
     success_rate: 0.6667,
   },
-  unproven_levers: ["compaction (needs a per-turn signal)"],
+  unproven_levers: [],
 };
