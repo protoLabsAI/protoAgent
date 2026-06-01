@@ -145,7 +145,9 @@ out), which suits us — we already ship a container.
 - Should the egress allowlist also gate `web_search`/peer/MCP target hosts, or
   leave those to their fixed config + the OpenShell netns layer? (Leaning: leave
   to OpenShell; `fetch_url` is the model-chosen-host vector.)
-- A managed "protoAgent-under-OpenShell" compose/k8s example (follow-up).
+- ✅ A managed "protoAgent-under-OpenShell" compose/k8s example — shipped in
+  `deploy/openshell/` (gateway compose + sandbox-create script; Helm values +
+  Agent-Sandbox CRD template for k8s).
 
 ## 8. Related
 
