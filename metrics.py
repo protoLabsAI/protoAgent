@@ -18,6 +18,7 @@ _llm_tokens = None
 _llm_cache_tokens = None
 _llm_cost = None
 _tools_deferred = None
+_compactions = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
@@ -30,7 +31,7 @@ def _prefix() -> str:
 
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
-    global _tools_deferred, _tool_calls, _tool_latency, _active_sessions
+    global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -60,6 +61,10 @@ def init():
         _tools_deferred = Counter(
             f"{p}_llm_tools_deferred_total",
             "Tool schemas withheld from the model by deferral (ADR 0005/0006)",
+        )
+        _compactions = Counter(
+            f"{p}_compactions_total",
+            "History-compaction (summarization) events (ADR 0006)",
         )
         _tool_calls = Counter(
             f"{p}_tool_calls_total", "Total tool executions",
@@ -109,6 +114,13 @@ def record_tools_deferred(count: int):
     4b) — proves the tool-deferral lever is reducing the per-turn schema load."""
     if _enabled and _tools_deferred is not None and count > 0:
         _tools_deferred.inc(count)
+
+
+def record_compaction():
+    """Count a history-compaction event (ADR 0006) — proves the compaction lever
+    fires + how often. Emitted from CountingSummarizationMiddleware."""
+    if _enabled and _compactions is not None:
+        _compactions.inc()
 
 
 def record_tool_call(tool_name: str, success: bool, latency_s: float):

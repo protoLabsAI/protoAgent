@@ -135,8 +135,12 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    primary, `models` = distinct set), so routing — incl. aux/fallback models —
    is proven per turn rather than stamped from the configured lead; and
    `ToolDeferralMiddleware` emits `*_llm_tools_deferred_total` to Prometheus,
-   proving the deferral lever live. Compaction remains the one unproven lever
-   (needs a `SummarizationMiddleware` hook) — honestly surfaced as such.
+   proving the deferral lever live. **Compaction** is likewise proven via
+   `CountingSummarizationMiddleware` (subclasses langchain's
+   `SummarizationMiddleware`, counts each real compaction →
+   `*_compactions_total`). With routing, deferral, and compaction all measured,
+   `insights.unproven_levers` is now empty — every optimization lever the agent
+   has is observable.
 
 > **Why advise-only (not auto-optimize).** Letting telemetry change config
 > automatically (auto-enable deferral, auto-downgrade model) is higher leverage

@@ -75,12 +75,14 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
         ))
 
     # Context compaction — summarize old history near the context limit.
+    # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
+    # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).
     if config.compaction_enabled:
-        from langchain.agents.middleware import SummarizationMiddleware
+        from graph.middleware.compaction import CountingSummarizationMiddleware
         summ_model = create_llm(config, model_name=_resolve_aux_model(config, config.compaction_model))
         keep = ("messages", config.compaction_keep_messages)
         try:
-            mw = SummarizationMiddleware(
+            mw = CountingSummarizationMiddleware(
                 model=summ_model,
                 trigger=_parse_compaction_trigger(config.compaction_trigger),
                 keep=keep,
@@ -97,7 +99,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
                 "falling back to messages:%d",
                 config.compaction_trigger, config.model_name, fallback,
             )
-            mw = SummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
+            mw = CountingSummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
         middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).

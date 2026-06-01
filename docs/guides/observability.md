@@ -58,6 +58,7 @@ my_agent_llm_tokens_total{model="claude-opus-4-8",direction="input"} 184320
 my_agent_llm_cache_tokens_total{model="claude-opus-4-8",kind="read"} 96000
 my_agent_llm_cost_usd_total{model="claude-opus-4-8"} 0.83
 my_agent_llm_tools_deferred_total 128
+my_agent_compactions_total 3
 my_agent_tool_calls_total{tool_name="web_search",success="True"} 17
 my_agent_active_sessions 3
 ```

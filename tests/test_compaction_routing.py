@@ -1,6 +1,7 @@
 """Tests for compaction (SummarizationMiddleware) + routing (ModelFallbackMiddleware) wiring."""
 
 import yaml
+from langchain.agents.middleware import SummarizationMiddleware
 
 from graph.agent import _build_middleware, _parse_compaction_trigger, _resolve_aux_model
 from graph.config import LangGraphConfig
@@ -41,7 +42,7 @@ def test_compaction_on_by_default(monkeypatch):
     cfg = LangGraphConfig()
     assert cfg.compaction_enabled
     mw = _build_middleware(cfg, knowledge_store=None)
-    assert any(m.__class__.__name__ == "SummarizationMiddleware" for m in mw)
+    assert any(isinstance(m, SummarizationMiddleware) for m in mw)
 
 
 def test_compaction_fraction_trigger_falls_back_without_model_profile(monkeypatch):
@@ -53,7 +54,7 @@ def test_compaction_fraction_trigger_falls_back_without_model_profile(monkeypatc
     cfg = LangGraphConfig()  # default trigger "fraction:0.8"; model alias has no profile
     assert cfg.compaction_trigger.startswith("fraction:")
     mw = _build_middleware(cfg, knowledge_store=None)  # must not raise
-    assert any(m.__class__.__name__ == "SummarizationMiddleware" for m in mw)
+    assert any(isinstance(m, SummarizationMiddleware) for m in mw)
 
 
 def test_compaction_wired_when_enabled(tmp_path, monkeypatch):
@@ -63,7 +64,7 @@ def test_compaction_wired_when_enabled(tmp_path, monkeypatch):
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.compaction_enabled and cfg.compaction_keep_messages == 30
     mw = _build_middleware(cfg, knowledge_store=None)
-    assert any(m.__class__.__name__ == "SummarizationMiddleware" for m in mw)
+    assert any(isinstance(m, SummarizationMiddleware) for m in mw)
 
 
 def test_routing_off_by_default(monkeypatch):
