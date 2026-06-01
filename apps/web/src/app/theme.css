@@ -373,59 +373,113 @@ h2 {
 }
 
 .chat-stage {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
-.chat-header {
-  min-height: 48px;
+/* One consolidated tab bar: a tab per session (dot · title · close) + "new".
+   Double-click a title to rename. Replaces the old header + tab strip + the
+   per-session title row. */
+.chat-tabbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.chat-title-group {
-  min-width: 0;
-}
-
-.chat-session-tabs {
-  display: flex;
   gap: 6px;
   overflow-x: auto;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
 }
 
-.chat-session-tabs button {
+.chat-tab {
   max-width: 220px;
-  min-width: 112px;
+  min-width: 120px;
   height: 32px;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  padding: 0 6px 0 10px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
   color: var(--fg-muted);
-  padding: 0 10px;
-  cursor: pointer;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
 }
 
-.chat-session-tabs button.active,
-.chat-session-tabs button:hover {
+.chat-tab.active,
+.chat-tab:hover {
   border-color: var(--border);
   background: var(--bg-hover);
   color: var(--fg);
 }
 
-.chat-session-tabs button span:last-child {
+.chat-tab-label {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-tab-edit {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #0c0c0f;
+  color: var(--fg);
+  padding: 0 6px;
+  font: inherit;
+}
+
+.chat-tab-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-tertiary, #777);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.chat-tab:hover .chat-tab-close,
+.chat-tab.active .chat-tab-close {
+  opacity: 1;
+}
+
+.chat-tab-close:hover {
+  background: var(--bg-elevated, #1a1a1f);
+  color: var(--fg);
+}
+
+.chat-tab-new {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.chat-tab-new:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 .session-dot {
@@ -453,36 +507,21 @@ h2 {
 .chat-session-slot {
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto; /* messages, composer (no header row) */
 }
 
 .chat-session-slot[hidden] {
   display: none;
 }
 
-.chat-session-header {
-  min-height: 48px;
-}
-
-.chat-session-actions {
+/* Subtle live status above the composer while streaming (was a header pill). */
+.composer-status {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.session-title-input {
-  height: 24px;
-  border-color: transparent;
-  background: transparent;
-  padding: 0;
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.session-title-input:focus {
-  border-color: var(--border);
-  background: #0c0c0f;
-  padding: 0 6px;
+  gap: 6px;
+  padding: 4px 12px 0;
+  font-size: 11px;
+  color: var(--fg-secondary);
 }
 
 .status-pill {
