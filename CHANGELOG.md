@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Observability & the self-improving flywheel** (ADR 0006): measure → persist
+  → surface → advise.
+  - Per-LLM-call telemetry at the streaming seam: prompt-cache tokens, per-call
+    latency, model, and USD cost (`pricing.py`); wired the previously-dead
+    Prometheus LLM metrics (calls, latency, tokens, cache, cost).
+  - `cost-v1` A2A artifact now carries Anthropic-shaped cache fields + `costUsd`
+    and the agent declares the `cost-v1` extension in its card (fleet alignment).
+  - Local `TelemetryStore` (per-turn rollups) + read API
+    `/api/telemetry/summary` · `/recent` · `/insights`.
+  - **System ▸ Telemetry** operator-console dashboard: cost, cache-hit %,
+    p50/p95 latency, by-model + recent-turns tables, and an advise-only Insights
+    panel (flags ≥5× median cost/latency turns, proves the cache lever in $).
+  - Per-turn actual-model routing (`model`/`models`) + a
+    `*_llm_tools_deferred_total` Prometheus counter proving tool deferral.
+
+### Changed
+- `costUsd` is computed in-process from a pricing table (consumers prefer it
+  over recomputing from tokens).
+
 ## [0.4.0] - 2026-06-01
 
 ### Added
