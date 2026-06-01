@@ -13,3 +13,4 @@ decision, numbered, never deleted (supersede instead).
 | [0002](./0002-reusable-subagent-workflows.md) | Reusable Subagent Workflows | Accepted |
 | [0003](./0003-reactive-agent-activity-thread.md) | Reactive Agent: Activity Thread, Event Bus & Inbound Inbox | Accepted |
 | [0004](./0004-multi-instance-data-scoping.md) | Multi-Instance Data Scoping | Accepted |
+| [0005](./0005-tool-pollution-and-progressive-disclosure.md) | Tool Pollution & Progressive Tool Disclosure | Proposed |
