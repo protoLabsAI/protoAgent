@@ -14,6 +14,7 @@ Configuring a server is the opt-in act; MCP is off unless ``mcp.enabled`` is set
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger("protoagent.mcp")
@@ -50,8 +51,17 @@ def _server_connection(server: dict) -> dict | None:
     if not command:
         return None
     conn = {"transport": "stdio", "command": str(command), "args": list(server.get("args") or [])}
-    if server.get("env"):
-        conn["env"] = dict(server["env"])
+    # Pass the parent environment through to the stdio subprocess by default.
+    # The MCP SDK's stdio client uses a MINIMAL default env, so custom vars set
+    # on the agent process (API keys, base URLs) are stripped from the server —
+    # a common failure in containerized deploys where those are injected into
+    # the agent's env, not the config YAML. Set ``inherit_env: false`` on the
+    # server to opt out; a per-server ``env:`` block always overrides on top.
+    server_env = {str(k): str(v) for k, v in (server.get("env") or {}).items()}
+    if server.get("inherit_env", True):
+        conn["env"] = {**os.environ, **server_env}
+    elif server_env:
+        conn["env"] = server_env
     if server.get("cwd"):
         conn["cwd"] = str(server["cwd"])
     return conn
