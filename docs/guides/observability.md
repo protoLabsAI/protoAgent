@@ -76,6 +76,31 @@ scrape_configs:
 
 `/metrics` returns a note saying metrics are disabled. No other side effects.
 
+## Local telemetry store
+
+Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal A2A turn (completed / failed / canceled) with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
+
+ON by default (one cheap write per turn). The SQLite path follows the usual `/sandbox` → `~/.protoagent` fallback and is instance-scoped (ADR 0004). Disable or relocate via config:
+
+```yaml
+telemetry:
+  enabled: true             # default; false → no store, endpoints return {enabled:false}
+  db_path: /sandbox/telemetry.db
+```
+
+Query it over HTTP (read-only):
+
+```bash
+# Aggregate rollup — totals, success rate, cache-hit ratio, p50/p95 latency, per-model split
+curl localhost:7870/api/telemetry/summary
+curl 'localhost:7870/api/telemetry/summary?since=2026-06-01T00:00:00+00:00'
+
+# Most recent turns (newest first)
+curl 'localhost:7870/api/telemetry/recent?limit=20'
+```
+
+`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. The operator console surfaces these (Slice 3). History isn't auto-expired (it's the analysis substrate); `TelemetryStore.prune(keep_days=…)` is available for hosts that want bounded retention.
+
 ## Audit log
 
 Every tool call is written to `/sandbox/audit/audit.jsonl`. One line per call:
