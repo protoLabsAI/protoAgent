@@ -1,25 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-// The rail and right panel are collapsible (topbar toggles) and the right
-// panel is resizable (drag its left edge); state persists to localStorage.
+// The right panel is collapsible (bottom utility-bar toggle) and resizable
+// (drag its left edge); state persists to localStorage. (The rail is fixed.)
 
-test("rail and right panel collapse + restore via the topbar toggles", async ({ page }) => {
+test("right panel collapses + restores via the utility-bar toggle", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  const rail = page.locator(".rail");
   const right = page.locator(".right-panel");
   // A zero-width (collapsed) element reports a null boundingBox → treat as 0.
   const widthOf = async (loc) => (await loc.boundingBox())?.width ?? 0;
-  await expect(rail).toBeVisible();
+  await expect(right).toBeVisible();
 
-  // Collapse the rail → its grid column goes to 0 width.
-  await page.getByTestId("toggle-rail").click();
-  await expect.poll(() => widthOf(rail)).toBe(0);
-  // Restore.
-  await page.getByTestId("toggle-rail").click();
-  await expect.poll(() => widthOf(rail)).toBeGreaterThan(0);
-
-  // Collapse the right panel.
   await page.getByTestId("toggle-right").click();
   await expect.poll(() => widthOf(right)).toBe(0);
   await page.getByTestId("toggle-right").click();
