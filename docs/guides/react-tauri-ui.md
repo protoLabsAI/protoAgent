@@ -344,6 +344,15 @@ server — not the client — decides which directories they may read and write.
 - The runtime-status `project.allowed_dirs` field feeds the project-path
   picker's suggestions; it does not relax the server-side check.
 
+## Telemetry surface
+
+The **System ▸ Telemetry** sub-tab (`apps/web/src/telemetry/TelemetrySurface.tsx`,
+ADR 0006) renders the local per-turn cost/latency rollup: summary cards (total
+cost, turns, success rate, cache-hit %, p50/p95 latency, tokens, tool calls), a
+by-model table, and a recent-turns table. It reads `GET /api/telemetry/summary`
++ `/api/telemetry/recent` — no chat-stream coupling — and degrades to a clear
+note when the store is disabled or empty.
+
 ## Settings surface
 
 The **Settings** rail surface lets an operator manage every config field from

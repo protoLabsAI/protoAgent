@@ -13,6 +13,8 @@ import type {
   SettingsGroup,
   SlashCommand,
   Subagent,
+  TelemetrySummary,
+  TelemetryTurn,
   ToolEvent,
   WorkflowRunResult,
   WorkflowSummary,
@@ -169,6 +171,19 @@ async function consumeSse(
 export const api = {
   runtimeStatus() {
     return request<RuntimeStatus>("/api/runtime/status");
+  },
+
+  telemetrySummary(since?: string) {
+    const q = since ? `?since=${encodeURIComponent(since)}` : "";
+    return request<{ enabled: boolean; summary: TelemetrySummary | null }>(
+      `/api/telemetry/summary${q}`,
+    );
+  },
+
+  telemetryRecent(limit = 50) {
+    return request<{ enabled: boolean; turns: TelemetryTurn[] }>(
+      `/api/telemetry/recent?limit=${limit}`,
+    );
   },
 
   setupStatus() {

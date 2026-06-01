@@ -333,3 +333,42 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   );
   return frames;
 }
+
+// Telemetry fixtures (ADR 0006 Slice 3) — shape mirrors /api/telemetry/*.
+export const TELEMETRY_SUMMARY = {
+  turns: 3,
+  input_tokens: 12000,
+  output_tokens: 1800,
+  total_tokens: 13800,
+  cache_read_input_tokens: 7200,
+  cache_creation_input_tokens: 0,
+  cost_usd: 0.2154,
+  llm_calls: 7,
+  tool_calls: 4,
+  avg_duration_ms: 4200,
+  p50_duration_ms: 3800,
+  p95_duration_ms: 8100,
+  success_rate: 0.6667,
+  cache_hit_ratio: 0.6,
+  by_model: [
+    { model: "claude-opus-4-8", turns: 2, cost_usd: 0.21, total_tokens: 12000 },
+    { model: "claude-haiku-4-5", turns: 1, cost_usd: 0.0054, total_tokens: 1800 },
+  ],
+};
+
+export const TELEMETRY_TURNS = [
+  {
+    task_id: "task-3", session_id: "s1", state: "completed", success: 1,
+    model: "claude-opus-4-8", input_tokens: 6000, output_tokens: 900, total_tokens: 6900,
+    cache_read_input_tokens: 3600, cache_creation_input_tokens: 0, cost_usd: 0.12,
+    duration_ms: 8100, llm_calls: 3, tool_calls: 2,
+    created_at: "2026-06-01T05:00:00+00:00", ended_at: "2026-06-01T05:00:08+00:00",
+  },
+  {
+    task_id: "task-2", session_id: "s1", state: "failed", success: 0,
+    model: "claude-haiku-4-5", input_tokens: 1800, output_tokens: 0, total_tokens: 1800,
+    cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cost_usd: 0.0054,
+    duration_ms: 700, llm_calls: 1, tool_calls: 0,
+    created_at: "2026-06-01T04:59:00+00:00", ended_at: "2026-06-01T04:59:01+00:00",
+  },
+];

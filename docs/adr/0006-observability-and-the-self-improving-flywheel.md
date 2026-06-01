@@ -1,6 +1,6 @@
 # ADR 0006 — Observability & the Self-Improving Flywheel
 
-- **Status:** Accepted (2026-06-01) — implementing the ranked plan (Slices 1–2 shipped)
+- **Status:** Accepted (2026-06-01) — implementing the ranked plan (Slices 1–3 shipped)
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** observability, cost, tracing, metrics, a2a, optimization, flywheel
@@ -115,10 +115,11 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    `/api/telemetry/summary` (totals, success rate, cache-hit ratio, p50/p95
    latency, per-model split) + `/api/telemetry/recent`. Survives restart; no TTL
    (history is the substrate), `prune()` available. *(fixes 5)*
-3. **Surface.** Operator-console telemetry: a per-turn footer (tokens · cost ·
-   latency) and a session/▾history panel (cumulative cost, p50/p95 latency,
-   cache-hit %, per-tool timings). Consumes the data already on the A2A stream.
-   *(fixes 6)*
+3. ✅ **Surface — shipped.** A **System ▸ Telemetry** dashboard
+   (`apps/web/src/telemetry/TelemetrySurface.tsx`): summary cards (cost, turns,
+   success rate, cache-hit %, p50/p95 latency, tokens, tool calls) + a by-model
+   table + a recent-turns table, reading `/api/telemetry/*`. Functional-first
+   (theme-consistent, no charts yet — a follow-up). *(fixes 6)*
 4. **Flywheel / feedback.** Flag turns whose cost/latency exceeds N× the rolling
    median; *prove the levers* (cache-hit %, deferral schema-token savings,
    routing/fallback rates, compaction triggers); feed signal back into the

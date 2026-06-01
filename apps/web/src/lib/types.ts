@@ -266,3 +266,41 @@ export type SetupStatus = {
   setup_complete: boolean;
   presets: string[];
 };
+
+// Telemetry (ADR 0006 Slice 3) — mirrors /api/telemetry/* (telemetry_store.py).
+export type TelemetrySummary = {
+  turns: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cost_usd: number;
+  llm_calls: number;
+  tool_calls: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  success_rate: number;
+  cache_hit_ratio: number;
+  by_model: { model: string; turns: number; cost_usd: number; total_tokens: number }[];
+};
+
+export type TelemetryTurn = {
+  task_id: string;
+  session_id: string;
+  state: string;
+  success: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cost_usd: number;
+  duration_ms: number;
+  llm_calls: number;
+  tool_calls: number;
+  created_at: string;
+  ended_at: string;
+};

@@ -25,6 +25,8 @@ import {
   settingsRestartRequired,
   SLASH_COMMANDS,
   SUBAGENTS,
+  TELEMETRY_SUMMARY,
+  TELEMETRY_TURNS,
   WORKFLOW_RUN_RESULT,
   WORKFLOWS,
 } from "./fixtures.mjs";
@@ -90,6 +92,10 @@ function handleApiGet(pathname) {
       return ACTIVITY_HISTORY;
     case "/api/inbox":
       return INBOX_ITEMS;
+    case "/api/telemetry/summary":
+      return { enabled: true, summary: TELEMETRY_SUMMARY };
+    case "/api/telemetry/recent":
+      return { enabled: true, turns: TELEMETRY_TURNS };
     default:
       return null;
   }

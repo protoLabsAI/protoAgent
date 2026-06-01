@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   Bot,
   Boxes,
   CalendarClock,
@@ -34,6 +35,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
+import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
@@ -45,7 +47,7 @@ import { SetupWizard } from "../setup/SetupWizard";
 // fanning out to sub-views via an in-surface segmented control.
 type Surface = "chat" | "activity" | "studio" | "system";
 type StudioTab = "subagents" | "workflows" | "schedule" | "goals";
-type SystemTab = "runtime" | "settings";
+type SystemTab = "runtime" | "telemetry" | "settings";
 type ActivityTab = "thread" | "inbox";
 type RightPanel = "notes" | "beads";
 type SubagentMode = "single" | "batch";
@@ -933,6 +935,9 @@ export function App() {
               <button className={systemTab === "runtime" ? "active" : ""} onClick={() => setSystemTab("runtime")}>
                 <Gauge size={15} /> Runtime
               </button>
+              <button className={systemTab === "telemetry" ? "active" : ""} onClick={() => setSystemTab("telemetry")}>
+                <BarChart3 size={15} /> Telemetry
+              </button>
               <button className={systemTab === "settings" ? "active" : ""} onClick={() => setSystemTab("settings")}>
                 <Settings2 size={15} /> Settings
               </button>
@@ -1306,6 +1311,7 @@ export function App() {
             </section>
           ) : null}
 
+          {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface onError={setError} /> : null}
           {surface === "system" && systemTab === "settings" ? <SettingsSurface onError={setError} /> : null}
         </main>
 
