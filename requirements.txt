@@ -1,32 +1,6 @@
-gradio>=5.0
-httpx>=0.27
-uvicorn>=0.30
-langfuse>=3.0
-prometheus-client>=0.20
-pyyaml>=6.0
-ruamel.yaml>=0.18  # round-trip YAML that preserves comments in config/langgraph-config.yaml when the drawer writes back edits
-websockets>=12.0
-
-# LangGraph agent backend. Keep the langchain-* lower bounds on the 1.x
-# line — a 0.3.x core/openai resolves against langchain 1.x into a broken
-# `langchain_core` namespace (surfaced by checks.yml in PR #171).
-langchain>=1.2.3
-langchain-core>=1.0
-langgraph>=1.1.0
-langchain-openai>=1.0
-# Durable conversation history — SQLite checkpointer so multi-turn chats
-# survive a server restart (graph/checkpointer.py).
-langgraph-checkpoint-sqlite>=2.0
-
-# MCP client — connect external Model Context Protocol servers (stdio /
-# streamable-HTTP); their tools become agent tools. See tools/mcp_tools.py.
-# Pulls the `mcp` SDK transitively (also used by examples/mcp/echo_server.py).
-langchain-mcp-adapters>=0.2,<0.3
-
-# Starter tools (tools/lg_tools.py)
-ddgs>=9.0
-beautifulsoup4>=4.12
-
-# Scheduler (scheduler/local.py — cron expression parsing for the
-# bundled local backend; the Workstacean adapter doesn't need this)
-croniter>=2.0
+# All-in-one install (the `full` UI tier) = core + the Gradio UI (ADR 0010).
+# `pip install -r requirements.txt` is unchanged — it still gets everything.
+# For a lean headless deploy (--ui none/console) install requirements-core.txt
+# instead, which skips Gradio.
+-r requirements-core.txt
+-r requirements-ui.txt

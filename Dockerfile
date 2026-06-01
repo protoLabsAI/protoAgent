@@ -51,8 +51,18 @@ RUN useradd -m -s /bin/bash -u ${SANDBOX_UID} sandbox
 # the requirements first so this layer stays cached across source-only
 # changes. Forks that need extras (agent-browser, sqlite-vec, pyjwt[crypto])
 # add them to requirements.txt.
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# UI tier (ADR 0010): default 'none' builds the LEAN image (core deps, no
+# Gradio) for a headless server. `--build-arg UI=full` adds the Gradio UI for an
+# all-in-one image. Both requirements files are copied so requirements.txt's
+# `-r` includes resolve. PROTOAGENT_UI is baked so the server runs the matching
+# tier (server.py reads it).
+ARG UI=none
+COPY requirements*.txt /tmp/
+RUN if [ "$UI" = "full" ]; then \
+      pip install --no-cache-dir -r /tmp/requirements.txt; \
+    else \
+      pip install --no-cache-dir -r /tmp/requirements-core.txt; \
+    fi
 
 # Single COPY with a matching .dockerignore covers everything that
 # should ship and excludes .git/, tests/, docs, and dev state. Adding a
@@ -86,6 +96,9 @@ RUN chown -R sandbox:sandbox /opt/protoagent/config
 VOLUME ["/opt/protoagent/config"]
 
 ENV PYTHONPATH=/opt/protoagent
+# UI tier baked from the build arg (ADR 0010): the image runs `--ui $UI` (default
+# 'none' = API + A2A + /metrics only). server.py reads PROTOAGENT_UI.
+ENV PROTOAGENT_UI=${UI}
 
 USER sandbox
 WORKDIR /sandbox

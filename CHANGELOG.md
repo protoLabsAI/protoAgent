@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Headless setup + UI deployment tiers** (ADR 0010): `--ui {full,console,none}`
+  (env `PROTOAGENT_UI`). `none` serves API + A2A + `/metrics` only — no Gradio,
+  no React console — the lean headless stack. `python server.py --setup` (and
+  boot-time auto-complete in the `none` tier) finishes setup from a validated
+  config — no wizard. `GET /healthz` readiness probe (503 until the graph
+  compiles). `gradio` is now an optional dep (`requirements-core.txt` vs
+  `requirements-ui.txt`); the Docker image defaults to the lean tier
+  (`--build-arg UI=full` for the all-in-one). `--headless` is a deprecated alias
+  for `--ui console`.
+
 ## [0.7.0] - 2026-06-01
 
 ### Added

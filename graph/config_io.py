@@ -564,6 +564,22 @@ def mark_setup_complete() -> None:
     SETUP_MARKER_PATH.touch()
 
 
+def validate_for_headless(config) -> tuple[bool, str]:
+    """Can a headless tier compile the graph from this config without a wizard?
+
+    Returns ``(ok, reason)`` (ADR 0010). Requires a model endpoint and a
+    resolvable key — the wizard's job, done here from config + env instead.
+    Used by ``--setup`` and the boot-time auto-complete; on failure the caller
+    fails fast rather than marking a broken config complete.
+    """
+    if not str(getattr(config, "api_base", "") or "").strip():
+        return False, "model.api_base is not set"
+    key = str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        return False, "no model api_key — set model.api_key in config/secrets.yaml or the OPENAI_API_KEY env var"
+    return True, "ok"
+
+
 def reset_setup() -> None:
     """Remove the marker, forcing the wizard to run on next page load.
 
