@@ -1,17 +1,16 @@
 import {
   Loader2,
-  MessageSquarePlus,
-  MoreHorizontal,
+  Plus,
   Send,
   Square,
   TerminalSquare,
-  Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import type { ChatMessage, SlashCommand, ToolCall } from "../lib/types";
-import { chatStore, MAX_ACTIVE_SESSIONS, useChatState } from "./chat-store";
+import { chatStore, useChatState } from "./chat-store";
 import { Markdown } from "./LazyMarkdown";
 import { ToolCalls } from "./ToolCalls";
 
@@ -27,6 +26,7 @@ function useSession(sessionId: string) {
 export function ChatSurface({ onError }: { onError: (message: string) => void }) {
   const chat = useChatState();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
@@ -34,40 +34,72 @@ export function ChatSurface({ onError }: { onError: (message: string) => void })
     }
   }, [chat.currentSessionId, chat.sessions.length]);
 
+  function closeSession(id: string) {
+    // Retire server-side (harvest history → knowledge, purge checkpoints),
+    // best-effort, then drop the tab locally.
+    void api.deleteChatSession(id).catch(() => {});
+    chatStore.deleteSession(id);
+  }
+
   return (
     <section className="panel stage-panel chat-stage">
-      <div className="chat-header">
-        <div className="chat-title-group">
-          <h1>Chat</h1>
-          <p className="panel-kicker">
-            {chat.activeSessions.length}/{MAX_ACTIVE_SESSIONS} mounted
-          </p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => chatStore.createSession()}>
-          <MessageSquarePlus size={15} />
-          New
-        </button>
-      </div>
-
-      <div className="chat-session-tabs" role="tablist" aria-label="Chat sessions">
+      {/* One row: a tab per session (status dot · title · close), then "+".
+          Double-click a title to rename. Replaces the old header + tab strip +
+          per-session title row. */}
+      <div className="chat-tabbar" role="tablist" aria-label="Chat sessions">
         {chat.sessions.map((session) => {
           const active = session.id === chat.currentSessionId;
           const status = chat.sessionStatusMap[session.id] || "idle";
           return (
-            <button
-              className={active ? "active" : ""}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              key={session.id}
-              onClick={() => chatStore.switchSession(session.id)}
-              title={session.title}
-            >
-              <span className={`session-dot ${status}`} />
-              <span>{session.title}</span>
-            </button>
+            <div className={`chat-tab ${active ? "active" : ""}`} role="tab" aria-selected={active} key={session.id}>
+              <span className={`session-dot ${status}`} title={status} />
+              {editingId === session.id ? (
+                <input
+                  className="chat-tab-edit"
+                  autoFocus
+                  defaultValue={session.title}
+                  aria-label="Rename session"
+                  onBlur={(e) => {
+                    chatStore.renameSession(session.id, e.target.value.trim() || session.title);
+                    setEditingId(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    else if (e.key === "Escape") setEditingId(null);
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="chat-tab-label"
+                  onClick={() => chatStore.switchSession(session.id)}
+                  onDoubleClick={() => { chatStore.switchSession(session.id); setEditingId(session.id); }}
+                  title={`${session.title} — double-click to rename`}
+                >
+                  {session.title}
+                </button>
+              )}
+              <button
+                type="button"
+                className="chat-tab-close"
+                title="Close session"
+                aria-label={`Close ${session.title}`}
+                onClick={() => closeSession(session.id)}
+              >
+                <X size={12} />
+              </button>
+            </div>
           );
         })}
+        <button
+          type="button"
+          className="chat-tab-new"
+          title="New chat"
+          aria-label="New chat"
+          onClick={() => chatStore.createSession()}
+        >
+          <Plus size={15} />
+        </button>
       </div>
 
       <div className="chat-session-pool">
@@ -313,38 +345,6 @@ function ChatSessionSlot({
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <div className="panel-header chat-session-header">
-        <div>
-          <input
-            className="session-title-input"
-            value={session.title}
-            onChange={(event) => chatStore.renameSession(session.id, event.target.value)}
-            aria-label="Session title"
-          />
-          <p className="panel-kicker">{session.id}</p>
-        </div>
-        <div className="chat-session-actions">
-          <StatusPill label={status === "streaming" ? statusMessage || "streaming" : status} tone={status === "error" ? "error" : status === "streaming" ? "warning" : "muted"} />
-          <button className="icon-button" type="button" title="Session menu">
-            <MoreHorizontal size={16} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            title="Delete session"
-            disabled={status === "streaming"}
-            onClick={() => {
-              // Retire server-side (harvest history → knowledge, purge
-              // checkpoints), best-effort, then drop the tab locally.
-              void api.deleteChatSession(session.id).catch(() => {});
-              chatStore.deleteSession(session.id);
-            }}
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
-      </div>
-
       <div className="message-list" ref={listRef}>
         {messages.length === 0 ? (
           <div className="empty-state">
@@ -373,6 +373,12 @@ function ChatSessionSlot({
       </div>
 
       <div className="composer-wrap">
+        {status === "streaming" && statusMessage ? (
+          <div className="composer-status">
+            <Loader2 className="spin" size={12} />
+            <span>{statusMessage}</span>
+          </div>
+        ) : null}
         {slashActive ? (
           <div className="slash-menu" role="listbox">
             {slashMatches.map((cmd, index) => (
@@ -474,13 +480,3 @@ function ChatSessionSlot({
   );
 }
 
-function StatusPill({ label, tone }: { label: string; tone: "warning" | "error" | "muted" }) {
-  // Tool status lines can be long (e.g. "🔧 web_search: {…}"); keep the pill
-  // compact and surface the full text on hover. CSS also clamps the width.
-  const short = label.length > 56 ? `${label.slice(0, 55)}…` : label;
-  return (
-    <span className={`status-pill ${tone}`} title={label}>
-      {short}
-    </span>
-  );
-}
