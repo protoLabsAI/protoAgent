@@ -37,6 +37,8 @@ build/
 .claude/
 .worktrees/
 worktrees/
+# Local session handoff / working notes — transient state, not shipped to forks
+HANDOFF.md
 
 # VitePress build artifacts + node modules
 node_modules/
