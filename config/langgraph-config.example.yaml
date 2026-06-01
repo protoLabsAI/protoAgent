@@ -8,11 +8,11 @@
 
 model:
   provider: openai
-  # Default LiteLLM gateway alias. Set an alias called ``protolabs/agent``
+  # Default LiteLLM gateway alias. Set an alias called ``protolabs/reasoning``
   # (or whatever you rename it to) in your gateway config pointing at the
   # real model — swapping the model becomes a gateway edit, not a code
   # change in the fork.
-  name: protolabs/agent
+  name: protolabs/reasoning
   api_base: http://gateway:4000/v1
   api_key: ""  # falls back to OPENAI_API_KEY env
   temperature: 0.2

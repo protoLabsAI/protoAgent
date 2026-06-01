@@ -2304,6 +2304,39 @@ def _main():
             return {"enabled": False, "cleared": False}
         return {"enabled": True, "cleared": _goal_controller.store.clear(session_id)}
 
+    # --- Playbooks (skills surface, ADR 0009) ------------------------------
+    # Browse + manage the procedural-memory skill index (skills.db) the operator
+    # was otherwise blind to. "Playbooks" is the operator-facing name for the
+    # skill-v1 artifacts (disk = pinned SKILL.md, emitted = agent-learned).
+    @fastapi_app.get("/api/playbooks")
+    async def _api_playbooks():
+        if _skills_index is None:
+            return {"enabled": False, "playbooks": []}
+        try:
+            skills = _skills_index.all_skills()
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[playbooks] all_skills failed")
+            return {"enabled": True, "playbooks": []}
+        # Drop the (potentially large) prompt_template from the list payload;
+        # the table only needs metadata. Sort pinned-first, then by confidence.
+        out = [
+            {k: v for k, v in s.items() if k != "prompt_template"}
+            for s in skills
+        ]
+        out.sort(key=lambda s: (s.get("source") != "disk", -(s.get("confidence") or 0)))
+        return {"enabled": True, "playbooks": out}
+
+    @fastapi_app.delete("/api/playbooks/{skill_id}")
+    async def _api_playbook_delete(skill_id: int):
+        if _skills_index is None:
+            return {"enabled": False, "deleted": False}
+        try:
+            _skills_index.delete_skill(skill_id)
+            return {"enabled": True, "deleted": True}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[playbooks] delete failed")
+            return {"enabled": True, "deleted": False, "error": str(exc)}
+
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency rollups from the local store. Powers the operator
     # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"

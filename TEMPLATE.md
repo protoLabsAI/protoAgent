@@ -135,7 +135,7 @@ include_subagents=False)` in `server.py`.
 ## 7. Set up the model
 
 The template points at a LiteLLM gateway alias called
-`protolabs/agent`. Two options:
+`protolabs/reasoning`. Two options:
 
 1. **Add a gateway alias** called `protolabs/<your-name>`
    pointing at whichever model you want, then update

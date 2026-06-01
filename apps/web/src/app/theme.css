@@ -2495,3 +2495,53 @@ textarea {
   color: var(--fg-muted);
   margin: 2px 0 0;
 }
+
+/* Playbooks surface (ADR 0009) */
+.playbook-search {
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 13px;
+}
+.playbook-search:focus { outline: none; border-color: var(--border-strong); }
+.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.playbook-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.playbook-card:hover { border-color: var(--border-strong); }
+.playbook-main { min-width: 0; }
+.playbook-title { display: flex; align-items: center; gap: 8px; }
+.playbook-title strong { font-size: 13.5px; }
+.playbook-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--fg-muted); white-space: nowrap;
+}
+.playbook-badge.pinned { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
+.playbook-badge.learned { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+.playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-secondary); }
+.playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
+.playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg-hover); color: var(--fg-muted); }
+.playbook-meta {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  font-size: 11.5px; color: var(--fg-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.icon-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: transparent; color: var(--fg-muted); cursor: pointer; margin-top: 2px;
+}
+.icon-button:hover { background: var(--bg-hover); color: var(--fg); }
+.icon-button.danger:hover { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
+.playbook-foot { margin-top: 16px; font-size: 11.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }

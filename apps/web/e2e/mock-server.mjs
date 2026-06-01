@@ -24,6 +24,7 @@ import {
   SETTINGS_SCHEMA,
   settingsRestartRequired,
   SLASH_COMMANDS,
+  PLAYBOOKS,
   SUBAGENTS,
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
@@ -99,6 +100,8 @@ function handleApiGet(pathname) {
       return { enabled: true, turns: TELEMETRY_TURNS };
     case "/api/telemetry/insights":
       return { enabled: true, insights: TELEMETRY_INSIGHTS };
+    case "/api/playbooks":
+      return { enabled: true, playbooks: PLAYBOOKS };
     default:
       return null;
   }
@@ -200,6 +203,9 @@ const server = createServer(async (req, res) => {
     }
     if (/^\/api\/workflows\/[^/]+\/run$/.test(pathname)) {
       return sendJson(res, WORKFLOW_RUN_RESULT);
+    }
+    if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
+      return sendJson(res, { enabled: true, deleted: true });
     }
     return sendJson(res, { ok: true });
   }
