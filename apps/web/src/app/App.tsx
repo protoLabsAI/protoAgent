@@ -798,6 +798,15 @@ export function App() {
 
   const workspaceCols = `${railCollapsed ? "0px" : "72px"} minmax(0, 1fr) ${rightCollapsed ? "0px" : `${rightWidth}px`}`;
 
+  // One glanceable health light for the topbar (detail on hover; full status in
+  // System → Runtime). Worst-state wins.
+  const health: { tone: "ok" | "warning" | "error"; label: string } =
+    runtime && !runtime.setup_complete ? { tone: "warning", label: "setup pending" }
+    : runtime && !runtime.graph_loaded ? { tone: "error", label: "graph offline" }
+    : status === "error" ? { tone: "error", label: "error" }
+    : status === "streaming" || status === "refreshing" || status.includes("…") ? { tone: "warning", label: status }
+    : { tone: "ok", label: "ready" };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -809,46 +818,22 @@ export function App() {
           </div>
         </div>
         <div className="topbar-status">
-          <StatusPill
-            label={runtime?.setup_complete ? "setup complete" : "setup pending"}
-            tone={statusTone(runtime?.setup_complete)}
-          />
-          <StatusPill
-            label={runtime?.graph_loaded ? "graph loaded" : "graph offline"}
-            tone={statusTone(runtime?.graph_loaded)}
-          />
-          <StatusPill label={status} tone={status === "error" ? "error" : "muted"} />
-          <span
-            className={`live-dot ${live ? "is-live" : ""}`}
-            role="status"
-            aria-label={live ? "event stream connected" : "event stream offline"}
-            title={live ? "Live — event stream connected" : "Event stream offline"}
+          <button
+            type="button"
+            className={`status-dot tone-${health.tone}`}
+            onClick={() => void refreshAll()}
+            title={
+              `Setup: ${runtime?.setup_complete ? "complete" : "pending"}\n` +
+              `Graph: ${runtime?.graph_loaded ? "loaded" : "offline"}\n` +
+              `Event stream: ${live ? "connected" : "offline"}\n` +
+              `Status: ${status}` +
+              (error ? `\nError: ${error}` : "") +
+              `\n\nClick to refresh.`
+            }
+            aria-label={`Status: ${health.label}. Click to refresh.`}
             data-testid="live-indicator"
             data-live={live ? "true" : "false"}
           />
-          <button
-            className={`icon-button ${railCollapsed ? "is-off" : ""}`}
-            type="button"
-            onClick={() => setRailCollapsed(railCollapsed ? "" : "1")}
-            title={railCollapsed ? "Show rail" : "Hide rail"}
-            aria-label="Toggle rail"
-            data-testid="toggle-rail"
-          >
-            <PanelLeft size={16} />
-          </button>
-          <button
-            className={`icon-button ${rightCollapsed ? "is-off" : ""}`}
-            type="button"
-            onClick={() => setRightCollapsed(rightCollapsed ? "" : "1")}
-            title={rightCollapsed ? "Show side panel" : "Hide side panel"}
-            aria-label="Toggle side panel"
-            data-testid="toggle-right"
-          >
-            <PanelRight size={16} />
-          </button>
-          <button className="icon-button" type="button" onClick={() => void refreshAll()} title="Refresh">
-            <RefreshCw size={16} />
-          </button>
         </div>
       </header>
 
@@ -1595,6 +1580,33 @@ export function App() {
           ) : null}
         </aside>
       </div>
+
+      <footer className="utility-bar">
+        <button
+          type="button"
+          className={`util-btn ${railCollapsed ? "is-off" : ""}`}
+          onClick={() => setRailCollapsed(railCollapsed ? "" : "1")}
+          title={railCollapsed ? "Show rail" : "Hide rail"}
+          aria-label="Toggle rail"
+          data-testid="toggle-rail"
+        >
+          <PanelLeft size={14} />
+          <span>{railCollapsed ? "Show rail" : "Hide rail"}</span>
+        </button>
+        <div className="util-spacer" />
+        <button
+          type="button"
+          className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
+          onClick={() => setRightCollapsed(rightCollapsed ? "" : "1")}
+          title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+          aria-label="Toggle side panel"
+          data-testid="toggle-right"
+        >
+          <span>{rightCollapsed ? "Show panel" : "Hide panel"}</span>
+          <PanelRight size={14} />
+        </button>
+      </footer>
+
       <SetupWizard
         open={runtime?.setup_complete === false}
         projectPath={projectPath}
