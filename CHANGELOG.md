@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-01
+
 ### Added
 - MCP per-server tool allowlist (`tools.include` / `tools.exclude`) and lazy
   `enabled: false` connect, bounding the per-turn tool-schema footprint
@@ -35,3 +37,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Releases cut before this changelog was introduced are recorded on the
 [GitHub Releases](https://github.com/protoLabsAI/protoAgent/releases) page.
+
