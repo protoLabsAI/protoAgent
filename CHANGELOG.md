@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- Reconcile drift after the recent releases: fix the deploy guide's stale
+  "every merge auto-cuts a patch" note (releases are manual now), document the
+  UI tiers + `--build-arg UI=full` for the image, link the orphaned "Eval your
+  fork" guide, and run the OpenShell deploy example with `--ui none`.
+
 ## [0.8.0] - 2026-06-01
 
 ### Added

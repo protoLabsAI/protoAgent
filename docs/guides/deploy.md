@@ -88,11 +88,19 @@ services:
 
 Watchtower polls `latest` every 60 seconds and recreates the container when the image hash changes.
 
+> **UI tier (ADR 0010):** the image defaults to **`--ui none`** — API + A2A +
+> `/metrics`, no console, no Gradio, core deps only (the lean server stack). For
+> the Gradio UI in the image, build with **`--build-arg UI=full`** (adds
+> `gradio`); it then runs `full`. Setup is headless in `none` — drop a config +
+> `OPENAI_API_KEY`, the graph compiles on boot (or run `--setup`); `GET /healthz`
+> reports readiness. See [Sandboxing & egress](/guides/sandboxing) and the
+> [env-vars reference](/reference/environment-variables#deployment-ui-tier-adr-0010).
+
 ## 7. Cut a release
 
-From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `minor` / `major`. It opens a bump PR, auto-merges it, and tags `vX.Y.Z`, which triggers `release.yml` → stable semver Docker tags → GitHub release → Discord post (if configured).
+From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `minor` / `major`. It opens a bump PR, auto-merges it once the required checks pass, and tags `vX.Y.Z`, which triggers `release.yml` → stable semver Docker tags → GitHub release → Discord post (if configured).
 
-After the first manual run, every non-release PR merge auto-triggers `prepare-release.yml` with a `patch` bump. Manual dispatch is only for `minor` / `major` bumps.
+Releases are **manual / on-demand** — merging a PR does **not** cut a release. See the [Releasing runbook](/guides/releasing) for the changelog protocol + the branch ruleset.
 
 ## Related
 

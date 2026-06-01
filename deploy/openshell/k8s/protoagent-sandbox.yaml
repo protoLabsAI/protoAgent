@@ -27,7 +27,7 @@ spec:
       containers:
         - name: protoagent
           image: ghcr.io/protolabsai/protoagent:latest
-          command: ["python", "server.py", "--port", "7870"]
+          command: ["python", "server.py", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010)
           ports:
             - containerPort: 7870
           env:
