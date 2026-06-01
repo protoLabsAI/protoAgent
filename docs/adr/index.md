@@ -17,3 +17,4 @@ decision, numbered, never deleted (supersede instead).
 | [0006](./0006-observability-and-the-self-improving-flywheel.md) | Observability & the Self-Improving Flywheel | Accepted |
 | [0007](./0007-directory-aware-operator-agent.md) | Directory-Aware Operator Primitives (enabling a "Roxy" fork) | Accepted |
 | [0008](./0008-sandboxing-and-openshell.md) | Sandboxing posture & NVIDIA OpenShell | Accepted |
+| [0009](./0009-studio-control-stack.md) | The Studio control stack (goals · workflows · subagents · skills) | Accepted |
