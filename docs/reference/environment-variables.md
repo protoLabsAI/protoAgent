@@ -15,6 +15,16 @@ Every env var the template reads at runtime.
 | `AGENT_NAME` | `protoagent` | Short slug. Used as the Prometheus metric prefix, Langfuse trace tag, and in log labels. Should match what you used when forking. |
 | `<AGENT_NAME>_API_KEY` | (unset — no auth) | Expected value of the `X-API-Key` header if you want to require auth on `/a2a` and `/v1/*`. Uppercased, non-alphanumeric → underscore. e.g. `MY_AGENT_API_KEY`. |
 
+## Deployment / UI tier (ADR 0010)
+
+| Variable | Default | What |
+|---|---|---|
+| `PROTOAGENT_UI` | `full` | UI deployment tier (or `--ui`): `full` (Gradio + React console + API/A2A), `console` (console + API/A2A, no Gradio), `none` (API + A2A + `/metrics` only — the lean headless stack). The Docker image defaults to `none`. |
+| `PROTOAGENT_HEADLESS` | (unset) | **Deprecated** alias for `PROTOAGENT_UI=console` (or `--headless`). |
+| `PROTOAGENT_HEADLESS_SETUP` | (unset) | Set `1`/`true` to auto-complete setup from a validated config even outside the `none` tier (no wizard). The `none` tier implies this. |
+
+Setup without the wizard: `python server.py --setup` validates the live config (`model.api_base` set + key resolvable via `secrets.yaml`/`OPENAI_API_KEY`) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
+
 ## Authentication — A2A bearer token
 
 | Variable | Default | What |
