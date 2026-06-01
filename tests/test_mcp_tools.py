@@ -9,6 +9,7 @@ The real stdio round-trip is covered by the end-to-end check in the PR.
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 
 from graph.config import LangGraphConfig
@@ -22,7 +23,20 @@ def test_stdio_connection_mapping() -> None:
     conn = _server_connection(
         {"name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "x"], "env": {"A": "1"}}
     )
-    assert conn == {"transport": "stdio", "command": "npx", "args": ["-y", "x"], "env": {"A": "1"}}
+    # stdio servers inherit the parent env by default, with the per-server
+    # override layered on top.
+    assert conn["transport"] == "stdio"
+    assert conn["command"] == "npx"
+    assert conn["args"] == ["-y", "x"]
+    assert conn["env"] == {**os.environ, "A": "1"}
+
+
+def test_stdio_connection_inherit_env_false() -> None:
+    # inherit_env: false → only the explicit per-server env (no parent env).
+    conn = _server_connection(
+        {"name": "fs", "transport": "stdio", "command": "npx", "inherit_env": False, "env": {"A": "1"}}
+    )
+    assert conn["env"] == {"A": "1"}
 
 
 def test_http_connection_mapping_and_alias() -> None:
