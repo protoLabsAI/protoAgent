@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-01
+
 ### Added
 - **Operator primitives** (ADR 0007): a fenced multi-project filesystem toolset
   (`tools/fs_tools.py`) + project registry — opt-in, off by default. Enables a
