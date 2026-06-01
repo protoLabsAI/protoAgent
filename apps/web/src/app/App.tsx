@@ -30,6 +30,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
@@ -232,6 +233,10 @@ export function App() {
   const [rightWidthStr, setRightWidthStr] = useLocalStorageState("protoagent.rightWidth", "360");
   const rightWidth = Math.min(720, Math.max(280, parseInt(rightWidthStr, 10) || 360));
   const [live, setLive] = useState(false);
+  // Shared custom confirm for destructive actions (notes/beads delete).
+  const [confirmState, setConfirmState] = useState<
+    null | { title: string; message?: string; confirmLabel?: string; onConfirm: () => void }
+  >(null);
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
@@ -630,6 +635,17 @@ export function App() {
 
   function deleteActiveNote() {
     if (!workspace || workspace.tabOrder.length <= 1) return;
+    const name = workspace.tabs[workspace.activeTabId]?.name || "this note";
+    setConfirmState({
+      title: "Delete this note?",
+      message: `"${name}" will be removed from the workspace.`,
+      confirmLabel: "Delete note",
+      onConfirm: doDeleteActiveNote,
+    });
+  }
+
+  function doDeleteActiveNote() {
+    if (!workspace || workspace.tabOrder.length <= 1) return;
     const nextOrder = workspace.tabOrder.filter((id) => id !== workspace.activeTabId);
     const nextTabs = { ...workspace.tabs };
     delete nextTabs[workspace.activeTabId];
@@ -753,9 +769,18 @@ export function App() {
     }
   }
 
-  async function deleteIssue(issue: BeadsIssue) {
+  function deleteIssue(issue: BeadsIssue) {
     if (!projectPath.trim() || beadsBusy) return;
-    if (!window.confirm(`Delete ${issue.id}?`)) return;
+    setConfirmState({
+      title: `Delete ${issue.id}?`,
+      message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the beads store.`,
+      confirmLabel: "Delete",
+      onConfirm: () => void doDeleteIssue(issue),
+    });
+  }
+
+  async function doDeleteIssue(issue: BeadsIssue) {
+    if (!projectPath.trim()) return;
     setBeadsBusy(true);
     setError("");
     try {
@@ -1598,6 +1623,18 @@ export function App() {
         projectPath={projectPath}
         onProjectPathChange={setProjectPath}
         onFinished={() => void refreshAll()}
+      />
+
+      <ConfirmDialog
+        open={confirmState !== null}
+        title={confirmState?.title ?? ""}
+        message={confirmState?.message}
+        confirmLabel={confirmState?.confirmLabel}
+        onConfirm={() => {
+          confirmState?.onConfirm();
+          setConfirmState(null);
+        }}
+        onCancel={() => setConfirmState(null)}
       />
     </div>
   );
