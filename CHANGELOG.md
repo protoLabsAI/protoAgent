@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Compaction telemetry signal (`*_compactions_total`, ADR 0006): with routing +
+  tool deferral + compaction now all measured, every optimization lever the
+  agent has is observable (`/api/telemetry/insights` `unproven_levers` is empty).
+
 ## [0.5.0] - 2026-06-01
 
 ### Added
