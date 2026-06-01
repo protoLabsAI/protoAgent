@@ -284,7 +284,9 @@ Connect external [Model Context Protocol](../guides/mcp.md) servers; their tools
 | `enabled` | `false` | Connect the configured servers and expose their tools. |
 | `timeout_seconds` | `20` | Per-server discovery timeout. A slow/unreachable server is skipped, never fatal. |
 | `denylist` | `[]` | Namespaced tool names to drop (e.g. `filesystem__write_file`). |
-| `servers` | `[]` | List of `{name, transport, …}`. `stdio` → `command`/`args`/`env`/`cwd`; `streamable_http`/`sse` → `url`/`headers`. |
+| `servers` | `[]` | List of `{name, transport, …}`. `stdio` → `command`/`args`/`env`/`cwd`; `streamable_http`/`sse` → `url`/`headers`. Per-server: `enabled: false` skips connecting it (lazy); `tools: {include: [...], exclude: [...]}` filters which of its tools bind. |
+
+Per-server `tools.include` is an **allowlist** (only those tools bind) — the fix for a server with a large catalog flooding context; `exclude` drops from the remainder (`include` wins on conflict). The global `denylist` is the cross-server hard block. Both match the bare or namespaced tool name. See [ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md) on tool pollution.
 
 Servers are discovered at startup/reload. `GET /api/runtime/status` reports `mcp.servers` and `mcp.tool_count`. See the [MCP guide](../guides/mcp.md) and `examples/mcp/echo_server.py`.
 

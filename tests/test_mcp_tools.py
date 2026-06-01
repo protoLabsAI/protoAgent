@@ -114,6 +114,78 @@ def test_denylist_and_core_collision_filtered(monkeypatch) -> None:
     assert meta[0]["tool_count"] == 1
 
 
+def test_disabled_server_not_connected(monkeypatch) -> None:
+    # enabled: false → the server is skipped before any connection attempt.
+    calls = {"connected": False}
+
+    class TripwireClient:
+        def __init__(self, connections, tool_name_prefix=False):
+            calls["connected"] = True
+
+        async def get_tools(self):
+            return [SimpleNamespace(name="x__t")]
+
+    monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", TripwireClient)
+    _clients, tools, meta = build_mcp_tools(
+        _cfg([{"name": "x", "transport": "stdio", "command": "python", "args": ["s.py"], "enabled": False}])
+    )
+    assert tools == [] and meta == []
+    assert calls["connected"] is False
+
+
+def test_include_allowlist_keeps_only_listed(monkeypatch) -> None:
+    _fake_client_factory(monkeypatch, by_server={
+        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b"), SimpleNamespace(name="s__c")],
+    })
+    # include matches the bare tool name (what you'd configure).
+    cfg = _cfg([{
+        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
+        "tools": {"include": ["a", "c"]},
+    }])
+    _clients, tools, meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["s__a", "s__c"]
+    assert meta[0]["tool_count"] == 2
+
+
+def test_exclude_drops_listed(monkeypatch) -> None:
+    _fake_client_factory(monkeypatch, by_server={
+        "s": [SimpleNamespace(name="s__keep"), SimpleNamespace(name="s__drop")],
+    })
+    cfg = _cfg([{
+        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
+        "tools": {"exclude": ["drop"]},
+    }])
+    _clients, tools, _meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["s__keep"]
+
+
+def test_include_wins_over_same_server_exclude(monkeypatch) -> None:
+    # A name in both include and exclude is kept — explicit inclusion wins.
+    _fake_client_factory(monkeypatch, by_server={
+        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b")],
+    })
+    cfg = _cfg([{
+        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
+        "tools": {"include": ["a"], "exclude": ["a"]},
+    }])
+    _clients, tools, _meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["s__a"]
+
+
+def test_global_denylist_overrides_include(monkeypatch) -> None:
+    # The cross-server denylist is the hard safety net — include cannot revive it.
+    _fake_client_factory(monkeypatch, by_server={
+        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__danger")],
+    })
+    cfg = _cfg([{
+        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
+        "tools": {"include": ["a", "danger"]},
+    }])
+    cfg.mcp_denylist = ["s__danger"]
+    _clients, tools, _meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["s__a"]
+
+
 def test_one_bad_server_does_not_break_others(monkeypatch) -> None:
     _fake_client_factory(monkeypatch, by_server={
         "good": [SimpleNamespace(name="good__t")],

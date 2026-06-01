@@ -225,7 +225,12 @@ class LangGraphConfig:
     # (stdio or streamable-HTTP); their tools become agent tools, namespaced
     # ``<server>__<tool>`` so they can't shadow core tools. OFF by default —
     # configuring a server is the opt-in. ``servers`` entries are
-    # ``{name, transport, command/args/env | url/headers}``. See tools/mcp_tools.py.
+    # ``{name, transport, command/args/env | url/headers}`` plus two optional
+    # context-control keys: ``enabled: false`` skips connecting that server
+    # entirely (lazy), and ``tools: {include: [...], exclude: [...]}`` filters
+    # which of its tools are bound — ``include`` is an allowlist (only those
+    # survive), the surgical defense against a large catalog flooding context.
+    # ``denylist`` is a cross-server hard block. See tools/mcp_tools.py.
     mcp_enabled: bool = False
     mcp_servers: list[dict] = field(default_factory=list)
     mcp_timeout_seconds: float = 20.0
