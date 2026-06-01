@@ -2309,6 +2309,42 @@ def _main():
             return {"enabled": False, "turns": []}
         return {"enabled": True, "turns": _telemetry_store.recent(limit=min(max(1, limit), 500))}
 
+    @fastapi_app.get("/api/telemetry/insights")
+    async def _api_telemetry_insights():
+        # Advise-only flywheel signal (ADR 0006 Slice 4): flag outlier turns +
+        # prove the levers we can measure from the per-turn store. Read-only.
+        if _telemetry_store is None:
+            return {"enabled": False, "insights": None}
+        import pricing
+
+        s = _telemetry_store.summary()
+        flagged = _telemetry_store.outliers()
+        # Cache lever (proven): estimated $ saved by prompt-cache reads, billed at
+        # the dominant model's input rate (the per-turn store keeps no per-call
+        # model breakdown of cache reads).
+        by_model = s.get("by_model") or []
+        dom_model = by_model[0]["model"] if by_model else ((_graph_config.model_name if _graph_config else "") or "")
+        cache_saved = pricing.cache_read_savings_usd(dom_model, s.get("cache_read_input_tokens", 0))
+        return {
+            "enabled": True,
+            "insights": {
+                "turns": s.get("turns", 0),
+                "flagged": flagged,
+                "flagged_count": len(flagged),
+                "levers": {
+                    "cache": {
+                        "hit_ratio": s.get("cache_hit_ratio", 0.0),
+                        "read_tokens": s.get("cache_read_input_tokens", 0),
+                        "est_savings_usd": cache_saved,
+                    },
+                    "routing": {"by_model": by_model},
+                    "success_rate": s.get("success_rate", 0.0),
+                },
+                # Levers that need extra per-turn signals before we can prove them.
+                "unproven_levers": ["tool deferral (schema-token savings)", "compaction", "model routing detail"],
+            },
+        }
+
     # --- Live config / SOUL editing ----------------------------------------
     # GET returns the current config + persona so external clients (the
     # Gradio drawer is one; curl is another) can mirror what's running.

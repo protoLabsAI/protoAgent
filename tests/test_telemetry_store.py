@@ -97,6 +97,41 @@ def test_prune(store):
     assert [r["task_id"] for r in store.recent()] == ["new"]
 
 
+def test_outliers_flags_expensive_and_slow_turns(store):
+    # A baseline of cheap/fast turns + one expensive + one slow.
+    for i in range(8):
+        store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500))
+    store.record(_row("pricey", cost_usd=0.20, duration_ms=500))   # ≥5× median cost
+    store.record(_row("slow", cost_usd=0.01, duration_ms=9000))    # ≥5× median latency
+    flagged = {f["task_id"]: f for f in store.outliers(cost_multiple=5, latency_multiple=5)}
+    assert "pricey" in flagged and "slow" in flagged
+    assert "base0" not in flagged
+    assert any("cost" in r for r in flagged["pricey"]["reasons"])
+    assert any("latency" in r for r in flagged["slow"]["reasons"])
+
+
+def test_outliers_empty_store(store):
+    assert store.outliers() == []
+
+
+def test_cache_read_savings_usd():
+    import pricing
+
+    # opus input rate 0.000015, discount 0.9 → 10000 cached reads save ~0.135
+    saved = pricing.cache_read_savings_usd("claude-opus-4-8", 10000)
+    assert saved == round(10000 * 0.000015 * 0.9, 6)
+    assert pricing.cache_read_savings_usd("claude-opus-4-8", 0) == 0.0
+
+
+def test_median_helper():
+    from telemetry_store import _median
+
+    assert _median([]) == 0
+    assert _median([5]) == 5
+    assert _median([1, 3]) == 2
+    assert _median([3, 1, 2]) == 2
+
+
 def test_percentile_helper():
     assert _percentile([], 50) == 0
     assert _percentile([10], 95) == 10

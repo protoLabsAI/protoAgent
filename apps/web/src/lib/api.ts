@@ -13,6 +13,7 @@ import type {
   SettingsGroup,
   SlashCommand,
   Subagent,
+  TelemetryInsights,
   TelemetrySummary,
   TelemetryTurn,
   ToolEvent,
@@ -183,6 +184,12 @@ export const api = {
   telemetryRecent(limit = 50) {
     return request<{ enabled: boolean; turns: TelemetryTurn[] }>(
       `/api/telemetry/recent?limit=${limit}`,
+    );
+  },
+
+  telemetryInsights() {
+    return request<{ enabled: boolean; insights: TelemetryInsights | null }>(
+      "/api/telemetry/insights",
     );
   },
 

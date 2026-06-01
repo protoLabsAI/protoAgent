@@ -304,3 +304,15 @@ export type TelemetryTurn = {
   created_at: string;
   ended_at: string;
 };
+
+export type TelemetryInsights = {
+  turns: number;
+  flagged: (TelemetryTurn & { reasons: string[] })[];
+  flagged_count: number;
+  levers: {
+    cache: { hit_ratio: number; read_tokens: number; est_savings_usd: number };
+    routing: { by_model: { model: string; turns: number; cost_usd: number; total_tokens: number }[] };
+    success_rate: number;
+  };
+  unproven_levers: string[];
+};

@@ -1,5 +1,7 @@
 import {
   Activity,
+  AlertTriangle,
+  CheckCircle2,
   Clock,
   Coins,
   Database,
@@ -11,7 +13,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
-import type { TelemetrySummary, TelemetryTurn } from "../lib/types";
+import type { TelemetryInsights, TelemetrySummary, TelemetryTurn } from "../lib/types";
 
 // Telemetry dashboard (ADR 0006 Slice 3) — reads /api/telemetry/* (the local
 // per-turn rollup store). Summary cards + a recent-turns table. Functional
@@ -41,16 +43,22 @@ function pct(n: number): string {
 export function TelemetrySurface({ onError }: { onError: (message: string) => void }) {
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [turns, setTurns] = useState<TelemetryTurn[]>([]);
+  const [insights, setInsights] = useState<TelemetryInsights | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const [s, r] = await Promise.all([api.telemetrySummary(), api.telemetryRecent(50)]);
+      const [s, r, i] = await Promise.all([
+        api.telemetrySummary(),
+        api.telemetryRecent(50),
+        api.telemetryInsights(),
+      ]);
       setEnabled(s.enabled && r.enabled);
       setSummary(s.summary);
       setTurns(r.turns || []);
+      setInsights(i.insights);
       onError("");
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -82,6 +90,38 @@ export function TelemetrySurface({ onError }: { onError: (message: string) => vo
           <p className="empty-note">No turns recorded yet — run a turn and refresh.</p>
         ) : (
           <>
+            {insights ? (
+              <div className="telemetry-insights" data-testid="telemetry-insights">
+                <div className={`insight-row ${insights.flagged_count ? "warn" : "ok"}`}>
+                  {insights.flagged_count ? (
+                    <><AlertTriangle size={15} /> {insights.flagged_count} turn{insights.flagged_count > 1 ? "s" : ""} flagged (≥5× median cost or latency)</>
+                  ) : (
+                    <><CheckCircle2 size={15} /> No cost or latency outliers</>
+                  )}
+                </div>
+                <div className="insight-row ok">
+                  <CheckCircle2 size={15} /> Prompt cache: {pct(insights.levers.cache.hit_ratio)} hit ·
+                  ~{usd(insights.levers.cache.est_savings_usd)} saved
+                </div>
+                {insights.flagged.length ? (
+                  <ul className="insight-flags">
+                    {insights.flagged.slice(0, 5).map((f) => (
+                      <li key={f.task_id}>
+                        <span className="flag-when">{(f.ended_at || "").replace("T", " ").slice(5, 19)}</span>
+                        <span className="flag-model">{f.model || "—"}</span>
+                        <span className="flag-reason">{f.reasons.join(" · ")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {insights.unproven_levers.length ? (
+                  <p className="insight-note">
+                    Not yet measured: {insights.unproven_levers.join(", ")}.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="metric-grid">
               <Metric icon={<Coins size={16} />} label="Total cost" value={usd(summary.cost_usd)} />
               <Metric icon={<Hash size={16} />} label="Turns" value={String(summary.turns)} />
