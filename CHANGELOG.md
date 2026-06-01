@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-01
+
 ### Added
 - **Playbooks surface** (ADR 0009) — a Knowledge ▸ Playbooks console surface to
   browse + manage the procedural-memory skill index (`skills.db`): pinned
