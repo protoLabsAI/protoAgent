@@ -1,0 +1,28 @@
+# Run protoAgent under NVIDIA OpenShell — Docker Compose (ADR 0008).
+#
+# This brings up the OpenShell **gateway** (the control plane). protoAgent then
+# runs as an OpenShell *sandbox* the gateway manages via the docker driver — see
+# create-protoagent-sandbox.sh (the agent is NOT a plain compose service; the
+# gateway spins its container with the Landlock/seccomp/egress policy applied).
+#
+# Gateway config below is verbatim from OpenShell's "Running the Gateway as a
+# Container" docs (TLS disabled = local/dev; enable mTLS for anything shared).
+# Verify image tag + env names against your installed OpenShell release.
+
+services:
+  openshell-gateway:
+    image: ghcr.io/nvidia/openshell/gateway:latest
+    container_name: openshell-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"      # localhost only
+    volumes:
+      - openshell-state:/var/openshell
+      - /var/run/docker.sock:/var/run/docker.sock   # docker driver provisions sandboxes
+    environment:
+      OPENSHELL_DRIVERS: docker
+      OPENSHELL_DB_URL: sqlite:/var/openshell/openshell.db
+      OPENSHELL_DISABLE_TLS: "true"   # DEV ONLY — set OPENSHELL_ENABLE_MTLS_AUTH=true + certs for shared hosts
+
+volumes:
+  openshell-state:

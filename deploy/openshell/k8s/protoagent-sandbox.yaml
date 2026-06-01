@@ -1,0 +1,47 @@
+# protoAgent as an OpenShell-managed sandbox on Kubernetes (ADR 0008).
+#
+# TEMPLATE — the Sandbox CRD shape comes from the Agent Sandbox SIG + OpenShell's
+# policy attachment, both pre-1.0 and changing between releases. Treat this as a
+# starting point: verify the apiVersion/kind/fields against the Agent Sandbox +
+# OpenShell versions you installed (`kubectl explain sandbox`).
+#
+# The policy ConfigMap is generated from protoAgent config:
+#   python scripts/gen_openshell_policy.py --config config/langgraph-config.yaml --out policy.yaml
+#   kubectl -n openshell create configmap protoagent-openshell-policy --from-file=policy.yaml
+---
+apiVersion: agents.x-k8s.io/v1alpha1     # verify: kubectl get crd | grep sandbox
+kind: Sandbox
+metadata:
+  name: protoagent
+  namespace: openshell
+  labels:
+    app: protoagent
+  annotations:
+    # OpenShell reads the policy that fences this sandbox (Landlock fs + seccomp
+    # + deny-by-default egress). Annotation key is release-specific — confirm it.
+    openshell.nvidia.com/policy-configmap: protoagent-openshell-policy
+spec:
+  podTemplate:
+    spec:
+      serviceAccountName: openshell-sandbox   # created by the OpenShell chart
+      containers:
+        - name: protoagent
+          image: ghcr.io/protolabsai/protoagent:latest
+          command: ["python", "server.py", "--port", "7870"]
+          ports:
+            - containerPort: 7870
+          env:
+            - name: PROTOAGENT_INSTANCE         # ADR 0004 — isolate this deployment's stores
+              value: "k8s"
+          volumeMounts:
+            - name: config
+              mountPath: /sandbox/config/langgraph-config.yaml
+              subPath: langgraph-config.yaml
+              readOnly: true
+            # Managed project workspaces are mounted per the OpenShell policy's
+            # filesystem paths (read-only for a monitor like Roxy). The policy —
+            # not this manifest — is the enforcement boundary (Landlock).
+      volumes:
+        - name: config
+          secret:
+            secretName: protoagent-config       # holds langgraph-config.yaml (model + A2A bearer)

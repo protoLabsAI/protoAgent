@@ -86,6 +86,20 @@ openshell sandbox create --policy openshell-policy.yaml -- python server.py
 Credentials are injected as env at runtime (never on disk); egress is
 deny-by-default through the proxy; the filesystem is locked to the policy paths.
 
+### Ready-made deployment
+
+`deploy/openshell/` has a managed example end-to-end:
+
+- **Docker:** `compose.yml` (the OpenShell gateway) + `create-protoagent-sandbox.sh`
+  (generates the policy, creates the protoAgent sandbox under the gateway).
+- **Kubernetes:** `k8s/values.yaml` (Helm gateway, kubernetes driver) +
+  `k8s/protoagent-sandbox.yaml` (Agent-Sandbox CRD + policy ConfigMap) — after
+  installing the Agent Sandbox CRDs.
+
+See [`deploy/openshell/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/deploy/openshell/README.md). The gateway/Helm
+commands are verbatim from OpenShell's docs; the sandbox/CRD wiring is a
+starting template (OpenShell is pre-1.0 — verify fields against your release).
+
 ## Recommended posture
 
 - **Trusted model, no code execution:** native egress allowlist is a sensible

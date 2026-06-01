@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NVIDIA OpenShell sandbox policy from config (project registry → Landlock
   paths, egress allowlist + gateway → network policy). New guides:
   "Build an operator fork (Roxy)" and "Sandboxing & egress".
+- **Run protoAgent under OpenShell** — `deploy/openshell/` managed example:
+  gateway compose + a sandbox-create script (Docker), and Helm values + an
+  Agent-Sandbox CRD template (Kubernetes), policy generated from config.
 
 ## [0.5.1] - 2026-06-01
 

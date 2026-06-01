@@ -1,0 +1,28 @@
+# Helm values for the OpenShell gateway on Kubernetes (ADR 0008).
+#
+# Install order (per OpenShell's K8s setup docs):
+#
+#   # 1) Agent Sandbox controller + CRDs (the SIG project OpenShell builds on)
+#   VERSION=$(curl -s https://api.github.com/repos/kubernetes-sigs/agent-sandbox/releases/latest | jq -r .tag_name)
+#   kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$VERSION/manifest.yaml
+#
+#   # 2) the OpenShell gateway (StatefulSet + PKI + RBAC, all via the chart)
+#   kubectl create namespace openshell
+#   helm upgrade --install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
+#     --version <release> --namespace openshell -f values.yaml
+#
+# The chart is flagged EXPERIMENTAL by NVIDIA — pin a version and verify these
+# keys against that release's values schema before relying on them.
+
+# Kubernetes compute driver — the gateway provisions sandbox pods via the
+# Agent Sandbox controller.
+drivers: kubernetes
+
+# The gateway↔sandbox-supervisor gRPC endpoint must be reachable in-cluster.
+server:
+  grpcEndpoint: openshell.openshell.svc.cluster.local:8080
+
+# mTLS is on by default; the chart's pre-install PKI hook generates the certs
+# (no manual secret creation). Keep it on for anything shared.
+tls:
+  enabled: true
