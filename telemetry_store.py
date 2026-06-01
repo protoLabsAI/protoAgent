@@ -164,6 +164,32 @@ class TelemetryStore:
         finally:
             db.close()
 
+    def outliers(self, *, cost_multiple: float = 5.0, latency_multiple: float = 5.0,
+                 sample: int = 200, limit: int = 20) -> list[dict]:
+        """Flag recent turns whose cost or duration exceeds ``N×`` the median
+        (over the last ``sample`` turns). Advise-only signal for the flywheel —
+        read-only, no action taken. Each flagged turn carries a ``reasons`` list
+        and the medians it beat. Newest first."""
+        recent = self.recent(limit=sample)
+        if not recent:
+            return []
+        med_cost = _median([float(r.get("cost_usd") or 0.0) for r in recent])
+        med_dur = _median([int(r.get("duration_ms") or 0) for r in recent])
+        flagged = []
+        for r in recent:
+            reasons = []
+            cost = float(r.get("cost_usd") or 0.0)
+            dur = int(r.get("duration_ms") or 0)
+            if med_cost > 0 and cost >= med_cost * cost_multiple:
+                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× median {med_cost:.4g}")
+            if med_dur > 0 and dur >= med_dur * latency_multiple:
+                reasons.append(f"latency {dur}ms ≥ {latency_multiple:g}× median {med_dur}ms")
+            if reasons:
+                flagged.append({**r, "reasons": reasons})
+            if len(flagged) >= limit:
+                break
+        return flagged
+
     def prune(self, keep_days: int = 30, *, now: datetime | None = None) -> int:
         """Delete turns older than ``keep_days``. Off by default — call from a
         host that wants bounded retention. Returns the rows removed."""
@@ -184,3 +210,13 @@ def _percentile(values: list[int], pct: float) -> int:
         return 0
     k = max(0, min(len(values) - 1, int(round((pct / 100.0) * len(values) + 0.5)) - 1))
     return int(values[k])
+
+
+def _median(values: list):
+    """Median of an unsorted numeric list (empty → 0)."""
+    if not values:
+        return 0
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2

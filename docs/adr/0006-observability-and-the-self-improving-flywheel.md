@@ -1,6 +1,6 @@
 # ADR 0006 — Observability & the Self-Improving Flywheel
 
-- **Status:** Accepted (2026-06-01) — implementing the ranked plan (Slices 1–3 shipped)
+- **Status:** Accepted (2026-06-01) — all 4 slices shipped (flywheel: measure → persist → surface → advise)
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** observability, cost, tracing, metrics, a2a, optimization, flywheel
@@ -120,10 +120,21 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    success rate, cache-hit %, p50/p95 latency, tokens, tool calls) + a by-model
    table + a recent-turns table, reading `/api/telemetry/*`. Functional-first
    (theme-consistent, no charts yet — a follow-up). *(fixes 6)*
-4. **Flywheel / feedback.** Flag turns whose cost/latency exceeds N× the rolling
-   median; *prove the levers* (cache-hit %, deferral schema-token savings,
-   routing/fallback rates, compaction triggers); feed signal back into the
-   learned-skills / memory layer and operator recommendations. *(fixes 7)*
+4. ✅ **Flywheel / feedback — shipped (advise-only).** `/api/telemetry/insights`
+   + a Telemetry **Insights** panel: flags turns whose cost/latency ≥ 5× the
+   rolling median, and *proves the levers we can measure from the per-turn
+   store* — prompt-cache hit % + estimated USD saved (`pricing.cache_read_savings_usd`),
+   plus model-mix (routing visibility). **Read-only**: it surfaces signal, the
+   operator decides — no autonomous config changes. Levers needing extra
+   per-turn signals (tool-deferral schema-token savings, compaction, detailed
+   routing) are explicitly listed as *not yet measured* rather than faked — a
+   follow-up that adds those signals can light them up. *(fixes 7)*
+
+> **Why advise-only (not auto-optimize).** Letting telemetry change config
+> automatically (auto-enable deferral, auto-downgrade model) is higher leverage
+> but needs guardrails and risks surprising regressions. We start by making the
+> signal trustworthy and visible; auto-optimization is a deliberate future step,
+> not a default.
 
 Priorities (per the kickoff): **cost visibility ($)** and **latency breakdown**
 lead; Slice 1 makes both real. The console surface (Slice 3) follows so the

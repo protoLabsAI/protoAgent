@@ -17,7 +17,7 @@ test("System → Telemetry shows summary cards and recent turns", async ({ page 
   await expect(surface.getByText("Total cost")).toBeVisible();
   await expect(surface.getByText("$0.22")).toBeVisible();      // 0.2154 → $0.22
   await expect(surface.getByText("Cache hit")).toBeVisible();
-  await expect(surface.getByText("60%")).toBeVisible();        // cache_hit_ratio 0.6
+  await expect(surface.getByText("60%", { exact: true })).toBeVisible(); // cache-hit card
 
   // Per-model + recent-turns tables.
   await expect(surface.getByText("By model")).toBeVisible();
@@ -25,4 +25,10 @@ test("System → Telemetry shows summary cards and recent turns", async ({ page 
   await expect(surface.getByText("Recent turns")).toBeVisible();
   // The failed turn renders its state pill.
   await expect(surface.getByText("failed")).toBeVisible();
+
+  // Insights (Slice 4, advise-only): flagged-turn warning + proven cache lever.
+  const insights = surface.getByTestId("telemetry-insights");
+  await expect(insights).toBeVisible();
+  await expect(insights.getByText(/1 turn flagged/)).toBeVisible();
+  await expect(insights.getByText(/Prompt cache: 60% hit/)).toBeVisible();
 });

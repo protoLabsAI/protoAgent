@@ -2453,3 +2453,45 @@ textarea {
   color: var(--error);
   border-color: color-mix(in srgb, var(--error) 40%, transparent);
 }
+
+/* Telemetry insights (ADR 0006 Slice 4 — advise-only) */
+.telemetry-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.insight-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.insight-row.ok { color: var(--success); }
+.insight-row.warn { color: var(--warning); }
+.insight-flags {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.insight-flags li {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  color: var(--fg-secondary);
+  border-top: 1px solid var(--border);
+}
+.flag-when { color: var(--fg-muted); min-width: 96px; }
+.flag-model { min-width: 150px; }
+.flag-reason { color: var(--warning); }
+.insight-note {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin: 2px 0 0;
+}

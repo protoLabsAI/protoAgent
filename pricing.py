@@ -59,3 +59,16 @@ def cost_usd(model: str | None, usage: dict) -> float:
     inp = int(usage.get("input_tokens", 0) or 0)
     out = int(usage.get("output_tokens", 0) or 0)
     return round(inp * rate["input"] + out * rate["output"], 6)
+
+
+# Anthropic prompt-cache reads are billed at ~10% of the input rate, so a cached
+# read *saves* ~90% of what that token would otherwise cost. This is an estimate
+# (the discount varies by provider/tier) used only to prove the cache lever is
+# working in dollar terms — not for billing. See ADR 0006 Slice 4.
+CACHE_READ_DISCOUNT = 0.9
+
+
+def cache_read_savings_usd(model: str | None, cache_read_tokens: int) -> float:
+    """Estimated USD saved by prompt-cache reads vs. paying full input rate."""
+    rate = rate_for(model)
+    return round(int(cache_read_tokens or 0) * rate["input"] * CACHE_READ_DISCOUNT, 6)

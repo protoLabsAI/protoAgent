@@ -372,3 +372,24 @@ export const TELEMETRY_TURNS = [
     created_at: "2026-06-01T04:59:00+00:00", ended_at: "2026-06-01T04:59:01+00:00",
   },
 ];
+
+export const TELEMETRY_INSIGHTS = {
+  turns: 3,
+  flagged_count: 1,
+  flagged: [
+    {
+      ...TELEMETRY_TURNS[0],
+      reasons: ["cost 0.12 ≥ 5× median 0.012", "latency 8100ms ≥ 5× median 700ms"],
+    },
+  ],
+  levers: {
+    cache: { hit_ratio: 0.6, read_tokens: 7200, est_savings_usd: 0.0972 },
+    routing: {
+      by_model: [
+        { model: "claude-opus-4-8", turns: 2, cost_usd: 0.21, total_tokens: 12000 },
+      ],
+    },
+    success_rate: 0.6667,
+  },
+  unproven_levers: ["tool deferral (schema-token savings)", "compaction", "model routing detail"],
+};

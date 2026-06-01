@@ -25,6 +25,7 @@ import {
   settingsRestartRequired,
   SLASH_COMMANDS,
   SUBAGENTS,
+  TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
   WORKFLOW_RUN_RESULT,
@@ -96,6 +97,8 @@ function handleApiGet(pathname) {
       return { enabled: true, summary: TELEMETRY_SUMMARY };
     case "/api/telemetry/recent":
       return { enabled: true, turns: TELEMETRY_TURNS };
+    case "/api/telemetry/insights":
+      return { enabled: true, insights: TELEMETRY_INSIGHTS };
     default:
       return null;
   }
