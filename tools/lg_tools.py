@@ -599,3 +599,89 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
     if inbox_store is not None:
         tools.extend(_build_inbox_tools(inbox_store))
     return tools
+
+
+# ── deferred tools (ADR 0005 #3) ──────────────────────────────────────────────
+
+SEARCH_TOOLS_NAME = "search_tools"
+
+# Tools always exposed to the model when deferral is on. The keyless core +
+# delegation/workflow tools + the search meta-tool itself — enough to operate
+# and to *discover* the rest. Everything else is deferred until searched.
+DEFERRED_BASE_TOOL_NAMES = frozenset({
+    "current_time", "calculator", "web_search", "fetch_url", "ask_human",
+    "task", "task_batch", "run_workflow", "save_workflow",
+    SEARCH_TOOLS_NAME,
+})
+
+
+def resolve_deferred_keep(configured_keep) -> set[str]:
+    """Resolve the always-on tool set for deferral: the configured override (if
+    any) else the built-in base. ``search_tools`` is always kept — without it the
+    agent could never load anything back."""
+    keep = {str(n) for n in (configured_keep or [])} or set(DEFERRED_BASE_TOOL_NAMES)
+    keep.add(SEARCH_TOOLS_NAME)
+    return keep
+
+
+def _tool_summary(t) -> str:
+    """First non-empty line of a tool's description, truncated."""
+    desc = (getattr(t, "description", "") or "").strip()
+    first = next((ln.strip() for ln in desc.splitlines() if ln.strip()), "")
+    return (first[:119].rstrip() + "…") if len(first) > 120 else first
+
+
+def build_search_tools_tool(all_tools, keep_names):
+    """Build the ``search_tools`` meta-tool over the *deferred* tools.
+
+    It keyword-matches the deferred tools (everything not in ``keep_names``) by
+    name + description and returns matches as a backticked bulleted list. The
+    ``ToolDeferralMiddleware`` reads those backticked names from the result and
+    binds the matched tools on subsequent turns (progressive disclosure).
+    """
+    keep = set(keep_names)
+    catalog = [
+        (t.name, _tool_summary(t))
+        for t in all_tools
+        if getattr(t, "name", None) and t.name not in keep
+    ]
+
+    def _render(pairs, header) -> str:
+        lines = [header]
+        for name, summary in pairs:
+            lines.append(f"- `{name}` — {summary}" if summary else f"- `{name}`")
+        return "\n".join(lines)
+
+    @tool
+    def search_tools(query: str = "", limit: int = 10) -> str:
+        """Find and load additional tools by capability.
+
+        Most tools are not shown up-front, to keep your working context focused.
+        When your visible tools don't cover the task, call this with a few
+        keywords describing what you need (e.g. "github pull request", "schedule
+        reminder", "read notes panel"). Matching tools become available to call
+        on your next step. Leave ``query`` empty to list every available tool.
+        Returns a bulleted list of ``name — purpose``.
+        """
+        if not catalog:
+            return "No additional tools are available beyond the ones already shown."
+        terms = (query or "").lower().split()
+        lim = max(1, min(int(limit or 10), 50))
+        if not terms:
+            return _render(catalog[:lim], "All additional tools — now available to call:")
+        scored = []
+        for name, summary in catalog:
+            hay = f"{name} {summary}".lower()
+            score = sum(hay.count(term) for term in terms)
+            if score:
+                scored.append((score, name, summary))
+        if not scored:
+            return _render(
+                catalog[:lim],
+                f'No tool matched "{query}". Here are the available tools (now callable):',
+            )
+        scored.sort(key=lambda r: (-r[0], r[1]))
+        shown = [(n, s) for _, n, s in scored[:lim]]
+        return _render(shown, f'Found {len(shown)} tool(s) for "{query}" — now available to call:')
+
+    return search_tools

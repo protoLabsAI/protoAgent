@@ -1,6 +1,6 @@
 # ADR 0005 — Tool Pollution & Progressive Tool Disclosure
 
-- **Status:** Accepted (2026-05-31) — implementing the ranked plan (#1, #2 shipped)
+- **Status:** Accepted (2026-05-31) — #1, #2, #3 shipped; #4 deferred by design
 - **Date:** 2026-05-31
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, agent, tools, mcp, skills, context, prompt
@@ -157,12 +157,16 @@ directional:
    nudge, not a gate — every tool stays bound). `SkillRecord.tools_used` now
    flows from `load_skills` through `KnowledgeMiddleware._format_learned_skills`.
    The OpenClaw "skill points at its tools" model, adapted to a bound tool set.
-3. **Deferred `search_tools` meta-tool** *(medium-high; opt-in — only worth
-   enabling past ~15 routinely relevant tools).* Bind a names-only roster + one
-   retrieval tool that expands matching schemas and re-binds them for subsequent
-   turns (Anthropic Tool-Search / this harness's ToolSearch). Real change to how
-   `create_agent` binds tools (dynamic per-turn tool set); ship behind a config
-   flag, default off, so default behavior is unchanged.
+3. ✅ **Deferred `search_tools` meta-tool** *(medium-high; opt-in — shipped,
+   default off).* `tools.deferred.enabled` adds a `search_tools` meta-tool +
+   `ToolDeferralMiddleware`. `create_agent` still receives every tool (so all
+   executors are registered — deferral never breaks execution); the middleware's
+   `wrap_model_call` trims `request.tools` to a base set (keyless core +
+   delegation/workflow + `search_tools`) plus whatever the agent has *loaded* by
+   calling `search_tools`. "Loaded" is read straight from the message history
+   (the backticked names in `search_tools` results) — no extra state channel.
+   Anthropic Tool-Search / this harness's ToolSearch pattern, model-agnostic
+   (works through any gateway, not just the Anthropic beta param).
 4. **Code-execution facade over MCP** *(high; deferred — only if hundreds of
    endpoints and 1–3 are insufficient).* Highest ceiling, most infrastructure.
    With #1 bounding MCP catalogs, this trigger is unlikely near-term.

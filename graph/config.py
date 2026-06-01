@@ -153,6 +153,17 @@ class LangGraphConfig:
     execute_code_tools: list[str] = field(default_factory=list)
     execute_code_output_truncate: int = 6000
 
+    # Deferred tools (ADR 0005 #3) — progressive tool disclosure for high tool
+    # counts. When enabled, only a small base set + a ``search_tools`` meta-tool
+    # are exposed to the model each turn; the rest are bound (callable) but their
+    # schemas are withheld until the agent searches for and "loads" them. Cuts
+    # the per-turn tool-schema footprint and improves selection accuracy past
+    # ~15 tools. OFF by default — the full tool set is exposed (unchanged).
+    # ``tools_deferred_keep`` overrides the always-on base (empty → built-in
+    # base: keyless core + delegation/workflow tools + search_tools).
+    tools_deferred_enabled: bool = False
+    tools_deferred_keep: list[str] = field(default_factory=list)
+
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
@@ -349,6 +360,8 @@ class LangGraphConfig:
             execute_code_timeout=data.get("execute_code", {}).get("timeout", cls.execute_code_timeout),
             execute_code_tools=data.get("execute_code", {}).get("tools", []),
             execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
+            tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
+            tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
