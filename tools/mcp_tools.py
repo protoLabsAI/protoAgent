@@ -146,6 +146,21 @@ def build_mcp_tools(config) -> tuple[list, list, list[dict]]:
             log.warning("[mcp] skipping invalid server entry (need name + command/url): %r", server)
             continue
 
+        # Lazy connect: a server explicitly disabled is never contacted, so a
+        # configured-but-paused server costs neither a connection nor context.
+        if server.get("enabled", True) is False:
+            log.info("[mcp] server %r disabled — not connecting", name)
+            continue
+
+        # Per-server tool filter — the primary defense against a large catalog
+        # dumping dozens of tool schemas into context. ``include`` is an
+        # allowlist (when set, only those tools survive); ``exclude`` drops
+        # tools from whatever remains. Both match the bare tool name (what you
+        # configure) or the namespaced ``<server>__<tool>`` form.
+        tool_filter = server.get("tools") or {}
+        include = {str(n) for n in (tool_filter.get("include") or [])}
+        exclude = {str(n) for n in (tool_filter.get("exclude") or [])}
+
         try:
             # tool_name_prefix=True → tools are named "<server>__<tool>".
             client = MultiServerMCPClient({name: conn}, tool_name_prefix=True)
@@ -154,9 +169,21 @@ def build_mcp_tools(config) -> tuple[list, list, list[dict]]:
             log.warning("[mcp] server %r discovery failed: %s — skipping", name, exc)
             continue
 
+        prefix = f"{name}__"
         kept = []
         for tool in discovered:
-            if tool.name in denylist:
+            bare = tool.name[len(prefix):] if tool.name.startswith(prefix) else tool.name
+            names = {tool.name, bare}
+            included = bool(names & include)
+            if include and not included:
+                log.info("[mcp] %s: %s not in include allowlist — skipped", name, tool.name)
+                continue
+            # include wins over a same-server exclude; the global denylist is the
+            # hard safety net and is never overridden.
+            if (names & exclude) and not included:
+                log.info("[mcp] %s: %s in exclude — skipped", name, tool.name)
+                continue
+            if names & denylist:
                 log.info("[mcp] %s: %s in denylist — skipped", name, tool.name)
                 continue
             if tool.name in core_names:

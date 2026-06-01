@@ -49,6 +49,47 @@ other servers.
 - `GET /api/runtime/status` reports `mcp.enabled`, the connected `servers`
   (`name`, `transport`, `tool_count`), and total `tool_count`.
 
+## Keeping tools out of context (allowlist + lazy connect)
+
+A single MCP server can export dozens or hundreds of tools, and **every bound
+tool's name, description, and full input schema is sent to the model on every
+turn**. Past ~10–15 tools this burns context and measurably degrades tool
+selection ("tool pollution" — see [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)).
+Two per-server knobs keep the surface small:
+
+```yaml
+mcp:
+  enabled: true
+  denylist: [dangerous__tool]    # cross-server hard block (always wins)
+  servers:
+    - name: github
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      tools:
+        include: [get_pull_request, list_issues]   # allowlist — ONLY these bind
+        exclude: [delete_repository]                # drop from whatever remains
+    - name: staging-only
+      enabled: false             # configured but not connected (no tools, no cost)
+      transport: streamable_http
+      url: "https://staging.example.com/mcp"
+```
+
+- **`tools.include`** — an allowlist. When set, *only* the listed tools are
+  bound; everything else from that server is dropped. This is the surgical fix
+  for a chatty server — pick the 2–10 tools you actually use.
+- **`tools.exclude`** — drops the listed tools from whatever remains. `include`
+  wins over a same-server `exclude` if a name appears in both.
+- **`enabled: false`** — the server is **not connected at all** (lazy). Use it
+  to park a server's config without paying its connection or context cost.
+- Both `include`/`exclude` match the **bare** tool name (`get_pull_request`) or
+  the namespaced form (`github__get_pull_request`).
+- The global `denylist` is the hard safety net — it removes a tool even if an
+  `include` lists it.
+
+When no filter is set, all of a server's tools bind (the original behavior), so
+existing configs are unchanged.
+
 ## Transports
 
 | Transport | Use when | Required fields |
