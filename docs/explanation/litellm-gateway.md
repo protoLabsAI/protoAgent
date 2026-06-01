@@ -20,9 +20,9 @@ Option 3 wins because:
 
 ## The alias pattern
 
-The template points at `model.name: protolabs/agent`. Two things to know:
+The template points at `model.name: protolabs/reasoning`. Two things to know:
 
-1. **`protolabs/<name>` is a gateway alias**, not a real model. The gateway config maps `protolabs/agent` → whichever real model (e.g. `claude-opus-4-6`, `gpt-4o`) you want.
+1. **`protolabs/<name>` is a gateway alias**, not a real model. The gateway config maps `protolabs/reasoning` → whichever real model (e.g. `claude-opus-4-6`, `gpt-4o`) you want.
 2. **Each agent gets its own alias**. Quinn uses `protolabs/quinn`, a researcher agent might use `protolabs/researcher`. Same gateway, different underlying models, different rate limits, different cost tracking.
 
 To swap a model for an agent:
@@ -30,7 +30,7 @@ To swap a model for an agent:
 ```yaml
 # In the gateway's config.yaml
 model_list:
-  - model_name: protolabs/agent
+  - model_name: protolabs/reasoning
     litellm_params:
       model: anthropic/claude-opus-4-6   # ← was claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY

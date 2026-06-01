@@ -12,6 +12,7 @@ import type {
   SetupStatus,
   SettingsGroup,
   SlashCommand,
+  Playbook,
   Subagent,
   TelemetryInsights,
   TelemetrySummary,
@@ -190,6 +191,17 @@ export const api = {
   telemetryInsights() {
     return request<{ enabled: boolean; insights: TelemetryInsights | null }>(
       "/api/telemetry/insights",
+    );
+  },
+
+  playbooks() {
+    return request<{ enabled: boolean; playbooks: Playbook[] }>("/api/playbooks");
+  },
+
+  deletePlaybook(id: number) {
+    return request<{ enabled: boolean; deleted: boolean; error?: string }>(
+      `/api/playbooks/${id}`,
+      { method: "DELETE" },
     );
   },
 

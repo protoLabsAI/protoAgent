@@ -46,7 +46,7 @@ class SubagentDef:
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
     model_provider: str = "openai"
-    model_name: str = "protolabs/agent"  # override in YAML per agent
+    model_name: str = "protolabs/reasoning"  # override in YAML per agent
     api_base: str = "http://gateway:4000/v1"
     api_key: str = ""  # set via OPENAI_API_KEY env (gateway master key)
     temperature: float = 0.2

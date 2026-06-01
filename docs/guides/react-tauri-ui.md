@@ -353,6 +353,18 @@ by-model table, and a recent-turns table. It reads `GET /api/telemetry/summary`
 + `/api/telemetry/recent` — no chat-stream coupling — and degrades to a clear
 note when the store is disabled or empty.
 
+## Playbooks surface
+
+The **Knowledge ▸ Playbooks** surface (`apps/web/src/playbooks/PlaybooksSurface.tsx`,
+ADR 0009) browses the procedural-memory skill index (`skills.db`) the operator
+was otherwise blind to. It lists each skill as **pinned** (a `SKILL.md` on disk,
+re-seeded at boot) or **learned** (agent-emitted, curated/decaying), with
+confidence + last-used, a search filter, and delete-with-confirm. Reads
+`GET /api/playbooks`; deletes via `DELETE /api/playbooks/{id}`. "Playbooks" is
+the operator-facing name for skill-v1 artifacts — see ADR 0009 (it disambiguates
+from the A2A agent-card `skills` field). Confidence-tuning + curator-audit
+read-back are noted follow-ups.
+
 ## Settings surface
 
 The **Settings** rail surface lets an operator manage every config field from
