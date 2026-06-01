@@ -146,7 +146,7 @@ export const SETTINGS_SCHEMA = [
   {
     section: "Model",
     fields: [
-      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/agent" },
+      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/reasoning" },
       { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2 },
       { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true },
     ],
@@ -393,3 +393,17 @@ export const TELEMETRY_INSIGHTS = {
   },
   unproven_levers: [],
 };
+
+// Playbooks fixtures (ADR 0009) — shape mirrors /api/playbooks (skills.db).
+export const PLAYBOOKS = [
+  {
+    id: 1, name: "web-research", description: "Plan → search → read → synthesize → cite.",
+    tools_used: ["web_search", "fetch_url"], source: "disk", confidence: 1.0,
+    last_used: "2026-06-01T18:00:00+00:00", created_at: "2026-05-29T00:00:00+00:00",
+  },
+  {
+    id: 2, name: "pr-triage-flow", description: "Learned: how to triage a PR review backlog.",
+    tools_used: ["github_get_pr", "github_list_issues"], source: "emitted", confidence: 0.62,
+    last_used: "2026-05-31T12:00:00+00:00", created_at: "2026-05-30T00:00:00+00:00",
+  },
+];

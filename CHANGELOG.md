@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Playbooks surface** (ADR 0009) — a Knowledge ▸ Playbooks console surface to
+  browse + manage the procedural-memory skill index (`skills.db`): pinned
+  (SKILL.md) vs learned (agent-emitted), confidence/last-used, search, and
+  delete-with-confirm. New API: `GET /api/playbooks` + `DELETE /api/playbooks/{id}`.
+
+### Changed
+- Default model alias is now **`protolabs/reasoning`** (was `protolabs/agent`) —
+  forks point at the reasoning model out of the box (override per agent in YAML).
+
 ## [0.6.0] - 2026-06-01
 
 ### Added

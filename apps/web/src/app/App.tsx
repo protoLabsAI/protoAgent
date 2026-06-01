@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  BookMarked,
   Bot,
   Boxes,
   CalendarClock,
@@ -34,6 +35,7 @@ import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
+import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
@@ -45,7 +47,7 @@ import { SetupWizard } from "../setup/SetupWizard";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
-type Surface = "chat" | "activity" | "studio" | "system";
+type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
 type StudioTab = "subagents" | "workflows" | "schedule" | "goals";
 type SystemTab = "runtime" | "telemetry" | "settings";
 type ActivityTab = "thread" | "inbox";
@@ -887,6 +889,12 @@ export function App() {
             onClick={() => setSurface("studio")}
           />
           <RailButton
+            active={surface === "knowledge"}
+            label="Knowledge"
+            icon={<BookMarked size={18} />}
+            onClick={() => setSurface("knowledge")}
+          />
+          <RailButton
             active={surface === "system"}
             label="System"
             icon={<Gauge size={18} />}
@@ -1312,6 +1320,7 @@ export function App() {
           ) : null}
 
           {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface onError={setError} /> : null}
+          {surface === "knowledge" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "system" && systemTab === "settings" ? <SettingsSurface onError={setError} /> : null}
         </main>
 

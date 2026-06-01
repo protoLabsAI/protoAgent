@@ -9,7 +9,7 @@
 ```yaml
 model:
   provider: openai
-  name: protolabs/agent
+  name: protolabs/reasoning
   api_base: http://gateway:4000/v1
   api_key: ""
   temperature: 0.2
@@ -44,7 +44,7 @@ knowledge:
 | Key | Default | What |
 |---|---|---|
 | `provider` | `openai` | LangChain LLM provider. The template's `graph/llm.py` only uses `openai` (via LiteLLM gateway). |
-| `name` | `protolabs/agent` | Gateway alias or direct model name. |
+| `name` | `protolabs/reasoning` | Gateway alias or direct model name. |
 | `api_base` | `http://gateway:4000/v1` | OpenAI-compatible endpoint. |
 | `api_key` | `""` | **Secret — not stored here.** Managed in the untracked `config/secrets.yaml` (see [Secrets](#secrets)); falls back to the `OPENAI_API_KEY` env var. |
 | `temperature` | `0.2` | Sampling temperature. |

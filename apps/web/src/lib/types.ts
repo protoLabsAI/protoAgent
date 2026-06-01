@@ -317,3 +317,15 @@ export type TelemetryInsights = {
   };
   unproven_levers: string[];
 };
+
+// Playbooks (skills surface, ADR 0009) — mirrors /api/playbooks (skills.db).
+export type Playbook = {
+  id: number;
+  name: string;
+  description: string;
+  tools_used: string[];
+  source: string;        // "disk" (pinned SKILL.md) | "emitted" (agent-learned)
+  confidence: number;
+  last_used: string | null;
+  created_at: string | null;
+};
