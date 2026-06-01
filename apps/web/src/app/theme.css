@@ -2399,3 +2399,57 @@ textarea {
   color: var(--fg-secondary);
   cursor: pointer;
 }
+
+/* Telemetry dashboard (ADR 0006 Slice 3) */
+.empty-note {
+  color: var(--fg-muted);
+  font-size: 13px;
+  padding: 16px 2px;
+}
+.telemetry-section {
+  margin-top: 22px;
+}
+.telemetry-section > .panel-kicker {
+  margin-bottom: 8px;
+}
+.telemetry-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.telemetry-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.telemetry-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.telemetry-table tr.turn-failed td {
+  color: var(--error);
+}
+.turn-state {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.turn-state-completed {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.turn-state-failed {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+}
