@@ -54,6 +54,14 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
             skills_top_k=config.skills_top_k,
         ))
 
+    # Deferred-tool disclosure (ADR 0005 #3) — trims the per-call tool set to
+    # base + agent-loaded. Opt-in; the search_tools meta-tool is added to the
+    # tool list in create_agent_graph when this is on.
+    if config.tools_deferred_enabled:
+        from graph.middleware.tool_deferral import ToolDeferralMiddleware
+        from tools.lg_tools import resolve_deferred_keep
+        middleware.append(ToolDeferralMiddleware(resolve_deferred_keep(config.tools_deferred_keep)))
+
     if config.audit_middleware:
         middleware.append(AuditMiddleware())
 
@@ -649,6 +657,15 @@ def create_agent_graph(
     if config.execute_code_enabled:
         from tools.execute_code import build_execute_code_tool
         all_tools.append(build_execute_code_tool(all_tools, config=config))
+
+    # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
+    # search_tools meta-tool is built over the full set (so it can surface any
+    # of them) and ToolDeferralMiddleware trims the per-call schemas to base +
+    # loaded. Every tool stays callable; only the model's view is trimmed.
+    if config.tools_deferred_enabled:
+        from tools.lg_tools import build_search_tools_tool, resolve_deferred_keep
+        keep = resolve_deferred_keep(config.tools_deferred_keep)
+        all_tools.append(build_search_tools_tool(all_tools, keep))
 
     middleware = _build_middleware(config, knowledge_store, skills_index=skills_index)
 

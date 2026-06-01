@@ -206,6 +206,24 @@ execute_code:
 
 > **Security:** subprocess + env-scrub + timeout is *isolation, not a true sandbox* — the child can still touch the filesystem and network as the server user. Enable only for trusted-model output or inside a hardened container (seccomp / read-only FS / network policy). Narrow `tools` to the minimum the workload needs.
 
+## `tools`
+
+**Deferred tools** — progressive tool disclosure for high tool counts ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)). When enabled, only a small base set + a `search_tools` meta-tool are shown to the model each turn; the rest stay bound (callable) but their schemas are withheld until the agent calls `search_tools` to load them. This cuts the per-turn tool-schema footprint and improves selection accuracy once you routinely exceed ~15 tools.
+
+```yaml
+tools:
+  deferred:
+    enabled: false          # OFF by default — the full tool set is shown
+    keep: []                # always-on tool names; empty = built-in base
+```
+
+| Key | Default | What |
+|---|---|---|
+| `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
+| `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
+
+Every tool remains **executable** even while deferred — `create_agent` registers all executors; deferral only trims what the model *sees* per turn. The agent loads tools by calling `search_tools("github pull request")`; matches stay available for the rest of the thread. Leave off unless you have a large catalog (e.g. a chatty MCP server) — for a handful of tools it adds a discovery hop for no benefit.
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).
