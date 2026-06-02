@@ -120,6 +120,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   KB. The researcher gains `memory_ingest` for that persistence.
 
 ### Docs
+- **"Built by protoLabs.studio" footer on every docs page** — a custom theme
+  (`docs/.vitepress/theme/`) injects a `StudioFooter` via the `layout-bottom`
+  slot (the built-in footer hides on sidebar pages), with the brand-gradient
+  `protoLabs.studio` wordmark linking to protolabs.studio.
 - Reconcile drift after the recent releases: fix the deploy guide's stale
   "every merge auto-cuts a patch" note (releases are manual now), document the
   UI tiers + `--build-arg UI=full` for the image, link the orphaned "Eval your
