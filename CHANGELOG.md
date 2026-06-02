@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already `protolabs/reasoning`; this just clears the dead alias from examples.
 
 ### Fixed
+- **Desktop drag + external links were blocked by missing Tauri capabilities.**
+  `data-tauri-drag-region` calls `startDragging()` and the Docs/GitHub links call
+  `shell.open` — neither permission was granted, so the window wouldn't move and
+  the links did nothing (`window.start_dragging not allowed`, `shell.open not
+  allowed` in the console). Granted `core:window:allow-start-dragging` and
+  `shell:allow-open` in the capability (and corrected the stale `--headless`
+  sidecar arg scope to `--ui console`). Also added a little bottom padding under
+  the utility-bar icons.
 - **Desktop window wasn't draggable under the invisible title bar** — with the
   brand at the very top there was no clear grab area. Now (macOS desktop) the app
   is pushed down by the title-bar height and a dedicated transparent
