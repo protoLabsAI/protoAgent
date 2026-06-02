@@ -213,7 +213,11 @@ h2 {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) minmax(320px, 380px);
+  /* The right column's width comes from --right-width (set inline in App.tsx
+     from the persisted/resized panel width; 0px when collapsed). Keeping the
+     template in CSS — not inline — lets the media query below collapse to two
+     columns instead of leaving a blank reserved column. */
+  grid-template-columns: 72px minmax(0, 1fr) var(--right-width, 360px);
 }
 
 .rail {
@@ -2193,7 +2197,12 @@ textarea {
   }
 }
 
-@media (max-width: 1040px) {
+/* Below this width there isn't room for the rail + chat + side panel, so drop
+   to two columns and hide the panel (reachable again by widening / the toggle).
+   Kept under the desktop's 980px min window so the panel stays put there; this
+   mainly affects narrow browser windows. The two-column template here now
+   actually wins because .workspace no longer sets its columns inline. */
+@media (max-width: 900px) {
   .workspace {
     grid-template-columns: 64px minmax(0, 1fr);
   }
