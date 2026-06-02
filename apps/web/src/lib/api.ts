@@ -345,6 +345,19 @@ export const api = {
     });
   },
 
+  saveWorkflow(recipe: Record<string, unknown>) {
+    return request<{ saved: boolean; name: string; path?: string }>("/api/workflows", {
+      method: "POST",
+      body: recipe,
+    });
+  },
+
+  deleteWorkflow(name: string) {
+    return request<{ deleted: boolean }>(`/api/workflows/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+  },
+
   saveSettings(updates: Record<string, unknown>) {
     return request<{ ok: boolean; messages: string[]; restart_required: string[] }>("/api/settings", {
       method: "POST",

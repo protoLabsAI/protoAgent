@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Workflow builder in the console (Sprint C).** The Workflows surface gains a
+  **＋ New workflow** builder — name + inputs + steps (id, subagent picker,
+  prompt, `depends_on` checkboxes) + output — that saves via `POST /api/workflows`
+  (validated) and is immediately runnable; a Delete action removes a recipe.
+  Authoring workflows is no longer YAML-file-only. **Completes the workflow-builder.**
 - **Workflow authoring API (Sprint C).** `POST /api/workflows` validates a recipe
   (against the live subagent registry + DAG checks via `validate_recipe`) and
   saves it to the writable workflows dir (immediately runnable); `DELETE
