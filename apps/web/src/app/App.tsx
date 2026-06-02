@@ -28,7 +28,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -826,7 +826,11 @@ export function App() {
     window.addEventListener("mouseup", onUp);
   }
 
-  const workspaceCols = `72px minmax(0, 1fr) ${rightCollapsed ? "0px" : `${rightWidth}px`}`;
+  // Drive only the right column's WIDTH via a CSS var — the grid template
+  // itself lives in CSS (.workspace), so the responsive media query can
+  // collapse to two columns below the breakpoint. Setting the full template
+  // inline here would beat the media query and leave a blank reserved column.
+  const rightCol = rightCollapsed ? "0px" : `${rightWidth}px`;
 
   // One glanceable health light for the topbar (detail on hover; full status in
   // System → Runtime). Worst-state wins.
@@ -869,7 +873,7 @@ export function App() {
 
       <div
         className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
-        style={{ gridTemplateColumns: workspaceCols }}
+        style={{ "--right-width": rightCol } as CSSProperties}
       >
         <aside className="rail" aria-label="Workspace surfaces">
           <RailButton
