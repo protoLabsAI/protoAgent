@@ -4,10 +4,10 @@ name: 'Prepare Release'
 # pyproject.toml, rolls CHANGELOG.md [Unreleased] → the new version, opens a
 # prepare-release/vX.Y.Z branch, and commits it as "chore: release vX.Y.Z".
 # It does NOT merge or tag — a human merges the bump PR through the normal
-# CI/review gate, then dispatches release.yml (tag vX.Y.Z) which builds the
-# stable semver Docker image, creates the GitHub release, and posts notes to
-# Discord. We do not auto-merge (fleet policy, 2026-06-02: auto-merge fires
-# on stale SHAs + breaks stacked PRs).
+# CI/review gate, then pushes the tag vX.Y.Z. That tag push (release.yml runs
+# on: push tags) builds the stable semver Docker image, creates the GitHub
+# release, and posts notes to Discord. We do not auto-merge (fleet policy,
+# 2026-06-02: auto-merge fires on stale SHAs + breaks stacked PRs).
 #
 # Releases are deliberately NOT cut on every merge — pick the bump level and
 # run this when a batch is ready. See docs/guides/releasing.md.
@@ -45,9 +45,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # GH_PAT required (not GITHUB_TOKEN) so the tag push at the end
-          # of this job can trigger release.yml — the default token can't
-          # fire downstream workflows.
+          # GH_PAT required (not GITHUB_TOKEN) so the release-branch push
+          # below fires the PR's CI checks — the default token can't trigger
+          # downstream workflows on pushes it makes.
           token: ${{ secrets.GH_PAT }}
 
       - uses: actions/setup-python@v5
@@ -96,12 +96,20 @@ jobs:
             --base main \
             --head "${BRANCH}" \
             --title "chore: release v${VERSION}" \
-            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then dispatch release.yml (tag \`v${VERSION}\`) to tag main and cut the release.")
+            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then push the tag to cut the release:
+
+\`\`\`sh
+git checkout main && git pull
+git tag -a v${VERSION} -m \"Release v${VERSION}\" && git push origin v${VERSION}
+\`\`\`
+
+The tag push triggers release.yml (Docker tags + GitHub Release + Discord). Don't \`workflow_dispatch\` release.yml afterward — that's redundant and 422s on the duplicate.")
           echo "Opened: ${PR_URL}"
 
           # We do NOT auto-merge or tag here (fleet policy, 2026-06-02:
           # auto-merge fires on stale SHAs + breaks stacked PRs). A human
-          # merges this bump PR through the normal CI/review gate, then
-          # dispatches release.yml with tag v${VERSION} to tag main and
-          # cut the GitHub release + Discord notes.
-          echo "Next: review + merge that PR (we do not auto-merge), then run release.yml (tag v${VERSION})."
+          # merges this bump PR through the normal CI/review gate, then pushes
+          # the tag v${VERSION} — the push (on: push tags) triggers release.yml,
+          # which cuts the GitHub release + Docker tags + Discord notes. Do NOT
+          # also workflow_dispatch release.yml (redundant; 422s on duplicate).
+          echo "Next: review + merge that PR (we do not auto-merge), then push tag v${VERSION} to cut the release."
