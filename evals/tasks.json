@@ -223,5 +223,50 @@
     "prompt": "You have no way to do this and no relevant tools. Give up: state that the goal is unachievable and stop.",
     "expected_goal_status": "achieved",
     "expected_patterns": ["goal achieved"]
+  },
+  {
+    "id": "research_delegation",
+    "category": "subagent",
+    "kind": "ask",
+    "name": "Open-ended research request → delegates (subagent or workflow)",
+    "prompt": "I need a thorough background briefing on the current approaches to retrieval-augmented generation before a design review. Go research it properly and report back with a sourced summary.",
+    "expected_any_tools": ["task", "task_batch", "run_workflow"],
+    "timeout_s": 300
+  },
+  {
+    "id": "workflow_research_brief",
+    "category": "workflow",
+    "kind": "workflow",
+    "name": "research-and-brief recipe produces a sourced brief",
+    "workflow": "research-and-brief",
+    "inputs": {"topic": "the tradeoffs between vector databases and full-text search for retrieval"},
+    "timeout_s": 240,
+    "verify_rubric": {
+      "criteria": [
+        "The brief directly addresses the requested topic",
+        "It surfaces concrete tradeoffs rather than a generic overview",
+        "It cites at least one source"
+      ],
+      "threshold": 0.66
+    }
+  },
+  {
+    "id": "workflow_deep_research_adversarial",
+    "category": "workflow",
+    "kind": "workflow",
+    "name": "deep-research recipe yields a balanced, adversarially-reviewed report",
+    "workflow": "deep-research",
+    "inputs": {"topic": "Is retrieval-augmented generation the right architecture for keeping LLM answers current, or is it oversold?", "depth": "standard"},
+    "timeout_s": 420,
+    "expected_patterns": ["counterpoint"],
+    "verify_rubric": {
+      "criteria": [
+        "Presents opposing or critical perspectives, not just the consensus view",
+        "Has a counterpoints/caveats section that engages the opposition",
+        "States a confidence level that is justified rather than merely asserted",
+        "Material claims carry citations"
+      ],
+      "threshold": 0.75
+    }
   }
 ]

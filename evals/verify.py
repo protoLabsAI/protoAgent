@@ -114,6 +114,29 @@ def assert_tools_fired(
     return True, f"saw: {dict(fired)}"
 
 
+def assert_any_tool_fired(
+    audit_entries: list[dict],
+    candidates: list[str],
+    *,
+    require_success: bool = True,
+) -> tuple[bool, str]:
+    """Confirm *at least one* of ``candidates`` fired.
+
+    For intent assertions where several tools satisfy the goal equally — e.g.
+    "the agent delegated open-ended research" is met by either ``task`` (a
+    subagent) or ``run_workflow`` (a recipe). ``assert_tools_fired`` would
+    over-constrain by demanding a specific one."""
+    fired: dict[str, dict[str, int]] = {}
+    for e in audit_entries:
+        bucket = fired.setdefault(e.get("tool", "?"), {"ok": 0, "err": 0})
+        bucket["ok" if e.get("success") else "err"] += 1
+
+    for t in candidates:
+        if t in fired and (not require_success or fired[t]["ok"] > 0):
+            return True, f"saw: {dict(fired)}"
+    return False, f"none of {candidates} fired; saw: {dict(fired)}"
+
+
 # ── knowledge store ─────────────────────────────────────────────────────────
 
 

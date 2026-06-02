@@ -57,6 +57,8 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 | `chained` | Multi-step reasoning that calls 2+ tools |
 | `subsystem` | KnowledgeMiddleware retrieval, hot-memory injection |
 | `goal` | Goal mode: set a goal, trigger the loop, assert the resulting goal state + footer |
+| `subagent` | Lead delegates open-ended work (`expected_any_tools`: `task` / `run_workflow`) |
+| `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output |
 
 ## File layout
 
@@ -64,7 +66,8 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 evals/
   client.py     A2A client (message/send + poll, message/stream, agent card, health, workflows, cancel)
   runner.py     CLI runner — print board, write model-tagged JSON report
-  verify.py     Audit-log + KB side-effect assertions, setup/teardown
+  verify.py     Audit-log + KB side-effect assertions (incl. any-of-tools), setup/teardown
+  judge.py      LLM-judge rubric scorer (verify_rubric) for quality substrings can't check
   sweep.py      Boot one agent per model + run the suite → model × category matrix
   report.py     Aggregate all reports → leaderboard + per-model trend over time
   compare.py    Diff two reports (pass-rate delta, per-category, flips)

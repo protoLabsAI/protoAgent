@@ -1,6 +1,6 @@
 # ADR 0012 — Eval strategy: model-tagged tracking & model comparison
 
-- **Status:** Accepted (2026-06-01) — model-comparison harness shipped; coverage cases (subagent/workflow/rubric) land in a follow-up
+- **Status:** Accepted (2026-06-01) — model-comparison harness + coverage cases (subagent/workflow/LLM-judge rubric) shipped
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** evals, observability, models, testing
@@ -69,7 +69,7 @@ per model, best first) and a **per-model trend** (pass rate by run, with ▲/▼
 the previous run). This is the "track as we work" surface — a regression after a
 prompt/model/code change is visible at a glance.
 
-### 2.5 Coverage for the agent layers (follow-up slice)
+### 2.5 Coverage for the agent layers
 - **Subagent delegation** — cases that assert the lead delegates (`task`) and the
   subagent's tools fire in the shared audit log.
 - **Workflow recipes** — a `kind: "workflow"` case that drives a recipe end-to-end

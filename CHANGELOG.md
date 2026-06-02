@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Eval coverage for the agent layer** (ADR 0012 §2.5): new `subagent` +
+  `workflow` eval categories track the research stack. A `workflow` case kind
+  drives a recipe end-to-end via `POST /api/workflows/{name}/run` (research-and-brief,
+  deep-research) and asserts on its output; `expected_any_tools` asserts the lead
+  *delegated* (via `task`/`task_batch`/`run_workflow`) without over-constraining to
+  one tool; and `verify_rubric` adds an **LLM-judge** (`evals/judge.py`) that scores
+  output against yes/no criteria for quality substrings/audit can't check (is the
+  report balanced? is the confidence earned?). Three starter cases added.
 - **Eval model comparison + trend tracking** (ADR 0012): every eval report is
   now tagged with the **model under test** (auto-detected from `/healthz`,
   overridable with `--model-label`). A `PROTOAGENT_MODEL` env var overrides the

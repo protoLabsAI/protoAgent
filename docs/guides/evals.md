@@ -115,7 +115,7 @@ afterward catches it.
 }
 ```
 
-Three case `kind`s ship:
+The case `kind`s that ship:
 
 - `agent_card` — fetch `/.well-known/agent-card.json` and assert on
   the card's name, skill count, and declared extensions.
@@ -123,6 +123,62 @@ Three case `kind`s ship:
   assert the server returns the expected status (401 by default).
 - `ask` — the main shape. Sends `prompt`, then asserts on tool firing,
   reply patterns, and KB state.
+- `stream` — like `ask` over SSE, plus asserts the stream surfaced the
+  expected event kinds.
+- `goal` — set a goal, trigger the loop, assert the resulting goal state.
+- `workflow` — drive a recipe end-to-end via `POST /api/workflows/{name}/run`
+  and assert on its synthesized output (patterns + rubric). Used to track the
+  subagent workflows (research-and-brief, deep-research).
+
+## Asserting the agent layer (subagents & workflows)
+
+Beyond single-tool selection, the suite tracks the layers recent work has been
+about ([ADR 0012](/adr/0012-eval-strategy-and-model-comparison)):
+
+**Delegation** — for intent that's satisfied equally by several tools (the lead
+might delegate open-ended research via a `task` subagent *or* a `run_workflow`
+recipe), assert that *any* of them fired rather than over-constraining to one:
+
+```json
+{ "kind": "ask", "category": "subagent",
+  "prompt": "Go research X properly and report back.",
+  "expected_any_tools": ["task", "task_batch", "run_workflow"] }
+```
+
+**Workflows** — a `workflow` case runs a recipe and asserts on the output:
+
+```json
+{ "kind": "workflow", "category": "workflow", "workflow": "deep-research",
+  "inputs": {"topic": "…", "depth": "standard"},
+  "expected_patterns": ["counterpoint"],
+  "verify_rubric": { "criteria": ["…"], "threshold": 0.75 },
+  "timeout_s": 420 }
+```
+
+## Grading quality substrings can't — the LLM judge
+
+"Is the deep-research report *actually balanced*? Is the confidence *earned*?"
+can't be checked with a substring. Add a `verify_rubric` to any `ask` /
+`workflow` case: a grader model scores the output against independent yes/no
+criteria and the case passes when the fraction met clears `threshold`.
+
+```json
+"verify_rubric": {
+  "criteria": [
+    "Presents opposing/critical perspectives, not just the consensus",
+    "Has a counterpoints or caveats section that engages the opposition",
+    "States a confidence level that is justified, not merely asserted"
+  ],
+  "threshold": 0.66,
+  "model": "protolabs/reasoning"
+}
+```
+
+The grader reuses the gateway via `graph.llm.create_llm`; it defaults to
+`$EVAL_JUDGE_MODEL` then the agent's model. It's non-deterministic and costs
+tokens — treat rubric scores as a **tracked signal** (trend across models), with
+the deterministic channels (audit / substring / KB) as the hard pass/fail. A
+grader error never crashes the run (the case just fails with the reason).
 
 ## Prompt rule
 
