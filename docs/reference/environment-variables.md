@@ -33,6 +33,12 @@ Setup without the wizard: `python server.py --setup` validates the live config (
 
 When unset, the handler logs a WARNING at startup (`"A2A auth token not configured — endpoint is open"`) and accepts all traffic — appropriate for local development, not production. When set, the agent card advertises `securitySchemes.bearer` so A2A consumers know to present credentials.
 
+## A2A agent-card endpoint
+
+| Variable | Default | What |
+|---|---|---|
+| `A2A_PUBLIC_URL` | (unset — `http://127.0.0.1:<bound-port>`) | The externally-reachable base URL advertised in the agent card's `supportedInterfaces[].url` (where peers send `message/send`). **Set this for any deployed agent** — behind a proxy / in a container the bound port isn't the address clients use. The `/a2a` JSON-RPC suffix is appended automatically (e.g. `A2A_PUBLIC_URL=https://gina.example.com` → card url `https://gina.example.com/a2a`). Unset, it falls back to the actually-bound loopback port (correct for local + the dynamic-port desktop sidecar, where the caller is on the same host). |
+
 This is independent of the legacy `<AGENT_NAME>_API_KEY` header-based scheme (X-API-Key) documented above. You can enable one, both, or neither; bearer is the preferred mechanism going forward.
 
 ## Memory

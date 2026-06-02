@@ -24,7 +24,9 @@ from google.protobuf.json_format import MessageToDict
 def _card_json(monkeypatch=None, *, bearer_token: str | None = None) -> dict:
     from server import _build_agent_card_proto
 
-    card = _build_agent_card_proto("protoagent:7870")
+    # The interface url derives from A2A_PUBLIC_URL or the bound port (no host
+    # arg) — _build_agent_card_proto() takes no parameters.
+    card = _build_agent_card_proto()
     return MessageToDict(card, preserving_proto_field_name=False)
 
 
@@ -41,6 +43,15 @@ def test_agent_card_jsonrpc_interface_points_at_rpc_endpoint() -> None:
     jsonrpc = next(i for i in ifaces if i["protocolBinding"] == "JSONRPC")
     assert jsonrpc["url"].endswith("/a2a")
     assert jsonrpc["protocolVersion"] == "1.0"
+
+
+def test_agent_card_url_honors_public_url_env(monkeypatch) -> None:
+    """A2A_PUBLIC_URL overrides the interface url (deployed agents advertise
+    their real external base, not the bound loopback port)."""
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://gina.example.com/")
+    card = _card_json()
+    jsonrpc = next(i for i in card["supportedInterfaces"] if i["protocolBinding"] == "JSONRPC")
+    assert jsonrpc["url"] == "https://gina.example.com/a2a"
 
 
 def test_agent_card_provider_is_fleet_provider() -> None:

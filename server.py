@@ -1826,7 +1826,24 @@ def _package_version() -> str:
     return "0.0.0"
 
 
-def _build_agent_card_proto(host: str):
+def _a2a_card_url() -> str:
+    """The reachable JSON-RPC endpoint to advertise in the A2A card's interface.
+
+    The card tells other agents *where to send* ``message/send``, so this must
+    be the agent's externally-reachable address — not the bind host. Prefer an
+    explicit ``A2A_PUBLIC_URL`` (set this for any deployed agent: behind a proxy
+    / in a container the public address isn't the bound port). Fall back to the
+    actually-bound loopback port (``_active_port``) for local + desktop runs —
+    correct there because the client is on the same host (and the desktop's port
+    is dynamic). The ``/a2a`` suffix is the JSON-RPC route.
+    """
+    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+    if not base:
+        base = f"http://127.0.0.1:{_active_port}"
+    return f"{base}/a2a"
+
+
+def _build_agent_card_proto():
     """Build the A2A 1.0 ``AgentCard`` (proto) served at
     ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
     via ``protolabs_a2a.build_agent_card``.
@@ -1837,8 +1854,9 @@ def _build_agent_card_proto(host: str):
     — this template emits cost-v1 + confidence-v1 from ``_chat_langgraph_stream``
     and worldstate-delta / tool-call when a tool reports them.
 
-    The card ``url`` must target the JSON-RPC endpoint (``/a2a``), NOT the server
-    root — clients send ``message/send`` to whatever the interface url says.
+    The interface ``url`` (``_a2a_card_url``) targets the JSON-RPC endpoint
+    (``/a2a``) at the agent's reachable address — set ``A2A_PUBLIC_URL`` when
+    deployed; otherwise it's the bound loopback port.
     """
     import protolabs_a2a as pa
 
@@ -1848,7 +1866,7 @@ def _build_agent_card_proto(host: str):
             "protoAgent template — A2A 1.0 LangGraph agent. "
             "Replace this description with your agent's actual purpose."
         ),
-        url=f"http://{host}/a2a",
+        url=_a2a_card_url(),
         version=_package_version(),
         skills=_agent_skills(),
         bearer=_bearer_configured(),
@@ -2720,7 +2738,7 @@ def _main():
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
     )
 
-    a2a_card = _build_agent_card_proto(f"{agent_name()}:7870")
+    a2a_card = _build_agent_card_proto()
 
     # Durable SQLite-backed task + push-config stores (survive restart; 24h TTL
     # sweep on tasks). The push-config store rejects SSRF callback URLs at
