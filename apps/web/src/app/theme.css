@@ -1989,6 +1989,54 @@ textarea {
   height: 100%;
 }
 
+/* Suspense + ErrorBoundary fallbacks for query-backed surfaces (ADR 0013). */
+.panel-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.panel-error {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(220, 60, 60, 0.06);
+}
+
+.panel-error svg:first-child {
+  color: #e0564f;
+}
+
+.panel-error > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.panel-error strong {
+  font-size: 13px;
+}
+
+.panel-error span {
+  color: var(--fg-muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.panel-error button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
 /* Goals side-panel (the agent's autonomy layer, moved out of Studio). */
 .goals-list {
   display: grid;

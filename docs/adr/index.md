@@ -21,3 +21,4 @@ decision, numbered, never deleted (supersede instead).
 | [0010](./0010-headless-setup-and-ui-tiers.md) | Headless setup & UI deployment tiers (lighter stack) | Accepted |
 | [0011](./0011-deep-research-workflow.md) | Deep-research workflow with adversarial review | Accepted |
 | [0012](./0012-eval-strategy-and-model-comparison.md) | Eval strategy: model-tagged tracking & model comparison | Accepted |
+| [0013](./0013-console-data-layer-react-query.md) | Console data layer: TanStack Query + Suspense + ErrorBoundary | Accepted |

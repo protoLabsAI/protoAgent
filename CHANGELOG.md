@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Console data layer: TanStack Query + Suspense + ErrorBoundary (ADR 0013).**
+  The operator console adopts `@tanstack/react-query` (suspense mode) for its
+  reads — loading is a `<Suspense>` fallback, failures are caught by a contained
+  `<ErrorBoundary>` with a Retry button, mutations invalidate query keys, and
+  live surfaces use `refetchInterval` instead of hand-rolled polls. Replaces the
+  per-surface `useEffect` + busy-flag + `try/catch → global banner` plumbing.
+  This PR lands the foundation (`QueryClient` at the app root, a reusable
+  `ErrorBoundary` + `PanelError`/`PanelSkeleton`, `lib/queries.ts`) and migrates
+  the **Goals** sidebar panel as the reference implementation. Remaining
+  surfaces (beads, studio, system, activity) follow in later PRs; **Notes stays
+  imperative** (it owns edit/undo/autosave state) but is wrapped in the boundary.
+
 ### Changed
 - **Goals moved into the right sidebar (Notes · Beads · Goals).** Goals were a
   Studio tab; in practice a goal is *agent state* the operator watches and

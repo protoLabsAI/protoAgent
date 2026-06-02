@@ -43,8 +43,10 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
+import type { BeadsIssue, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
+import { StatusPill, type StatusTone } from "./StatusPill";
+import { GoalsPanel } from "./GoalsPanel";
 import { SetupWizard } from "../setup/SetupWizard";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
@@ -61,7 +63,6 @@ type ActivityTab = "thread" | "inbox" | "schedule";
 // its notebook, its task board, and its goals.
 type RightPanel = "notes" | "beads" | "goals";
 type SubagentMode = "single" | "batch";
-type StatusTone = "success" | "warning" | "error" | "muted";
 
 type BatchTask = {
   id: string;
@@ -282,8 +283,6 @@ export function App() {
   const [scheduleJobId, setScheduleJobId] = useState("");
   const [scheduleBusy, setScheduleBusy] = useState(false);
 
-  const [goalsList, setGoalsList] = useState<GoalState[]>([]);
-  const [goalsBusy, setGoalsBusy] = useState(false);
 
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
   const canUndoNote = Boolean(
@@ -342,28 +341,6 @@ export function App() {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setScheduleBusy(false);
-    }
-  }
-
-  async function refreshGoals() {
-    try {
-      const payload = await api.goals();
-      setGoalsList(payload.goals);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }
-
-  async function clearGoal(sessionId: string) {
-    if (goalsBusy) return;
-    setGoalsBusy(true);
-    try {
-      await api.clearGoal(sessionId);
-      await refreshGoals();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setGoalsBusy(false);
     }
   }
 
@@ -462,16 +439,8 @@ export function App() {
     if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
   }, [surface, activityTab]);
 
-  // Goals live in the right sidebar (the agent's working memory). Refresh on
-  // open and poll while visible — the agent advances/clears goals mid-turn.
-  useEffect(() => {
-    if (rightPanel !== "goals") return;
-    void refreshGoals();
-    const handle = window.setInterval(() => {
-      if (!goalsBusy) void refreshGoals();
-    }, 5000);
-    return () => window.clearInterval(handle);
-  }, [rightPanel]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Goals now own their data via TanStack Query inside <GoalsPanel> (ADR 0013) —
+  // no App-level fetch/poll here.
 
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
@@ -1571,59 +1540,7 @@ export function App() {
             </section>
           ) : null}
 
-          {rightPanel === "goals" ? (
-            <section className="panel side-panel goals-panel">
-              <div className="panel-header compact">
-                <div>
-                  <h2>Goals</h2>
-                  <p className="panel-kicker">
-                    {goalsList.length} goal{goalsList.length === 1 ? "" : "s"} · set with <code>/goal</code> in chat
-                  </p>
-                </div>
-              </div>
-              <ScrollArea className="goals-list" ariaLabel="Goals">
-                {goalsList.length ? (
-                  goalsList.map((goal) => (
-                    <div className="goal-row" key={goal.session_id}>
-                      <div className="goal-row-head">
-                        <strong>{goal.condition || goal.session_id}</strong>
-                        <StatusPill
-                          label={goal.status}
-                          tone={
-                            goal.status === "achieved"
-                              ? "success"
-                              : goal.status === "active"
-                                ? "warning"
-                                : goal.status === "unachievable"
-                                  ? "error"
-                                  : "muted"
-                          }
-                        />
-                      </div>
-                      <span className="goal-row-meta">
-                        {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}
-                        {goal.last_reason ? ` · ${goal.last_reason.length > 80 ? `${goal.last_reason.slice(0, 80)}…` : goal.last_reason}` : ""}
-                      </span>
-                      <button
-                        className="icon-button goal-row-clear"
-                        type="button"
-                        onClick={() => void clearGoal(goal.session_id)}
-                        disabled={goalsBusy}
-                        title="Clear goal"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="goal-row empty">
-                    <strong>No goals</strong>
-                    <span className="goal-row-meta">set one in chat with <code>/goal …</code></span>
-                  </div>
-                )}
-              </ScrollArea>
-            </section>
-          ) : null}
+          {rightPanel === "goals" ? <GoalsPanel /> : null}
         </aside>
       </div>
 
@@ -1681,10 +1598,6 @@ export function App() {
       />
     </div>
   );
-}
-
-function StatusPill({ label, tone }: { label: string; tone: StatusTone }) {
-  return <span className={`status-pill ${tone}`}>{label}</span>;
 }
 
 function RailButton({
