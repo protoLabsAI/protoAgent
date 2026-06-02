@@ -43,6 +43,15 @@ import protolabs_a2a as pa
 
 logger = logging.getLogger(__name__)
 
+# protoAgent-LOCAL extension (not one of the four fleet extensions in
+# ``protolabs_a2a``): the HITL form/approval payload surfaced on an
+# ``input-required`` frame so the operator console can render a JSON-schema form
+# or an Approve/Deny card (the agent's ``request_user_input`` / ``run_command``
+# approval). The console matches on this MIME; the hub doesn't need it. Built
+# with the same ``data_part`` wire primitive as the fleet extensions, so it
+# rides the 1.0 envelope identically — it's just not on the shared card.
+HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
+
 @dataclass
 class TurnOutcome:
     """Everything a host needs at the end of an A2A turn (ADR 0003 / 0006).
@@ -111,6 +120,17 @@ def _ext_data_part(emit_dict: dict[str, Any]) -> Part:
     mime = emit_dict["metadata"][pa.MIME_KEY]
     payload = emit_dict["content"]["value"]
     return _data_part_proto(payload, mime)
+
+
+def _hitl_prompt(payload: Any) -> str:
+    """A human-readable prompt for an ``input-required`` pause, for consumers
+    that don't parse the hitl-v1 DataPart. Forms/approvals fall back to their
+    title; a plain ask uses its question."""
+    if isinstance(payload, dict):
+        return str(
+            payload.get("question") or payload.get("title") or "Input required."
+        )
+    return str(payload) if payload is not None else "Input required."
 
 
 class ProtoAgentExecutor(AgentExecutor):
@@ -221,12 +241,14 @@ class ProtoAgentExecutor(AgentExecutor):
                         confidence_expl = expl.strip() if isinstance(expl, str) and expl.strip() else None
 
                 elif event_type == "input_required":
-                    question = (
-                        payload.get("question", "Input required.")
-                        if isinstance(payload, dict) else str(payload)
-                    )
+                    # Human-readable prompt for plain consumers; the full
+                    # form/approval payload rides a protoAgent-local hitl-v1
+                    # DataPart so the console renders the form / approval card.
+                    parts = [_text_part(_hitl_prompt(payload))]
+                    if isinstance(payload, dict):
+                        parts.append(_data_part_proto(payload, HITL_MIME))
                     await updater.requires_input(
-                        message=updater.new_agent_message([_text_part(question)])
+                        message=updater.new_agent_message(parts)
                     )
                     return  # parked — the caller resumes via message/send on this task
 

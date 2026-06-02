@@ -1219,10 +1219,12 @@ def _interrupt_payload(val) -> dict:
     """Shape a LangGraph interrupt value into the ``input-required`` payload the
     A2A layer parks and the console renders. Richer HITL shapes pass through:
     ``ask_human`` → ``{"question": …}``; ``request_user_input`` → ``{"kind":"form",
-    "title", "description", "steps":[…]}``. Anything else degrades to a question
-    with the stringified value. The console renders by shape (prompt vs JSON-schema
-    form); the resume value is a string for a question, a dict for a form."""
-    if isinstance(val, dict) and (val.get("question") or val.get("kind") == "form"):
+    "title", "description", "steps":[…]}``; ``run_command`` approval →
+    ``{"kind":"approval", "title", "detail", …}``. Anything else degrades to a
+    question with the stringified value. The console renders by shape (prompt vs
+    JSON-schema form vs Approve/Deny); the resume value is a string for a
+    question, a dict for a form, and a decision for an approval."""
+    if isinstance(val, dict) and (val.get("question") or val.get("kind") in ("form", "approval")):
         return val
     return {"question": (str(val) if val is not None else "Input required.")}
 

@@ -129,24 +129,35 @@ function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
+type RawPart = {
+  kind?: string;
+  data?: unknown;
+  content?: { $case?: string; value?: unknown };
+  metadata?: { mimeType?: string };
+};
+
+/** Read a custom DataPart's payload iff its `metadata.mimeType` matches `mime`.
+ *
+ * Accepts every encoding the fleet emits: A2A 1.0 member-discriminated
+ * (`content.$case === "data"`, payload under `content.value`), 1.0 flattened
+ * proto-JSON (top-level `data`), and legacy 0.3 (`kind: "data"` + `data`). The
+ * discriminator is always `metadata.mimeType` — `kind` is not required (1.0
+ * dropped it), so this keeps matching after the a2a-sdk migration. */
+function dataByMime(parts: RawPart[] | undefined, mime: string): unknown {
+  const part = (parts || []).find((p) => p.metadata?.mimeType === mime);
+  if (!part) return null;
+  if (part.content && part.content.$case === "data") return part.content.value ?? null;
+  return part.data ?? null;
+}
+
 /** Pull a structured tool event ({id, name, phase, input|output}) off a frame's parts. */
-function toolEventFromParts(
-  parts?: Array<{ kind?: string; data?: unknown; metadata?: { mimeType?: string } }>,
-): ToolEvent | null {
-  const part = (parts || []).find(
-    (p) => p.kind === "data" && p.metadata?.mimeType === TOOL_CALL_MIME,
-  );
-  return part ? (part.data as ToolEvent) : null;
+function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
+  return (dataByMime(parts, TOOL_CALL_MIME) as ToolEvent) || null;
 }
 
 /** Pull the HITL form/question payload off an input-required frame's parts. */
-function hitlFromParts(
-  parts?: Array<{ kind?: string; data?: unknown; metadata?: { mimeType?: string } }>,
-): HitlPayload | null {
-  const part = (parts || []).find(
-    (p) => p.kind === "data" && p.metadata?.mimeType === HITL_MIME,
-  );
-  return part ? (part.data as HitlPayload) : null;
+function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
+  return (dataByMime(parts, HITL_MIME) as HitlPayload) || null;
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {

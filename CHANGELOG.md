@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **HITL form/approval cards survive the A2A 1.0 migration.** On the
+  `feature/a2a-1.0-protolabs-a2a` branch the `ProtoAgentExecutor` now emits a
+  protoAgent-local `hitl-v1` DataPart (full `request_user_input` form /
+  `run_command` approval payload) on the `input-required` frame, plus a
+  human-readable text fallback — so the console renders the form / Approve-Deny
+  card instead of a stringified blob. `_interrupt_payload` passes `approval`
+  shapes through (not just `form`), and the console's part reader is now A2A-1.0
+  aware (matches `metadata.mimeType`, reads `content.value`/flattened `data`,
+  no longer requires the dropped 0.3 `kind:"data"`) — which also restores
+  tool-call-v1 card rendering. `protolabs_a2a` stays the four fleet extensions.
 - **ADR 0014 — A2A 0.3 → 1.0 migration plan.** Records the protoAgent-local plan
   to replace the ~2,083-LOC hand-rolled `a2a_handler.py` with the official
   `a2a-sdk` (`AgentExecutor`) + a shared `protolabs-a2a` conventions layer

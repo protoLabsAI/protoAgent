@@ -354,6 +354,42 @@ async def test_tool_events_surface_as_tool_call_dataparts():
     assert completed["result"] == "BUG-9"
 
 
+@pytest.mark.asyncio
+async def test_input_required_form_carries_hitl_datapart():
+    """A request_user_input form (or run_command approval) parks the task with a
+    protoAgent-local hitl-v1 DataPart carrying the full payload, plus a text
+    part that falls back to the form title — so the console renders the form,
+    not just a stringified blob."""
+    from a2a_executor import HITL_MIME
+
+    form = {
+        "kind": "form",
+        "title": "Deploy params",
+        "description": "Confirm before rollout",
+        "steps": [{"id": "env", "label": "Environment", "type": "string"}],
+    }
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None):
+        yield ("input_required", form)
+        yield ("done", "must not reach")
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    parts = final["status"]["message"]["parts"]
+    # Plain consumers see the title as the prompt text.
+    assert "Deploy params" in " ".join(p.get("text", "") for p in parts)
+    # The full form payload rides a hitl-v1 DataPart for the console to render.
+    hitl = next((payload for p in parts for mime, payload in [pa.read_data(p)] if mime == HITL_MIME), None)
+    assert hitl is not None
+    assert hitl["kind"] == "form"
+    assert hitl["title"] == "Deploy params"
+    assert hitl["steps"][0]["id"] == "env"
+
+
 # ── Terminal hook (telemetry + Activity feed) ─────────────────────────────────
 
 
