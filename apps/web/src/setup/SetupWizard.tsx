@@ -247,11 +247,10 @@ export function SetupWizard({
         setError(response.message);
         return;
       }
-      // `br` ships in the container, so init is expected to succeed — surface
-      // a failure rather than swallowing it. The allowlist no longer blocks it
-      // (the project path is folded into allowed_dirs above).
-      if (state.initBeads && projectPath.trim()) {
-        await api.initBeads(projectPath);
+      // The beads store is agent-global and always ready, so this is a no-op
+      // confirmation now (kept so the setup step still feels acknowledged).
+      if (state.initBeads) {
+        await api.initBeads();
       }
       setMessage(response.message);
       onFinished();

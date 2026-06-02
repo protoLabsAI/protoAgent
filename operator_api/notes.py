@@ -1,4 +1,13 @@
-"""Project notes workspace storage for the React operator console."""
+"""Agent-global notes workspace storage for the React operator console.
+
+One persistent, instance-scoped notes workspace the agent and the console
+share — *not* per-project. There's no ``.automaker/notes/`` inside project
+directories anymore (it was confusing to scatter the agent's notes across
+whatever directory happened to be "the project"); the agent has a single
+notebook, the same one the console's Notes panel shows. This mirrors the
+in-process ``BeadsStore`` (``beads/store.py``). The project / allowed-dirs
+list is purely the filesystem security fence, not a notes scope.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +15,23 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from operator_api.paths import resolve_project_path
+from paths import scope_leaf
+
+DEFAULT_NOTES_PATH = "/sandbox/notes/workspace.json"
+
+
+def _resolve_notes_path(path: str | None) -> Path:
+    """``NOTES_PATH`` env → constructor arg → default. Falls back from a
+    non-writable ``/sandbox`` to ``~/.protoagent`` for local dev, then
+    instance-scoped — the same shape as the beads + knowledge stores."""
+    raw = os.environ.get("NOTES_PATH") or path or DEFAULT_NOTES_PATH
+    p = Path(raw).expanduser()
+    if str(p).startswith("/sandbox") and not Path("/sandbox").is_dir():
+        p = Path.home() / ".protoagent" / "notes" / "workspace.json"
+    return scope_leaf(p)
 
 
 def create_default_workspace() -> dict[str, Any]:
@@ -39,31 +60,34 @@ def create_default_workspace() -> dict[str, Any]:
 
 
 class NotesService:
-    """Load/save a ProtoMaker-compatible notes workspace."""
+    """Load/save the agent's single persistent notes workspace.
 
-    def __init__(self, *, allowed_dirs: Callable[[], list[str]] | None = None):
-        self._allowed_dirs = allowed_dirs
+    Instance-scoped (one notebook per agent), not per-project. ``allowed_dirs``
+    is accepted and ignored for backward compatibility with older call sites —
+    notes no longer live inside a project directory, so there's nothing to
+    fence here.
+    """
 
-    def workspace_path(self, project_path: str) -> Path:
-        allowed = self._allowed_dirs() if self._allowed_dirs is not None else None
-        return resolve_project_path(project_path, allowed) / ".automaker" / "notes" / "workspace.json"
+    def __init__(self, *, path: str | None = None, allowed_dirs: Any = None):
+        self.path = _resolve_notes_path(path)
 
-    def load_workspace(self, project_path: str) -> dict[str, Any]:
-        path = self.workspace_path(project_path)
+    def workspace_path(self) -> Path:
+        return self.path
+
+    def load_workspace(self) -> dict[str, Any]:
         try:
-            with path.open(encoding="utf-8") as fh:
+            with self.path.open(encoding="utf-8") as fh:
                 data = json.load(fh)
             return data if isinstance(data, dict) else create_default_workspace()
         except (OSError, json.JSONDecodeError, ValueError):
             return create_default_workspace()
 
-    def save_workspace(self, project_path: str, workspace: dict[str, Any]) -> None:
+    def save_workspace(self, workspace: dict[str, Any]) -> None:
         if not isinstance(workspace, dict):
             raise ValueError("workspace must be an object")
-        path = self.workspace_path(project_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".json.tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(workspace, fh, indent=2)
             fh.write("\n")
-        os.replace(tmp, path)
+        os.replace(tmp, self.path)

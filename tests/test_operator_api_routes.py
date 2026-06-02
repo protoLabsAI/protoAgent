@@ -10,11 +10,11 @@ class _Notes:
     def __init__(self) -> None:
         self.saved = None
 
-    def load_workspace(self, project_path: str):
-        return {"project_path": project_path}
+    def load_workspace(self):
+        return {"loaded": True}
 
-    def save_workspace(self, project_path: str, workspace):
-        self.saved = (project_path, workspace)
+    def save_workspace(self, workspace):
+        self.saved = workspace
 
 
 class _Beads:
@@ -81,17 +81,13 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     )
     assert batch.json()["output"] == "batch:2"
 
-    notes_path = str(tmp_path)
-    assert client.get("/api/notes/workspace", params={"project_path": notes_path}).json() == {
-        "workspace": {"project_path": notes_path},
-    }
-    save = client.post(
-        "/api/notes/workspace",
-        json={"project_path": notes_path, "workspace": {"tabs": {}}},
-    )
+    # Notes are agent-global — no project_path in the request or response.
+    assert client.get("/api/notes/workspace").json() == {"workspace": {"loaded": True}}
+    save = client.post("/api/notes/workspace", json={"workspace": {"tabs": {}}})
     assert save.json() == {"ok": True}
-    assert notes.saved == (notes_path, {"tabs": {}})
+    assert notes.saved == {"tabs": {}}
 
+    notes_path = str(tmp_path)
     assert client.get("/api/beads/status", params={"project_path": notes_path}).json() == {
         "initialized": True,
         "project_path": notes_path,

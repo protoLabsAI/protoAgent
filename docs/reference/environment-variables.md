@@ -56,6 +56,22 @@ The bundled `KnowledgeStore` (sqlite + FTS5) is enabled by default. See [Configu
 
 To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_ingest`, `memory_recall`, etc.) are dropped from the agent loop when the store is disabled.
 
+## Notes, beads & goals (agent-global working stores)
+
+The agent's notebook, task board, and goals are **agent-global** — one
+persistent, instance-scoped store each, shared by the agent's tools and the
+operator console. They are *not* per-project (there's no `.automaker/notes/` or
+`.beads/` inside project directories); `operator.allowed_dirs` is purely the
+filesystem fence for file/shell tools, unrelated to these stores. Each falls
+back from a non-writable `/sandbox` to `~/.protoagent/…` for local dev and is
+instance-scoped via `PROTOAGENT_INSTANCE`.
+
+| Variable | Default | What |
+|---|---|---|
+| `NOTES_PATH` | `/sandbox/notes/workspace.json` | The console Notes panel workspace + the `notes_*` tools. |
+| `BEADS_DB_PATH` | `/sandbox/beads/issues.db` | The in-process beads issue store (the `beads_*` tools + the console Beads panel). |
+| `GOAL_PATH` | `/sandbox/goals` | Directory of per-session goal JSON files (goal mode). |
+
 ## Audit log
 
 | Variable | Default | What |
