@@ -10,6 +10,7 @@ The defaults here point at the protoLabs LiteLLM gateway via the
 YAML (or swap the gateway alias) per agent without code changes.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -345,7 +346,10 @@ class LangGraphConfig:
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
-            model_name=model.get("name", cls.model_name),
+            # PROTOAGENT_MODEL wins over the YAML so an eval sweep can boot the
+            # same agent against different models without rewriting config
+            # (evals/sweep.py). Blank/unset falls through to the YAML value.
+            model_name=os.environ.get("PROTOAGENT_MODEL") or model.get("name", cls.model_name),
             api_base=model.get("api_base", cls.api_base),
             api_key=secret_api_key or model.get("api_key", cls.api_key),
             temperature=model.get("temperature", cls.temperature),

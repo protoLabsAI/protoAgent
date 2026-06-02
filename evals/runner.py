@@ -406,10 +406,15 @@ def _print_board(results: list[CaseResult]) -> None:
     print(f"\n{pass_count}/{len(results)} passed")
 
 
-def _save_report(results: list[CaseResult], path: Path) -> None:
+def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base_url: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "ts": datetime.now(UTC).isoformat(),
+        # The model under test — tagged so reports are comparable across model
+        # swaps (evals.compare / evals.report key off this). Auto-detected from
+        # /healthz, overridable with --model-label.
+        "model": model,
+        "base_url": base_url,
         "total": len(results),
         "passed": sum(1 for r in results if r.passed),
         "results": [asdict(r) for r in results],
@@ -424,6 +429,10 @@ async def main():
     p.add_argument("--tasks", default=None, help="comma-separated case IDs")
     p.add_argument("--category", default=None)
     p.add_argument("--out", default=None)
+    p.add_argument(
+        "--model-label", default=None,
+        help="tag the report with this model name (default: auto-detect from /healthz)",
+    )
     args = p.parse_args()
 
     tasks_path = Path(__file__).parent / "tasks.json"
@@ -441,7 +450,16 @@ async def main():
 
     client = AgentClient(base_url=args.base_url)
 
-    print(f"Running {len(cases)} case(s) against {client.base_url}")
+    # Tag the report with the model under test. --model-label wins; otherwise
+    # ask /healthz what the running agent is serving so swaps are traceable.
+    model_label = args.model_label or ""
+    if not model_label:
+        try:
+            model_label = (await client.health()).get("model") or ""
+        except Exception:
+            model_label = ""
+
+    print(f"Running {len(cases)} case(s) against {client.base_url}" + (f" [model: {model_label}]" if model_label else ""))
     results: list[CaseResult] = []
     for case in cases:
         sys.stdout.write(f"  {case['id']}... ")
@@ -455,7 +473,7 @@ async def main():
     out_path = Path(args.out) if args.out else (
         Path(__file__).parent / "results" / f"run-{int(time.time())}.json"
     )
-    _save_report(results, out_path)
+    _save_report(results, out_path, model=model_label, base_url=client.base_url)
 
     return 0 if all(r.passed for r in results) else 1
 

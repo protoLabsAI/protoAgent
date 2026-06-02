@@ -63,6 +63,10 @@ apps/desktop/src-tauri/binaries/
 # PyInstaller sidecar build workdir
 /build/sidecar/
 
+# Eval run artifacts (per-run reports, sweep outputs, captured server logs).
+# The harness recreates evals/results/ on demand; runs aren't source.
+evals/results/
+
 # Playwright E2E artifacts (apps/web smoke harness)
 apps/web/test-results/
 apps/web/playwright-report/
