@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Telemetry surface migrated to TanStack Query (ADR 0013).** System →
+  Telemetry reads the summary + recent turns + insights via a single
+  `useSuspenseQuery` (`telemetryQuery`), refreshes via `refetch`, and renders
+  loading/errors through `<Suspense>` + `<ErrorBoundary>` — dropping its
+  `useEffect`/`onError` plumbing.
 - **Workflows surface migrated to TanStack Query (ADR 0013).** The Studio →
   Workflows surface now reads the recipe list + subagent registry via
   `useSuspenseQuery`, runs/deletes via `useMutation` (invalidating the list),
