@@ -854,9 +854,21 @@ export function App() {
     : status === "streaming" || status === "refreshing" || status.includes("…") ? { tone: "warning", label: status }
     : { tone: "ok", label: "ready" };
 
+  // Desktop (macOS) runs with an overlay/invisible title bar — no chrome, the
+  // native traffic lights float over the content. Detect that build so the
+  // topbar can inset for the lights + act as the window's drag region. (Tauri
+  // injects __PROTOAGENT_API_BASE__; the macOS guard avoids insetting on other
+  // platforms where the window keeps a normal title bar.)
+  const isTauriMac =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "tauri:" ||
+      window.location.hostname === "tauri.localhost" ||
+      Boolean((window as unknown as { __PROTOAGENT_API_BASE__?: string }).__PROTOAGENT_API_BASE__)) &&
+    /Mac/i.test(navigator.userAgent);
+
   return (
-    <div className="app-shell">
-      <header className="topbar">
+    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
+      <header className="topbar" data-tauri-drag-region>
         <div className="brand-lockup">
           <img src="/app/protolabs-icon-outline.svg" alt="" className="brand-mark" />
           <div>
