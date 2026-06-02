@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   onefile is the ephemeral `_MEIxxxx` extraction dir, so notes/beads failed with
   "project_path does not exist". It now resolves a stable dir when frozen
   (`PROTOAGENT_PROJECT_DIR` override → the desktop's `PROTOAGENT_CONFIG_DIR` →
-  home); a source checkout still uses the repo root.
+  home); a source checkout still uses the repo root. The console also self-heals
+  a stale persisted project path (e.g. a `_MEI` dir saved by an earlier run):
+  if a project API call fails for it, it falls back to the server's default.
 - **Desktop orphaned its sidecar server on exit** — a PyInstaller onefile runs
   as a bootloader + re-exec'd child, so the Tauri shell killing the tracked
   process on quit left the real server alive (holding its port; they accumulated
