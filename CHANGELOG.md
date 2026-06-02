@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Run surface migrated to TanStack Query (ADR 0013).** Studio → Run extracted
+  from `App` into `RunPanel`: the subagent registry is a `useSuspenseQuery`, the
+  single/batch launch is a `useMutation`. Loading/errors via `<Suspense>` +
+  `<ErrorBoundary>`. Retires the Run form state + handlers from `App` (the
+  shell-level `runtime` read is the remaining ADR 0013 item).
 - **Schedule surface migrated to TanStack Query (ADR 0013).** Activity →
   Schedule (extracted from `App` into `SchedulePanel`) reads jobs via
   `useSuspenseQuery` and adds/cancels via `useMutation` (invalidating the list);
