@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Console Beads panel + API now use the in-process store (Sprint B).** The
+  operator beads endpoints go through a `_BeadsStoreAdapter` to the same
+  instance-scoped `BeadsStore` the agent uses — the agent and console share one
+  board, no `br` CLI / per-project `.beads/`. `project_path` is accepted but
+  ignored; the `br`-backed service stays as a fork fallback. **Completes the
+  beads-in-process work** (store + agent tools + console).
 - **Beads agent tools (Sprint B).** The lead agent gets `beads_create` /
   `beads_list` / `beads_update` / `beads_close` over the in-process store — its
   planning/task surface (the todo replacement). Booted instance-scoped in
