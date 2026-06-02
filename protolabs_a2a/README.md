@@ -52,7 +52,7 @@ by either runtime parses.
 | --- | --- | --- |
 | cost-v1 | `application/vnd.protolabs.cost-v1+json` | `https://proto-labs.ai/a2a/ext/cost-v1` |
 | confidence-v1 | `application/vnd.protolabs.confidence-v1+json` | `https://proto-labs.ai/a2a/ext/confidence-v1` |
-| worldstate-delta-v1 | `application/vnd.protolabs.worldstate-delta+json` *(no `-v1` in the MIME)* | `https://proto-labs.ai/a2a/ext/worldstate-delta-v1` |
+| worldstate-delta-v1 | `application/vnd.protolabs.worldstate-delta-v1+json` | `https://proto-labs.ai/a2a/ext/worldstate-delta-v1` |
 | tool-call-v1 | `application/vnd.protolabs.tool-call-v1+json` | `https://proto-labs.ai/a2a/ext/tool-call-v1` |
 
 Payload shapes:

@@ -30,8 +30,7 @@ from .parts import data_part, read_data
 # ── MIME types (the metadata.mimeType discriminator) ──────────────────────────
 COST_MIME = "application/vnd.protolabs.cost-v1+json"
 CONFIDENCE_MIME = "application/vnd.protolabs.confidence-v1+json"
-# NOTE: worldstate-delta has NO "-v1" in the MIME (it does in the card URI).
-WORLDSTATE_DELTA_MIME = "application/vnd.protolabs.worldstate-delta+json"
+WORLDSTATE_DELTA_MIME = "application/vnd.protolabs.worldstate-delta-v1+json"
 TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json"
 
 # ── Card extension URIs (capabilities.extensions[].uri) ───────────────────────

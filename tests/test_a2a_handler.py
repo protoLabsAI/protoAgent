@@ -104,11 +104,11 @@ def test_confidence_extension_mime_uri_and_payload():
     assert pa.parse_confidence(part) == {"confidence": 0.9, "explanation": "sure", "success": True}
 
 
-def test_worldstate_delta_mime_has_no_v1_but_uri_does():
-    """Contract quirk: the MIME is ...worldstate-delta+json (no -v1) while the
-    card URI is .../worldstate-delta-v1. Locking this prevents a silent
-    interop break."""
-    assert pa.WORLDSTATE_DELTA_MIME == "application/vnd.protolabs.worldstate-delta+json"
+def test_worldstate_delta_mime_and_uri_both_carry_v1():
+    """The MIME (...worldstate-delta-v1+json) and the card URI
+    (.../worldstate-delta-v1) both carry -v1, matching the other three
+    extensions. Locking this prevents a silent interop break."""
+    assert pa.WORLDSTATE_DELTA_MIME == "application/vnd.protolabs.worldstate-delta-v1+json"
     assert pa.WORLDSTATE_DELTA_EXT_URI == "https://proto-labs.ai/a2a/ext/worldstate-delta-v1"
     part = pa.emit_worldstate_delta([{"domain": "board", "path": "x", "op": "inc", "value": 1}])
     assert part["metadata"]["mimeType"] == pa.WORLDSTATE_DELTA_MIME
