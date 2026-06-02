@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **In-process beads store (Sprint B).** A server-owned SQLite issue tracker
+  (`beads/store.py`, instance-scoped) — create/list/update/close/delete with the
+  beads issue shape — replacing the file-based `br` CLI. Foundation for the beads
+  agent tools + the console panel rewire (next slices).
 - **`request_user_input` HITL form tool (Sprint A, server side).** Generalizes
   `ask_human` from a free-text question to a **JSON-schema form** (multi-step =
   wizard): the agent calls `request_user_input(title, steps, description?)`, the
