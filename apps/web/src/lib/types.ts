@@ -190,11 +190,12 @@ export type HitlFormStep = {
   description?: string;
 };
 export type HitlPayload = {
-  kind?: "form";
+  kind?: "form" | "approval";
   title?: string;
   description?: string;
   steps?: HitlFormStep[];
   question?: string; // ask_human shape
+  detail?: string; // approval shape — the command/action being approved
 };
 
 export type NotesWorkspace = {

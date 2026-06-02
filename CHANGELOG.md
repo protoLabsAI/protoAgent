@@ -29,8 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for input and the window isn't focused (the menu-bar-only desktop, or a
   backgrounded tab), the console fires a native notification — via the Web
   Notification API, bridged on desktop by `tauri-plugin-notification`
-  (capability `notification:default`). (The `run_command` approval gate is the
-  last Sprint-A slice.)
+  (capability `notification:default`).
+- **Shell (`run_command`) is now ON by default, behind HITL approval (Sprint A).**
+  `filesystem.allow_run` defaults true, but each command pauses for the operator
+  to **Approve / Deny** (`filesystem.run_requires_approval`, default on) — surfaced
+  as a `kind:"approval"` HITL request the console renders with the command shown
+  (and the A.3 desktop notification when hidden). Completes the "shell
+  on-behind-approval" posture (ADR 0007 update); a fork can drop the gate inside a
+  hardened container / trusted autonomous run.
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
   off to the app via the View Transitions API (clean cross-fade; plain unmount
