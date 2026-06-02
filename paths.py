@@ -42,3 +42,23 @@ def scope_leaf(path: str | Path) -> Path:
     if not iid:
         return p
     return p.parent / _safe_segment(iid) / p.name
+
+
+def workspace_dir(*, create: bool = False) -> Path:
+    """The agent's default fenced workspace — where the on-by-default filesystem
+    toolset can read/write/edit (the fence the agent lives inside).
+
+    Resolution: ``PROTOAGENT_WORKSPACE`` env wins (point it at a friendlier dir,
+    e.g. from the desktop); else ``/sandbox/workspace`` in a container, falling
+    back to ``~/.protoagent/workspace`` for local dev — instance-scoped either
+    way. ``create=True`` mkdirs it (writes need the dir to exist)."""
+    raw = os.environ.get("PROTOAGENT_WORKSPACE")
+    if raw:
+        base = Path(raw).expanduser()
+    else:
+        sandbox = Path("/sandbox/workspace")
+        base = sandbox if sandbox.parent.is_dir() else Path.home() / ".protoagent" / "workspace"
+        base = scope_leaf(base)
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    return base.resolve()

@@ -146,7 +146,27 @@ def test_config_parses_filesystem(tmp_path):
     assert cfg.filesystem_projects[0]["name"] == "orbis"
 
 
-def test_config_filesystem_default_off():
+def test_config_filesystem_default_on_fenced_workspace(tmp_path, monkeypatch):
+    """Filesystem is ON by default (fenced to a workspace); run_command stays opt-in."""
     from graph.config import LangGraphConfig
 
-    assert LangGraphConfig().filesystem_enabled is False
+    cfg = LangGraphConfig()
+    assert cfg.filesystem_enabled is True
+    # run_command (arbitrary argv, unsandboxed like execute_code) stays opt-in.
+    assert cfg.filesystem_allow_run is False
+    # No explicit projects → a single default `workspace` project, fenced + writable.
+    monkeypatch.setenv("PROTOAGENT_WORKSPACE", str(tmp_path / "ws"))
+    projects = cfg.effective_filesystem_projects(create=True)
+    assert len(projects) == 1
+    assert projects[0]["name"] == "workspace" and projects[0]["write"] is True
+    assert (tmp_path / "ws").is_dir()  # created
+
+
+def test_effective_projects_explicit_wins_and_disabled_is_empty(tmp_path):
+    from graph.config import LangGraphConfig
+
+    explicit = [{"name": "repo", "path": str(tmp_path), "write": False}]
+    cfg = LangGraphConfig(filesystem_projects=explicit)
+    assert cfg.effective_filesystem_projects() == explicit  # explicit registry wins
+    off = LangGraphConfig(filesystem_enabled=False)
+    assert off.effective_filesystem_projects() == []  # disabled → no projects

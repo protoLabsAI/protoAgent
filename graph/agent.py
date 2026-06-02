@@ -680,7 +680,7 @@ def create_agent_graph(
 
     system_prompt = build_system_prompt(
         include_subagents=include_subagents,
-        projects=(config.filesystem_projects if config.filesystem_enabled else None),
+        projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
     )
 
     agent = create_agent(

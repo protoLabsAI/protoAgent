@@ -298,13 +298,16 @@ class LangGraphConfig:
     # list — not the UI — is the security boundary. See operator_api/paths.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
-    # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
-    # OFF by default; a generic capability a fork (e.g. "Roxy") opts into. When
-    # enabled with a non-empty ``projects`` registry, the agent gets fenced
-    # read/write/list/search tools over those dirs (every path contained under a
-    # project root). ``allow_run`` adds the dual-use ``run_command`` power tool.
-    # ``projects`` entries: ``{name, path, write: true|false}``. See tools/fs_tools.
-    filesystem_enabled: bool = False
+    # Fenced filesystem toolset (ADR 0007 — operator primitives). ON by default,
+    # fenced to a default **workspace** dir (paths.workspace_dir) when no explicit
+    # ``projects`` are configured — read/write/list/search, every path contained
+    # under the workspace root (``..``/symlink escapes refused). A capable, safe
+    # first run: the agent can actually work with files, but only inside the fence.
+    # ``projects`` entries: ``{name, path, write: true|false}`` register extra dirs.
+    # ``allow_run`` adds the dual-use ``run_command`` power tool — OFF by default:
+    # run_command (like execute_code) is fenced cwd but arbitrary argv, i.e. NOT a
+    # real sandbox, so it stays opt-in until gated behind HITL approval.
+    filesystem_enabled: bool = True
     filesystem_allow_run: bool = False
     filesystem_projects: list[dict] = field(default_factory=list)
 
@@ -323,6 +326,18 @@ class LangGraphConfig:
         env_model = os.environ.get("PROTOAGENT_MODEL")
         if env_model:
             self.model_name = env_model
+
+    def effective_filesystem_projects(self, *, create: bool = False) -> list[dict]:
+        """The fs project registry the agent actually gets. Explicit
+        ``filesystem_projects`` win; otherwise (when filesystem is enabled) a
+        single default ``workspace`` project so the on-by-default fs toolset has a
+        fenced place to work. ``create=True`` mkdirs the workspace dir."""
+        if self.filesystem_projects:
+            return self.filesystem_projects
+        if not self.filesystem_enabled:
+            return []
+        from paths import workspace_dir
+        return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
