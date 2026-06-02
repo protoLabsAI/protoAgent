@@ -1027,7 +1027,7 @@ export function App() {
 
           {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
           {surface === "knowledge" ? <PlaybooksSurface onError={setError} /> : null}
-          {surface === "system" && systemTab === "settings" ? <SettingsSurface onError={setError} /> : null}
+          {surface === "system" && systemTab === "settings" ? <SettingsSurface /> : null}
         </main>
 
         <aside className="right-panel">

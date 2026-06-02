@@ -1,37 +1,46 @@
-import { AlertTriangle, RefreshCw, RotateCcw, Save } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { AlertTriangle, RotateCcw, Save } from "lucide-react";
+import { Suspense, useMemo, useState } from "react";
 
+import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
-import type { SettingsField, SettingsGroup } from "../lib/types";
+import { queryKeys, settingsSchemaQuery } from "../lib/queries";
+import type { SettingsField } from "../lib/types";
 
 // Generic settings surface — renders whatever GET /api/settings/schema returns,
 // so it stays in sync as config grows. Saving POSTs the changed fields and the
 // server hot-reloads the agent; fields flagged `restart` get a badge + banner.
+// On the TanStack Query data layer (ADR 0013): the schema is a useSuspenseQuery,
+// save is a useMutation that invalidates it; loading/errors via Suspense +
+// ErrorBoundary.
 
-export function SettingsSurface({ onError }: { onError: (message: string) => void }) {
-  const [groups, setGroups] = useState<SettingsGroup[] | null>(null);
+export function SettingsSurface() {
+  return (
+    <section className="panel stage-panel">
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="settings" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading settings…" />}>
+              <SettingsBody />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
+    </section>
+  );
+}
+
+function SettingsBody() {
+  const queryClient = useQueryClient();
+  const { data } = useSuspenseQuery(settingsSchemaQuery());
+  const groups = data.groups;
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
-  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
-
-  async function load() {
-    try {
-      const r = await api.settingsSchema();
-      setGroups(r.groups);
-      setDirty({});
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, []);
 
   const dirtyKeys = Object.keys(dirty);
 
   // Pending changes that won't take effect until a process restart.
   const pendingRestart = useMemo(() => {
-    if (!groups) return [];
     const labels: string[] = [];
     for (const g of groups) {
       for (const f of g.fields) {
@@ -41,49 +50,31 @@ export function SettingsSurface({ onError }: { onError: (message: string) => voi
     return labels;
   }, [groups, dirty]);
 
-  async function save() {
-    if (!dirtyKeys.length) return;
-    setSaving(true);
-    setStatus("saving…");
-    onError("");
-    try {
-      const r = await api.saveSettings(dirty);
+  const save = useMutation({
+    mutationFn: () => api.saveSettings(dirty),
+    onMutate: () => setStatus("saving…"),
+    onSuccess: (r) => {
       if (!r.ok) {
-        onError(r.messages.join(" · "));
-        setStatus("save failed");
+        setStatus(`save failed: ${r.messages.join(" · ")}`);
         return;
       }
       const restartNote = r.restart_required.length
         ? ` — restart required for: ${r.restart_required.join(", ")}`
         : "";
       setStatus(`${r.messages.join(" · ")}${restartNote}`);
-      await load();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-      setStatus("save failed");
-    } finally {
-      setSaving(false);
-    }
-  }
+      setDirty({});
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+    onError: (e) => setStatus(`save failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
 
-  if (!groups) {
-    return (
-      <section className="panel stage-panel">
-        <div className="panel-header">
-          <h1>Settings</h1>
-        </div>
-        <div className="stage-body">
-          <div className="empty-state">
-            <RefreshCw size={16} className="spin" />
-            <span>Loading settings…</span>
-          </div>
-        </div>
-      </section>
-    );
+  function discard() {
+    setDirty({});
+    setStatus("");
   }
 
   return (
-    <section className="panel stage-panel">
+    <>
       <div className="panel-header">
         <div>
           <h1>Settings</h1>
@@ -92,11 +83,11 @@ export function SettingsSurface({ onError }: { onError: (message: string) => voi
           </p>
         </div>
         <div className="settings-actions">
-          <button className="secondary-button" type="button" onClick={() => void load()} disabled={saving || !dirtyKeys.length}>
+          <button className="secondary-button" type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
             <RotateCcw size={15} />
             Discard
           </button>
-          <button className="primary-button" type="button" onClick={() => void save()} disabled={saving || !dirtyKeys.length}>
+          <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
             <Save size={16} />
             Save &amp; apply
           </button>
@@ -126,7 +117,7 @@ export function SettingsSurface({ onError }: { onError: (message: string) => voi
           </section>
         ))}
       </div>
-    </section>
+    </>
   );
 }
 

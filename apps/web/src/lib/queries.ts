@@ -11,6 +11,7 @@ export const queryKeys = {
   workflows: ["workflows"] as const,
   subagents: ["subagents"] as const,
   telemetry: ["telemetry"] as const,
+  settings: ["settings", "schema"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -64,4 +65,12 @@ export const telemetryQuery = () =>
         insights: i.insights,
       };
     },
+  });
+
+// The generic settings schema (GET /api/settings/schema). Invalidated after a
+// save so the surface reloads the server's hot-reloaded values.
+export const settingsSchemaQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.settings,
+    queryFn: () => api.settingsSchema(),
   });

@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Settings surface migrated to TanStack Query (ADR 0013).** System → Settings
+  reads the schema via `useSuspenseQuery` and saves via `useMutation` (which
+  invalidates the schema so hot-reloaded values reload); save status/errors show
+  inline. Loading/errors via `<Suspense>` + `<ErrorBoundary>`; drops the
+  `useEffect`/`onError` plumbing.
 - **Telemetry surface migrated to TanStack Query (ADR 0013).** System →
   Telemetry reads the summary + recent turns + insights via a single
   `useSuspenseQuery` (`telemetryQuery`), refreshes via `refetch`, and renders
