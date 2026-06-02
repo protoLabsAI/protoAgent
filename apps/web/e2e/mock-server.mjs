@@ -83,9 +83,20 @@ function handleApiGet(pathname) {
     case "/api/notes/workspace":
       return { workspace: NOTES_WORKSPACE };
     case "/api/beads/status":
-      return { initialized: false };
+      return { initialized: true };
     case "/api/beads/issues":
-      return { issues: [] };
+      return {
+        issues: [
+          {
+            id: "bd-1",
+            title: "Wire the telemetry rollup",
+            status: "in_progress",
+            priority: 1,
+            issue_type: "task",
+            created_at: "2026-06-02T09:00:00Z",
+          },
+        ],
+      };
     case "/api/settings/schema":
       return { groups: SETTINGS_SCHEMA };
     case "/api/workflows":
