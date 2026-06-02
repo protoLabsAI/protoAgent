@@ -25,9 +25,56 @@ python -m evals.runner --category tool
 python -m evals.runner --tasks current_time_intent,daily_log_intent
 ```
 
-Reports land in `evals/results/run-<ts>.json`. The CLI prints a
-pass/fail board; the JSON report carries reply previews and timing
-for post-hoc inspection.
+Reports land in `evals/results/run-<ts>.json` (gitignored — they're run
+artifacts, not source). The CLI prints a pass/fail board; the JSON report
+carries reply previews, timing, and the **model under test** (auto-detected from
+`/healthz`, overridable with `--model-label`) so runs stay comparable.
+
+## Compare models, track over time
+
+Improving an agent means measuring it the same way every time and being able to
+swap the model and compare ([ADR 0012](/adr/0012-eval-strategy-and-model-comparison)).
+
+**Swap one model:** `PROTOAGENT_MODEL` wins over the YAML `model.name`, so you
+can point the same agent at a different model without editing config:
+
+```bash
+PROTOAGENT_MODEL=vendor/some-model python server.py --ui none
+```
+
+**Sweep several models** with one command — `evals/sweep.py` boots a throwaway,
+UI-less agent per model (its own port + `PROTOAGENT_INSTANCE`, so they never
+share data), runs the suite tagged with each model, tears each down, and prints a
+`model × category` matrix:
+
+```bash
+python -m evals.sweep --models protolabs/reasoning,protolabs/agent
+python -m evals.sweep --models a,b,c --category tool      # one category
+python -m evals.sweep --models a,b --tasks current_time_intent --keep
+```
+
+```
+| Model                 | a2a-protocol | tool        | **Overall**     |
+|-----------------------|--------------|-------------|-----------------|
+| `protolabs/reasoning` | 3/3 (100%)   | 6/6 (100%)  | **9/9 (100%)**  |
+| `protolabs/agent`     | 3/3 (100%)   | 4/6 (67%)   | **7/9 (78%)**   |
+```
+
+**Track the trend** across every run on the box — `evals/report.py` aggregates
+the model-tagged reports into a leaderboard (latest standing per model, best
+first) plus a per-model trend (pass rate by run, ▲/▼ vs the last one):
+
+```bash
+python -m evals.report                          # all models
+python -m evals.report --model protolabs/reasoning
+```
+
+For a single before/after of one change, `evals/compare.py` diffs two reports
+(pass-rate delta, per-category, which cases flipped):
+
+```bash
+python -m evals.compare evals/results/run-OLD.json evals/results/run-NEW.json
+```
 
 ## The three assertion channels
 

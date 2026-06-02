@@ -104,6 +104,31 @@ class AgentClient:
             r.raise_for_status()  # surface the last error
             return {}
 
+    async def health(self) -> dict:
+        """GET ``/healthz`` → ``{ok, graph_compiled, setup_complete, ui, model}``.
+
+        The eval runner reads ``model`` from here to tag the report with the
+        model under test (no guessing which model produced a run)."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{self.base_url}/healthz")
+            return r.json()
+
+    # ── workflows ─────────────────────────────────────────────────────────────
+
+    async def run_workflow(self, name: str, inputs: dict, *, timeout_s: int = 300) -> dict:
+        """POST ``/api/workflows/{name}/run`` → the workflow result dict.
+
+        Used by ``kind: "workflow"`` eval cases to drive a recipe (e.g.
+        ``deep-research``) end-to-end and assert on its synthesized output."""
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            r = await client.post(
+                f"{self.base_url}/api/workflows/{name}/run",
+                headers=self.headers,
+                json={"inputs": inputs},
+            )
+            r.raise_for_status()
+            return r.json()
+
     # ── message/send + poll ─────────────────────────────────────────────────
 
     async def ask(self, prompt: str, *, timeout_s: int = 90, context_id: str | None = None) -> TaskResult:

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Eval model comparison + trend tracking** (ADR 0012): every eval report is
+  now tagged with the **model under test** (auto-detected from `/healthz`,
+  overridable with `--model-label`). A `PROTOAGENT_MODEL` env var overrides the
+  YAML `model.name` so the same agent boots against any model. New
+  `evals/sweep.py` boots a throwaway `--ui none` agent per model (own port +
+  `PROTOAGENT_INSTANCE`), runs the suite against each, and prints a
+  `model × category` pass-rate matrix; new `evals/report.py` aggregates every
+  model-tagged report into a leaderboard + per-model trend over time. `/healthz`
+  now returns the active `model`; `evals/results/` is gitignored.
 - **Deep-research workflow with adversarial review** (ADR 0011): a bundled
   `deep-research` recipe (`run_workflow`/`/deep-research`) that orchestrates a
   six-stage DAG — `research ∥ dissent → gap_fill → antagonist ∥ verify →

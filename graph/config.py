@@ -10,6 +10,7 @@ The defaults here point at the protoLabs LiteLLM gateway via the
 YAML (or swap the gateway alias) per agent without code changes.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -312,6 +313,16 @@ class LangGraphConfig:
     # = permissive (off). ``*.host`` matches subdomains. Single source of truth
     # for the generated OpenShell network policy (scripts/gen_openshell_policy).
     egress_allowed_hosts: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
+        # boot the same agent against different models without editing config
+        # (evals/sweep.py). Applied here so it holds on *every* construction
+        # path — including the defaults fallback when no YAML is present (CI,
+        # fresh forks), not just the from_yaml parse branch.
+        env_model = os.environ.get("PROTOAGENT_MODEL")
+        if env_model:
+            self.model_name = env_model
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
