@@ -10,6 +10,7 @@ export const queryKeys = {
   beadsIssues: ["beads", "issues"] as const,
   workflows: ["workflows"] as const,
   subagents: ["subagents"] as const,
+  telemetry: ["telemetry"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -43,4 +44,24 @@ export const subagentsQuery = () =>
   queryOptions({
     queryKey: queryKeys.subagents,
     queryFn: () => api.subagents(),
+  });
+
+// Telemetry dashboard (ADR 0006) — the summary + recent turns + insights in one
+// read (mirrors the surface's original Promise.all). Refreshed by invalidation.
+export const telemetryQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.telemetry,
+    queryFn: async () => {
+      const [s, r, i] = await Promise.all([
+        api.telemetrySummary(),
+        api.telemetryRecent(50),
+        api.telemetryInsights(),
+      ]);
+      return {
+        enabled: s.enabled && r.enabled,
+        summary: s.summary,
+        turns: r.turns || [],
+        insights: i.insights,
+      };
+    },
   });
