@@ -12,6 +12,7 @@ export const queryKeys = {
   subagents: ["subagents"] as const,
   telemetry: ["telemetry"] as const,
   settings: ["settings", "schema"] as const,
+  inbox: ["inbox"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -73,4 +74,12 @@ export const settingsSchemaQuery = () =>
   queryOptions({
     queryKey: queryKeys.settings,
     queryFn: () => api.settingsSchema(),
+  });
+
+// The inbound inbox (ADR 0003) — all pending tiers. Live: the panel invalidates
+// this on the `inbox.item` push event so a new stimulus appears immediately.
+export const inboxQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.inbox,
+    queryFn: () => api.inbox("later", false),
   });

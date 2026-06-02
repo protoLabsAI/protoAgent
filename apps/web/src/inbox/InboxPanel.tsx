@@ -1,65 +1,67 @@
-import { Check, Loader2, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  QueryErrorResetBoundary,
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query";
+import { Check, RefreshCw } from "lucide-react";
+import { Suspense, useEffect, useState } from "react";
 
+import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
-import type { InboxItem } from "../lib/types";
+import { inboxQuery, queryKeys } from "../lib/queries";
 
 // Right-sidebar view of the inbound inbox (ADR 0003). Lists pending stimuli
 // (webhooks / external systems / sister agents), live-updates as items arrive
-// over the `inbox.item` push event, and lets the operator dismiss one
-// (mark it delivered). External intake is POST /api/inbox (token-gated); this
-// surface is read + dismiss only.
+// over the `inbox.item` push event, and lets the operator dismiss one (mark it
+// delivered). External intake is POST /api/inbox (token-gated); this surface is
+// read + dismiss only. On the TanStack Query data layer (ADR 0013): the list is
+// a useSuspenseQuery the `inbox.item` event invalidates; dismiss is a mutation.
 
 const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
-export function InboxPanel({ onError }: { onError: (message: string) => void }) {
-  const [items, setItems] = useState<InboxItem[]>([]);
-  const [loading, setLoading] = useState(true);
+function InboxBody({
+  dismissed,
+  onDismiss,
+}: {
+  dismissed: Set<number>;
+  onDismiss: (id: number) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { data, isFetching, refetch } = useSuspenseQuery(inboxQuery());
 
-  async function load() {
-    setLoading(true);
-    try {
-      const r = await api.inbox("later", false); // all pending tiers
-      setItems(r.items);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, []);
+  // Delivered items stay hidden even if a refetch re-includes them (the server
+  // drops them once delivered). `dismissed` is held by the parent so it
+  // survives the live-event refetch cycle.
+  const items = data.items.filter((i) => !dismissed.has(i.id));
 
-  // Live: a new item arrived. Reload to pick it up with its server-assigned id.
-  useEffect(() => onServerEvent("inbox.item", () => void load()), []);
+  // Live: a new item arrived — refresh to pick it up with its server id.
+  useEffect(
+    () => onServerEvent("inbox.item", () => void queryClient.invalidateQueries({ queryKey: queryKeys.inbox })),
+    [queryClient],
+  );
 
-  async function dismiss(id: number) {
-    try {
-      await api.deliverInbox(id);
-      setItems((prev) => prev.filter((i) => i.id !== id));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    }
-  }
+  const dismiss = useMutation({
+    mutationFn: (id: number) => api.deliverInbox(id),
+    // Hide immediately on click (optimistic); it won't return once delivered.
+    onMutate: (id) => onDismiss(id),
+  });
 
   return (
-    <section className="panel side-panel inbox-panel">
+    <>
       <div className="panel-header compact">
         <div>
           <h2>Inbox</h2>
-          <p className="panel-kicker">
-            {loading ? "loading…" : `${items.length} pending`}
-          </p>
+          <p className="panel-kicker">{items.length} pending</p>
         </div>
-        <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
-          {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+        <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+          <RefreshCw size={16} className={isFetching ? "spin" : ""} />
         </button>
       </div>
 
       <div className="inbox-list">
-        {!loading && items.length === 0 ? (
+        {items.length === 0 ? (
           <div className="inbox-empty">
             Nothing pending. Inbound stimuli (webhooks, scripts, sister agents) posted to
             <code>/api/inbox</code> show up here.
@@ -75,7 +77,7 @@ export function InboxPanel({ onError }: { onError: (message: string) => void }) 
               <button
                 className="icon-button inbox-dismiss"
                 type="button"
-                onClick={() => void dismiss(item.id)}
+                onClick={() => dismiss.mutate(item.id)}
                 title="Mark delivered (dismiss)"
               >
                 <Check size={15} />
@@ -85,6 +87,28 @@ export function InboxPanel({ onError }: { onError: (message: string) => void }) 
           </div>
         ))}
       </div>
+    </>
+  );
+}
+
+export function InboxPanel() {
+  // Held above the Suspense boundary so a delivered item stays dismissed across
+  // the live-event refetch cycle (the inner body remounts on re-suspend).
+  const [dismissed, setDismissed] = useState<Set<number>>(() => new Set());
+  return (
+    <section className="panel side-panel inbox-panel">
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="inbox" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading inbox…" />}>
+              <InboxBody
+                dismissed={dismissed}
+                onDismiss={(id) => setDismissed((s) => new Set(s).add(id))}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
     </section>
   );
 }
