@@ -6,9 +6,6 @@ import {
   Bot,
   Boxes,
   CalendarClock,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   CircleAlert,
   Database,
   FileText,
@@ -43,10 +40,10 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { BeadsIssue, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
-import { ScrollArea } from "./ScrollArea";
-import { StatusPill, type StatusTone } from "./StatusPill";
+import type { NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
+import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
+import { BeadsPanel } from "./BeadsPanel";
 import { SetupWizard } from "../setup/SetupWizard";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
@@ -71,22 +68,7 @@ type BatchTask = {
   prompt: string;
 };
 
-type IssueDraft = {
-  title: string;
-  description: string;
-  type: string;
-  priority: number;
-};
-
 const sessionId = "operator-default";
-const emptyIssueDraft: IssueDraft = {
-  title: "",
-  description: "",
-  type: "task",
-  priority: 2,
-};
-
-const issueStatusOrder = ["in_progress", "open", "blocked", "deferred", "closed"];
 
 function createBatchTask(type = "researcher"): BatchTask {
   return {
@@ -143,97 +125,6 @@ function statusTone(ok?: boolean) {
   return ok ? "success" : "error";
 }
 
-function issueStatus(issue: BeadsIssue) {
-  return issue.status || "open";
-}
-
-function issueType(issue: BeadsIssue) {
-  return issue.issue_type || issue.type || "task";
-}
-
-function issueStatusLabel(status: string) {
-  return status.replace(/_/g, " ");
-}
-
-function issueStatusTone(status: string): StatusTone {
-  if (status === "closed") return "success";
-  if (status === "blocked") return "error";
-  if (status === "in_progress" || status === "deferred") return "warning";
-  return "muted";
-}
-
-function priorityLabel(priority: BeadsIssue["priority"]) {
-  if (priority === undefined || priority === null || priority === "") return "P-";
-  const value = String(priority);
-  return value.toUpperCase().startsWith("P") ? value.toUpperCase() : `P${value}`;
-}
-
-function parseTimestamp(value?: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function dayStart(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
-function formatTimestamp(value?: string | null) {
-  const date = parseTimestamp(value);
-  if (!date) return "";
-
-  const now = new Date();
-  const dayDelta = Math.round((dayStart(now) - dayStart(date)) / 86_400_000);
-  const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
-
-  if (dayDelta === 0) return `today at ${time}`;
-  if (dayDelta === 1) return `yesterday at ${time}`;
-
-  const options: Intl.DateTimeFormatOptions = {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  };
-  if (date.getFullYear() !== now.getFullYear()) {
-    options.year = "numeric";
-  }
-  return new Intl.DateTimeFormat(undefined, options).format(date);
-}
-
-function issueGroupId(status: string) {
-  return `issue-group-${status.replace(/[^a-z0-9_-]/gi, "-")}`;
-}
-
-function formatExactTimestamp(value?: string | null) {
-  const date = parseTimestamp(value);
-  if (!date) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "full",
-    timeStyle: "long",
-  }).format(date);
-}
-
-function groupIssues(issues: BeadsIssue[]) {
-  const buckets = new Map<string, BeadsIssue[]>();
-  for (const issue of issues) {
-    const status = issueStatus(issue);
-    const bucket = buckets.get(status);
-    if (bucket) {
-      bucket.push(issue);
-    } else {
-      buckets.set(status, [issue]);
-    }
-  }
-
-  const ordered = issueStatusOrder.filter((status) => buckets.has(status));
-  const rest = [...buckets.keys()].filter((status) => !issueStatusOrder.includes(status)).sort();
-  return [...ordered, ...rest].map((status) => ({
-    status,
-    issues: buckets.get(status) || [],
-  }));
-}
-
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [studioTab, setStudioTab] = useState<StudioTab>("workflows");
@@ -256,8 +147,6 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [workspace, setWorkspace] = useState<NotesWorkspace | null>(null);
-  const [beadsIssues, setBeadsIssues] = useState<BeadsIssue[]>([]);
-  const [beadsReady, setBeadsReady] = useState<boolean | null>(null);
   const [status, setStatus] = useState("ready");
   const [error, setError] = useState("");
 
@@ -272,9 +161,6 @@ export function App() {
 
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesDirty, setNotesDirty] = useState(false);
-  const [issueDraft, setIssueDraft] = useState<IssueDraft>(emptyIssueDraft);
-  const [beadsBusy, setBeadsBusy] = useState(false);
-  const [collapsedIssueGroups, setCollapsedIssueGroups] = useState<Set<string>>(() => new Set(["closed"]));
 
   const [scheduleJobs, setScheduleJobs] = useState<ScheduledJob[]>([]);
   const [scheduleBackend, setScheduleBackend] = useState("local");
@@ -344,23 +230,12 @@ export function App() {
     }
   }
 
-  // Notes + Beads are agent-global (one persistent store each) — not scoped to
-  // a project. The project / allowed-dirs list is purely the filesystem
-  // security fence; it doesn't gate the agent's notebook or task board.
+  // Notes are agent-global (one persistent store). Beads + Goals own their data
+  // via TanStack Query inside their panels (ADR 0013), so this only loads notes.
   async function refreshProjectState() {
-    const [notesPayload, beadsStatus] = await Promise.all([
-      api.getNotes(),
-      api.beadsStatus(),
-    ]);
+    const notesPayload = await api.getNotes();
     setWorkspace(notesPayload.workspace);
     setNotesDirty(false);
-    setBeadsReady(beadsStatus.initialized);
-    if (beadsStatus.initialized) {
-      const issuesPayload = await api.beadsIssues();
-      setBeadsIssues(issuesPayload.issues);
-    } else {
-      setBeadsIssues([]);
-    }
   }
 
   async function refreshAll() {
@@ -672,114 +547,10 @@ export function App() {
     });
   }
 
-  async function initBeads() {
-    if (beadsBusy) return;
-    setBeadsBusy(true);
-    setError("");
-    try {
-      await api.initBeads();
-      await refreshProjectState();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBeadsBusy(false);
-    }
-  }
-
-  async function createIssue() {
-    const title = issueDraft.title.trim();
-    if (!title || beadsBusy) return;
-    setBeadsBusy(true);
-    setError("");
-    try {
-      const response = await api.createIssue({
-        title,
-        type: issueDraft.type,
-        priority: issueDraft.priority,
-        description: issueDraft.description.trim() || undefined,
-      });
-      setBeadsIssues((items) => [response.issue, ...items]);
-      setIssueDraft(emptyIssueDraft);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBeadsBusy(false);
-    }
-  }
-
-  function replaceIssue(issue: BeadsIssue) {
-    setBeadsIssues((items) => items.map((item) => (item.id === issue.id ? { ...item, ...issue } : item)));
-  }
-
-  function toggleIssueGroup(status: string) {
-    setCollapsedIssueGroups((current) => {
-      const next = new Set(current);
-      if (next.has(status)) {
-        next.delete(status);
-      } else {
-        next.add(status);
-      }
-      return next;
-    });
-  }
-
-  async function updateIssueStatus(issue: BeadsIssue, nextStatus: string) {
-    if (beadsBusy) return;
-    setBeadsBusy(true);
-    setError("");
-    try {
-      const response = await api.updateIssue(issue.id, { status: nextStatus });
-      replaceIssue(response.issue.id ? response.issue : { ...issue, status: nextStatus });
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBeadsBusy(false);
-    }
-  }
-
-  async function closeIssue(issue: BeadsIssue) {
-    if (beadsBusy) return;
-    setBeadsBusy(true);
-    setError("");
-    try {
-      const response = await api.closeIssue(issue.id);
-      replaceIssue(response.issue.id ? response.issue : { ...issue, status: "closed" });
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBeadsBusy(false);
-    }
-  }
-
-  function deleteIssue(issue: BeadsIssue) {
-    if (beadsBusy) return;
-    setConfirmState({
-      title: `Delete ${issue.id}?`,
-      message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the beads store.`,
-      confirmLabel: "Delete",
-      onConfirm: () => void doDeleteIssue(issue),
-    });
-  }
-
-  async function doDeleteIssue(issue: BeadsIssue) {
-    setBeadsBusy(true);
-    setError("");
-    try {
-      await api.deleteIssue(issue.id);
-      setBeadsIssues((items) => items.filter((item) => item.id !== issue.id));
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBeadsBusy(false);
-    }
-  }
-
   const middleware = useMemo(() => {
     if (!runtime) return [];
     return Object.entries(runtime.middleware).sort(([a], [b]) => a.localeCompare(b));
   }, [runtime]);
-
-  const groupedIssues = useMemo(() => groupIssues(beadsIssues), [beadsIssues]);
 
   // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
   function startRightResize(e: React.MouseEvent) {
@@ -1358,187 +1129,7 @@ export function App() {
             </section>
           ) : null}
 
-          {rightPanel === "beads" ? (
-            <section className="panel side-panel beads-panel">
-              <div className="panel-header compact">
-                <div>
-                  <h2>Beads</h2>
-                  <p className="panel-kicker">
-                    {beadsReady === null ? "not checked" : beadsReady ? `${beadsIssues.length} task${beadsIssues.length === 1 ? "" : "s"}` : "not initialized"}
-                  </p>
-                </div>
-                {beadsReady === false ? (
-                  <button className="icon-button" type="button" onClick={() => void initBeads()} title="Initialize beads">
-                    <CheckCircle2 size={16} />
-                  </button>
-                ) : null}
-              </div>
-              <form
-                className="issue-create"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void createIssue();
-                }}
-              >
-                <input
-                  value={issueDraft.title}
-                  onChange={(event) => setIssueDraft((draft) => ({ ...draft, title: event.target.value }))}
-                  placeholder="New issue title"
-                  disabled={!beadsReady}
-                />
-                <button className="primary-button" type="submit" disabled={!beadsReady || !issueDraft.title.trim() || beadsBusy}>
-                  {beadsBusy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-                  Add
-                </button>
-                <div className="issue-create-meta">
-                  <select
-                    value={issueDraft.type}
-                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, type: event.target.value }))}
-                    disabled={!beadsReady}
-                    aria-label="Issue type"
-                  >
-                    <option value="task">task</option>
-                    <option value="bug">bug</option>
-                    <option value="feature">feature</option>
-                    <option value="chore">chore</option>
-                  </select>
-                  <select
-                    value={issueDraft.priority}
-                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, priority: Number(event.target.value) }))}
-                    disabled={!beadsReady}
-                    aria-label="Issue priority"
-                  >
-                    <option value={0}>P0</option>
-                    <option value={1}>P1</option>
-                    <option value={2}>P2</option>
-                    <option value={3}>P3</option>
-                    <option value={4}>P4</option>
-                  </select>
-                  <input
-                    value={issueDraft.description}
-                    onChange={(event) => setIssueDraft((draft) => ({ ...draft, description: event.target.value }))}
-                    placeholder="Description"
-                    disabled={!beadsReady}
-                  />
-                </div>
-              </form>
-              <ScrollArea className="issue-list" ariaLabel="Beads tasks">
-                {beadsReady === null ? (
-                  <div className="empty-state stacked">
-                    <Boxes size={18} />
-                    <span>Load a project to check beads.</span>
-                  </div>
-                ) : beadsReady === false ? (
-                  <div className="empty-state stacked">
-                    <Boxes size={18} />
-                    <span>Beads is not initialized.</span>
-                    <button className="secondary-button" type="button" onClick={() => void initBeads()} disabled={beadsBusy}>
-                      <CheckCircle2 size={16} />
-                      Initialize
-                    </button>
-                  </div>
-                ) : beadsIssues.length === 0 ? (
-                  <div className="empty-state stacked">
-                    <Boxes size={18} />
-                    <span>No beads loaded.</span>
-                  </div>
-                ) : (
-                  groupedIssues.map((group) => {
-                    const isGroupCollapsed = collapsedIssueGroups.has(group.status);
-                    const groupBodyId = issueGroupId(group.status);
-                    return (
-                      <section className={`issue-group${isGroupCollapsed ? " collapsed" : ""}`} key={group.status}>
-                        <div className="issue-group-header">
-                          <button
-                            className="issue-group-toggle"
-                            type="button"
-                            aria-expanded={!isGroupCollapsed}
-                            aria-controls={groupBodyId}
-                            onClick={() => toggleIssueGroup(group.status)}
-                          >
-                            {isGroupCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                            <span>{issueStatusLabel(group.status)}</span>
-                          </button>
-                          <StatusPill label={String(group.issues.length)} tone="muted" />
-                        </div>
-                        {!isGroupCollapsed ? (
-                          <div className="issue-group-body" id={groupBodyId}>
-                            {group.issues.map((issue) => {
-                              const status = issueStatus(issue);
-                              const isClosed = status === "closed";
-                              const isActive = status === "in_progress";
-                              const createdLabel = formatTimestamp(issue.created_at);
-                              const createdTitle = formatExactTimestamp(issue.created_at);
-                              return (
-                                <div className="issue-row" key={issue.id}>
-                                  <div className="issue-main">
-                                    <div className="issue-titleline">
-                                      <strong>{issue.title}</strong>
-                                    </div>
-                                    <div className="issue-toolbar">
-                                      <div className="issue-badges">
-                                        <span>{issue.id}</span>
-                                        <span>{issueType(issue)}</span>
-                                        <span>{priorityLabel(issue.priority)}</span>
-                                        {createdLabel ? (
-                                          <span className="issue-time" title={createdTitle ? `Created ${createdTitle}` : "Created"}>
-                                            created {createdLabel}
-                                          </span>
-                                        ) : null}
-                                        {issue.assignee ? <span>{issue.assignee}</span> : null}
-                                        <StatusPill label={issueStatusLabel(status)} tone={issueStatusTone(status)} />
-                                      </div>
-                                      <div className="issue-actions">
-                                        {!isClosed ? (
-                                          <button
-                                            className="icon-button"
-                                            type="button"
-                                            onClick={() => void updateIssueStatus(issue, isActive ? "open" : "in_progress")}
-                                            disabled={beadsBusy}
-                                            title={isActive ? "Mark open" : "Start issue"}
-                                          >
-                                            {isActive ? <CircleAlert size={15} /> : <Play size={15} />}
-                                          </button>
-                                        ) : null}
-                                        <button
-                                          className="icon-button"
-                                          type="button"
-                                          onClick={() => void (isClosed ? updateIssueStatus(issue, "open") : closeIssue(issue))}
-                                          disabled={beadsBusy}
-                                          title={isClosed ? "Reopen issue" : "Close issue"}
-                                        >
-                                          {isClosed ? <Play size={15} /> : <CheckCircle2 size={15} />}
-                                        </button>
-                                        <button
-                                          className="icon-button danger"
-                                          type="button"
-                                          onClick={() => void deleteIssue(issue)}
-                                          disabled={beadsBusy}
-                                          title="Delete issue"
-                                        >
-                                          <Trash2 size={15} />
-                                        </button>
-                                      </div>
-                                    </div>
-                                    {issue.description ? (
-                                      <details className="issue-description-block">
-                                        <summary>Description</summary>
-                                        <p className="issue-description">{issue.description}</p>
-                                      </details>
-                                    ) : null}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </section>
-                    );
-                  })
-                )}
-              </ScrollArea>
-            </section>
-          ) : null}
+          {rightPanel === "beads" ? <BeadsPanel confirm={setConfirmState} /> : null}
 
           {rightPanel === "goals" ? <GoalsPanel /> : null}
         </aside>

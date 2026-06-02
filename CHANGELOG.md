@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Beads panel migrated to TanStack Query (ADR 0013).** The console's Beads
+  surface is now a self-contained `BeadsPanel` — the issue list is a
+  `useSuspenseQuery` (refetching while mounted), and create/start/close/reopen/
+  delete are `useMutation`s that invalidate it; loading is a `<Suspense>`
+  fallback and errors a contained `<ErrorBoundary>` retry card. Drops the
+  App-level beads state/handlers + the vestigial init flow (the in-process store
+  is always ready). Beads helpers moved to `app/beads.ts`. Completes the right
+  panel on the query layer (Notes stays imperative for its edit state).
+
 ## [0.9.0] - 2026-06-02
 
 ### Changed

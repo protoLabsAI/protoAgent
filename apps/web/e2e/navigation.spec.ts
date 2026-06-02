@@ -39,6 +39,13 @@ test("goals tab in the right sidebar lists active goals", async ({ page }) => {
   await expect(page.getByText("All tests pass")).toBeVisible();
 });
 
+test("beads tab in the right sidebar lists issues (query-backed)", async ({ page }) => {
+  // Beads panel reads via TanStack Query / Suspense (ADR 0013).
+  await page.getByRole("button", { name: "Beads", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Beads" })).toBeVisible();
+  await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
+});
+
 test("runtime surface surfaces skills, MCP servers, and plugins", async ({ page }) => {
   await openSub(page, "System", "Runtime");
   await expect(page.getByRole("heading", { name: "Runtime" })).toBeVisible();
