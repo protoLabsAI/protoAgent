@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Scheduled jobs fire again on A2A 1.0 (#477).** `LocalScheduler._fire`'s
+  loopback POST to the agent's own `/a2a` was still 0.3-shaped, so the a2a-sdk
+  1.1 handler rejected every scheduled fire (`-32009 VERSION_NOT_SUPPORTED`,
+  then `Method not found`). Now sends the 1.0 wire shape: `A2A-Version: 1.0`
+  header, method `SendMessage`, `role: ROLE_USER`, `parts: [{text}]`, with
+  `contextId` + scheduler `metadata` on the message. Regression test
+  `test_fire_emits_a2a_1_0_wire_shape` locks the shape (existing tests only
+  covered scheduling logic and missed it). Fleet-wide — same fix as protoPen #144.
 - **A2A agent card advertises a reachable interface URL.** The card's
   `supportedInterfaces[].url` was built from `f"{agent_name()}:7870"` — i.e. the
   *agent name* as the hostname plus a hardcoded port (`http://Gina:7870/a2a`),

@@ -291,11 +291,12 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     assert s.list_jobs() == []
 
     # Fires route into the durable Activity thread (ADR 0003) so the response
-    # surfaces, with an origin tag for the activity surface.
+    # surfaces, with an origin tag for the activity surface. A2A 1.0: contextId +
+    # metadata live on the message (#477).
     call = next(c for c in fired if "FIRED-ME" in str(c["json"]))
-    params = call["json"]["params"]
-    assert params["contextId"] == "system:activity"
-    assert params["metadata"]["origin"] == "scheduler"
+    msg = call["json"]["params"]["message"]
+    assert msg["contextId"] == "system:activity"
+    assert msg["metadata"]["origin"] == "scheduler"
 
 
 @pytest.mark.asyncio
@@ -413,3 +414,53 @@ def test_workstacean_opt_in_without_creds_falls_back_local(monkeypatch):
     monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
 
     assert isinstance(server._build_scheduler(cfg), LocalScheduler)
+
+
+# ── A2A 1.0 loopback wire shape (#477) ───────────────────────────────────────
+
+
+class _CaptureClient:
+    """Stub for httpx.AsyncClient that records the single POST _fire makes."""
+
+    def __init__(self):
+        self.url = self.headers = self.json = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        self.url, self.headers, self.json = url, headers, json
+        return type("R", (), {"status_code": 200, "text": "ok"})()
+
+
+@pytest.mark.asyncio
+async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
+    """_fire must POST the A2A 1.0 shape (the sidecar's a2a-sdk 1.1 handler
+    rejects 0.3): A2A-Version header, SendMessage, ROLE_USER, parts:[{text}],
+    contextId + metadata ON the message. Regresses #477."""
+    import httpx
+
+    from events import ACTIVITY_CONTEXT
+
+    cap = _CaptureClient()
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: cap)
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("do the thing", "0 9 * * *")
+    assert await s._fire(job) is True
+
+    assert cap.headers["A2A-Version"] == "1.0"
+    assert cap.url.endswith("/a2a")
+
+    body = cap.json
+    assert body["method"] == "SendMessage"          # not 0.3 "message/send"
+    assert "contextId" not in body["params"]          # moved onto the message
+    msg = body["params"]["message"]
+    assert msg["role"] == "ROLE_USER"                 # not "user"
+    assert msg["parts"] == [{"text": "do the thing"}] # not [{"kind":"text",...}]
+    assert msg["contextId"] == ACTIVITY_CONTEXT
+    assert msg["metadata"]["scheduler_job_id"] == job.id
+    assert msg["metadata"]["origin"] == "scheduler"
