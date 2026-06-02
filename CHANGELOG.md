@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-02
+
 ### Added
 - **Structured-skill executor finalizer (#476).** Completes the protoAgent side
   of schema-enforced skill outputs. When a turn carries a `skillHint` for a
