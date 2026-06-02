@@ -14,7 +14,13 @@ import pytest
 
 from evals.report import build_report
 from evals.runner import CaseResult, _save_report
-from evals.sweep import _render_matrix, _slug
+from evals.sweep import (
+    _aggregate_runs,
+    _majority,
+    _render_matrix,
+    _render_repeat_matrix,
+    _slug,
+)
 
 
 def _fake_report(model: str, *, ts: str, rows: list[tuple[str, str, bool]]) -> dict:
@@ -71,6 +77,46 @@ def test_save_report_tags_model_and_base_url(tmp_path):
 def test_slug_is_filesystem_safe():
     assert _slug("protolabs/reasoning") == "protolabs-reasoning"
     assert "/" not in _slug("a/b:c")
+
+
+# ── best-of-N (--repeat) ─────────────────────────────────────────────────────
+
+
+def test_majority_threshold():
+    assert _majority(1) == 1
+    assert _majority(2) == 2
+    assert _majority(3) == 2
+    assert _majority(5) == 3
+
+
+def test_aggregate_runs_counts_passes_per_case():
+    runs = [
+        _fake_report("m", ts="1", rows=[("a", "tool", True), ("b", "tool", False)]),
+        _fake_report("m", ts="2", rows=[("a", "tool", True), ("b", "tool", True)]),
+        _fake_report("m", ts="3", rows=[("a", "tool", False), ("b", "tool", True)]),
+    ]
+    agg = _aggregate_runs(runs)
+    assert agg["a"] == (2, 3)  # passed 2 of 3
+    assert agg["b"] == (2, 3)
+
+
+def test_repeat_matrix_majority_pass_and_ranking():
+    # m1: a 3/3, b 2/3 → both clear majority (2/3) → best-of-3 = 2/2.
+    # m2: a 1/3 (fails majority), b 3/3 → best-of-3 = 1/2.
+    m1 = [
+        _fake_report("m1", ts=str(i), rows=[("a", "tool", True), ("b", "tool", i != 2)])
+        for i in range(3)
+    ]
+    m2 = [
+        _fake_report("m2", ts=str(i), rows=[("a", "tool", i == 0), ("b", "tool", True)])
+        for i in range(3)
+    ]
+    md = _render_repeat_matrix({"m1": m1, "m2": m2}, repeat=3)
+    assert "best-of-3" in md
+    assert "**2/2**" in md and "**1/2**" in md      # per-model best-of-N scores
+    assert md.index("m1") < md.index("m2")          # m1 ranked first
+    assert "1/3 ✗" in md                            # m2's case `a` flagged as majority-fail
+    assert "3/3" in md and "2/3" in md
 
 
 def test_render_matrix_ranks_best_model_first():

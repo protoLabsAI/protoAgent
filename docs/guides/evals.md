@@ -60,6 +60,30 @@ python -m evals.sweep --models a,b --tasks current_time_intent --keep
 | `protolabs/smart`     | 3/3 (100%)   | 4/6 (67%)   | **7/9 (78%)**   |
 ```
 
+**Best-of-N for noisy cases** — tool selection and other non-deterministic
+behavior varies run to run, so a single sweep can mislead. `--repeat N` runs the
+suite N times per model (against the same booted agent, isolating model-sampling
+variance from boot variance) and prints a per-case `passes/N` table, scoring each
+model on the cases that passed the **majority** of runs:
+
+```bash
+python -m evals.sweep --models protolabs/reasoning,protolabs/smart,protolabs/fast \
+  --category tool --repeat 3
+```
+
+```
+| Case            | smart | reasoning | fast  |
+|-----------------|-------|-----------|-------|
+| `calculator`    | 3/3   | 3/3       | 0/3 ✗ |
+| `fetch_url`     | 3/3   | 3/3       | 0/3 ✗ |
+| `web_search`    | 3/3   | 3/3       | 2/3   |
+| **Best-of-N**   | 9/9   | 9/9       | 5/9   |
+```
+
+A `✗` marks a case that failed the majority of runs — e.g. a fast model that
+consistently answers inline instead of *calling* the tool (a structural gap),
+versus a one-off flake that still clears the majority.
+
 **Track the trend** across every run on the box — `evals/report.py` aggregates
 the model-tagged reports into a leaderboard (latest standing per model, best
 first) plus a per-model trend (pass rate by run, ▲/▼ vs the last one):
