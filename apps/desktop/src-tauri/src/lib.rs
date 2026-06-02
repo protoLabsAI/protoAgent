@@ -176,6 +176,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        // Notifications — bridges the web Notification API in the webview so the
+        // console can alert (e.g. a HITL form awaiting input) even when the
+        // menu-bar window is hidden.
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_shortcut(Shortcut::new(
