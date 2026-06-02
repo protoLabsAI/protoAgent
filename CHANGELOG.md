@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- **Fix stale release instructions.** `docs/guides/releasing.md` + the
+  `prepare-release.yml` header/PR-body/comments said the release was cut by
+  *dispatching* `release.yml` (and implied Prepare Release auto-merges +
+  auto-tags). Both are wrong since the 2026-06-02 no-auto-merge/tag policy:
+  Prepare Release only opens the bump PR; a human merges it and **pushes the
+  tag**, which is what triggers `release.yml` (`on: push: tags`). Dispatching it
+  by hand afterward is redundant and 422s on the duplicate release. The release
+  PR body now prints the exact `git tag … && git push` to run.
+
 ## [0.10.0] - 2026-06-02
 
 ### Added

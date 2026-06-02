@@ -11,12 +11,12 @@ feature PR (adds a CHANGELOG [Unreleased] entry)  ──▶  merge to main
                                                           │
 run "Prepare Release" (workflow_dispatch, pick bump) ◀────┘
    │  bumps pyproject.toml + rolls CHANGELOG.md
-   │  opens chore: release vX.Y.Z PR → auto-merges when the 3 checks pass
+   │  opens chore: release vX.Y.Z PR   (does NOT merge or tag)
    ▼
-pushes tag vX.Y.Z  ──▶  Release workflow:
-                          • builds + pushes the semver Docker tags
-                          • creates the GitHub Release (notes minus chore/docs)
-                          • posts notes to Discord (release-tools)
+you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──▶  Release workflow (on: push tag):
+                                                              • builds + pushes the semver Docker tags
+                                                              • creates the GitHub Release (notes minus chore/docs)
+                                                              • posts notes to Discord (release-tools)
 ```
 
 `latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
@@ -24,14 +24,30 @@ independent of releases.
 
 ## Cutting a release
 
-1. **Actions → Prepare Release → Run workflow.**
-2. Choose the **bump**: `patch` (default) · `minor` · `major`. Use `dry_run`
-   to preview the version + changelog/​pyproject diff without opening a PR.
-3. The workflow bumps the version, rolls the changelog, opens
-   `chore: release vX.Y.Z`, and auto-merges once the required checks pass, then
-   tags `vX.Y.Z` — which triggers the **Release** workflow.
+1. **Actions → Prepare Release → Run workflow.** Choose the **bump**: `patch`
+   (default) · `minor` · `major`. Use `dry_run` to preview the version +
+   changelog/​pyproject diff without opening a PR.
+2. The workflow bumps the version, rolls the changelog, and opens
+   `chore: release vX.Y.Z`. It **does not merge or tag** — that's deliberate
+   (fleet policy: auto-merge fired on stale SHAs and broke stacked PRs).
+3. **Merge the release PR** once the three checks pass (squash).
+4. **Push the tag** on the merged release commit — this is what triggers the
+   release:
+   ```sh
+   git checkout main && git pull
+   git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
+   ```
+   `release.yml` runs `on: push: tags: 'v*.*.*'` → builds + pushes the semver
+   Docker tags, creates the GitHub Release, and posts to Discord.
 
-That's it. Don't bump `pyproject.toml` or tag by hand — the workflow owns both.
+> **Don't also dispatch the Release workflow by hand after pushing the tag.**
+> The tag push already triggers it; a manual `workflow_dispatch` is redundant
+> and fails with `422 Release.tag_name already exists` (it leaves a harmless red
+> ✗ in Actions — the `[push]`-triggered run is the real one). The dispatch
+> trigger exists only to *re-run* a release against a tag that already exists.
+
+Don't bump `pyproject.toml` by hand — Prepare Release owns the version. You do
+push the tag by hand (step 4); that tag push is the release trigger.
 
 ## The changelog protocol
 
@@ -66,6 +82,6 @@ a reviewer — the gate is CI, not human review.
 
 | Secret | Used by | Purpose |
 |---|---|---|
-| `GH_PAT` | `prepare-release.yml` | A PAT (not `GITHUB_TOKEN`) so the tag push can trigger the downstream Release workflow. |
+| `GH_PAT` | `prepare-release.yml` | A PAT (not `GITHUB_TOKEN`) so the release-branch push fires the PR's CI checks — the default token can't trigger workflows on its own pushes. (The release tag is pushed by a human, so it triggers `release.yml` normally.) |
 | `GATEWAY_API_KEY` | `release.yml` (release-tools) | Rewrites the commit range into themed release notes via the protoLabs gateway. |
 | `DISCORD_RELEASE_WEBHOOK` | `release.yml` (release-tools) | Posts the release embed to Discord. **Optional** — the step is `continue-on-error`, so releases still succeed without it; set it to enable the Discord post. |
