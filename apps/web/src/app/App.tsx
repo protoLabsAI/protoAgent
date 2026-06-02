@@ -838,7 +838,7 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "studio" && studioTab === "workflows" ? <WorkflowsSurface onError={setError} /> : null}
+          {surface === "studio" && studioTab === "workflows" ? <WorkflowsSurface /> : null}
 
           {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel onError={setError} /> : null}

@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Workflows surface migrated to TanStack Query (ADR 0013).** The Studio →
+  Workflows surface now reads the recipe list + subagent registry via
+  `useSuspenseQuery`, runs/deletes via `useMutation` (invalidating the list),
+  and renders loading/errors through `<Suspense>` + a contained
+  `<ErrorBoundary>` — dropping its `useEffect` fetches + the `onError` global
+  banner. Shared `workflowsQuery`/`subagentsQuery` added.
 - **Beads panel migrated to TanStack Query (ADR 0013).** The console's Beads
   surface is now a self-contained `BeadsPanel` — the issue list is a
   `useSuspenseQuery` (refetching while mounted), and create/start/close/reopen/

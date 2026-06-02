@@ -8,6 +8,8 @@ import { api } from "./api";
 export const queryKeys = {
   goals: ["goals"] as const,
   beadsIssues: ["beads", "issues"] as const,
+  workflows: ["workflows"] as const,
+  subagents: ["subagents"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -27,4 +29,18 @@ export const beadsIssuesQuery = () =>
     queryKey: queryKeys.beadsIssues,
     queryFn: () => api.beadsIssues(),
     refetchInterval: 5_000,
+  });
+
+// Registered workflow recipes + the subagent registry — config, not live, so no
+// poll; invalidated when the agent/console saves or deletes one.
+export const workflowsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.workflows,
+    queryFn: () => api.workflows(),
+  });
+
+export const subagentsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.subagents,
+    queryFn: () => api.subagents(),
   });
