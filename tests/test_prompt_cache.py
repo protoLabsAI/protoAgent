@@ -45,7 +45,7 @@ def test_anthropic_caches_stable_prefix_and_delivers_context():
 
 def test_non_anthropic_delivers_context_without_cache_control():
     mw = PromptCacheMiddleware()
-    req = _Req("protolabs/agent", SystemMessage(content="PROMPT"),
+    req = _Req("protolabs/reasoning", SystemMessage(content="PROMPT"),
                state={"context": "knowledge here"})
     out = _run(mw, req)
     # plain string append, no cache_control blocks (safe for any provider)
@@ -79,7 +79,7 @@ def test_ttl_persistent_tier():
 
 def test_force_caches_non_anthropic():
     mw = PromptCacheMiddleware(force=True)
-    req = _Req("protolabs/agent", SystemMessage(content="P"), state={})
+    req = _Req("protolabs/reasoning", SystemMessage(content="P"), state={})
     out = _run(mw, req)
     assert out.system_message.content[0]["cache_control"] == {"type": "ephemeral"}
 

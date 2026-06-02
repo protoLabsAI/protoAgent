@@ -17,7 +17,7 @@ How it works (per model):
 
 Usage::
 
-    python -m evals.sweep --models protolabs/reasoning,protolabs/agent
+    python -m evals.sweep --models protolabs/reasoning,protolabs/smart
     python -m evals.sweep --models a,b,c --category tool
     python -m evals.sweep --models a,b --tasks current_time,daily_log --keep
 

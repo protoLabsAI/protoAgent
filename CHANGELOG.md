@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Retired the `protolabs/agent` gateway alias from docs, eval examples, and test
+  fixtures (use `protolabs/smart` / `protolabs/reasoning`). The default model is
+  already `protolabs/reasoning`; this just clears the dead alias from examples.
+
 ### Fixed
 - **Lean Docker image (`--ui none`/`console`) couldn't serve** — `fastapi` was
   never declared in any requirements file; it came in only transitively via

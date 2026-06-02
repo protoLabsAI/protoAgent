@@ -36,7 +36,7 @@ overridable with `--model-label`).
 # Boot one agent per model, run the suite against each, print a
 # model × category matrix. Each model gets its own throwaway --ui none
 # instance (PROTOAGENT_MODEL env override + a unique PROTOAGENT_INSTANCE).
-python -m evals.sweep --models protolabs/reasoning,protolabs/agent
+python -m evals.sweep --models protolabs/reasoning,protolabs/smart
 python -m evals.sweep --models a,b,c --category tool
 
 # Leaderboard + per-model trend across every report on the box.

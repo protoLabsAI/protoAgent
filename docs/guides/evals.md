@@ -48,7 +48,7 @@ share data), runs the suite tagged with each model, tears each down, and prints 
 `model × category` matrix:
 
 ```bash
-python -m evals.sweep --models protolabs/reasoning,protolabs/agent
+python -m evals.sweep --models protolabs/reasoning,protolabs/smart
 python -m evals.sweep --models a,b,c --category tool      # one category
 python -m evals.sweep --models a,b --tasks current_time_intent --keep
 ```
@@ -57,7 +57,7 @@ python -m evals.sweep --models a,b --tasks current_time_intent --keep
 | Model                 | a2a-protocol | tool        | **Overall**     |
 |-----------------------|--------------|-------------|-----------------|
 | `protolabs/reasoning` | 3/3 (100%)   | 6/6 (100%)  | **9/9 (100%)**  |
-| `protolabs/agent`     | 3/3 (100%)   | 4/6 (67%)   | **7/9 (78%)**   |
+| `protolabs/smart`     | 3/3 (100%)   | 4/6 (67%)   | **7/9 (78%)**   |
 ```
 
 **Track the trend** across every run on the box — `evals/report.py` aggregates
