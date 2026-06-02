@@ -594,7 +594,70 @@ def _build_scheduler_tools(scheduler) -> list:
 # ── registry ─────────────────────────────────────────────────────────────────
 
 
-def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
+def _build_beads_tools(beads_store) -> list:
+    """Bind the beads issue tracker to a ``BeadsStore`` (Sprint B) — the agent's
+    in-process planning/task surface. Returns a list."""
+
+    @tool
+    def beads_create(title: str, description: str = "", priority: int = 2, issue_type: str = "task") -> str:
+        """Track a task/issue on your beads board — your planning surface for
+        multi-step work. ``priority`` 0=highest…3=low; ``issue_type`` is one of
+        task|bug|feature|chore|epic. Returns the new issue id."""
+        try:
+            i = beads_store.create(title, description=description, priority=priority, issue_type=issue_type)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        return f"Created {i['id']}: {i['title']} ({i['issue_type']}, p{i['priority']})"
+
+    @tool
+    def beads_list(include_closed: bool = False) -> str:
+        """List issues on your beads board (open ones by default). Use it to see
+        and track outstanding work."""
+        items = beads_store.list(include_closed=include_closed)
+        if not items:
+            return "No issues on the board."
+        return "\n".join(
+            f"[{i['status']}] {i['id']} (p{i['priority']}, {i['issue_type']}) {i['title']}"
+            for i in items
+        )
+
+    @tool
+    def beads_update(
+        issue_id: str, status: str = "", title: str = "",
+        description: str = "", priority: int = -1, issue_type: str = "",
+    ) -> str:
+        """Update an issue. ``status`` is open|in_progress|blocked|deferred|closed.
+        Leave a field empty (``priority`` -1) to keep it unchanged."""
+        fields: dict = {}
+        if status:
+            fields["status"] = status
+        if title:
+            fields["title"] = title
+        if description:
+            fields["description"] = description
+        if priority is not None and priority >= 0:
+            fields["priority"] = priority
+        if issue_type:
+            fields["issue_type"] = issue_type
+        try:
+            i = beads_store.update(issue_id, **fields)
+        except (KeyError, ValueError) as exc:
+            return f"Error: {exc}"
+        return f"Updated {i['id']}: [{i['status']}] {i['title']}"
+
+    @tool
+    def beads_close(issue_id: str, reason: str = "") -> str:
+        """Close an issue (done, or won't-do). Optional ``reason``."""
+        try:
+            i = beads_store.close(issue_id, reason=reason or None)
+        except (KeyError, ValueError) as exc:
+            return f"Error: {exc}"
+        return f"Closed {i['id']}: {i['title']}"
+
+    return [beads_create, beads_list, beads_update, beads_close]
+
+
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None):
     """Return every LangChain tool the lead agent + subagents can use.
 
     Optional dependencies:
@@ -633,6 +696,8 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
         tools.extend(_build_scheduler_tools(scheduler))
     if inbox_store is not None:
         tools.extend(_build_inbox_tools(inbox_store))
+    if beads_store is not None:
+        tools.extend(_build_beads_tools(beads_store))
     return tools
 
 
