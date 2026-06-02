@@ -10,19 +10,7 @@
     "beforeBuildCommand": "npm --workspace @protoagent/web run build -- --base ./"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "protoAgent",
-        "width": 1280,
-        "height": 820,
-        "minWidth": 980,
-        "minHeight": 640,
-        "resizable": true,
-        "center": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

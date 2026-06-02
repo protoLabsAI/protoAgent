@@ -70,6 +70,13 @@ function defaultApiBase() {
   }
   if (savedBase) return savedBase.replace(/\/$/, "");
 
+  // The Tauri desktop shell boots its bundled server on a dynamically-chosen
+  // free port and injects the base URL here before any page script runs
+  // (apps/desktop/src-tauri/src/lib.rs). Prefer it over the legacy fixed port.
+  const injected = (window as unknown as { __PROTOAGENT_API_BASE__?: string })
+    .__PROTOAGENT_API_BASE__;
+  if (injected) return injected.replace(/\/$/, "");
+
   const { hostname, protocol } = window.location;
   if (protocol === "tauri:" || protocol === "file:" || hostname === "tauri.localhost") {
     return "http://127.0.0.1:7870";
