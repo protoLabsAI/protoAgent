@@ -39,6 +39,11 @@ overridable with `--model-label`).
 python -m evals.sweep --models protolabs/reasoning,protolabs/smart
 python -m evals.sweep --models a,b,c --category tool
 
+# Best-of-N: run the suite N times per model → per-case passes/N table,
+# scored on the cases that passed the majority of runs (sees past
+# single-run sampling noise on tool selection etc.).
+python -m evals.sweep --models a,b,c --category tool --repeat 3
+
 # Leaderboard + per-model trend across every report on the box.
 python -m evals.report
 

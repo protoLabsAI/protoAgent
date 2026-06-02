@@ -20,9 +20,15 @@ Usage::
     python -m evals.sweep --models protolabs/reasoning,protolabs/smart
     python -m evals.sweep --models a,b,c --category tool
     python -m evals.sweep --models a,b --tasks current_time,daily_log --keep
+    python -m evals.sweep --models a,b,c --category tool --repeat 3   # best-of-3
 
-The combined result lands in ``evals/results/sweep-<ts>.json``; each model's
-own report is written alongside as ``run-sweep-<ts>-<model>.json``.
+``--repeat N`` runs the suite N times per model (against the same booted agent)
+and prints a per-case ``passes/N`` table, scoring each model on the cases that
+passed the majority of runs — the way to see past single-run sampling noise on
+non-deterministic cases (tool selection especially).
+
+The combined result lands in ``evals/results/sweep-<ts>.json``; each run is
+written alongside as ``run-sweep-<ts>-<model>[-r<i>].json``.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -97,10 +104,15 @@ def _run_one_model(
     category: str | None,
     tasks: str | None,
     keep: bool,
-) -> dict | None:
-    """Boot an agent on ``model``, run the suite, return the report dict."""
+    repeat: int = 1,
+) -> list[dict]:
+    """Boot one agent on ``model`` and run the suite ``repeat`` times against
+    it; return the list of report dicts (empty if the agent never came up).
+
+    Repeats run against the *same* booted agent on purpose — that isolates the
+    model's own run-to-run sampling variance (the thing best-of-N measures) from
+    boot/cold-start variance, and costs one boot per model instead of N."""
     base_url = f"http://127.0.0.1:{port}"
-    report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(model)}.json"
     log_path = _RESULTS_DIR / f"server-sweep-{ts}-{_slug(model)}.log"
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -132,22 +144,28 @@ def _run_one_model(
             return None
         print(f"  ✓ healthy (model={health.get('model')})")
 
-        cmd = [
-            sys.executable, "-m", "evals.runner",
-            "--base-url", base_url,
-            "--model-label", model,
-            "--out", str(report_path),
-        ]
-        if category:
-            cmd += ["--category", category]
-        if tasks:
-            cmd += ["--tasks", tasks]
-        subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, check=False)
-
-        if not report_path.exists():
-            print(f"  ✗ no report written for {model}")
-            return None
-        return json.loads(report_path.read_text())
+        reports: list[dict] = []
+        for run_i in range(repeat):
+            suffix = f"-r{run_i + 1}" if repeat > 1 else ""
+            report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(model)}{suffix}.json"
+            cmd = [
+                sys.executable, "-m", "evals.runner",
+                "--base-url", base_url,
+                "--model-label", model,
+                "--out", str(report_path),
+            ]
+            if category:
+                cmd += ["--category", category]
+            if tasks:
+                cmd += ["--tasks", tasks]
+            if repeat > 1:
+                print(f"  — run {run_i + 1}/{repeat}")
+            subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, check=False)
+            if report_path.exists():
+                reports.append(json.loads(report_path.read_text()))
+            else:
+                print(f"  ✗ no report written for {model} (run {run_i + 1})")
+        return reports
     finally:
         proc.terminate()
         try:
@@ -197,6 +215,70 @@ def _render_matrix(reports: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+def _majority(repeat: int) -> int:
+    """Best-of-N threshold: a case passes when it passed the majority of runs."""
+    return repeat // 2 + 1
+
+
+def _aggregate_runs(runs: list[dict]) -> dict[str, tuple[int, int]]:
+    """Across a model's N runs → case_id -> (passes, n_runs_seen)."""
+    agg: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for rep in runs:
+        for r in rep.get("results", []):
+            cell = agg[r["id"]]
+            cell[1] += 1
+            if r.get("passed"):
+                cell[0] += 1
+    return {cid: (p, n) for cid, (p, n) in agg.items()}
+
+
+def _avg_latency(runs: list[dict]) -> int:
+    timed = [r["duration_ms"] for rep in runs for r in rep.get("results", []) if r.get("duration_ms")]
+    return round(sum(timed) / len(timed)) if timed else 0
+
+
+def _render_repeat_matrix(model_runs: dict[str, list[dict]], repeat: int) -> str:
+    """A per-case best-of-N table: each cell is ``passes/N``; a model's
+    best-of-N score counts cases that passed the majority of runs."""
+    threshold = _majority(repeat)
+    agg = {m: _aggregate_runs(runs) for m, runs in model_runs.items()}
+    cases = sorted({c for a in agg.values() for c in a})
+
+    def best_of_n(m: str) -> int:
+        return sum(1 for c, (p, _n) in agg[m].items() if p >= threshold)
+
+    ordered = sorted(model_runs, key=best_of_n, reverse=True)
+    short = {m: m.split("/")[-1] for m in ordered}
+
+    lines = [
+        f"# Model sweep — best-of-{repeat} (majority = {threshold}/{repeat})",
+        "",
+        "Each cell is `passes/runs`; ✗ marks a case that failed the majority of runs.",
+        "",
+        "| Case | " + " | ".join(short[m] for m in ordered) + " |",
+        "|" + "---|" * (len(ordered) + 1),
+    ]
+    for c in cases:
+        row = [f"`{c}`"]
+        for m in ordered:
+            p, n = agg[m].get(c, (0, 0))
+            mark = "" if (n and p >= threshold) else " ✗"
+            row.append(f"{p}/{n}{mark}" if n else "—")
+        lines.append("| " + " | ".join(row) + " |")
+
+    lines.append("|" + "---|" * (len(ordered) + 1))
+    total = len(cases)
+    lines.append(
+        "| **Best-of-N passed** | "
+        + " | ".join(f"**{best_of_n(m)}/{total}**" for m in ordered) + " |"
+    )
+    lines.append(
+        "| Avg latency | "
+        + " | ".join(f"{_avg_latency(model_runs[m])}ms" for m in ordered) + " |"
+    )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Run the eval suite across multiple models.")
     p.add_argument("--models", required=True, help="comma-separated model aliases")
@@ -204,17 +286,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tasks", default=None, help="comma-separated case IDs")
     p.add_argument("--port-base", type=int, default=7990, help="first port (each model uses port-base+i)")
     p.add_argument("--keep", action="store_true", help="keep each model's instance data + logs")
+    p.add_argument(
+        "--repeat", type=int, default=1,
+        help="run the suite N times per model for a best-of-N (majority) per-case table",
+    )
     args = p.parse_args(argv)
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     if not models:
         sys.stderr.write("no models given\n")
         return 2
+    repeat = max(1, args.repeat)
 
     ts = int(time.time())
-    reports: dict[str, dict] = {}
+    model_runs: dict[str, list[dict]] = {}
     for i, model in enumerate(models):
-        rep = _run_one_model(
+        runs = _run_one_model(
             model,
             port=args.port_base + i,
             instance=f"eval-sweep-{ts}-{i}",
@@ -222,22 +309,28 @@ def main(argv: list[str] | None = None) -> int:
             category=args.category,
             tasks=args.tasks,
             keep=args.keep,
+            repeat=repeat,
         )
-        if rep is not None:
-            reports[model] = rep
+        if runs:
+            model_runs[model] = runs
 
-    if not reports:
+    if not model_runs:
         sys.stderr.write("no model produced a report\n")
         return 1
 
-    matrix = _render_matrix(reports)
+    if repeat > 1:
+        matrix = _render_repeat_matrix(model_runs, repeat)
+    else:
+        matrix = _render_matrix({m: runs[0] for m, runs in model_runs.items()})
     print("\n" + matrix)
 
     combined = _RESULTS_DIR / f"sweep-{ts}.json"
     combined.write_text(json.dumps({
         "ts": ts,
         "models": models,
-        "reports": {m: rep for m, rep in reports.items()},
+        "repeat": repeat,
+        # repeat>1: all N runs per model; repeat==1: the single run (list of one).
+        "runs": model_runs,
     }, indent=2))
     (_RESULTS_DIR / f"sweep-{ts}.md").write_text(matrix + "\n")
     print(f"\nSweep: {combined}")

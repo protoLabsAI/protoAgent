@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`evals/sweep.py --repeat N`** — best-of-N model comparison. Runs the suite N
+  times per model against the same booted agent (isolating model-sampling
+  variance from boot variance) and prints a per-case `passes/N` table, scoring
+  each model on the cases that passed the **majority** of runs. Surfaces
+  structural gaps (e.g. a fast model that consistently won't call a tool) vs.
+  one-off flakes that still clear the majority.
+
 ### Changed
 - Retired the `protolabs/agent` gateway alias from docs, eval examples, and test
   fixtures (use `protolabs/smart` / `protolabs/reasoning`). The default model is
