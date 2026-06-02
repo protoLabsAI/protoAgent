@@ -76,7 +76,14 @@ class ProjectRegistry:
 
 def _registry_from_config(config) -> ProjectRegistry:
     projects: list[Project] = []
-    for entry in getattr(config, "filesystem_projects", []) or []:
+    # Explicit projects, or the default workspace dir (created) when none are
+    # configured — the on-by-default fenced workspace.
+    entries = (
+        config.effective_filesystem_projects(create=True)
+        if hasattr(config, "effective_filesystem_projects")
+        else (getattr(config, "filesystem_projects", []) or [])
+    )
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
