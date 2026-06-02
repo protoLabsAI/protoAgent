@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`protolabs_a2a` now consumed as a published git-dep, not vendored.** Dropped
+  the vendored `protolabs_a2a/` copy (added by #453) and pinned the public
+  package instead — `protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0`
+  in `requirements-core.txt`, next to `a2a-sdk`. Single source of truth, no
+  drift. The repo is public, so the Docker build needs no clone auth. Imports
+  stay `import protolabs_a2a` (the installed package exposes the same module).
+  Behavioral parity verified (byte-for-byte with the deleted copy) and the full
+  test suite stays green.
+
 ### Added
 - **HITL form/approval cards survive the A2A 1.0 migration.** On the
   `feature/a2a-1.0-protolabs-a2a` branch the `ProtoAgentExecutor` now emits a

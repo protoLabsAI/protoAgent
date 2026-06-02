@@ -4,11 +4,17 @@
 httpx>=0.27
 # A2A protocol (spec 1.0) — official SDK. Owns JSON-RPC dispatch, SSE streaming,
 # the task lifecycle, the task + push-config stores, and push delivery. The
-# protolabs_a2a package + a2a_executor.py are a thin conventions/bridge layer on
+# protolabs-a2a package + a2a_executor.py are a thin conventions/bridge layer on
 # top. http-server + fastapi extras pull starlette / sse-starlette for the route
 # builders; the sqlite extra pulls SQLAlchemy + aiosqlite for the durable
 # DatabaseTaskStore / DatabasePushNotificationConfigStore wired in a2a_stores.py.
 a2a-sdk[http-server,fastapi,sqlite]>=1.1
+# protoLabs fleet A2A conventions — the four custom DataPart extensions (cost /
+# confidence / worldstate-delta / tool-call), agent-card builder, and auth
+# schemes that keep every fleet agent interoperable byte-for-byte. Consumed from
+# the public published repo (single source of truth, no vendored copy). The repo
+# is public so the Docker build needs no auth to clone it.
+protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0
 # Web framework for the API / A2A / operator routes (server.py, operator_api/).
 # Previously satisfied only transitively via Gradio — but the lean tiers
 # (--ui none/console) drop Gradio (requirements-ui.txt), so the lean image had
