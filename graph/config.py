@@ -314,6 +314,16 @@ class LangGraphConfig:
     # for the generated OpenShell network policy (scripts/gen_openshell_policy).
     egress_allowed_hosts: list[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
+        # boot the same agent against different models without editing config
+        # (evals/sweep.py). Applied here so it holds on *every* construction
+        # path — including the defaults fallback when no YAML is present (CI,
+        # fresh forks), not just the from_yaml parse branch.
+        env_model = os.environ.get("PROTOAGENT_MODEL")
+        if env_model:
+            self.model_name = env_model
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
         """Load config from YAML file. Falls back to defaults if absent."""
@@ -346,10 +356,7 @@ class LangGraphConfig:
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
-            # PROTOAGENT_MODEL wins over the YAML so an eval sweep can boot the
-            # same agent against different models without rewriting config
-            # (evals/sweep.py). Blank/unset falls through to the YAML value.
-            model_name=os.environ.get("PROTOAGENT_MODEL") or model.get("name", cls.model_name),
+            model_name=model.get("name", cls.model_name),
             api_base=model.get("api_base", cls.api_base),
             api_key=secret_api_key or model.get("api_key", cls.api_key),
             temperature=model.get("temperature", cls.temperature),
