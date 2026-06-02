@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-off flakes that still clear the majority.
 
 ### Changed
+- **Desktop is now a menu-bar app with the protoLabs robot tray icon.** The
+  Tauri shell uses the robot mark at the proper menu-bar size (44×44, template /
+  system-tinted — `icons/tray-robot.png`) instead of the squished default app
+  icon, and runs **menu-bar-only** (macOS Accessory activation policy → no dock
+  icon). Closing the window hides the UI while the app + sidecar keep running in
+  the menu bar; reopen via the tray icon or `⌘⇧P`, and the tray's **Quit** is the
+  real exit. (protoAgent owns its own menu-bar presence — the Orbis-dropdown
+  consolidation was dropped.)
 - **Desktop sidecar now picks a free port + runs the `console` UI tier.** The
   Tauri shell (`apps/desktop`) probes a free port instead of hardcoding 7870
   (so it coexists with any agent already on 7870, and is the base for running

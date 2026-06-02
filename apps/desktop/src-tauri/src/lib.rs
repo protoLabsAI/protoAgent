@@ -139,7 +139,12 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
 
-    let mut builder = TrayIconBuilder::new()
+    // The protoLabs robot mark, at the menu-bar size + template treatment Orbis
+    // used for fleet agents (icons/tray-robot.png, 44×44; system-tinted). Each
+    // protoLabs.studio app owns its own menu-bar item.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-robot.png"))?;
+    let builder = TrayIconBuilder::new()
+        .icon(icon)
         .menu(&menu)
         .tooltip("protoAgent")
         .icon_as_template(true)
@@ -162,10 +167,6 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             } => show_main_window(&tray.app_handle()),
             _ => {}
         });
-
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
-    }
 
     builder.build(app)?;
     Ok(())
@@ -217,7 +218,18 @@ pub fn run() {
                 .initialization_script(&init)
                 .build()?;
 
-            build_tray(app)?;
+            // Menu-bar-only: build the tray, and only drop the dock icon
+            // (Accessory) if it succeeds — so a tray failure leaves us reachable
+            // in the dock rather than with no way to surface the window. Closing
+            // the window then hides the UI while the app + sidecar keep running
+            // in the menu bar; the tray's Quit is the real exit.
+            match build_tray(app) {
+                Ok(()) => {
+                    #[cfg(target_os = "macos")]
+                    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+                Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
