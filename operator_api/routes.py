@@ -122,6 +122,49 @@ def _model_payload(model: BaseModel) -> dict[str, Any]:
     return model.dict()
 
 
+class _BeadsStoreAdapter:
+    """Adapts the in-process ``BeadsStore`` (Sprint B) to the BeadsService method
+    shape the beads routes call. ``project_path`` is ignored — the store is a
+    single instance-scoped board the agent + console share (no `br` CLI, no
+    per-project ``.beads/``)."""
+
+    def __init__(self, store: Any):
+        self._s = store
+
+    def status(self, project_path: str) -> dict[str, bool]:
+        return {"initialized": True}
+
+    def init(self, project_path: str, prefix: str | None = None) -> dict[str, bool]:
+        return {"initialized": True, "already_initialized": True}
+
+    def list(self, project_path: str) -> list[dict[str, Any]]:
+        return self._s.list()
+
+    def create(self, project_path: str, issue: dict[str, Any]) -> dict[str, Any]:
+        return self._s.create(
+            str(issue.get("title", "")),
+            description=issue.get("description") or "",
+            priority=issue.get("priority") if issue.get("priority") is not None else 2,
+            issue_type=issue.get("type") or issue.get("issue_type") or "task",
+            assignee=issue.get("assignee") or "",
+        )
+
+    def update(self, project_path: str, issue_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        fields = {
+            k: v
+            for k, v in update.items()
+            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee")
+            and v is not None
+        }
+        return self._s.update(issue_id, **fields)
+
+    def close(self, project_path: str, issue_id: str, reason: str | None = None) -> dict[str, Any]:
+        return self._s.close(issue_id, reason=reason)
+
+    def delete(self, project_path: str, issue_id: str) -> dict[str, Any]:
+        return {"deleted": self._s.delete(issue_id)}
+
+
 def register_operator_routes(
     app,
     *,
@@ -130,6 +173,7 @@ def register_operator_routes(
     subagent_run: Callable[[dict[str, Any]], Awaitable[str]],
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
     beads_service: BeadsService | None = None,
+    beads_store: Any | None = None,
     notes_service: NotesService | None = None,
     allowed_dirs: Callable[[], list[str]] | None = None,
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
@@ -154,7 +198,13 @@ def register_operator_routes(
     list, so it re-reads live config after a settings reload. Injected
     services keep their own allowlist; it only wires the defaults.
     """
-    beads = beads_service or BeadsService(allowed_dirs=allowed_dirs)
+    # Prefer the in-process store (Sprint B) — the agent + console share one
+    # instance-scoped board; the `br` CLI service stays as a fallback for forks.
+    beads = (
+        _BeadsStoreAdapter(beads_store)
+        if beads_store is not None
+        else (beads_service or BeadsService(allowed_dirs=allowed_dirs))
+    )
     notes = notes_service or NotesService(allowed_dirs=allowed_dirs)
 
     @app.get("/api/runtime/status")

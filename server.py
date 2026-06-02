@@ -2346,6 +2346,7 @@ def _main():
         subagent_list=_operator_subagent_list,
         subagent_run=_operator_subagent_run,
         subagent_batch=_operator_subagent_batch,
+        beads_store=_beads_store,
         allowed_dirs=_operator_allowed_dirs,
         scheduler_list=_operator_scheduler_list,
         scheduler_add=_operator_scheduler_add,

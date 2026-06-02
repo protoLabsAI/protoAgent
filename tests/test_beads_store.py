@@ -96,3 +96,20 @@ def test_beads_tools_wired_and_functional(store):
     closed = by_name["beads_close"].invoke({"issue_id": "bd-1", "reason": "done"})
     assert "Closed bd-1" in closed
     assert store.get("bd-1")["status"] == "closed"
+
+
+def test_operator_adapter_maps_to_store(store):
+    """The console's beads routes go through _BeadsStoreAdapter → the in-process
+    store (project_path ignored), so the agent + console share one board."""
+    from operator_api.routes import _BeadsStoreAdapter
+
+    a = _BeadsStoreAdapter(store)
+    assert a.status("/anything") == {"initialized": True}
+    issue = a.create("/anything", {"title": "from console", "type": "bug", "priority": 1})
+    assert issue["id"] == "bd-1" and issue["issue_type"] == "bug"
+    assert a.list("/anything")[0]["title"] == "from console"
+    a.update("/x", "bd-1", {"status": "in_progress", "project_path": "/x"})  # project_path ignored
+    assert store.get("bd-1")["status"] == "in_progress"
+    a.close("/x", "bd-1", "shipped")
+    assert store.get("bd-1")["status"] == "closed"
+    assert a.delete("/x", "bd-1") == {"deleted": True}
