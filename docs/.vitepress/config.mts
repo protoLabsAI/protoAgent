@@ -6,6 +6,10 @@ export default defineConfig({
     "Template repository for building protoLabs A2A agents on LangGraph.",
   base: "/protoAgent/",
 
+  // The protoLabs.studio theme (@protolabsai/vitepress-theme) is dark-first like
+  // the marketing site; pin the dark, brand-first ground.
+  appearance: "force-dark",
+
   // Tutorials legitimately reference the local dev server (http://localhost:7870);
   // VitePress treats dead links as fatal, so skip just the localhost ones.
   ignoreDeadLinks: "localhostLinks",
