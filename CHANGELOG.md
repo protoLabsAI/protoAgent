@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **protoLabs.studio launch splash + console footer links.** A brand bumper
+  (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
+  off to the app via the View Transitions API (clean cross-fade; plain unmount
+  where unsupported). The console's bottom utility bar gains icon-only **Docs**
+  and **GitHub** links on the left.
 - **`evals/sweep.py --repeat N`** — best-of-N model comparison. Runs the suite N
   times per model against the same booted agent (isolating model-sampling
   variance from boot variance) and prints a per-case `passes/N` table, scoring
@@ -50,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already `protolabs/reasoning`; this just clears the dead alias from examples.
 
 ### Fixed
+- **Desktop window wasn't draggable under the invisible title bar** — with the
+  brand at the very top there was no clear grab area. Now (macOS desktop) the app
+  is pushed down by the title-bar height and a dedicated transparent
+  `data-tauri-drag-region` strip sits behind the traffic lights, so the topbar
+  lives below the stoplights with room to drag (mirrors Orbis's approach).
 - **Frozen desktop: console project APIs hit a nonexistent path** — the operator
   console's default project root was `__file__`'s dir, which in a PyInstaller
   onefile is the ephemeral `_MEIxxxx` extraction dir, so notes/beads failed with

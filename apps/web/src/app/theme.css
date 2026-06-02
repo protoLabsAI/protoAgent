@@ -175,11 +175,71 @@ h2 {
   background: var(--bg);
 }
 
-/* macOS desktop (invisible title bar): inset the brand so it clears the native
-   traffic lights that float top-left over the content. The topbar carries
-   `data-tauri-drag-region`, so this strip also drags the window. */
-.app-shell.is-tauri-mac .topbar {
-  padding-left: 84px;
+/* macOS desktop (invisible title bar): push the whole app down by the title-bar
+   height so the topbar (brand + icon) sits *below* the native traffic lights,
+   leaving a clear strip up top to drag. */
+.app-shell.is-tauri-mac {
+  padding-top: 30px;
+}
+
+/* The transparent drag strip behind the traffic lights (full width, the height
+   we reserved above). data-tauri-drag-region makes it move the window. */
+.tauri-drag-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  z-index: 50;
+}
+
+/* protoLabs.studio brand bumper (IntroSplash) — full-screen splash on launch,
+   handed off to the app via the View Transitions API. */
+.intro-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.intro-splash-rise {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  animation: intro-rise 0.7s cubic-bezier(0.2, 0.6, 0.2, 1) both;
+}
+
+.intro-splash-mark {
+  width: 88px;
+  height: 88px;
+  filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.35));
+}
+
+.intro-splash-word {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #9b87f2 0%, #818cf8 50%, #6366f1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+@keyframes intro-rise {
+  0% { opacity: 0; transform: translateY(10px) scale(0.985); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* The splash → app hand-off cross-fade (default root view transition); a touch
+   longer than the default for a cleaner settle. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 450ms;
 }
 
 .brand-lockup {

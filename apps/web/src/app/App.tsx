@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   BookMarked,
+  BookOpen,
   Bot,
   Boxes,
   CalendarClock,
@@ -12,6 +13,7 @@ import {
   Database,
   FileText,
   Gauge,
+  Github,
   Inbox,
   Loader2,
   MessageSquare,
@@ -29,6 +31,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { IntroSplash } from "./IntroSplash";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -868,7 +871,12 @@ export function App() {
 
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
-      <header className="topbar" data-tauri-drag-region>
+      <IntroSplash />
+      {/* macOS desktop: a transparent strip behind the native traffic lights
+          that drags the window. The app content is pushed below it (the topbar
+          sits under the stoplights) so there's a clear area to grab. */}
+      {isTauriMac && <div className="tauri-drag-strip" data-tauri-drag-region />}
+      <header className="topbar">
         <div className="brand-lockup">
           <img src="/app/protolabs-icon-outline.svg" alt="" className="brand-mark" />
           <div>
@@ -1653,6 +1661,26 @@ export function App() {
       </div>
 
       <footer className="utility-bar">
+        <a
+          className="util-btn"
+          href="https://protolabsai.github.io/protoAgent/"
+          target="_blank"
+          rel="noreferrer"
+          title="Documentation"
+          aria-label="Documentation"
+        >
+          <BookOpen size={14} />
+        </a>
+        <a
+          className="util-btn"
+          href="https://github.com/protoLabsAI/protoAgent"
+          target="_blank"
+          rel="noreferrer"
+          title="GitHub repository"
+          aria-label="GitHub repository"
+        >
+          <Github size={14} />
+        </a>
         <div className="util-spacer" />
         <button
           type="button"
