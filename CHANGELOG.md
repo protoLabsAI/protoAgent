@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Beads agent tools (Sprint B).** The lead agent gets `beads_create` /
+  `beads_list` / `beads_update` / `beads_close` over the in-process store — its
+  planning/task surface (the todo replacement). Booted instance-scoped in
+  `server.py` and threaded through `create_agent_graph(beads_store=…)`.
 - **In-process beads store (Sprint B).** A server-owned SQLite issue tracker
   (`beads/store.py`, instance-scoped) — create/list/update/close/delete with the
   beads issue shape — replacing the file-based `br` CLI. Foundation for the beads

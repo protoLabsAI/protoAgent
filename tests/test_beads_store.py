@@ -74,3 +74,25 @@ def test_persists_across_reopen(tmp_path):
     path = str(tmp_path / "issues.db")
     BeadsStore(db_path=path).create("survive me")
     assert [i["title"] for i in BeadsStore(db_path=path).list()] == ["survive me"]
+
+
+# ── agent tools over the store ────────────────────────────────────────────────
+
+
+def test_beads_tools_wired_and_functional(store):
+    from tools.lg_tools import get_all_tools
+
+    by_name = {getattr(t, "name", ""): t for t in get_all_tools(beads_store=store)}
+    for name in ("beads_create", "beads_list", "beads_update", "beads_close"):
+        assert name in by_name
+    # Not added when no store is passed.
+    assert "beads_create" not in {getattr(t, "name", "") for t in get_all_tools()}
+
+    out = by_name["beads_create"].invoke({"title": "ship beads", "priority": 1})
+    assert "bd-1" in out
+    by_name["beads_update"].invoke({"issue_id": "bd-1", "status": "in_progress"})
+    listing = by_name["beads_list"].invoke({})
+    assert "in_progress" in listing and "ship beads" in listing
+    closed = by_name["beads_close"].invoke({"issue_id": "bd-1", "reason": "done"})
+    assert "Closed bd-1" in closed
+    assert store.get("bd-1")["status"] == "closed"

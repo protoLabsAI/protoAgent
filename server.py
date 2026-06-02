@@ -76,6 +76,7 @@ _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
 _telemetry_store = None  # TelemetryStore (per-turn cost/latency rollups, ADR 0006), or None.
 _inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
+_beads_store = None    # BeadsStore — in-process issue tracker (Sprint B), or None.
 _storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
@@ -258,8 +259,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     _workflow_registry = _build_workflow_registry(_graph_config)
 
-    global _inbox_store, _storm_guard
+    global _inbox_store, _storm_guard, _beads_store
     _inbox_store = _build_inbox_store(_graph_config)
+    from beads import BeadsStore
+    _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
     if _storm_guard is None:
         from inbox import StormGuard
         _storm_guard = StormGuard()
@@ -268,7 +271,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
         skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
         checkpointer=_checkpointer, workflow_registry=_workflow_registry,
-        inbox_store=_inbox_store,
+        inbox_store=_inbox_store, beads_store=_beads_store,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
