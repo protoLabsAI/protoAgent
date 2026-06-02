@@ -64,6 +64,9 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         // (Was the now-deprecated --headless / PROTOAGENT_HEADLESS alias.)
         .args(["--ui", "console", "--port", &port_arg])
         .env("PROTOAGENT_UI", "console")
+        // So the sidecar exits if we die without a clean kill (the frozen
+        // onefile's child process otherwise outlives us, holding its port).
+        .env("PROTOAGENT_PARENT_PID", std::process::id().to_string())
         .env("PROTOAGENT_CONFIG_DIR", config_dir.to_string_lossy().to_string());
 
     let (mut rx, child) = match command.spawn() {
