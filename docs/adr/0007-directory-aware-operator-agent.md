@@ -1,6 +1,7 @@
 # ADR 0007 — Directory-Aware Operator Primitives (enabling a "Roxy" fork)
 
 - **Status:** Accepted (2026-06-01) — template primitives shipped (registry+fence, fenced fs toolset, fork guide); per-project subagent binding deferred
+- **Update (2026-06-02):** the **fenced filesystem is now ON by default**, scoped to a default **workspace** dir (`paths.workspace_dir`) when no projects are configured — a capable, safe first run (the agent can work with files, but only inside the fence). Benchmarking OpenClaw/Hermes (both ship FS default-on) + the UX research ("anticlimactic first run", "value off by default") motivated flipping the *read/write/edit/search* default. The two **unsandboxed** power tools stay opt-in: `run_command` (`filesystem.allow_run`) and `execute_code` are *fenced cwd but arbitrary argv/code as the server user* — not a real sandbox — so they stay off until gated behind **HITL approval** (intermediate confirmation on consequential actions, per the research) or run inside the hardened container (ADR 0008).
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, filesystem, multi-project, operator, supervisor, security, template-vs-fork

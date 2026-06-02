@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-off flakes that still clear the majority.
 
 ### Changed
+- **Fenced filesystem is now ON by default (ADR 0007 update).** A fresh agent
+  gets `read_file`/`write_file`/`edit_file`/`list_dir`/`search_files`/`find_files`
+  fenced to a default **workspace** dir (`paths.workspace_dir` —
+  `PROTOAGENT_WORKSPACE` env, else `/sandbox/workspace` or `~/.protoagent/workspace`,
+  instance-scoped) when no `filesystem.projects` are configured — a capable,
+  safe first run (informed by benchmarking OpenClaw/Hermes, which both ship FS
+  on, + the "anticlimactic first run" UX complaint). The two **unsandboxed**
+  power tools stay opt-in: `run_command` (`filesystem.allow_run`) and
+  `execute_code` are fenced-cwd-but-arbitrary-argv/code as the server user, so
+  they remain off until gated behind HITL approval or run in the hardened
+  container.
 - **Desktop: invisible title bar + macOS bundle hardening (production prep).**
   The window uses an overlay/hidden title bar on macOS (`titleBarStyle: Overlay`
   + `hiddenTitle`) — no chrome, native traffic lights float over the content;
