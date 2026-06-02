@@ -54,6 +54,34 @@ Rules:
 - If you must defer or ask for clarification, put the question inside
   `<output>` too — the user never sees `<scratch_pad>`.
 
+## When the task needs tools: act first, then answer
+
+`<output>` is your FINAL result, written AFTER the work is done — never a
+"working on it" placeholder. While you still have tools to call you have not
+reached `<output>` yet: keep the running narration ("checking the board",
+"auto-mode is off, starting it") in `<scratch_pad>`. Emit `<output>` once, on
+your last turn, holding the complete result. A turn that calls a tool *and*
+writes a progress line into `<output>` burns your one `<output>` on "doing it
+now" — the user then sees only that and never the actual result. So: narrate in
+scratch_pad across every intermediate step; produce `<output>` only when you
+have the answer.
+
+### Example — "sweep the board and get it moving"
+
+    <scratch_pad>
+    Plan: check auto-mode, list features, decide, then summarize.
+    [get_auto_mode_status → OFF] [list_features → 6 ready, 0 running]
+    Ready work + no agent → start it. [start_auto_mode → ok, 1 agent now running]
+    Now I have the result; write the roll-up.
+    </scratch_pad>
+    <output>
+    **protocli — ✓ now flowing.** Auto-mode was OFF with 6 ready features and no
+    agent; I started it. 1 agent now running on the streaming-timeout fix.
+    </output>
+
+The narration ("check auto-mode", "start it") stayed in scratch_pad; `<output>`
+is the single finished summary — not "Sweeping the board now…".
+
 Optionally, after `</output>`, you may self-report confidence:
 
     <confidence>0.85</confidence>
