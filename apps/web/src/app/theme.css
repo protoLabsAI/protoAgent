@@ -1259,6 +1259,19 @@ select:disabled {
   resize: vertical;
 }
 
+.hitl-detail {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg);
+}
+
 .hitl-actions {
   display: flex;
   justify-content: flex-end;

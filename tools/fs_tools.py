@@ -74,6 +74,19 @@ class ProjectRegistry:
         return target
 
 
+def _approved(decision) -> bool:
+    """Whether the operator approved a gated command. Accepts the resume shapes
+    the console may send: a bool, a string ("approve"/"approved"/"yes"/"ok"/…),
+    or a dict ({approved: true} / {decision: "approve"})."""
+    if isinstance(decision, bool):
+        return decision
+    if isinstance(decision, dict):
+        if isinstance(decision.get("approved"), bool):
+            return decision["approved"]
+        decision = decision.get("decision") or decision.get("answer") or ""
+    return str(decision).strip().lower() in {"approve", "approved", "yes", "y", "true", "ok"}
+
+
 def _registry_from_config(config) -> ProjectRegistry:
     projects: list[Project] = []
     # Explicit projects, or the default workspace dir (created) when none are
@@ -107,6 +120,11 @@ def build_fs_tools(config) -> list:
         log.info("[fs] filesystem enabled but no valid projects registered — no tools")
         return []
     allow_run = bool(getattr(config, "filesystem_allow_run", False))
+    # run_command is unsandboxed (arbitrary argv as the server user), so by
+    # default each invocation is gated behind a HITL approval (the operator sees
+    # the command + approves/denies). Forks can disable the gate (e.g. inside a
+    # hardened container, or for a trusted autonomous deploy).
+    run_requires_approval = bool(getattr(config, "filesystem_run_requires_approval", True))
 
     @tool
     def list_projects() -> str:
@@ -246,6 +264,20 @@ def build_fs_tools(config) -> list:
                 return f"Error: cannot parse command: {exc}"
             if not argv:
                 return "Error: empty command."
+            # HITL approval gate (Sprint A): pause for the operator to approve
+            # the command before it runs. interrupt() re-runs this fn from the
+            # top on resume (the validation above is idempotent) and returns the
+            # operator's decision. Denied → don't run.
+            if run_requires_approval:
+                from langgraph.types import interrupt
+                decision = interrupt({
+                    "kind": "approval",
+                    "title": "Approve shell command?",
+                    "detail": command,
+                    "project": project,
+                })
+                if not _approved(decision):
+                    return f"Command not run — the operator declined: {command!r}"
             res = await _shell_run(argv, cwd=str(root), timeout=timeout)
             if res.error:
                 return f"Error: {res.error}"

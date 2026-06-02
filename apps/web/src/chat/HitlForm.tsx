@@ -99,8 +99,28 @@ export function HitlForm({
   onCancel: () => void;
 }) {
   const isForm = payload.kind === "form" && (payload.steps?.length ?? 0) > 0;
+  const isApproval = payload.kind === "approval";
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [text, setText] = useState("");
+
+  // Approval gate (e.g. run_command) — Approve / Deny on the action.
+  if (isApproval) {
+    return (
+      <div className="hitl-card hitl-approval" role="dialog" aria-label="Approval requested">
+        <div className="hitl-title">{payload.title || "Approve this action?"}</div>
+        {payload.description && <div className="hitl-prompt">{payload.description}</div>}
+        {payload.detail && <pre className="hitl-detail">{payload.detail}</pre>}
+        <div className="hitl-actions">
+          <button type="button" className="ghost-button" onClick={() => onSubmit("denied")} disabled={busy}>
+            Deny
+          </button>
+          <button type="button" className="primary-button" onClick={() => onSubmit("approved")} disabled={busy}>
+            Approve
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ask_human / free-text question.
   if (!isForm) {

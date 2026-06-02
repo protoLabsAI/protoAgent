@@ -304,11 +304,14 @@ class LangGraphConfig:
     # under the workspace root (``..``/symlink escapes refused). A capable, safe
     # first run: the agent can actually work with files, but only inside the fence.
     # ``projects`` entries: ``{name, path, write: true|false}`` register extra dirs.
-    # ``allow_run`` adds the dual-use ``run_command`` power tool — OFF by default:
-    # run_command (like execute_code) is fenced cwd but arbitrary argv, i.e. NOT a
-    # real sandbox, so it stays opt-in until gated behind HITL approval.
+    # ``allow_run`` adds the dual-use ``run_command`` power tool. ON by default
+    # now that it's gated: run_command (like execute_code) is fenced cwd but
+    # arbitrary argv (not a real sandbox), so each call pauses for HITL approval
+    # (``run_requires_approval``) — the operator sees the command + approves. A
+    # fork can drop the gate inside a hardened container / trusted autonomous run.
     filesystem_enabled: bool = True
-    filesystem_allow_run: bool = False
+    filesystem_allow_run: bool = True
+    filesystem_run_requires_approval: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
@@ -449,6 +452,9 @@ class LangGraphConfig:
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
             filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
+            filesystem_run_requires_approval=data.get("filesystem", {}).get(
+                "run_requires_approval", cls.filesystem_run_requires_approval
+            ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
         )
