@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already `protolabs/reasoning`; this just clears the dead alias from examples.
 
 ### Fixed
+- **Desktop orphaned its sidecar server on exit** — a PyInstaller onefile runs
+  as a bootloader + re-exec'd child, so the Tauri shell killing the tracked
+  process on quit left the real server alive (holding its port; they accumulated
+  across open/close cycles). The shell now passes `PROTOAGENT_PARENT_PID` and the
+  server runs a parent-death watchdog that exits when the launcher goes away
+  (clean quit, crash, or SIGKILL). No-op for standalone/container runs.
 - **Lean Docker image (`--ui none`/`console`) couldn't serve** — `fastapi` was
   never declared in any requirements file; it came in only transitively via
   Gradio, which the lean tiers drop (ADR 0010). The lean image therefore had no

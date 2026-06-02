@@ -100,6 +100,40 @@ _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # streams to connected consoles.
 
 
+def _install_parent_death_watchdog() -> None:
+    """Exit if the launcher process (``PROTOAGENT_PARENT_PID``) goes away.
+
+    Set by the desktop's Tauri shell (apps/desktop/src-tauri/src/lib.rs) when it
+    spawns this server as a sidecar. A PyInstaller onefile runs as a bootloader
+    + re-exec'd child, so the shell killing the tracked bootloader on exit can
+    leave this process orphaned and holding its port. Polling the launcher PID
+    and exiting when it dies reaps the whole tree regardless of how the shell
+    went away (clean quit, crash, or SIGKILL). No-op when the env isn't set
+    (normal standalone / container runs)."""
+    ppid_s = os.environ.get("PROTOAGENT_PARENT_PID")
+    if not ppid_s:
+        return
+    try:
+        ppid = int(ppid_s)
+    except ValueError:
+        return
+
+    import threading
+
+    def _watch() -> None:
+        while True:
+            time.sleep(2)
+            try:
+                os.kill(ppid, 0)  # signal 0 = liveness probe; raises if gone
+            except OSError:
+                log.info("[watchdog] launcher pid %d gone — exiting sidecar", ppid)
+                os._exit(0)
+            except Exception:  # noqa: BLE001 — never let the watchdog crash the server
+                return
+
+    threading.Thread(target=_watch, daemon=True, name="parent-death-watchdog").start()
+
+
 def _init_langgraph_agent(headless_setup: bool = False):
     """Initialize the LangGraph backend — setup-aware.
 
@@ -2737,6 +2771,12 @@ def _main():
     else:
         app = fastapi_app
         log.info("Starting %s (ui=%s) on http://0.0.0.0:%d", agent_name(), ui, args.port)
+
+    # Don't outlive the launcher. When run as a desktop sidecar the Tauri shell
+    # sets PROTOAGENT_PARENT_PID; a PyInstaller-frozen onefile runs as a
+    # bootloader + child, so the shell killing the bootloader can leave this
+    # server orphaned (holding its port). Poll the launcher and exit if it dies.
+    _install_parent_death_watchdog()
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
