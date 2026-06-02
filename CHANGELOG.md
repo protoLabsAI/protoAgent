@@ -20,8 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now passes richer shapes through (`{kind:"form", …}` alongside `{question}`) so
   the console can render a form vs a prompt. The input-required A2A status
   frame now carries the payload as a `hitl-v1` **DataPart** (alongside the text),
-  so any client can render the form/approval, not just read the question. (Console form-card + desktop
-  notification + the run_command approval gate are the next Sprint-A slices.)
+  so any client can render the form/approval, not just read the question.
+- **HITL forms render in the console + resume (Sprint A).** A paused
+  (input-required) turn surfaces its `hitl-v1` payload; the chat renders a
+  JSON-schema form (`request_user_input`) or a prompt (`ask_human`) above the
+  composer, and submitting resumes the turn on the same session. (Desktop
+  notification when the window is hidden + the `run_command` approval gate are
+  the next Sprint-A slices.)
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
   off to the app via the View Transitions API (clean cross-fade; plain unmount

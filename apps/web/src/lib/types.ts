@@ -180,6 +180,23 @@ export type ChatMessage = {
   status?: "streaming" | "done" | "error";
 };
 
+// HITL (human-in-the-loop) request surfaced when a turn pauses as input-required
+// — a `request_user_input` JSON-schema form (kind "form", multi-step = wizard) or
+// an `ask_human` free-text question.
+export type HitlFormStep = {
+  schema: Record<string, unknown>; // JSON Schema (draft-07) of the step's fields
+  uiSchema?: Record<string, unknown>;
+  title?: string;
+  description?: string;
+};
+export type HitlPayload = {
+  kind?: "form";
+  title?: string;
+  description?: string;
+  steps?: HitlFormStep[];
+  question?: string; // ask_human shape
+};
+
 export type NotesWorkspace = {
   version: number;
   workspaceVersion: number;
