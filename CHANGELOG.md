@@ -22,13 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aware (matches `metadata.mimeType`, reads `content.value`/flattened `data`,
   no longer requires the dropped 0.3 `kind:"data"`) — which also restores
   tool-call-v1 card rendering. `protolabs_a2a` stays the four fleet extensions.
-- **ADR 0014 — A2A 0.3 → 1.0 migration plan.** Records the protoAgent-local plan
-  to replace the ~2,083-LOC hand-rolled `a2a_handler.py` with the official
-  `a2a-sdk` (`AgentExecutor`) + a shared `protolabs-a2a` conventions layer
-  (inherited from protoWorkstacean ADR-0006; tracked by #443). Plan-only — a
-  surface-to-1.0 map + sliced checklist; execution is blocked (the
-  `protolabs-a2a` package doesn't exist yet) and is a flag-day cutover, so no
-  code lands until those clear.
+- **A2A 1.0 migration shipped (ADR 0014, #453).** Deleted the ~2,059-LOC
+  hand-rolled `a2a_handler.py` and adopted the official **`a2a-sdk` 1.1** +
+  a vendored **`protolabs_a2a/`** conventions layer (the four fleet extensions —
+  cost/confidence/worldstate-delta/tool-call — plus the 1.0 card builder, auth,
+  and member-discriminated parts, byte-for-byte with the hub's `@protolabs/a2a`).
+  `ProtoAgentExecutor` bridges the LangGraph stream onto the SDK; durable SQLite
+  task/push stores (24h TTL) with an SSRF guard on push callbacks; bearer/
+  X-API-Key/origin auth; card at `/.well-known/agent-card.json`. A protoAgent-
+  local `hitl-v1` DataPart keeps `request_user_input` forms + `run_command`
+  approval cards rendering in the console. **Merging ≠ deploying** — the
+  0.3→1.0 cutover is a coordinated publish/deploy-time step (the hub +
+  roxy/ORBIS/pwnDeck), not gated on this merge.
 - **Console data layer: TanStack Query + Suspense + ErrorBoundary (ADR 0013).**
   The operator console adopts `@tanstack/react-query` (suspense mode) for its
   reads — loading is a `<Suspense>` fallback, failures are caught by a contained
