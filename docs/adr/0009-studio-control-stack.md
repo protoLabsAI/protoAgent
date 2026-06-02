@@ -97,6 +97,12 @@ Four peer tabs → **three layered tabs + two relocations**:
 - **Studio = Goals · Workflows · Run** — `Run` carries the existing Single/Batch
   toggle (batch is a *mode*, not a tab). Order Goals → Workflows → Run
   ("outcome → recipe → worker"), with a one-line subhead per tab.
+  - **Update (2026-06-02):** **Goals subsequently moved out of Studio into the
+    right sidebar**, alongside Notes and Beads. In practice a goal is *agent
+    state* the operator watches and clears (like the notebook and task board),
+    not a work-type you author in the main stage — so it belongs with the
+    agent's persistent working memory. The altitude model below is unchanged;
+    only the autonomy layer's surface moved. Studio is now **Workflows · Run**.
 - **Schedule leaves Studio → a Triggers/System grouping.** Cron is a *trigger*
   ("when"), orthogonal to work-types and parallel to the inbox/event-bus
   triggers (ADR 0003) — not a fourth kind of work.
