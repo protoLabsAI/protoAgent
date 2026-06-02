@@ -1,9 +1,10 @@
+use std::net::TcpListener;
 use std::sync::Mutex;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, RunEvent, Runtime, WindowEvent,
+    AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::{
@@ -11,21 +12,32 @@ use tauri_plugin_shell::{
     ShellExt,
 };
 
-/// Port the bundled server binds and the React console talks to. Matches the
-/// connect-to-local-server default in `apps/web/src/lib/api.ts`.
-const SIDECAR_PORT: &str = "7870";
+/// Fallback port if probing for a free one fails (matches the historical
+/// hardcoded default + the web client's last-resort base).
+const FALLBACK_PORT: u16 = 7870;
+
+/// Pick a free localhost port for the bundled sidecar, so several agents (and a
+/// pre-existing server on 7870) can coexist without a collision. We bind :0,
+/// read the OS-assigned port, then drop the listener and hand the port to the
+/// sidecar — a tiny TOCTOU window, acceptable for a single local launch.
+fn pick_free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or(FALLBACK_PORT)
+}
 
 /// Holds the running sidecar so it can be killed when the app exits.
 #[derive(Default)]
 struct SidecarProcess(Mutex<Option<CommandChild>>);
 
-/// Launch the bundled headless protoAgent server as a sidecar.
+/// Launch the bundled protoAgent server (console UI tier) as a sidecar.
 ///
 /// The frozen binary is read-only, so its writable state (live config,
 /// secrets, setup marker) is pointed at the per-user app-config dir via
 /// `PROTOAGENT_CONFIG_DIR`. Failures are logged, not fatal — the window still
 /// opens (and shows the API error) rather than the whole app refusing to boot.
-fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>) {
+fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
     let config_dir = match app.path().app_config_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -45,9 +57,13 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>) {
             return;
         }
     };
+    let port_arg = port.to_string();
     let command = command
-        .args(["--headless", "--port", SIDECAR_PORT])
-        .env("PROTOAGENT_HEADLESS", "1")
+        // The desktop renders the React operator console, so run the server in
+        // its 'console' UI tier (API + A2A + console, no Gradio) — ADR 0010.
+        // (Was the now-deprecated --headless / PROTOAGENT_HEADLESS alias.)
+        .args(["--ui", "console", "--port", &port_arg])
+        .env("PROTOAGENT_UI", "console")
         .env("PROTOAGENT_CONFIG_DIR", config_dir.to_string_lossy().to_string());
 
     let (mut rx, child) = match command.spawn() {
@@ -179,7 +195,25 @@ pub fn run() {
                 )?;
             }
             app.manage(SidecarProcess::default());
-            spawn_sidecar(app.handle());
+
+            // Pick a free port, boot the sidecar on it, and create the window
+            // ourselves so we can inject the chosen API base *before* any page
+            // script runs (race-free). The web client reads
+            // `window.__PROTOAGENT_API_BASE__` (see apps/web/src/lib/api.ts).
+            let port = pick_free_port();
+            spawn_sidecar(app.handle(), port);
+            let init = format!(
+                "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
+            );
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                .title("protoAgent")
+                .inner_size(1280.0, 820.0)
+                .min_inner_size(980.0, 640.0)
+                .resizable(true)
+                .center()
+                .initialization_script(&init)
+                .build()?;
+
             build_tray(app)?;
             Ok(())
         })

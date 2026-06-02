@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-off flakes that still clear the majority.
 
 ### Changed
+- **Desktop sidecar now picks a free port + runs the `console` UI tier.** The
+  Tauri shell (`apps/desktop`) probes a free port instead of hardcoding 7870
+  (so it coexists with any agent already on 7870, and is the base for running
+  several agents at once), spawns the bundled server with `--ui console`
+  (replacing the deprecated `--headless` alias), and injects the chosen base URL
+  as `window.__PROTOAGENT_API_BASE__` before page load — the React console reads
+  it (`localStorage["protoagent.apiBase"]` still overrides). The "main" window is
+  now created in `src/lib.rs` (so the init script can run pre-load) rather than
+  declared in `tauri.conf.json`.
 - Retired the `protolabs/agent` gateway alias from docs, eval examples, and test
   fixtures (use `protolabs/smart` / `protolabs/reasoning`). The default model is
   already `protolabs/reasoning`; this just clears the dead alias from examples.

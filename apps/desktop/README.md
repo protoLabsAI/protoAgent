@@ -5,7 +5,7 @@ Tauri v2 wrapper for the React operator console.
 ## Commands
 
 ```bash
-# 1. Freeze the headless server into the bundled sidecar (per platform).
+# 1. Freeze the server into the bundled sidecar (per platform).
 #    Needs a venv with the runtime deps + PyInstaller:
 #      pip install -r requirements.txt pyinstaller
 npm run desktop:sidecar
@@ -23,13 +23,13 @@ npm run desktop:dev
 
 The app **bundles and launches the protoAgent server itself** as a Tauri sidecar — no separately-running server required.
 
-- `apps/desktop/sidecar/build_sidecar.py` freezes the server (`server.py --headless`) into a single binary via PyInstaller, named `binaries/protoagent-server-<target-triple>` (the `externalBin` Tauri bundles). Gradio is excluded — the React console is the UI — so the binary is ~55 MB rather than carrying the full UI stack.
-- On launch the Rust shell (`src-tauri/src/lib.rs`) spawns the sidecar with `--headless --port 7870`, sets `PROTOAGENT_CONFIG_DIR` to the per-user app-config dir (so the read-only binary still persists setup/secrets), drains its output to the log, and kills it on app exit.
-- The webview loads the bundled React build and calls the sidecar's `/api`, `/a2a`, and `/v1` on `127.0.0.1:7870`. The console probes with backoff on startup so the few-second cold start doesn't surface as an error.
+- `apps/desktop/sidecar/build_sidecar.py` freezes the server into a single binary via PyInstaller, named `binaries/protoagent-server-<target-triple>` (the `externalBin` Tauri bundles). Gradio is excluded — the React console is the UI — so the binary is ~60 MB rather than carrying the full UI stack.
+- On launch the Rust shell (`src-tauri/src/lib.rs`) **picks a free port**, spawns the sidecar with `--ui console --port <port>` (the console UI tier — API + A2A + console, no Gradio; ADR 0010), sets `PROTOAGENT_CONFIG_DIR` to the per-user app-config dir (so the read-only binary still persists setup/secrets), drains its output to the log, and kills it on app exit. A free port (not a fixed 7870) means the desktop coexists with any other agent already running — and is the foundation for several agents at once.
+- The shell creates the window itself and injects `window.__PROTOAGENT_API_BASE__` (the chosen `http://127.0.0.1:<port>`) before any page script runs; the webview's React build reads it (`apps/web/src/lib/api.ts`) and calls the sidecar's `/api`, `/a2a`, and `/v1`. The console probes with backoff on startup so the few-second cold start doesn't surface as an error.
 
 The sidecar binary is gitignored — it's a build artifact produced per platform by step 1 (locally or in CI before `tauri build`).
 
-To point the desktop UI at a *different* server instead of the bundled one, set `protoagent.apiBase` in localStorage to the desired base URL.
+To point the desktop UI at a *different* server instead of the bundled one, set `protoagent.apiBase` in localStorage (it wins over the injected port).
 
 ## Desktop Behavior
 
