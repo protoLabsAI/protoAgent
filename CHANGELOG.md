@@ -24,9 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HITL forms render in the console + resume (Sprint A).** A paused
   (input-required) turn surfaces its `hitl-v1` payload; the chat renders a
   JSON-schema form (`request_user_input`) or a prompt (`ask_human`) above the
-  composer, and submitting resumes the turn on the same session. (Desktop
-  notification when the window is hidden + the `run_command` approval gate are
-  the next Sprint-A slices.)
+  composer, and submitting resumes the turn on the same session.
+- **Desktop notification for HITL when hidden (Sprint A).** When a turn pauses
+  for input and the window isn't focused (the menu-bar-only desktop, or a
+  backgrounded tab), the console fires a native notification — via the Web
+  Notification API, bridged on desktop by `tauri-plugin-notification`
+  (capability `notification:default`). (The `run_command` approval gate is the
+  last Sprint-A slice.)
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
   off to the app via the View Transitions API (clean cross-fade; plain unmount
