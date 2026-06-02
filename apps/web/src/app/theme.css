@@ -175,22 +175,12 @@ h2 {
   background: var(--bg);
 }
 
-/* macOS desktop (invisible title bar): push the whole app down by the title-bar
-   height so the topbar (brand + icon) sits *below* the native traffic lights,
-   leaving a clear strip up top to drag. */
-.app-shell.is-tauri-mac {
-  padding-top: 30px;
-}
-
-/* The transparent drag strip behind the traffic lights (full width, the height
-   we reserved above). data-tauri-drag-region makes it move the window. */
-.tauri-drag-strip {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 30px;
-  z-index: 50;
+/* macOS desktop (invisible title bar): inset the brand so it clears the native
+   traffic lights that float top-left over the content. The topbar carries
+   `data-tauri-drag-region`, so this area drags the window. Mac build ONLY — the
+   browser has no traffic lights, so no inset there. */
+.app-shell.is-tauri-mac .topbar {
+  padding-left: 84px;
 }
 
 /* protoLabs.studio brand bumper (IntroSplash) — full-screen splash on launch,
