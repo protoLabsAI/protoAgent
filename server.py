@@ -2198,6 +2198,24 @@ def _main():
             name=name, inputs=inputs or {},
         )
 
+    def _operator_workflow_save(recipe: dict) -> dict:
+        # Validate against the live subagent registry before writing, so a
+        # UI-authored recipe can't reference an unknown subagent / bad DAG.
+        if _workflow_registry is None:
+            raise RuntimeError("workflows are not available")
+        from graph.subagents.config import SUBAGENT_REGISTRY
+        from graph.workflows.engine import validate_recipe
+        errors = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
+        if errors:
+            raise ValueError("invalid recipe: " + "; ".join(errors))
+        path = _workflow_registry.save(recipe)
+        return {"saved": True, "name": recipe.get("name"), "path": path}
+
+    def _operator_workflow_delete(name: str) -> dict:
+        if _workflow_registry is None:
+            raise RuntimeError("workflows are not available")
+        return {"deleted": _workflow_registry.delete(name)}
+
     def _publish_activity_terminal(record) -> None:
         """Terminal hook (ADR 0003): when a turn in the Activity thread completes,
         push the assistant's visible output to the event bus so connected
@@ -2356,6 +2374,8 @@ def _main():
         chat_commands=_operator_chat_commands,
         workflows_list=_operator_workflows_list,
         workflows_run=_operator_workflow_run,
+        workflows_save=_operator_workflow_save,
+        workflows_delete=_operator_workflow_delete,
         events_subscribe=_event_bus.subscribe,
         activity_list=_operator_activity_list,
         inbox_add=_operator_inbox_add,

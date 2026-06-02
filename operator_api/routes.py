@@ -184,6 +184,8 @@ def register_operator_routes(
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     workflows_list: Callable[[], dict[str, Any]] | None = None,
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    workflows_save: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    workflows_delete: Callable[[str], dict[str, Any]] | None = None,
     events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     inbox_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -383,6 +385,26 @@ def register_operator_routes(
         async def _workflow_run(name: str, req: WorkflowRunRequest):
             try:
                 return await workflows_run(name, req.inputs)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # Author a workflow from the console (validates, then saves to the writable
+    # workflows dir; immediately runnable). The body is the recipe dict.
+    if workflows_save is not None:
+
+        @app.post("/api/workflows")
+        async def _workflow_save(recipe: dict[str, Any]):
+            try:
+                return workflows_save(recipe)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if workflows_delete is not None:
+
+        @app.delete("/api/workflows/{name}")
+        async def _workflow_delete(name: str):
+            try:
+                return workflows_delete(name)
             except Exception as exc:
                 raise _http_error(exc) from exc
 

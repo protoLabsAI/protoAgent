@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Workflow authoring API (Sprint C).** `POST /api/workflows` validates a recipe
+  (against the live subagent registry + DAG checks via `validate_recipe`) and
+  saves it to the writable workflows dir (immediately runnable); `DELETE
+  /api/workflows/{name}` removes it. Backs the upcoming console workflow-builder.
 - **Console Beads panel + API now use the in-process store (Sprint B).** The
   operator beads endpoints go through a `_BeadsStoreAdapter` to the same
   instance-scoped `BeadsStore` the agent uses — the agent and console share one
