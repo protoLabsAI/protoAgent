@@ -48,13 +48,18 @@ def configure(*, bearer_token: str | None, api_key: str, allowed_origins_raw: st
     """Seed the guard at route-registration time.
 
     Args:
-        bearer_token: from YAML ``auth.token`` (``A2A_AUTH_TOKEN`` env fallback
-            applied by the caller). Empty/whitespace → open mode.
+        bearer_token: from YAML ``auth.token``. The caller is authoritative:
+            ``None`` means "unspecified" and falls back to ``A2A_AUTH_TOKEN``;
+            an explicit ``""`` means "bearer off" (e.g. an apiKey-only agent)
+            and does NOT fall back — otherwise a stray env var would silently
+            enable bearer auth the card never advertises. Empty/whitespace →
+            open mode.
         api_key: the ``<AGENT>_API_KEY`` value; "" disables the X-API-Key check.
         allowed_origins_raw: ``A2A_ALLOWED_ORIGINS`` value ("" = disabled,
             "*" = disabled, else comma-separated allowlist).
     """
-    seed = (bearer_token or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
+    raw_bearer = bearer_token if bearer_token is not None else os.environ.get("A2A_AUTH_TOKEN", "")
+    seed = (raw_bearer or "").strip()
     _BEARER[0] = seed or None
     if _BEARER[0] is None:
         logger.warning("[a2a] A2A auth token not configured — endpoint is open")
@@ -96,11 +101,14 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             if not hmac.compare_digest(header[len("Bearer "):], active):
                 return _unauthorized("Unauthorized: invalid bearer token")
 
-        # Origin — enforced only when an allowlist is set.
+        # Origin — enforced only when an allowlist is set AND an Origin is
+        # present. Origin is a browser-only header; server-to-server callers
+        # (the hub, the LocalScheduler loopback) send none and must not be
+        # rejected for it.
         allowed = _ALLOWED_ORIGINS[0]
         if allowed is not None:
-            origin = request.headers.get("Origin", "").lower()
-            if origin not in allowed:
+            origin = request.headers.get("Origin")
+            if origin is not None and origin.lower() not in allowed:
                 return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
 
         return await call_next(request)

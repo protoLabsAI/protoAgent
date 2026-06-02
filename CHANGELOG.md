@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `protolabs_a2a` helper exists; this is the non-blocking declaration/card half.
 
 ### Fixed
+- **A2A auth: caller bearer token is authoritative + origin guard is browser-only (#482).**
+  Two `a2a_auth.py` correctness bugs (found via CodeRabbit on protoPen's port,
+  fixed there in protoPen#145). (1) `configure()` collapsed `bearer_token` with
+  the env fallback (`bearer_token or A2A_AUTH_TOKEN`), so an apiKey-only agent
+  passing `""` would silently enable bearer auth from a stray env var the card
+  never advertises — now only `None` (unspecified) falls back; an explicit `""`
+  means bearer-off. (2) The origin allowlist rejected requests with **no**
+  `Origin` header, blocking server-to-server callers (the hub, the scheduler
+  loopback) — `Origin` is browser-only, so the guard now fires only when an
+  `Origin` is actually present. protoAgent's install site maps its `""` default
+  to `None` so the documented `A2A_AUTH_TOKEN` env path is preserved (no
+  regression). New `tests/test_a2a_auth.py` pins both.
 - **A2A request-level metadata was being dropped (trace + skill dispatch).**
   `_extract_caller_trace` read only `context.message.metadata`, missing
   `SendMessageRequest`-level `context.metadata` — where clients (the hub) put
