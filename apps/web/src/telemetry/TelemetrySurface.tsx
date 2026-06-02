@@ -1,3 +1,4 @@
+import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
@@ -10,14 +11,15 @@ import {
   RefreshCw,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense } from "react";
 
-import { api } from "../lib/api";
-import type { TelemetryInsights, TelemetrySummary, TelemetryTurn } from "../lib/types";
+import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { telemetryQuery } from "../lib/queries";
 
 // Telemetry dashboard (ADR 0006 Slice 3) — reads /api/telemetry/* (the local
-// per-turn rollup store). Summary cards + a recent-turns table. Functional
-// first: real numbers, theme-consistent, no charts yet.
+// per-turn rollup store) on the TanStack Query data layer (ADR 0013). Summary
+// cards + a recent-turns table; loading via <Suspense>, errors via
+// <ErrorBoundary>. Functional: real numbers, theme-consistent, no charts yet.
 
 function usd(n: number): string {
   if (!n) return "$0";
@@ -40,46 +42,19 @@ function pct(n: number): string {
   return `${Math.round((n || 0) * 100)}%`;
 }
 
-export function TelemetrySurface({ onError }: { onError: (message: string) => void }) {
-  const [summary, setSummary] = useState<TelemetrySummary | null>(null);
-  const [turns, setTurns] = useState<TelemetryTurn[]>([]);
-  const [insights, setInsights] = useState<TelemetryInsights | null>(null);
-  const [enabled, setEnabled] = useState(true);
-  const [loading, setLoading] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [s, r, i] = await Promise.all([
-        api.telemetrySummary(),
-        api.telemetryRecent(50),
-        api.telemetryInsights(),
-      ]);
-      setEnabled(s.enabled && r.enabled);
-      setSummary(s.summary);
-      setTurns(r.turns || []);
-      setInsights(i.insights);
-      onError("");
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void load();
-  }, []);
+function TelemetryBody() {
+  const { data, isFetching, refetch } = useSuspenseQuery(telemetryQuery());
+  const { enabled, summary, turns, insights } = data;
 
   return (
-    <section className="panel stage-panel" data-testid="telemetry-surface">
+    <>
       <div className="panel-header">
         <div>
           <h1>Telemetry</h1>
           <p className="panel-kicker">per-turn cost &amp; latency · {summary?.turns ?? 0} turns recorded</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
-          <RefreshCw size={15} className={loading ? "spin" : ""} /> Refresh
+        <button className="secondary-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+          <RefreshCw size={15} className={isFetching ? "spin" : ""} /> Refresh
         </button>
       </div>
 
@@ -187,6 +162,22 @@ export function TelemetrySurface({ onError }: { onError: (message: string) => vo
           </>
         )}
       </div>
+    </>
+  );
+}
+
+export function TelemetrySurface() {
+  return (
+    <section className="panel stage-panel" data-testid="telemetry-surface">
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="telemetry" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading telemetry…" />}>
+              <TelemetryBody />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
     </section>
   );
 }

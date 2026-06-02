@@ -1025,7 +1025,7 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface onError={setError} /> : null}
+          {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
           {surface === "knowledge" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "system" && systemTab === "settings" ? <SettingsSurface onError={setError} /> : null}
         </main>
