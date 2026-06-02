@@ -13,17 +13,13 @@ hero:
       link: /guides/customize-and-deploy
 
 features:
-  - icon: 🔌
-    title: A2A out of the box
+  - title: A2A out of the box
     details: JSON-RPC 2.0 over /a2a, SSE streaming, tasks/* lifecycle, push notifications, dual token-shape parsing — all spec-compliant, all already tested.
-  - icon: 💰
-    title: cost-v1 + trace propagation
+  - title: cost-v1 + trace propagation
     details: Every terminal task emits a cost-v1 DataPart with token usage and wall time. a2a.trace metadata nests this agent's Langfuse trace under the caller's.
-  - icon: 🧰
-    title: Free starter tools
+  - title: Free starter tools
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
-  - icon: 🚀
-    title: Autonomous release pipeline
+  - title: Autonomous release pipeline
     details: Merge a PR → semver bump → GHCR image → GitHub release → Discord embed. Update the repo guard in three workflow files and you're done.
 ---
 
