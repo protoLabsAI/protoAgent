@@ -48,6 +48,15 @@ COLLECT_ALL = [
     "ddgs",
     "langfuse",
     "croniter",
+    # A2A 1.0 (ADR 0014): the SDK + the protoLabs conventions layer (git-dep).
+    # Both pull submodules/metadata that a bare import-scan misses — without a
+    # full collect, the frozen `protolabs_a2a` is missing `build_agent_card`.
+    "a2a",
+    "protolabs_a2a",
+    # a2a-sdk[sqlite] durable task/push stores: imported lazily by the SDK, so
+    # the import-scan misses them — collect explicitly.
+    "aiosqlite",
+    "sqlalchemy",
 ]
 
 # Gradio (and the chat_ui module that imports it) is dead weight in headless
