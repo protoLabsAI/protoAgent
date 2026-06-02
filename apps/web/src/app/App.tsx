@@ -52,12 +52,14 @@ import { SetupWizard } from "../setup/SetupWizard";
 type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
 // Studio = the "make the agent do work" surface, ordered by altitude
 // (ADR 0009): goals (autonomy) → workflows (orchestration) → run (execution).
-type StudioTab = "goals" | "workflows" | "run";
+type StudioTab = "workflows" | "run";
 type SystemTab = "runtime" | "telemetry" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox" | "schedule";
-type RightPanel = "notes" | "beads";
+// The agent's persistent working memory, grouped in the right sidebar:
+// its notebook, its task board, and its goals.
+type RightPanel = "notes" | "beads" | "goals";
 type SubagentMode = "single" | "batch";
 type StatusTone = "success" | "warning" | "error" | "muted";
 
@@ -233,7 +235,7 @@ function groupIssues(issues: BeadsIssue[]) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
-  const [studioTab, setStudioTab] = useState<StudioTab>("goals");
+  const [studioTab, setStudioTab] = useState<StudioTab>("workflows");
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -458,8 +460,18 @@ export function App() {
 
   useEffect(() => {
     if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
-    if (surface === "studio" && studioTab === "goals") void refreshGoals();
-  }, [surface, studioTab, activityTab]);
+  }, [surface, activityTab]);
+
+  // Goals live in the right sidebar (the agent's working memory). Refresh on
+  // open and poll while visible — the agent advances/clears goals mid-turn.
+  useEffect(() => {
+    if (rightPanel !== "goals") return;
+    void refreshGoals();
+    const handle = window.setInterval(() => {
+      if (!goalsBusy) void refreshGoals();
+    }, 5000);
+    return () => window.clearInterval(handle);
+  }, [rightPanel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
@@ -544,19 +556,6 @@ export function App() {
     setBatchTasks((tasks) => (tasks.length > 1 ? tasks.filter((task) => task.id !== id) : tasks));
   }
 
-  async function loadProject() {
-    setNotesBusy(true);
-    setBeadsBusy(true);
-    setError("");
-    try {
-      await refreshProjectState();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setNotesBusy(false);
-      setBeadsBusy(false);
-    }
-  }
 
   function updateWorkspace(nextWorkspace: NotesWorkspace) {
     setWorkspace(nextWorkspace);
@@ -955,11 +954,9 @@ export function App() {
             </div>
           ) : null}
           {surface === "studio" ? (
-            // Ordered by altitude (ADR 0009): outcome → recipe → worker.
+            // Orchestration → execution (ADR 0009). Goals (the autonomy layer)
+            // moved to the right sidebar alongside the agent's notes + beads.
             <div className="stage-subnav">
-              <button className={studioTab === "goals" ? "active" : ""} onClick={() => setStudioTab("goals")}>
-                <Target size={15} /> Goals
-              </button>
               <button className={studioTab === "workflows" ? "active" : ""} onClick={() => setStudioTab("workflows")}>
                 <Workflow size={15} /> Workflows
               </button>
@@ -1193,67 +1190,6 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "studio" && studioTab === "goals" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <div>
-                  <h1>Goals</h1>
-                  <p className="panel-kicker">{goalsList.length} goal{goalsList.length === 1 ? "" : "s"}</p>
-                </div>
-                <button className="icon-button" type="button" onClick={() => void refreshGoals()} title="Refresh">
-                  {goalsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-                </button>
-              </div>
-              <div className="stage-body">
-                <div className="subagent-list">
-                  {goalsList.length ? (
-                    goalsList.map((goal) => (
-                      <div className="subagent-row" key={goal.session_id}>
-                        <div>
-                          <strong>{goal.condition || goal.session_id}</strong>
-                          <span>
-                            {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}
-                            {goal.last_reason ? ` · ${goal.last_reason.length > 70 ? `${goal.last_reason.slice(0, 70)}…` : goal.last_reason}` : ""}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <StatusPill
-                            label={goal.status}
-                            tone={
-                              goal.status === "achieved"
-                                ? "success"
-                                : goal.status === "active"
-                                  ? "warning"
-                                  : goal.status === "unachievable"
-                                    ? "error"
-                                    : "muted"
-                            }
-                          />
-                          <button
-                            className="icon-button"
-                            type="button"
-                            onClick={() => void clearGoal(goal.session_id)}
-                            disabled={goalsBusy}
-                            title="Clear goal"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="subagent-row">
-                      <div>
-                        <strong>No goals</strong>
-                        <span>set one in chat with <code>/goal …</code></span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
-          ) : null}
-
           {surface === "system" && systemTab === "runtime" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
@@ -1365,25 +1301,18 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          <div className="right-panel-nav">
-            <div className="segmented">
-              <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
-                <FileText size={15} />
-                Notes
-              </button>
-              <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
-                <Boxes size={15} />
-                Beads
-              </button>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              onClick={() => void loadProject()}
-              disabled={notesBusy || beadsBusy}
-              title="Refresh notes & beads"
-            >
-              {notesBusy || beadsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          <div className="segmented">
+            <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
+              <FileText size={15} />
+              Notes
+            </button>
+            <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
+              <Boxes size={15} />
+              Beads
+            </button>
+            <button type="button" className={rightPanel === "goals" ? "active" : ""} onClick={() => setRightPanel("goals")}>
+              <Target size={15} />
+              Goals
             </button>
           </div>
 
@@ -1637,6 +1566,60 @@ export function App() {
                       </section>
                     );
                   })
+                )}
+              </ScrollArea>
+            </section>
+          ) : null}
+
+          {rightPanel === "goals" ? (
+            <section className="panel side-panel goals-panel">
+              <div className="panel-header compact">
+                <div>
+                  <h2>Goals</h2>
+                  <p className="panel-kicker">
+                    {goalsList.length} goal{goalsList.length === 1 ? "" : "s"} · set with <code>/goal</code> in chat
+                  </p>
+                </div>
+              </div>
+              <ScrollArea className="goals-list" ariaLabel="Goals">
+                {goalsList.length ? (
+                  goalsList.map((goal) => (
+                    <div className="goal-row" key={goal.session_id}>
+                      <div className="goal-row-head">
+                        <strong>{goal.condition || goal.session_id}</strong>
+                        <StatusPill
+                          label={goal.status}
+                          tone={
+                            goal.status === "achieved"
+                              ? "success"
+                              : goal.status === "active"
+                                ? "warning"
+                                : goal.status === "unachievable"
+                                  ? "error"
+                                  : "muted"
+                          }
+                        />
+                      </div>
+                      <span className="goal-row-meta">
+                        {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}
+                        {goal.last_reason ? ` · ${goal.last_reason.length > 80 ? `${goal.last_reason.slice(0, 80)}…` : goal.last_reason}` : ""}
+                      </span>
+                      <button
+                        className="icon-button goal-row-clear"
+                        type="button"
+                        onClick={() => void clearGoal(goal.session_id)}
+                        disabled={goalsBusy}
+                        title="Clear goal"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="goal-row empty">
+                    <strong>No goals</strong>
+                    <span className="goal-row-meta">set one in chat with <code>/goal …</code></span>
+                  </div>
                 )}
               </ScrollArea>
             </section>

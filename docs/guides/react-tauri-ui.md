@@ -209,7 +209,7 @@ Use the Orbis slot pattern:
 
 - `stage`: main work area
 - `left-rail`: navigation
-- `right-panel`: notes/beads/details
+- `right-panel`: the agent's working memory — Notes / Beads / Goals
 - `overlay-top`: status and connection banners
 - `modal`: setup wizard, command palette
 
@@ -353,15 +353,21 @@ to do with notes/beads:
 - The runtime-status `project.allowed_dirs` field reports the fence; it does not
   relax the server-side check.
 
-## Studio & Activity surfaces (the control stack)
+## Studio, Activity & the right sidebar (the control stack)
 
-Per [ADR 0009](/adr/0009-studio-control-stack), the Studio tabs are ordered by
-altitude — **Goals** (autonomy: when to stop) → **Workflows** (orchestration: the
-order) → **Run** (execution: one focused worker, with the Single/Batch toggle).
-They're layers of one control loop, not peers. **Schedule** moved to **Activity**
+Per [ADR 0009](/adr/0009-studio-control-stack), Studio holds the
+orchestration→execution layers — **Workflows** (the order) → **Run** (one
+focused worker, with the Single/Batch toggle). **Schedule** moved to **Activity**
 (Thread · Inbox · Schedule) — cron is a *trigger* ("when"), grouped with the
 inbox/event-bus (ADR 0003), not a Studio work-type. Skills moved to the
 **Knowledge ▸ Playbooks** surface (below) — they're retrieved memory, not work.
+
+The right sidebar is the agent's **persistent working memory** — **Notes**
+(its notebook) · **Beads** (its task board) · **Goals** (its autonomy layer:
+the standing conditions it works toward, set in chat with `/goal`). Goals used
+to be a Studio tab; they're really *agent state* the operator watches and
+clears, so they sit next to notes and beads. All three are agent-global
+(one instance-scoped store each), not per-project.
 
 ## Telemetry surface
 

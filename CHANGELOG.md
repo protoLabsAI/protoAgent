@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Goals moved into the right sidebar (Notes · Beads · Goals).** Goals were a
+  Studio tab; in practice a goal is *agent state* the operator watches and
+  clears, like the notebook and task board — so it now sits with the agent's
+  persistent working memory in the right panel (set with `/goal` in chat, as
+  before). Studio is now **Workflows · Run**. The right panel also dropped its
+  per-project selector + manual refresh button (notes/beads/goals are
+  agent-global and self-refresh). See [ADR 0009](docs/adr/0009-studio-control-stack.md).
 - **Notes are now agent-global, like beads.** The notes workspace is a single
   persistent, instance-scoped store (`$NOTES_PATH`, default
   `/sandbox/notes/workspace.json`) that the `notes_*` tools and the console

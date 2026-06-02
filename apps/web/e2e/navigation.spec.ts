@@ -16,7 +16,10 @@ async function openSub(page, group: string, tab: string) {
 }
 
 test("Studio → Run lists the registered subagent (single/batch)", async ({ page }) => {
-  await openSub(page, "Studio", "Run");
+  // Studio now lands on Workflows (Goals moved to the sidebar), whose surface
+  // has its own "Run" button — scope to the sub-nav to pick the tab.
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Run", exact: true })).toBeVisible();
   // The kicker reflects the mocked subagent list; the Single/Batch toggle is here.
   await expect(page.getByText(/1 subagent type/)).toBeVisible();
@@ -29,8 +32,9 @@ test("schedule moved to Activity → Schedule lists scheduled jobs", async ({ pa
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });
 
-test("goals surface lists active goals", async ({ page }) => {
-  await openSub(page, "Studio", "Goals");
+test("goals tab in the right sidebar lists active goals", async ({ page }) => {
+  // Goals moved out of Studio into the right sidebar (Notes / Beads / Goals).
+  await page.getByRole("button", { name: "Goals", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
   await expect(page.getByText("All tests pass")).toBeVisible();
 });
