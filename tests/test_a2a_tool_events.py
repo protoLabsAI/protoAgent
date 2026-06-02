@@ -18,6 +18,8 @@ import pytest
 
 from a2a_handler import (
     COMPLETED,
+    HITL_MIME,
+    INPUT_REQUIRED,
     SUBMITTED,
     TOOL_CALL_MIME,
     WORKING,
@@ -60,6 +62,26 @@ async def _mock_stream(*events):
     for event in events:
         yield event
         await asyncio.sleep(0)
+
+
+# ── _build_status_event: HITL form DataPart (Sprint A) ───────────────────────
+
+
+def test_status_event_includes_hitl_datapart_on_input_required():
+    """An input-required frame carries the HITL payload as a hitl-v1 DataPart
+    (so the console renders a form/approval) plus the text part for text-only
+    clients."""
+    record = _make_record(state=INPUT_REQUIRED)
+    record.last_status_message = "Pick a model"
+    record.hitl_payload = {
+        "kind": "form",
+        "title": "Pick a model",
+        "steps": [{"schema": {"type": "object", "properties": {"model": {"type": "string"}}}}],
+    }
+    parts = _build_status_event(record)["status"]["message"]["parts"]
+    hitl = [p for p in parts if p.get("kind") == "data" and p["metadata"]["mimeType"] == HITL_MIME]
+    assert len(hitl) == 1 and hitl[0]["data"] == record.hitl_payload
+    assert any(p.get("kind") == "text" for p in parts)  # text part stays
 
 
 # ── _build_status_event: tool-call DataPart ──────────────────────────────────

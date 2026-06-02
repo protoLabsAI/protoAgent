@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turn pauses via the existing LangGraph `interrupt()` → A2A `input-required`, and
   the submitted form object is returned. The interrupt→`input_required` payload
   now passes richer shapes through (`{kind:"form", …}` alongside `{question}`) so
-  the console can render a form vs a prompt. (Console form-card + desktop
+  the console can render a form vs a prompt. The input-required A2A status
+  frame now carries the payload as a `hitl-v1` **DataPart** (alongside the text),
+  so any client can render the form/approval, not just read the question. (Console form-card + desktop
   notification + the run_command approval gate are the next Sprint-A slices.)
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands

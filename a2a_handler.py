@@ -95,6 +95,12 @@ CONFIDENCE_MIME = "application/vnd.protolabs.confidence-v1+json"
 # terminal extension — emitted on status-update, not the terminal artifact.
 TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json"
 
+# HITL form payload (Sprint A) — attached as a DataPart on the input-required
+# status frame so the console can render a JSON-schema form / approval dialog
+# (not just the flattened question text). Shape: {kind:"form", title, description,
+# steps:[…]} for request_user_input, or {question:…} for ask_human.
+HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
+
 # ── Data types ────────────────────────────────────────────────────────────────
 
 
@@ -134,6 +140,9 @@ class TaskRecord:
     # render per-tool cards (vs. the flattened text in last_status_message).
     # Reset to None after each frame build so a tool event is emitted once.
     last_tool_event: dict | None = None
+    # HITL form/question payload for the input-required status frame (Sprint A),
+    # surfaced as a hitl-v1 DataPart so the console renders a form vs. a prompt.
+    hitl_payload: dict | None = None
     # Observed world-state mutations to emit on the terminal artifact under
     # the worldstate-delta-v1 MIME type. Populated during the run whenever a
     # tool with known effects succeeds (see _chat_langgraph_stream). Shape:
@@ -281,6 +290,7 @@ class A2ATaskStore:
         error: str | None = None,
         status_message: str | None = None,
         tool_event: dict | None = None,
+        hitl_payload: dict | None = None,
     ) -> TaskRecord | None:
         async with self._lock:
             record = self._tasks.get(task_id)
@@ -296,11 +306,14 @@ class A2ATaskStore:
                 record.last_status_message = status_message
             if tool_event is not None:
                 record.last_tool_event = tool_event
+            if hitl_payload is not None:
+                record.hitl_payload = hitl_payload
             # Terminal transitions clear the status/tool ping so post-run
             # subscribers see the final state cleanly, not a stale tool ping.
             if state in _TERMINAL:
                 record.last_status_message = None
                 record.last_tool_event = None
+                record.hitl_payload = None
             old_event = record._update_event
             record._update_event = asyncio.Event()
         # Wake subscribers outside the lock so they can re-acquire it
@@ -649,6 +662,14 @@ def _build_status_event(record: TaskRecord, *, final: bool = False) -> dict:
                 "kind": "data",
                 "data": record.last_tool_event,
                 "metadata": {"mimeType": TOOL_CALL_MIME},
+            })
+        # HITL form/question → hitl-v1 DataPart on the input-required frame so the
+        # console renders a JSON-schema form / approval dialog (text part stays).
+        if record.state == INPUT_REQUIRED and record.hitl_payload:
+            parts.append({
+                "kind": "data",
+                "data": record.hitl_payload,
+                "metadata": {"mimeType": HITL_MIME},
             })
         evt["status"]["message"] = {"role": "agent", "parts": parts}
     return evt
@@ -1173,11 +1194,14 @@ async def _run_task_background(
                 # task as input-required carrying the question, close the stream
                 # cycle (final:true), and push immediately so a webhook caller
                 # can answer. The caller resumes via message/send on this taskId.
-                question = payload.get("question", "Input required.") if isinstance(payload, dict) else str(payload)
+                hitl = payload if isinstance(payload, dict) else {"question": str(payload)}
+                # Status text: the question, or a form's title (text-only clients).
+                question = hitl.get("question") or hitl.get("title") or "Input required."
                 record = await _store.update_state(
                     task_id, INPUT_REQUIRED,
                     accumulated_text=accumulated,
                     status_message=question,
+                    hitl_payload=hitl,
                 )
                 if record is not None:
                     await _push(record)
