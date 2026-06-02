@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ConfigPayload,
   GoalState,
+  HitlPayload,
   InboxItem,
   NotesWorkspace,
   RuntimeStatus,
@@ -126,6 +127,7 @@ function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 }
 
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
+const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
 /** Pull a structured tool event ({id, name, phase, input|output}) off a frame's parts. */
 function toolEventFromParts(
@@ -135,6 +137,16 @@ function toolEventFromParts(
     (p) => p.kind === "data" && p.metadata?.mimeType === TOOL_CALL_MIME,
   );
   return part ? (part.data as ToolEvent) : null;
+}
+
+/** Pull the HITL form/question payload off an input-required frame's parts. */
+function hitlFromParts(
+  parts?: Array<{ kind?: string; data?: unknown; metadata?: { mimeType?: string } }>,
+): HitlPayload | null {
+  const part = (parts || []).find(
+    (p) => p.kind === "data" && p.metadata?.mimeType === HITL_MIME,
+  );
+  return part ? (part.data as HitlPayload) : null;
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
@@ -365,6 +377,7 @@ export const api = {
       onStatus?: (status: string) => void;
       onText?: (text: string, append: boolean) => void;
       onToolCall?: (evt: ToolEvent) => void;
+      onInputRequired?: (payload: HitlPayload) => void;
       onDone?: () => void;
     } = {},
   ) {
@@ -408,6 +421,13 @@ export const api = {
         handlers.onStatus?.(messageText || state);
         const toolEvent = toolEventFromParts(result.status?.message?.parts);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
+        // HITL pause: the turn parked awaiting the operator. Surface the form /
+        // question payload so the console can render it (falls back to the text).
+        if (state === "input-required") {
+          handlers.onInputRequired?.(
+            hitlFromParts(result.status?.message?.parts) || { question: messageText },
+          );
+        }
         if (result.final) handlers.onDone?.();
       }
 

@@ -1187,6 +1187,84 @@ select:disabled {
 }
 
 /* Slash-command autocomplete (floats above the composer). */
+/* HITL request card (request_user_input form / ask_human prompt) — sits above
+   the composer when a turn pauses as input-required. */
+.hitl-card {
+  margin: 0 12px 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--brand-indigo, #6366f1);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hitl-title {
+  font-weight: 600;
+}
+
+.hitl-prompt {
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+.hitl-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hitl-step-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.hitl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.hitl-field > span {
+  color: var(--fg-secondary);
+}
+
+.hitl-field-bool {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.hitl-field input,
+.hitl-field select,
+.hitl-field textarea,
+.hitl-freetext {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.hitl-field small {
+  color: var(--fg-muted);
+}
+
+.hitl-freetext {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.hitl-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .composer-wrap {
   position: relative;
 }
