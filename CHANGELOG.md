@@ -125,6 +125,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   KB. The researcher gains `memory_ingest` for that persistence.
 
 ### Docs
+- **Adopt the shared protoLabs.studio docs theme + brand assets.** The docs now
+  use `@protolabsai/vitepress-theme` (maps VitePress `--vp-*` vars to the
+  `@protolabsai/design` `--pl-*` tokens, so the site is brand-consistent from one
+  source; `appearance: "force-dark"`). The placeholder teal favicon is replaced
+  with the canonical protoLabs marks (`favicon.svg` + `protolabs-icon-outline.svg`
+  from the design package), and the landing-page feature cards drop their emoji
+  icons. The "Built by protoLabs.studio" footer stays (now using the brand
+  gradient token).
 - **"Built by protoLabs.studio" footer on every docs page** — a custom theme
   (`docs/.vitepress/theme/`) injects a `StudioFooter` via the `layout-bottom`
   slot (the built-in footer hides on sidebar pages), with the brand-gradient

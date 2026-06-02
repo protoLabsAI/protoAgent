@@ -31,8 +31,10 @@
 
 .wordmark {
   font-weight: 600;
-  /* protoLabs brand gradient: lavender → indigo. */
-  background: linear-gradient(135deg, #9b87f2 0%, #818cf8 50%, #6366f1 100%);
+  /* The brand gradient from the shared theme tokens (@protolabsai/design),
+     with a literal fallback so the wordmark still reads on-brand if a future
+     theme version renames the token. */
+  background: var(--pl-gradient-brand, linear-gradient(135deg, #9b87f2 0%, #818cf8 50%, #6366f1 100%));
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
