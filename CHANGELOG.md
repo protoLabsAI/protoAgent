@@ -55,11 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already `protolabs/reasoning`; this just clears the dead alias from examples.
 
 ### Fixed
-- **Desktop window wasn't draggable under the invisible title bar** — with the
-  brand at the very top there was no clear grab area. Now (macOS desktop) the app
-  is pushed down by the title-bar height and a dedicated transparent
-  `data-tauri-drag-region` strip sits behind the traffic lights, so the topbar
-  lives below the stoplights with room to drag (mirrors Orbis's approach).
+- **Desktop window wasn't draggable + external links didn't open under the
+  invisible title bar.** Two parts: (1) the Tauri capability didn't grant the
+  commands they invoke — `data-tauri-drag-region` → `startDragging()` and the
+  Docs/GitHub links → `shell.open` — so both silently failed
+  (`window.start_dragging not allowed`, `shell.open not allowed`); granted
+  `core:window:allow-start-dragging` + `shell:allow-open` (and corrected the
+  stale `--headless` sidecar arg scope to `--ui console`). (2) The topbar is the
+  drag region, with the brand **inset** right of the native traffic lights —
+  **macOS build only** (the browser has no traffic lights, so no inset there).
+  Plus a little more bottom padding under the utility-bar icons.
 - **Frozen desktop: console project APIs hit a nonexistent path** — the operator
   console's default project root was `__file__`'s dir, which in a PyInstaller
   onefile is the ephemeral `_MEIxxxx` extraction dir, so notes/beads failed with
