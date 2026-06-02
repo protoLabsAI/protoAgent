@@ -13,9 +13,14 @@ import { useEffect, useState } from "react";
 const HOLD_MS = 2500; // entrance + hold before handing off to the app
 
 export function IntroSplash() {
-  const [gone, setGone] = useState(false);
+  // Skip under automation (Playwright/Selenium set navigator.webdriver) so the
+  // 2.5s overlay doesn't intercept E2E interactions. Real users see it.
+  const [gone, setGone] = useState(
+    () => typeof navigator !== "undefined" && (navigator as Navigator).webdriver === true,
+  );
 
   useEffect(() => {
+    if (gone) return; // skipped (automation) — no timer, nothing to unmount
     const t = window.setTimeout(() => {
       const doc = document as Document & {
         startViewTransition?: (cb: () => void) => unknown;
