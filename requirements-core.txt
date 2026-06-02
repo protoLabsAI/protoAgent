@@ -14,7 +14,7 @@ a2a-sdk[http-server,fastapi,sqlite]>=1.1
 # schemes that keep every fleet agent interoperable byte-for-byte. Consumed from
 # the public published repo (single source of truth, no vendored copy). The repo
 # is public so the Docker build needs no auth to clone it.
-protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0
+protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0
 # Web framework for the API / A2A / operator routes (server.py, operator_api/).
 # Previously satisfied only transitively via Gradio — but the lean tiers
 # (--ui none/console) drop Gradio (requirements-ui.txt), so the lean image had
