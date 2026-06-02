@@ -439,7 +439,14 @@ class LocalScheduler:
         """
         import httpx
 
-        headers = {"Content-Type": "application/json"}
+        # A2A 1.0 wire shape (ADR 0014 / #477). The loopback POSTs to the agent's
+        # own a2a-sdk 1.1 handler, which rejects 0.3-shaped requests:
+        #   - `A2A-Version: 1.0` header (else -32009 VERSION_NOT_SUPPORTED)
+        #   - method `SendMessage` (the proto RPC name; 0.3's `message/send` →
+        #     Method not found)
+        #   - `role: ROLE_USER`, `parts: [{"text": …}]`, and contextId + metadata
+        #     live ON the message (not at params level).
+        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         if self._bearer:
             headers["Authorization"] = f"Bearer {self._bearer}"
         if self._api_key:
@@ -449,25 +456,24 @@ class LocalScheduler:
         body = {
             "jsonrpc": "2.0",
             "id": message_id,
-            "method": "message/send",
+            "method": "SendMessage",
             "params": {
-                # Route into the durable Activity thread (ADR 0003) so the
-                # fired turn lands somewhere visible/continuable instead of a
-                # throwaway context. Without this, the agent mints a fresh
-                # context per fire and the response surfaces nowhere.
-                "contextId": ACTIVITY_CONTEXT,
                 "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": job.prompt}],
+                    "role": "ROLE_USER",
+                    "parts": [{"text": job.prompt}],
                     "messageId": message_id,
-                },
-                # Scheduler bookkeeping for this fire, sent as params.metadata
-                # per the A2A message/send shape (origin + job id). These keys
-                # are informational — the handler does not require them.
-                "metadata": {
-                    "scheduler_job_id": job.id,
-                    "scheduler_kind": "local",
-                    "origin": "scheduler",
+                    # Route into the durable Activity thread (ADR 0003) so the
+                    # fired turn lands somewhere visible/continuable instead of a
+                    # throwaway context. Without this, the agent mints a fresh
+                    # context per fire and the response surfaces nowhere.
+                    "contextId": ACTIVITY_CONTEXT,
+                    # Scheduler bookkeeping for this fire (origin + job id) —
+                    # informational; the handler doesn't require these keys.
+                    "metadata": {
+                        "scheduler_job_id": job.id,
+                        "scheduler_kind": "local",
+                        "origin": "scheduler",
+                    },
                 },
             },
         }
