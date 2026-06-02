@@ -2383,7 +2383,15 @@ def _main():
         from graph.config_io import is_setup_complete
         ready = _graph is not None
         return JSONResponse(
-            {"ok": ready, "graph_compiled": ready, "setup_complete": is_setup_complete(), "ui": ui},
+            {
+                "ok": ready,
+                "graph_compiled": ready,
+                "setup_complete": is_setup_complete(),
+                "ui": ui,
+                # Surface the active model so eval reports can be tagged with the
+                # model under test without guessing (evals.runner auto-detects).
+                "model": _graph_config.model_name if _graph_config else None,
+            },
             status_code=200 if ready else 503,
         )
 
