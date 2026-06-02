@@ -32,6 +32,8 @@ import os
 import re
 import sys
 import time
+
+import httpx
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -2643,20 +2645,22 @@ def _main():
 
     # --- A2A protocol (a2a-sdk 1.0) -----------------------------------------
     # a2a-sdk owns all protocol mechanics: JSON-RPC dispatch, SSE streaming,
-    # the task lifecycle, the in-memory task store, and push delivery. Our
-    # ProtoAgentExecutor bridges protoagent's LangGraph stream onto it, and
-    # protolabs_a2 builds the card + emits the four custom extensions.
+    # the task lifecycle, and push delivery. Our ProtoAgentExecutor bridges
+    # protoagent's LangGraph stream onto it, and protolabs_a2 builds the card +
+    # emits the four custom extensions. Task + push-config state is durable
+    # (SQLite via a2a_stores), and push callbacks are SSRF-guarded.
     from a2a.server.request_handlers import DefaultRequestHandler
     from a2a.server.routes.agent_card_routes import create_agent_card_routes
     from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-    from a2a.server.tasks import (
-        InMemoryPushNotificationConfigStore,
-        InMemoryTaskStore,
-    )
 
     import a2a_auth
     from a2a_executor import ProtoAgentExecutor, set_terminal_hook
+    from a2a_stores import (
+        build_a2a_stores,
+        build_push_sender,
+        initialize_a2a_stores,
+    )
 
     global _telemetry_store
     _telemetry_store = _build_telemetry_store(_graph_config)
@@ -2675,12 +2679,21 @@ def _main():
     )
 
     a2a_card = _build_agent_card_proto(f"{agent_name()}:7870")
-    push_config_store = InMemoryPushNotificationConfigStore()
+
+    # Durable SQLite-backed task + push-config stores (survive restart; 24h TTL
+    # sweep on tasks). The push-config store rejects SSRF callback URLs at
+    # set-time; the matching push sender re-validates at send-time.
+    task_store, push_config_store, task_db, push_db = build_a2a_stores()
+    asyncio.run(initialize_a2a_stores(task_store, push_config_store))
+    log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
+
+    _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(_chat_langgraph_stream),
-        task_store=InMemoryTaskStore(),
+        task_store=task_store,
         agent_card=a2a_card,
         push_config_store=push_config_store,
+        push_sender=build_push_sender(push_config_store, _a2a_push_client),
     )
     add_a2a_routes_to_fastapi(
         fastapi_app,
