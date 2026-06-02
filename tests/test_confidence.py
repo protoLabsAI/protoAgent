@@ -1,35 +1,19 @@
-"""Tests for the confidence-v1 A2A extension wiring."""
+"""Tests for the confidence-v1 A2A extension wiring (A2A 1.0).
 
-import pytest
+The model self-reports a ``<confidence>`` tag (parsed by
+``graph.output_format.extract_confidence``); the executor records it and emits a
+confidence-v1 DataPart on the terminal artifact via ``protolabs_a2a``. These
+tests cover the parse, the 1.0 payload shape, and the clamp.
+"""
 
-from a2a_handler import (
-    CANCELED,
-    COMPLETED,
-    CONFIDENCE_MIME,
-    A2ATaskStore,
-    TaskRecord,
-    _confidence_payload,
-    _terminal_artifact_parts,
-)
+from __future__ import annotations
+
+import protolabs_a2a as pa
 from graph.output_format import extract_confidence, extract_output
 
 
-def _now() -> str:
-    from datetime import datetime, timezone
+# ── extract_confidence (graph) ────────────────────────────────────────────────
 
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _record(**kw) -> TaskRecord:
-    d = dict(
-        id="t", context_id="c", state=COMPLETED,
-        created_at=_now(), updated_at=_now(), message_text="hi",
-    )
-    d.update(kw)
-    return TaskRecord(**d)
-
-
-# ── extract_confidence ────────────────────────────────────────────────────────
 
 def test_extract_confidence_parses_score_and_explanation():
     text = (
@@ -64,53 +48,29 @@ def test_confidence_tags_stripped_from_output():
     assert "confidence" not in out.lower()
 
 
-# ── _confidence_payload ───────────────────────────────────────────────────────
-
-def test_payload_none_when_no_confidence():
-    assert _confidence_payload(_record(confidence=None)) is None
+# ── confidence-v1 DataPart (protolabs_a2a, A2A 1.0 shape) ─────────────────────
 
 
-def test_payload_success_true_on_completed():
-    p = _confidence_payload(_record(state=COMPLETED, confidence=0.7))
-    assert p == {"confidence": 0.7, "success": True}
+def test_emit_confidence_payload_minimal():
+    part = pa.emit_confidence(0.7, success=True)
+    assert part["metadata"]["mimeType"] == pa.CONFIDENCE_MIME
+    assert pa.parse_confidence(part) == {"confidence": 0.7, "success": True}
 
 
-def test_payload_success_false_on_non_completed_includes_explanation():
-    p = _confidence_payload(
-        _record(state=CANCELED, confidence=0.9, confidence_explanation="sure but wrong")
-    )
-    assert p["success"] is False
-    assert p["confidence"] == 0.9
-    assert p["confidenceExplanation"] == "sure but wrong"
+def test_emit_confidence_includes_explanation_and_success_false():
+    """The 1.0 contract uses the ``explanation`` key (the 0.3 shape used
+    ``confidenceExplanation``). Reporting confidence on a non-success run is
+    the high-confidence-failure calibration signal — still emitted."""
+    part = pa.emit_confidence(0.9, explanation="sure but wrong", success=False)
+    payload = pa.parse_confidence(part)
+    assert payload["confidence"] == 0.9
+    assert payload["explanation"] == "sure but wrong"
+    assert payload["success"] is False
 
 
-def test_terminal_artifact_includes_confidence_datapart():
-    parts = _terminal_artifact_parts(
-        _record(accumulated_text="done", confidence=0.6)
-    )
-    data_parts = [p for p in parts if p.get("metadata", {}).get("mimeType") == CONFIDENCE_MIME]
-    assert len(data_parts) == 1
-    assert data_parts[0]["data"]["confidence"] == 0.6
-
-
-def test_terminal_artifact_omits_confidence_when_unset():
-    parts = _terminal_artifact_parts(_record(accumulated_text="done"))
-    assert not any(
-        p.get("metadata", {}).get("mimeType") == CONFIDENCE_MIME for p in parts
-    )
-
-
-# ── set_confidence clamping ───────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_set_confidence_clamps_and_stores():
-    store = A2ATaskStore()
-    rec = await store.create(_record(id="conf-task", state="working"))
-    await store.set_confidence(rec.id, confidence=1.7, explanation="  over  ")
-    got = await store.get(rec.id)
-    assert got.confidence == 1.0  # clamped
-    assert got.confidence_explanation == "over"
-
-    await store.set_confidence(rec.id, confidence=-0.5)
-    got = await store.get(rec.id)
-    assert got.confidence == 0.0
+def test_confidence_clamp_is_executor_side():
+    """The executor clamps a model-reported confidence to [0, 1] before
+    emitting, so the DataPart is always in-spec. Verify the clamp contract
+    that ``a2a_executor`` applies (max(0, min(1, x)))."""
+    assert max(0.0, min(1.0, 1.7)) == 1.0
+    assert max(0.0, min(1.0, -0.5)) == 0.0

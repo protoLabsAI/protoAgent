@@ -2,36 +2,37 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import a2a_handler
+import a2a_executor
+from a2a_executor import TurnOutcome
 from operator_api.routes import register_operator_routes
 
 
 def test_notify_terminal_invokes_hook_and_is_exception_safe():
-    record = SimpleNamespace(id="t1", context_id="system:activity", accumulated_text="hi")
+    outcome = TurnOutcome(
+        task_id="t1", context_id="system:activity", state="completed", text="hi",
+    )
     seen = []
-    prior = a2a_handler._ON_TERMINAL[0]
+    prior = a2a_executor._ON_TERMINAL[0]
     try:
-        a2a_handler._ON_TERMINAL[0] = seen.append
-        a2a_handler._notify_terminal(record)
-        assert seen == [record]
+        a2a_executor.set_terminal_hook(seen.append)
+        a2a_executor._notify_terminal(outcome)
+        assert seen == [outcome]
 
-        # A throwing hook must not propagate into the background runner.
+        # A throwing hook must not propagate into the executor.
         def boom(_):
             raise RuntimeError("nope")
 
-        a2a_handler._ON_TERMINAL[0] = boom
-        a2a_handler._notify_terminal(record)  # no raise
+        a2a_executor.set_terminal_hook(boom)
+        a2a_executor._notify_terminal(outcome)  # no raise
 
         # No hook registered → no-op.
-        a2a_handler._ON_TERMINAL[0] = None
-        a2a_handler._notify_terminal(record)
+        a2a_executor.set_terminal_hook(None)
+        a2a_executor._notify_terminal(outcome)
     finally:
-        a2a_handler._ON_TERMINAL[0] = prior
+        a2a_executor._ON_TERMINAL[0] = prior
 
 
 def test_activity_route_returns_history():

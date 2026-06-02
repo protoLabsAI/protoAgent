@@ -140,36 +140,41 @@ def test_percentile_helper():
 
 
 @pytest.fixture
-def telemetry_holder(store):
-    """Point a2a_handler's telemetry holder at the test store, then restore."""
-    import a2a_handler
+def telemetry_server(store):
+    """Point server's telemetry holder at the test store, then restore.
 
-    prev_store, prev_model = a2a_handler._TELEMETRY[0], a2a_handler._TELEMETRY_MODEL[0]
-    a2a_handler._TELEMETRY[0] = store
-    a2a_handler._TELEMETRY_MODEL[0] = "claude-opus-4-8"
+    Telemetry recording moved from the hand-rolled handler to
+    ``server._record_a2a_telemetry`` (fed a ``TurnOutcome`` by the executor's
+    terminal hook). The configured lead model defaults from ``_graph_config``;
+    we leave it unset so the primary model comes from the turn's actual models."""
+    import server
+
+    prev = server._telemetry_store
+    server._telemetry_store = store
     try:
-        yield a2a_handler
+        yield server
     finally:
-        a2a_handler._TELEMETRY[0] = prev_store
-        a2a_handler._TELEMETRY_MODEL[0] = prev_model
+        server._telemetry_store = prev
 
 
-def test_record_telemetry_writes_row_from_task_record(store, telemetry_holder):
-    """The terminal writer maps a TaskRecord → a telemetry row (ADR 0006)."""
-    a2a_handler = telemetry_holder
-    rec = a2a_handler.TaskRecord(
-        id="task-x", context_id="sess-1", state=a2a_handler.COMPLETED,
-        created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:03+00:00",
-        message_text="hi",
-    )
-    rec.usage = {
-        "input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500,
-        "cache_read_input_tokens": 600, "cache_creation_input_tokens": 0, "cost_usd": 0.042,
-    }
-    rec.llm_calls = 3
-    rec.tool_calls = 2
+def _outcome(**kw):
+    from a2a_executor import TurnOutcome
 
-    a2a_handler._record_telemetry(rec)
+    return TurnOutcome(**kw)
+
+
+def test_record_telemetry_writes_row_from_turn_outcome(store, telemetry_server):
+    """The terminal writer maps a TurnOutcome → a telemetry row (ADR 0006)."""
+    server = telemetry_server
+    server._record_a2a_telemetry(_outcome(
+        task_id="task-x", context_id="sess-1", state="completed", text="hi",
+        usage={
+            "input_tokens": 1200, "output_tokens": 300,
+            "cache_read_input_tokens": 600, "cache_creation_input_tokens": 0,
+        },
+        cost_usd=0.042, duration_ms=3000, llm_calls=3, tool_calls=2,
+        models=["claude-opus-4-8"],
+    ))
 
     turns = store.recent()
     assert len(turns) == 1
@@ -178,47 +183,63 @@ def test_record_telemetry_writes_row_from_task_record(store, telemetry_holder):
     assert row["session_id"] == "sess-1"
     assert row["success"] == 1
     assert row["model"] == "claude-opus-4-8"
+    assert row["total_tokens"] == 1500
     assert row["cost_usd"] == 0.042
     assert row["llm_calls"] == 3 and row["tool_calls"] == 2
-    assert row["duration_ms"] == 3000  # 3s between created/ended
+    assert row["duration_ms"] == 3000
 
 
-def test_record_telemetry_uses_actual_models(store, telemetry_holder):
-    """Actual per-turn models override the configured lead, and the distinct
-    set is stored (ADR 0006 Slice 4b — routing proof)."""
-    a2a_handler = telemetry_holder
-    rec = a2a_handler.TaskRecord(
-        id="task-rt", context_id="s", state=a2a_handler.COMPLETED,
-        created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:01+00:00",
-        message_text="hi",
-    )
-    rec.usage = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110, "cost_usd": 0.001}
-    rec.models = ["protolabs/reasoning", "claude-haiku-4-5"]  # lead + aux
-    a2a_handler._record_telemetry(rec)
+def test_record_telemetry_uses_actual_models(store, telemetry_server):
+    """The primary model is the first one actually used this turn, and the
+    distinct set is stored (ADR 0006 Slice 4b — routing proof)."""
+    server = telemetry_server
+    server._record_a2a_telemetry(_outcome(
+        task_id="task-rt", context_id="s", state="completed", text="hi",
+        usage={"input_tokens": 100, "output_tokens": 10},
+        cost_usd=0.001, duration_ms=1000,
+        models=["protolabs/reasoning", "claude-haiku-4-5"],
+    ))
     row = store.recent()[0]
     assert row["model"] == "protolabs/reasoning"          # primary = first actual
     assert row["models"] == "protolabs/reasoning,claude-haiku-4-5"
 
 
-def test_add_usage_collects_distinct_models():
-    """add_usage records each distinct model once, in first-seen order."""
+def test_executor_accumulates_distinct_models_in_first_seen_order():
+    """The executor records each distinct model once, in first-seen order, on
+    the TurnOutcome — the routing-proof signal."""
     import asyncio
-    import a2a_handler
+
+    from a2a.server.context import ServerCallContext
+    from a2a.server.agent_execution import RequestContext
+    from a2a.server.events.event_queue import EventQueueLegacy as EventQueue
+    from a2a.types import Message, Part, Role, SendMessageRequest
+
+    from a2a_executor import ProtoAgentExecutor, set_terminal_hook
+
+    captured = []
+    set_terminal_hook(captured.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None):
+        yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m1"})
+        yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m2"})
+        yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m1"})  # dup
+        yield ("done", "ok")
 
     async def run():
-        s = a2a_handler.A2ATaskStore()
-        rec = a2a_handler.TaskRecord(
-            id="t", context_id="c", state=a2a_handler.SUBMITTED,
-            created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:00+00:00",
-            message_text="x",
+        q = EventQueue()
+        req = SendMessageRequest(
+            message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="hi")])
         )
-        await s.create(rec)
-        await s.add_usage("t", 10, 5, model="m1")
-        await s.add_usage("t", 10, 5, model="m2")
-        await s.add_usage("t", 10, 5, model="m1")  # dup
-        return (await s.get("t")).models
+        ctx = RequestContext(call_context=ServerCallContext(), request=req, task_id="t", context_id="c")
+        await ProtoAgentExecutor(stream).execute(ctx, q)
 
-    assert asyncio.run(run()) == ["m1", "m2"]
+    try:
+        asyncio.run(run())
+    finally:
+        set_terminal_hook(None)
+
+    assert captured[0].models == ["m1", "m2"]
+    assert captured[0].llm_calls == 3
 
 
 def test_record_tools_deferred_noop_when_disabled():
@@ -228,19 +249,17 @@ def test_record_tools_deferred_noop_when_disabled():
 
 
 def test_record_telemetry_noop_when_store_unset():
-    import a2a_handler
+    import server
 
-    prev = a2a_handler._TELEMETRY[0]
-    a2a_handler._TELEMETRY[0] = None
+    prev = server._telemetry_store
+    server._telemetry_store = None
     try:
-        rec = a2a_handler.TaskRecord(
-            id="t", context_id="c", state=a2a_handler.COMPLETED,
-            created_at="2026-06-01T00:00:00+00:00", updated_at="2026-06-01T00:00:01+00:00",
-            message_text="x",
-        )
-        a2a_handler._record_telemetry(rec)  # must not raise
+        server._record_a2a_telemetry(_outcome(
+            task_id="t", context_id="c", state="completed", text="x",
+            usage={"input_tokens": 1, "output_tokens": 1}, duration_ms=1000,
+        ))  # must not raise
     finally:
-        a2a_handler._TELEMETRY[0] = prev
+        server._telemetry_store = prev
 
 
 def test_config_parses_telemetry(tmp_path):
