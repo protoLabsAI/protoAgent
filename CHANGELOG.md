@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-02
+
 ### Changed
 - **`protolabs_a2a` now consumed as a published git-dep, not vendored.** Dropped
   the vendored `protolabs_a2a/` copy (added by #453) and pinned the public
