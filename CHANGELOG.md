@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ADR 0014 — A2A 0.3 → 1.0 migration plan.** Records the protoAgent-local plan
+  to replace the ~2,083-LOC hand-rolled `a2a_handler.py` with the official
+  `a2a-sdk` (`AgentExecutor`) + a shared `protolabs-a2a` conventions layer
+  (inherited from protoWorkstacean ADR-0006; tracked by #443). Plan-only — a
+  surface-to-1.0 map + sliced checklist; execution is blocked (the
+  `protolabs-a2a` package doesn't exist yet) and is a flag-day cutover, so no
+  code lands until those clear.
 - **Console data layer: TanStack Query + Suspense + ErrorBoundary (ADR 0013).**
   The operator console adopts `@tanstack/react-query` (suspense mode) for its
   reads — loading is a `<Suspense>` fallback, failures are caught by a contained
