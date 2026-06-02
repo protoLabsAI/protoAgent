@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Inbox panel migrated to TanStack Query (ADR 0013).** Activity → Inbox reads
+  via `useSuspenseQuery`, invalidates on the live `inbox.item` event, and
+  dismisses via a `useMutation` (optimistic hide held above the Suspense
+  boundary so a delivered item stays gone). Loading/errors via `<Suspense>` +
+  `<ErrorBoundary>`; drops the `useEffect`/`onError` plumbing. (Activity →
+  Thread stays imperative — it's a live message stream with a streaming send,
+  like Chat/Notes.)
 - **Settings surface migrated to TanStack Query (ADR 0013).** System → Settings
   reads the schema via `useSuspenseQuery` and saves via `useMutation` (which
   invalidates the schema so hot-reloaded values reload); save status/errors show
