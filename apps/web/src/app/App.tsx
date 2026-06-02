@@ -384,11 +384,24 @@ export function App() {
     setError("");
     try {
       const runtimePayload = await refreshRuntime();
-      const nextProjectPath = projectPath.trim() || runtimePayload.project.path;
+      const serverDefault = runtimePayload.project.path;
+      let nextProjectPath = projectPath.trim() || serverDefault;
+      try {
+        await refreshProjectState(nextProjectPath);
+      } catch (projErr) {
+        // The persisted project path is stale/invalid — e.g. a previous frozen
+        // (desktop) run stored a PyInstaller _MEI temp dir that no longer
+        // exists. Self-heal by adopting the server's current default project.
+        if (serverDefault && nextProjectPath !== serverDefault) {
+          nextProjectPath = serverDefault;
+          await refreshProjectState(nextProjectPath);
+        } else {
+          throw projErr;
+        }
+      }
       if (nextProjectPath && nextProjectPath !== projectPath) {
         setProjectPath(nextProjectPath);
       }
-      await refreshProjectState(nextProjectPath);
       setStatus("ready");
     } catch (exc) {
       setStatus("error");
