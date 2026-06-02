@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Lean Docker image (`--ui none`/`console`) couldn't serve** — `fastapi` was
+  never declared in any requirements file; it came in only transitively via
+  Gradio, which the lean tiers drop (ADR 0010). The lean image therefore had no
+  FastAPI and the server couldn't start. Declared `fastapi` in
+  `requirements-core.txt` (caught by the runtime-image pytest-collection check).
+
 ### Added
 - **Eval coverage for the agent layer** (ADR 0012 §2.5): new `subagent` +
   `workflow` eval categories track the research stack. A `workflow` case kind
