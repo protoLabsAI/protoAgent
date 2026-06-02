@@ -75,6 +75,34 @@ def ask_human(question: str) -> str:
 
 
 @tool
+def request_user_input(title: str, steps: list[dict], description: str = "") -> str:
+    """Ask the operator for **structured** input via a form dialog, then continue
+    with their response. Use when you need specific values, choices, credentials,
+    or config — anything better captured as form fields than free text. The task
+    pauses (surfaced as ``input-required``) until they submit; their response (a
+    JSON object keyed by field name) is returned from this call.
+
+    ``steps`` is a list of form steps — multiple steps render as a wizard. Each
+    step is ``{"schema": <JSON Schema draft-07 of the fields>, "uiSchema"?: <layout
+    hints>, "title"?: str, "description"?: str}``. Phrase the ask clearly and only
+    request fields you actually need. For a single free-text or yes/no question,
+    use ``ask_human`` instead.
+    """
+    import json
+    from langgraph.types import interrupt
+
+    response = interrupt({
+        "kind": "form",
+        "title": title,
+        "description": description,
+        "steps": steps,
+    })
+    # The resume value is the submitted form object; return it as JSON so the
+    # model reads structured fields. (A plain string resume is passed through.)
+    return response if isinstance(response, str) else json.dumps(response)
+
+
+@tool
 @with_fallback()
 async def current_time(timezone: str = "UTC") -> str:
     """Return the current wall-clock time in the given IANA timezone.
@@ -584,7 +612,7 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None):
     # LangGraph interrupt that only the lead turn's runner resumes. Subagents
     # (run outside that runner) must not get it, so it's gated by allowlist:
     # present in the full set for the lead agent, absent from subagent allowlists.
-    tools = [current_time, calculator, web_search, fetch_url, ask_human]
+    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
     # GitHub read tools (PRs/issues/commits) over the gh CLI. Always
     # included — they degrade to a readable error if gh/auth is missing.
     from tools.github_tools import get_github_tools
@@ -616,7 +644,7 @@ SEARCH_TOOLS_NAME = "search_tools"
 # delegation/workflow tools + the search meta-tool itself — enough to operate
 # and to *discover* the rest. Everything else is deferred until searched.
 DEFERRED_BASE_TOOL_NAMES = frozenset({
-    "current_time", "calculator", "web_search", "fetch_url", "ask_human",
+    "current_time", "calculator", "web_search", "fetch_url", "ask_human", "request_user_input",
     "task", "task_batch", "run_workflow", "save_workflow",
     SEARCH_TOOLS_NAME,
 })
