@@ -7,7 +7,7 @@ unchanged until they opt in. This is also the single source of truth the
 OpenShell network policy is generated from (``scripts/gen_openshell_policy.py``).
 
 Mirrors the ``PUSH_NOTIFICATION_ALLOWED_HOSTS`` SSRF-guard pattern in
-``a2a_handler``. Wildcards: a leading ``*.`` matches any subdomain
+``a2a_stores``. Wildcards: a leading ``*.`` matches any subdomain
 (``*.proto-labs.ai`` allows ``api.proto-labs.ai`` and ``proto-labs.ai``).
 
 This is the in-process half. Process-level egress (subprocess escapes via

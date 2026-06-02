@@ -453,7 +453,7 @@ class LocalScheduler:
             "params": {
                 # Route into the durable Activity thread (ADR 0003) so the
                 # fired turn lands somewhere visible/continuable instead of a
-                # throwaway context. Without this, a2a_handler mints a fresh
+                # throwaway context. Without this, the agent mints a fresh
                 # context per fire and the response surfaces nowhere.
                 "contextId": ACTIVITY_CONTEXT,
                 "message": {
@@ -461,10 +461,9 @@ class LocalScheduler:
                     "parts": [{"kind": "text", "text": job.prompt}],
                     "messageId": message_id,
                 },
-                # Custom metadata goes at params.metadata — that's
-                # where a2a_handler._a2a_rpc reads it (see
-                # ``msg_metadata = params.get("metadata")``). Putting
-                # it inside params.message.metadata silently drops it.
+                # Scheduler bookkeeping for this fire, sent as params.metadata
+                # per the A2A message/send shape (origin + job id). These keys
+                # are informational — the handler does not require them.
                 "metadata": {
                     "scheduler_job_id": job.id,
                     "scheduler_kind": "local",

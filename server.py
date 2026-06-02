@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Root-level log config. Python's default is WARNING, which silently filters
 # every `logger.info(...)` call — including "webhook delivered" lines from
-# a2a_handler, making the A2A/webhook path invisible in docker logs.
+# the A2A push sender, making the A2A/webhook path invisible in docker logs.
 # LOG_LEVEL env var lets operators tune without a code change.
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
