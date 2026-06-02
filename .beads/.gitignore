@@ -1,0 +1,9 @@
+# Allowlist form (matches the upstream beads pattern): ignore everything in
+# .beads/ except the committed source of truth, so new runtime files br adds
+# (beads.db*, *.lock, .br_history/, daemon.*, metadata.json, .local_version,
+# last-touched, *.tmp) are ignored automatically — no .gitignore churn.
+*
+!issues.jsonl
+!config.yaml
+!routes.jsonl
+!.gitignore

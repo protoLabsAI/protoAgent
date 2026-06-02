@@ -29,8 +29,11 @@ build/
 .DS_Store
 *.db
 *.jsonl
-# Workspace-config standard: the beads issue export is the committed source of truth
-!.beads/issues.jsonl
+# Most .beads/ rules live in .beads/.gitignore (self-contained allowlist) so they
+# travel with the dir and cover every runtime file br adds. This one stays at the
+# root because the workspace-config gate (release-tools) only reads the root
+# .gitignore and requires a beads-db pattern here.
+.beads/*.db
 
 # protoLabs Studio agent workspace (never commit)
 .automaker-lock
@@ -46,9 +49,6 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 
 # protoLabs workspace-config standard
-.beads/beads.db
-.beads/beads.db-*
-.beads/.br_history/
 .automaker/features/
 .automaker/checkpoints/
 .automaker/trajectory/
@@ -56,7 +56,6 @@ docs/.vitepress/cache/
 .automaker/notes/
 .automaker/knowledge.db
 .automaker/knowledge.db-*
-.beads/last-touched
 
 # Built Tauri sidecar binaries (produced by apps/desktop/sidecar/build_sidecar.py)
 apps/desktop/src-tauri/binaries/
