@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Structured-skill declaration scaffolding (#476, protoAgent side).** A skill
+  spec (`_SKILL_SPECS`) may declare an `output_schema` (JSON Schema) +
+  `result_mime`; `_agent_skills()` then advertises the MIME in that skill's
+  card `output_modes` (the A2A-native way), and `structured_skill_schema(id)`
+  hands the schema to the executor's forthcoming forced-tool-call finalizer.
+  The schema lives in the skill config (not the card — `AgentSkill` has no
+  schema field). No schema ⇒ free text (unchanged). The forced-tool-call
+  enforcement + `emit_skill_result` DataPart land once the shared
+  `protolabs_a2a` helper exists; this is the non-blocking declaration/card half.
+
 ### Fixed
 - **Scheduled jobs fire again on A2A 1.0 (#477).** `LocalScheduler._fire`'s
   loopback POST to the agent's own `/a2a` was still 0.3-shaped, so the a2a-sdk

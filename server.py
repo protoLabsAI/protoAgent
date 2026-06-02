@@ -1780,20 +1780,62 @@ def _bearer_configured() -> bool:
     return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (_graph_config and _graph_config.auth_token))
 
 
+# Skill declarations (ADR-0006 addendum / #476). A skill MAY declare an
+# ``output_schema`` (JSON Schema) + ``result_mime`` — when present, the agent
+# enforces the schema via a forced-tool-call finalizer in the executor and emits
+# the result as a typed DataPart (``protolabs_a2a.emit_skill_result``), and the
+# card advertises the MIME in that skill's ``output_modes``. No schema ⇒ free
+# text (today's default). The schema lives HERE (skill config), not on the card
+# — ``AgentSkill`` only carries ``output_modes`` (the MIME), per the A2A spec.
+#
+# REPLACE when forking. The template ships one free-text placeholder so a fresh
+# clone is callable; the commented fields below show a structured skill.
+_SKILL_SPECS: list[dict] = [
+    {
+        "id": "chat",
+        "name": "Chat",
+        "description": "General-purpose chat interface. Replace with your agent's real skills.",
+        "tags": ["template"],
+        "examples": ["hello", "what can you do?"],
+        # To make a skill return schema-enforced structured output, add:
+        #   "output_schema": {"type": "object", "properties": {...}, "required": [...]},
+        #   "result_mime": "application/vnd.protolabs.<your-skill>-v1+json",
+    },
+]
+
+
 def _agent_skills():
-    """The agent's A2A skills. REPLACE when forking — the template ships one
-    placeholder ``chat`` skill so a fresh clone is callable."""
+    """Build the card's ``AgentSkill`` list from ``_SKILL_SPECS``. A spec with a
+    ``result_mime`` advertises it in ``output_modes`` (the A2A-native way to tell
+    consumers the skill emits that structured type)."""
     from a2a.types import AgentSkill
 
-    return [
-        AgentSkill(
-            id="chat",
-            name="Chat",
-            description="General-purpose chat interface. Replace with your agent's real skills.",
-            tags=["template"],
-            examples=["hello", "what can you do?"],
-        ),
-    ]
+    skills = []
+    for s in _SKILL_SPECS:
+        kwargs = dict(
+            id=s["id"],
+            name=s["name"],
+            description=s["description"],
+            tags=s.get("tags", []),
+            examples=s.get("examples", []),
+        )
+        if s.get("result_mime"):
+            kwargs["output_modes"] = [s["result_mime"]]
+        skills.append(AgentSkill(**kwargs))
+    return skills
+
+
+def structured_skill_schema(skill_id: str) -> dict | None:
+    """For a skill that declares structured output, return
+    ``{"schema": <JSON Schema>, "mime": <result_mime>}``; else ``None`` (free
+    text). The executor's structured finalizer (#476) reads this to run the
+    forced-tool-call against the schema and emit the validated object as a
+    ``result_mime`` DataPart. The schema isn't on the card (``AgentSkill`` has no
+    schema field) — it lives in ``_SKILL_SPECS``."""
+    for s in _SKILL_SPECS:
+        if s["id"] == skill_id and s.get("output_schema") and s.get("result_mime"):
+            return {"schema": s["output_schema"], "mime": s["result_mime"]}
+    return None
 
 
 def _package_version() -> str:
