@@ -22,3 +22,4 @@ decision, numbered, never deleted (supersede instead).
 | [0011](./0011-deep-research-workflow.md) | Deep-research workflow with adversarial review | Accepted |
 | [0012](./0012-eval-strategy-and-model-comparison.md) | Eval strategy: model-tagged tracking & model comparison | Accepted |
 | [0013](./0013-console-data-layer-react-query.md) | Console data layer: TanStack Query + Suspense + ErrorBoundary | Accepted |
+| [0014](./0014-a2a-1.0-migration.md) | A2A 0.3 → 1.0: adopt `a2a-sdk` + `protolabs-a2a` | Accepted (blocked) |
