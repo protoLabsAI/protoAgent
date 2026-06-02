@@ -1187,6 +1187,97 @@ select:disabled {
 }
 
 /* Slash-command autocomplete (floats above the composer). */
+/* HITL request card (request_user_input form / ask_human prompt) — sits above
+   the composer when a turn pauses as input-required. */
+.hitl-card {
+  margin: 0 12px 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--brand-indigo, #6366f1);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hitl-title {
+  font-weight: 600;
+}
+
+.hitl-prompt {
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+
+.hitl-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hitl-step-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.hitl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.hitl-field > span {
+  color: var(--fg-secondary);
+}
+
+.hitl-field-bool {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.hitl-field input,
+.hitl-field select,
+.hitl-field textarea,
+.hitl-freetext {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.hitl-field small {
+  color: var(--fg-muted);
+}
+
+.hitl-freetext {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.hitl-detail {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg);
+}
+
+.hitl-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .composer-wrap {
   position: relative;
 }
@@ -1586,6 +1677,71 @@ textarea {
   margin: 4px 12px;
 }
 
+/* Workflow builder (Sprint C) — author a recipe in the console. */
+.workflow-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 12px;
+}
+
+.builder-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.builder-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.builder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.builder-row input,
+.builder-row select,
+.builder-prompt {
+  flex: 1;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.builder-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.builder-prompt {
+  resize: vertical;
+}
+
+.builder-deps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
 .workflow-step {
   display: flex;
   align-items: center;
@@ -1710,12 +1866,10 @@ textarea {
   font-size: 13px;
 }
 
-.project-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
+/* The right-panel tab control (Notes / Beads / Goals — the agent's working
+   memory). The per-project selector + manual refresh were removed: notes/beads
+   are agent-global, and the project/allowed-dirs list is purely the filesystem
+   fence. */
 .segmented {
   height: 34px;
   display: grid;
@@ -1833,6 +1987,108 @@ textarea {
   display: grid;
   align-content: start;
   height: 100%;
+}
+
+/* Suspense + ErrorBoundary fallbacks for query-backed surfaces (ADR 0013). */
+.panel-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.panel-error {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(220, 60, 60, 0.06);
+}
+
+.panel-error svg:first-child {
+  color: #e0564f;
+}
+
+.panel-error > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.panel-error strong {
+  font-size: 13px;
+}
+
+.panel-error span {
+  color: var(--fg-muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.panel-error button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+/* Goals side-panel (the agent's autonomy layer, moved out of Studio). */
+.goals-list {
+  display: grid;
+  align-content: start;
+  height: 100%;
+}
+
+.goal-row {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 34px 10px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.goal-row:last-child {
+  border-bottom: 0;
+}
+
+.goal-row.empty {
+  gap: 2px;
+}
+
+.goal-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.goal-row-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.goal-row-meta {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.goal-row-clear {
+  position: absolute;
+  top: 8px;
+  right: 6px;
 }
 
 .issue-group {

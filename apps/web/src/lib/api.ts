@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ConfigPayload,
   GoalState,
+  HitlPayload,
   InboxItem,
   NotesWorkspace,
   RuntimeStatus,
@@ -126,6 +127,7 @@ function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 }
 
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
+const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
 /** Pull a structured tool event ({id, name, phase, input|output}) off a frame's parts. */
 function toolEventFromParts(
@@ -135,6 +137,16 @@ function toolEventFromParts(
     (p) => p.kind === "data" && p.metadata?.mimeType === TOOL_CALL_MIME,
   );
   return part ? (part.data as ToolEvent) : null;
+}
+
+/** Pull the HITL form/question payload off an input-required frame's parts. */
+function hitlFromParts(
+  parts?: Array<{ kind?: string; data?: unknown; metadata?: { mimeType?: string } }>,
+): HitlPayload | null {
+  const part = (parts || []).find(
+    (p) => p.kind === "data" && p.metadata?.mimeType === HITL_MIME,
+  );
+  return part ? (part.data as HitlPayload) : null;
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
@@ -333,6 +345,19 @@ export const api = {
     });
   },
 
+  saveWorkflow(recipe: Record<string, unknown>) {
+    return request<{ saved: boolean; name: string; path?: string }>("/api/workflows", {
+      method: "POST",
+      body: recipe,
+    });
+  },
+
+  deleteWorkflow(name: string) {
+    return request<{ deleted: boolean }>(`/api/workflows/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+  },
+
   saveSettings(updates: Record<string, unknown>) {
     return request<{ ok: boolean; messages: string[]; restart_required: string[] }>("/api/settings", {
       method: "POST",
@@ -365,6 +390,7 @@ export const api = {
       onStatus?: (status: string) => void;
       onText?: (text: string, append: boolean) => void;
       onToolCall?: (evt: ToolEvent) => void;
+      onInputRequired?: (payload: HitlPayload) => void;
       onDone?: () => void;
     } = {},
   ) {
@@ -408,6 +434,13 @@ export const api = {
         handlers.onStatus?.(messageText || state);
         const toolEvent = toolEventFromParts(result.status?.message?.parts);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
+        // HITL pause: the turn parked awaiting the operator. Surface the form /
+        // question payload so the console can render it (falls back to the text).
+        if (state === "input-required") {
+          handlers.onInputRequired?.(
+            hitlFromParts(result.status?.message?.parts) || { question: messageText },
+          );
+        }
         if (result.final) handlers.onDone?.();
       }
 
@@ -431,53 +464,48 @@ export const api = {
     });
   },
 
-  getNotes(projectPath: string) {
-    const params = new URLSearchParams({ project_path: projectPath });
-    return request<{ workspace: NotesWorkspace }>(`/api/notes/workspace?${params}`);
+  // Notes + Beads are agent-global (one persistent store each) — no project
+  // scope. The project / allowed-dirs list is purely the filesystem fence.
+  getNotes() {
+    return request<{ workspace: NotesWorkspace }>("/api/notes/workspace");
   },
 
-  saveNotes(projectPath: string, workspace: NotesWorkspace) {
+  saveNotes(workspace: NotesWorkspace) {
     return request<{ ok: boolean }>("/api/notes/workspace", {
       method: "POST",
-      body: { project_path: projectPath, workspace },
+      body: { workspace },
     });
   },
 
-  beadsStatus(projectPath: string) {
-    const params = new URLSearchParams({ project_path: projectPath });
-    return request<{ initialized: boolean }>(`/api/beads/status?${params}`);
+  beadsStatus() {
+    return request<{ initialized: boolean }>("/api/beads/status");
   },
 
-  initBeads(projectPath: string) {
+  initBeads() {
     return request<{ initialized: boolean; already_initialized?: boolean }>("/api/beads/init", {
       method: "POST",
-      body: { project_path: projectPath },
+      body: {},
     });
   },
 
-  beadsIssues(projectPath: string) {
-    const params = new URLSearchParams({ project_path: projectPath });
-    return request<{ issues: BeadsIssue[] }>(`/api/beads/issues?${params}`);
+  beadsIssues() {
+    return request<{ issues: BeadsIssue[] }>("/api/beads/issues");
   },
 
-  createIssue(
-    projectPath: string,
-    issue: {
-      title: string;
-      type?: string;
-      priority?: number;
-      description?: string;
-      assignee?: string;
-    },
-  ) {
+  createIssue(issue: {
+    title: string;
+    type?: string;
+    priority?: number;
+    description?: string;
+    assignee?: string;
+  }) {
     return request<{ issue: BeadsIssue }>("/api/beads/issues", {
       method: "POST",
-      body: { project_path: projectPath, ...issue },
+      body: { ...issue },
     });
   },
 
   updateIssue(
-    projectPath: string,
     issueId: string,
     update: {
       title?: string;
@@ -490,21 +518,20 @@ export const api = {
   ) {
     return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}`, {
       method: "PATCH",
-      body: { project_path: projectPath, ...update },
+      body: { ...update },
     });
   },
 
-  closeIssue(projectPath: string, issueId: string, reason?: string) {
+  closeIssue(issueId: string, reason?: string) {
     return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}/close`, {
       method: "POST",
-      body: { project_path: projectPath, reason },
+      body: { reason },
     });
   },
 
-  deleteIssue(projectPath: string, issueId: string) {
-    const params = new URLSearchParams({ project_path: projectPath });
+  deleteIssue(issueId: string) {
     return request<{ deleted?: string; project_path?: string }>(
-      `/api/beads/issues/${encodeURIComponent(issueId)}?${params}`,
+      `/api/beads/issues/${encodeURIComponent(issueId)}`,
       { method: "DELETE" },
     );
   },

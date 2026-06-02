@@ -139,7 +139,7 @@ jobs:
 
       - name: Generate + post release notes
         continue-on-error: true
-        uses: protoLabsAI/release-tools@v1
+        uses: protoLabsAI/release-tools@b7c3531dd67accb57ca09242f47d8c0eb1ace8eb # v1.1.0
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.version.outputs.prev_tag }}

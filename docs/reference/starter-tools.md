@@ -8,7 +8,7 @@ Sixteen tools ship by default:
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
 - One **HITL tool** — `ask_human` — pauses the turn (A2A `input-required`) to ask the operator and resumes with their answer (lead-agent only).
-- Four **project-notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent, gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
+- Four **notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent (one agent-global notebook), gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
 
 `get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
 
@@ -244,10 +244,10 @@ toggles in the panel; these tools **honor them per tab**:
 
 ```python
 @tool
-async def notes_list(project_path: str = "") -> str          # tabs + read/write flags
-async def notes_read(tab: str = "", project_path: str = "") -> str   # agent-readable tabs only
-async def notes_write(tab: str, content: str, mode: str = "append", project_path: str = "") -> str
-async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str  # undo recent writes
+async def notes_list() -> str                                 # tabs + read/write flags
+async def notes_read(tab: str = "") -> str                    # agent-readable tabs only
+async def notes_write(tab: str, content: str, mode: str = "append") -> str
+async def notes_revert(tab: str, steps: int = 1) -> str       # undo recent writes
 ```
 
 - `notes_read` returns only tabs with **Agent read** on (a named tab with it off
@@ -259,8 +259,10 @@ async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str 
   panel also has an **Undo** button that does the same client-side).
 - Writes land **live** in the Notes panel (it polls + adopts newer versions
   without clobbering unsaved edits).
-- `project_path` defaults to the current project (the repo root the Notes panel
-  shows); notes live at `<project>/.automaker/notes/workspace.json`.
+- Notes are **agent-global**: one persistent, instance-scoped notebook the
+  agent and the console's Notes panel share (not per-project). It lives at
+  `$NOTES_PATH` (default `/sandbox/notes/workspace.json`, falling back to
+  `~/.protoagent/notes/workspace.json`) — the same shape as the beads store.
 
 These bridge the Notes panel's permission toggles to the agent — without them,
 "what's on my Todo tab?" never reaches the notes (the agent would only see its

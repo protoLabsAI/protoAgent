@@ -12,14 +12,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ADR 0014 — A2A 0.3 → 1.0 migration plan.** Records the protoAgent-local plan
+  to replace the ~2,083-LOC hand-rolled `a2a_handler.py` with the official
+  `a2a-sdk` (`AgentExecutor`) + a shared `protolabs-a2a` conventions layer
+  (inherited from protoWorkstacean ADR-0006; tracked by #443). Plan-only — a
+  surface-to-1.0 map + sliced checklist; execution is blocked (the
+  `protolabs-a2a` package doesn't exist yet) and is a flag-day cutover, so no
+  code lands until those clear.
+- **Console data layer: TanStack Query + Suspense + ErrorBoundary (ADR 0013).**
+  The operator console adopts `@tanstack/react-query` (suspense mode) for its
+  reads — loading is a `<Suspense>` fallback, failures are caught by a contained
+  `<ErrorBoundary>` with a Retry button, mutations invalidate query keys, and
+  live surfaces use `refetchInterval` instead of hand-rolled polls. Replaces the
+  per-surface `useEffect` + busy-flag + `try/catch → global banner` plumbing.
+  This PR lands the foundation (`QueryClient` at the app root, a reusable
+  `ErrorBoundary` + `PanelError`/`PanelSkeleton`, `lib/queries.ts`) and migrates
+  the **Goals** sidebar panel as the reference implementation. Remaining
+  surfaces (beads, studio, system, activity) follow in later PRs; **Notes stays
+  imperative** (it owns edit/undo/autosave state) but is wrapped in the boundary.
+
+### Changed
+- **Goals moved into the right sidebar (Notes · Beads · Goals).** Goals were a
+  Studio tab; in practice a goal is *agent state* the operator watches and
+  clears, like the notebook and task board — so it now sits with the agent's
+  persistent working memory in the right panel (set with `/goal` in chat, as
+  before). Studio is now **Workflows · Run**. The right panel also dropped its
+  per-project selector + manual refresh button (notes/beads/goals are
+  agent-global and self-refresh). See [ADR 0009](docs/adr/0009-studio-control-stack.md).
+- **Notes are now agent-global, like beads.** The notes workspace is a single
+  persistent, instance-scoped store (`$NOTES_PATH`, default
+  `/sandbox/notes/workspace.json`) that the `notes_*` tools and the console
+  Notes panel share — no longer per-project (`.automaker/notes/` inside project
+  dirs is gone). Scattering the agent's notebook across whatever directory was
+  "the project" was confusing; the agent has one notebook now. The `notes_*`
+  tools and the notes/beads APIs drop their `project_path` argument (still
+  accepted-and-ignored on the HTTP layer for back-compat). The console's
+  right-panel **project selector is removed**: `operator.allowed_dirs` is purely
+  the filesystem security fence for file/shell tools, unrelated to notes/beads.
+
+### Added
+- **Workflow builder in the console (Sprint C).** The Workflows surface gains a
+  **＋ New workflow** builder — name + inputs + steps (id, subagent picker,
+  prompt, `depends_on` checkboxes) + output — that saves via `POST /api/workflows`
+  (validated) and is immediately runnable; a Delete action removes a recipe.
+  Authoring workflows is no longer YAML-file-only. **Completes the workflow-builder.**
+- **Workflow authoring API (Sprint C).** `POST /api/workflows` validates a recipe
+  (against the live subagent registry + DAG checks via `validate_recipe`) and
+  saves it to the writable workflows dir (immediately runnable); `DELETE
+  /api/workflows/{name}` removes it. Backs the upcoming console workflow-builder.
+- **Console Beads panel + API now use the in-process store (Sprint B).** The
+  operator beads endpoints go through a `_BeadsStoreAdapter` to the same
+  instance-scoped `BeadsStore` the agent uses — the agent and console share one
+  board, no `br` CLI / per-project `.beads/`. `project_path` is accepted but
+  ignored; the `br`-backed service stays as a fork fallback. **Completes the
+  beads-in-process work** (store + agent tools + console).
+- **Beads agent tools (Sprint B).** The lead agent gets `beads_create` /
+  `beads_list` / `beads_update` / `beads_close` over the in-process store — its
+  planning/task surface (the todo replacement). Booted instance-scoped in
+  `server.py` and threaded through `create_agent_graph(beads_store=…)`.
+- **In-process beads store (Sprint B).** A server-owned SQLite issue tracker
+  (`beads/store.py`, instance-scoped) — create/list/update/close/delete with the
+  beads issue shape — replacing the file-based `br` CLI. Foundation for the beads
+  agent tools + the console panel rewire (next slices).
 - **`request_user_input` HITL form tool (Sprint A, server side).** Generalizes
   `ask_human` from a free-text question to a **JSON-schema form** (multi-step =
   wizard): the agent calls `request_user_input(title, steps, description?)`, the
   turn pauses via the existing LangGraph `interrupt()` → A2A `input-required`, and
   the submitted form object is returned. The interrupt→`input_required` payload
   now passes richer shapes through (`{kind:"form", …}` alongside `{question}`) so
-  the console can render a form vs a prompt. (Console form-card + desktop
-  notification + the run_command approval gate are the next Sprint-A slices.)
+  the console can render a form vs a prompt. The input-required A2A status
+  frame now carries the payload as a `hitl-v1` **DataPart** (alongside the text),
+  so any client can render the form/approval, not just read the question.
+- **HITL forms render in the console + resume (Sprint A).** A paused
+  (input-required) turn surfaces its `hitl-v1` payload; the chat renders a
+  JSON-schema form (`request_user_input`) or a prompt (`ask_human`) above the
+  composer, and submitting resumes the turn on the same session.
+- **Desktop notification for HITL when hidden (Sprint A).** When a turn pauses
+  for input and the window isn't focused (the menu-bar-only desktop, or a
+  backgrounded tab), the console fires a native notification — via the Web
+  Notification API, bridged on desktop by `tauri-plugin-notification`
+  (capability `notification:default`).
+- **Shell (`run_command`) is now ON by default, behind HITL approval (Sprint A).**
+  `filesystem.allow_run` defaults true, but each command pauses for the operator
+  to **Approve / Deny** (`filesystem.run_requires_approval`, default on) — surfaced
+  as a `kind:"approval"` HITL request the console renders with the command shown
+  (and the A.3 desktop notification when hidden). Completes the "shell
+  on-behind-approval" posture (ADR 0007 update); a fork can drop the gate inside a
+  hardened container / trusted autonomous run.
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
   off to the app via the View Transitions API (clean cross-fade; plain unmount

@@ -29,8 +29,8 @@ class SubagentBatchRequest(BaseModel):
 
 
 class NotesSaveRequest(BaseModel):
-    project_path: str
     workspace: dict[str, Any]
+    project_path: str = ""  # ignored — notes are agent-global; kept for back-compat
 
 
 class ScheduleAddRequest(BaseModel):
@@ -51,12 +51,12 @@ class InboxAddRequest(BaseModel):
 
 
 class BeadsInitRequest(BaseModel):
-    project_path: str
+    project_path: str = ""  # ignored — the beads store is agent-global
     prefix: str | None = None
 
 
 class BeadsCreateRequest(BaseModel):
-    project_path: str
+    project_path: str = ""  # ignored — the beads store is agent-global
     title: str
     type: str = "task"
     priority: int = 2
@@ -65,7 +65,7 @@ class BeadsCreateRequest(BaseModel):
 
 
 class BeadsUpdateRequest(BaseModel):
-    project_path: str
+    project_path: str = ""  # ignored — the beads store is agent-global
     title: str | None = None
     description: str | None = None
     status: str | None = None
@@ -75,7 +75,7 @@ class BeadsUpdateRequest(BaseModel):
 
 
 class BeadsCloseRequest(BaseModel):
-    project_path: str
+    project_path: str = ""  # ignored — the beads store is agent-global
     reason: str | None = None
 
 
@@ -122,6 +122,49 @@ def _model_payload(model: BaseModel) -> dict[str, Any]:
     return model.dict()
 
 
+class _BeadsStoreAdapter:
+    """Adapts the in-process ``BeadsStore`` (Sprint B) to the BeadsService method
+    shape the beads routes call. ``project_path`` is ignored — the store is a
+    single instance-scoped board the agent + console share (no `br` CLI, no
+    per-project ``.beads/``)."""
+
+    def __init__(self, store: Any):
+        self._s = store
+
+    def status(self, project_path: str) -> dict[str, bool]:
+        return {"initialized": True}
+
+    def init(self, project_path: str, prefix: str | None = None) -> dict[str, bool]:
+        return {"initialized": True, "already_initialized": True}
+
+    def list(self, project_path: str) -> list[dict[str, Any]]:
+        return self._s.list()
+
+    def create(self, project_path: str, issue: dict[str, Any]) -> dict[str, Any]:
+        return self._s.create(
+            str(issue.get("title", "")),
+            description=issue.get("description") or "",
+            priority=issue.get("priority") if issue.get("priority") is not None else 2,
+            issue_type=issue.get("type") or issue.get("issue_type") or "task",
+            assignee=issue.get("assignee") or "",
+        )
+
+    def update(self, project_path: str, issue_id: str, update: dict[str, Any]) -> dict[str, Any]:
+        fields = {
+            k: v
+            for k, v in update.items()
+            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee")
+            and v is not None
+        }
+        return self._s.update(issue_id, **fields)
+
+    def close(self, project_path: str, issue_id: str, reason: str | None = None) -> dict[str, Any]:
+        return self._s.close(issue_id, reason=reason)
+
+    def delete(self, project_path: str, issue_id: str) -> dict[str, Any]:
+        return {"deleted": self._s.delete(issue_id)}
+
+
 def register_operator_routes(
     app,
     *,
@@ -130,6 +173,7 @@ def register_operator_routes(
     subagent_run: Callable[[dict[str, Any]], Awaitable[str]],
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
     beads_service: BeadsService | None = None,
+    beads_store: Any | None = None,
     notes_service: NotesService | None = None,
     allowed_dirs: Callable[[], list[str]] | None = None,
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
@@ -140,6 +184,8 @@ def register_operator_routes(
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     workflows_list: Callable[[], dict[str, Any]] | None = None,
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    workflows_save: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    workflows_delete: Callable[[str], dict[str, Any]] | None = None,
     events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     inbox_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -154,7 +200,13 @@ def register_operator_routes(
     list, so it re-reads live config after a settings reload. Injected
     services keep their own allowlist; it only wires the defaults.
     """
-    beads = beads_service or BeadsService(allowed_dirs=allowed_dirs)
+    # Prefer the in-process store (Sprint B) — the agent + console share one
+    # instance-scoped board; the `br` CLI service stays as a fallback for forks.
+    beads = (
+        _BeadsStoreAdapter(beads_store)
+        if beads_store is not None
+        else (beads_service or BeadsService(allowed_dirs=allowed_dirs))
+    )
     notes = notes_service or NotesService(allowed_dirs=allowed_dirs)
 
     @app.get("/api/runtime/status")
@@ -182,9 +234,9 @@ def register_operator_routes(
             raise _http_error(exc) from exc
 
     @app.get("/api/notes/workspace")
-    async def _notes_get(project_path: str):
+    async def _notes_get():
         try:
-            workspace = await asyncio.to_thread(notes.load_workspace, project_path)
+            workspace = await asyncio.to_thread(notes.load_workspace)
             return {"workspace": workspace}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -192,13 +244,13 @@ def register_operator_routes(
     @app.post("/api/notes/workspace")
     async def _notes_save(req: NotesSaveRequest):
         try:
-            await asyncio.to_thread(notes.save_workspace, req.project_path, req.workspace)
+            await asyncio.to_thread(notes.save_workspace, req.workspace)
             return {"ok": True}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @app.get("/api/beads/status")
-    async def _beads_status(project_path: str):
+    async def _beads_status(project_path: str = ""):
         try:
             return await asyncio.to_thread(beads.status, project_path)
         except Exception as exc:
@@ -212,7 +264,7 @@ def register_operator_routes(
             raise _http_error(exc) from exc
 
     @app.get("/api/beads/issues")
-    async def _beads_list(project_path: str):
+    async def _beads_list(project_path: str = ""):
         try:
             issues = await asyncio.to_thread(beads.list, project_path)
             return {"issues": issues}
@@ -246,7 +298,7 @@ def register_operator_routes(
             raise _http_error(exc) from exc
 
     @app.delete("/api/beads/issues/{issue_id}")
-    async def _beads_delete(issue_id: str, project_path: str):
+    async def _beads_delete(issue_id: str, project_path: str = ""):
         try:
             return await asyncio.to_thread(beads.delete, project_path, issue_id)
         except Exception as exc:
@@ -333,6 +385,26 @@ def register_operator_routes(
         async def _workflow_run(name: str, req: WorkflowRunRequest):
             try:
                 return await workflows_run(name, req.inputs)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    # Author a workflow from the console (validates, then saves to the writable
+    # workflows dir; immediately runnable). The body is the recipe dict.
+    if workflows_save is not None:
+
+        @app.post("/api/workflows")
+        async def _workflow_save(recipe: dict[str, Any]):
+            try:
+                return workflows_save(recipe)
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if workflows_delete is not None:
+
+        @app.delete("/api/workflows/{name}")
+        async def _workflow_delete(name: str):
+            try:
+                return workflows_delete(name)
             except Exception as exc:
                 raise _http_error(exc) from exc
 

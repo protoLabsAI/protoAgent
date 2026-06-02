@@ -141,10 +141,10 @@ Add these before the React UI depends on them:
 | `GET /api/subagents` | list `SUBAGENT_REGISTRY` entries, tool allowlists, max turns, enabled state |
 | `POST /api/subagents/run` | manually launch one subagent with `{session_id, type, description, prompt, emit_skill}` |
 | `POST /api/subagents/batch` | manually launch independent subagent jobs concurrently |
-| `GET /api/beads/status?project_path=` | detect initialized `.beads/` store through `br list --json` |
-| `POST /api/beads/init` | run `br init` idempotently |
-| `GET/POST /api/beads/issues` | list/create/update/close/delete issues through `br --json` |
-| `GET/POST /api/notes/workspace` | load/save the notes workspace file |
+| `GET /api/beads/status` | report the in-process beads store ready (agent-global; always initialized) |
+| `POST /api/beads/init` | no-op confirmation (the store is always ready) |
+| `GET/POST /api/beads/issues` | list/create/update/close/delete issues in the in-process store |
+| `GET/POST /api/notes/workspace` | load/save the agent-global notes workspace (no project scope) |
 | `GET/POST /api/scheduler/jobs`, `DELETE /api/scheduler/jobs/{id}` | list/create/cancel scheduled jobs over the active `SchedulerBackend` |
 | `GET /api/goals`, `DELETE /api/goals/{session_id}` | list goals across sessions / clear one (goals are *set* in chat via `/goal`) |
 | `GET /api/chat/commands` | registered slash commands (`{name, description, usage}`) for the composer's `/` autocomplete |
@@ -209,7 +209,7 @@ Use the Orbis slot pattern:
 
 - `stage`: main work area
 - `left-rail`: navigation
-- `right-panel`: notes/beads/details
+- `right-panel`: the agent's working memory — Notes / Beads / Goals
 - `overlay-top`: status and connection banners
 - `modal`: setup wizard, command palette
 
@@ -329,30 +329,45 @@ block React UI validation.
 7. **Tauri shell**: wrap `/app`, add tray/hotkey/hide-on-close.
 8. **Gradio retirement**: remove only after React covers setup, config, chat, diagnostics.
 
-## Directory Allowlist
+## Notes & beads are agent-global; the allowlist is the filesystem fence
 
-The beads and notes APIs take a `project_path` from the (free-text) UI, so the
-server — not the client — decides which directories they may read and write.
-`operator.allowed_dirs` in `config/langgraph-config.yaml` is that boundary:
+Notes and beads used to be **per-project** (the panels took a `project_path`
+from a free-text selector). That was confusing — the agent's notebook and task
+board would silently change depending on which directory was "the project". So
+both are now **agent-global**: one persistent, instance-scoped store each (notes
+at `$NOTES_PATH`, beads at `$BEADS_DB_PATH`), shared by the agent's tools and
+the console. There's no per-project `.automaker/notes/` or `.beads/` anymore,
+and the right panel has no project selector.
 
-- The protoAgent repo root is always allowed (the default project).
-- Add other project roots you operate on to `operator.allowed_dirs`, or edit
-  the list in-app from the setup wizard's **Workspace** step.
-- An out-of-allowlist path is rejected with a 400 before any subprocess or file
-  I/O. `resolve_project_path` resolves symlinks and `..` *before* the
-  containment check, so neither can escape an allowed root.
-- The runtime-status `project.allowed_dirs` field feeds the project-path
-  picker's suggestions; it does not relax the server-side check.
+`operator.allowed_dirs` in `config/langgraph-config.yaml` is now purely the
+**filesystem security fence** for the agent's file/shell tools — it has nothing
+to do with notes/beads:
 
-## Studio & Activity surfaces (the control stack)
+- The protoAgent repo root is always allowed (the default workspace).
+- Add other roots the agent may read/write to `operator.allowed_dirs`, or set
+  the working directory from the setup wizard's **Workspace** step (it's folded
+  into the allowlist automatically).
+- An out-of-allowlist path is rejected before any file I/O. `resolve_project_path`
+  resolves symlinks and `..` *before* the containment check, so neither can
+  escape an allowed root.
+- The runtime-status `project.allowed_dirs` field reports the fence; it does not
+  relax the server-side check.
 
-Per [ADR 0009](/adr/0009-studio-control-stack), the Studio tabs are ordered by
-altitude — **Goals** (autonomy: when to stop) → **Workflows** (orchestration: the
-order) → **Run** (execution: one focused worker, with the Single/Batch toggle).
-They're layers of one control loop, not peers. **Schedule** moved to **Activity**
+## Studio, Activity & the right sidebar (the control stack)
+
+Per [ADR 0009](/adr/0009-studio-control-stack), Studio holds the
+orchestration→execution layers — **Workflows** (the order) → **Run** (one
+focused worker, with the Single/Batch toggle). **Schedule** moved to **Activity**
 (Thread · Inbox · Schedule) — cron is a *trigger* ("when"), grouped with the
 inbox/event-bus (ADR 0003), not a Studio work-type. Skills moved to the
 **Knowledge ▸ Playbooks** surface (below) — they're retrieved memory, not work.
+
+The right sidebar is the agent's **persistent working memory** — **Notes**
+(its notebook) · **Beads** (its task board) · **Goals** (its autonomy layer:
+the standing conditions it works toward, set in chat with `/goal`). Goals used
+to be a Studio tab; they're really *agent state* the operator watches and
+clears, so they sit next to notes and beads. All three are agent-global
+(one instance-scoped store each), not per-project.
 
 ## Telemetry surface
 

@@ -14,6 +14,7 @@ from tools.fs_tools import Project, ProjectRegistry, build_fs_tools
 class _Cfg:
     filesystem_enabled: bool = True
     filesystem_allow_run: bool = False
+    filesystem_run_requires_approval: bool = True
     filesystem_projects: list = field(default_factory=list)
 
 
@@ -121,7 +122,13 @@ def test_run_command_absent_unless_allowed(workspace):
 
 def test_run_command_executes_in_project_cwd(workspace):
     _, a, _ = workspace
-    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}], filesystem_allow_run=True))
+    # Approval off here so the unit test exercises execution directly (the gate
+    # calls interrupt(), which needs a graph runtime — covered separately).
+    t = _tools(_Cfg(
+        filesystem_projects=[{"name": "a", "path": str(a)}],
+        filesystem_allow_run=True,
+        filesystem_run_requires_approval=False,
+    ))
     out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
     assert "README.md" in out
 
@@ -152,14 +159,37 @@ def test_config_filesystem_default_on_fenced_workspace(tmp_path, monkeypatch):
 
     cfg = LangGraphConfig()
     assert cfg.filesystem_enabled is True
-    # run_command (arbitrary argv, unsandboxed like execute_code) stays opt-in.
-    assert cfg.filesystem_allow_run is False
+    # run_command is ON now (arbitrary argv, unsandboxed) but gated by HITL
+    # approval by default — capable, not dangerous-by-default.
+    assert cfg.filesystem_allow_run is True
+    assert cfg.filesystem_run_requires_approval is True
     # No explicit projects → a single default `workspace` project, fenced + writable.
     monkeypatch.setenv("PROTOAGENT_WORKSPACE", str(tmp_path / "ws"))
     projects = cfg.effective_filesystem_projects(create=True)
     assert len(projects) == 1
     assert projects[0]["name"] == "workspace" and projects[0]["write"] is True
     assert (tmp_path / "ws").is_dir()  # created
+
+
+def test_approved_accepts_known_shapes():
+    from tools.fs_tools import _approved
+
+    for yes in ("approve", "approved", "Yes", " OK ", True, {"approved": True}, {"decision": "approve"}):
+        assert _approved(yes) is True, yes
+    for no in ("deny", "denied", "no", "", False, {"approved": False}, {"decision": "deny"}, None):
+        assert _approved(no) is False, no
+
+
+def test_run_command_present_by_default_gated(tmp_path, monkeypatch):
+    """Shell is on by default (allow_run) — run_command is built — and approval
+    is required by default."""
+    from graph.config import LangGraphConfig
+    from tools.fs_tools import build_fs_tools
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACE", str(tmp_path / "ws"))
+    cfg = LangGraphConfig()  # defaults: enabled + allow_run + requires_approval
+    names = {getattr(t, "name", "") for t in build_fs_tools(cfg)}
+    assert "run_command" in names
 
 
 def test_effective_projects_explicit_wins_and_disabled_is_empty(tmp_path):

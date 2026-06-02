@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from operator_api.notes import NotesService
 from operator_api.paths import resolve_project_path
 
 
@@ -77,19 +76,3 @@ def test_symlink_cannot_escape_allowed_root(tmp_path) -> None:
     # resolve() follows it before the containment check, so it's rejected.
     with pytest.raises(ValueError, match="outside the allowed"):
         resolve_project_path(str(link), [str(allowed)])
-
-
-def test_notes_service_enforces_allowlist(tmp_path) -> None:
-    allowed = tmp_path / "allowed"
-    other = tmp_path / "other"
-    allowed.mkdir()
-    other.mkdir()
-    service = NotesService(allowed_dirs=lambda: [str(allowed)])
-
-    # in-allowlist project saves/loads fine
-    service.save_workspace(str(allowed), {"version": 1})
-    assert service.load_workspace(str(allowed)) == {"version": 1}
-
-    # out-of-allowlist project is blocked before touching disk
-    with pytest.raises(ValueError, match="outside the allowed"):
-        service.workspace_path(str(other))

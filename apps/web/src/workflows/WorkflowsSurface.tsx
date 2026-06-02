@@ -1,8 +1,9 @@
-import { Loader2, Play, RefreshCw, Workflow } from "lucide-react";
+import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api";
 import type { WorkflowRunResult, WorkflowSummary } from "../lib/types";
+import { WorkflowBuilder } from "./WorkflowBuilder";
 
 // Operator surface for declarative workflow recipes (ADR 0002). Lists the
 // registered recipes, shows the selected one's step DAG, collects its inputs,
@@ -14,6 +15,8 @@ export function WorkflowsSurface({ onError }: { onError: (message: string) => vo
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<WorkflowRunResult | null>(null);
+  const [building, setBuilding] = useState(false);
+  const [subagentNames, setSubagentNames] = useState<string[]>([]);
 
   async function load() {
     try {
@@ -28,7 +31,22 @@ export function WorkflowsSurface({ onError }: { onError: (message: string) => vo
   }
   useEffect(() => {
     void load();
+    void api
+      .subagents()
+      .then((r) => setSubagentNames((r.subagents || []).map((s) => s.name).filter(Boolean)))
+      .catch(() => setSubagentNames([]));
   }, []);
+
+  async function removeWorkflow(name: string) {
+    onError("");
+    try {
+      await api.deleteWorkflow(name);
+      setSelected("");
+      await load();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   const current = useMemo(
     () => workflows?.find((w) => w.name === selected) ?? null,
@@ -80,12 +98,28 @@ export function WorkflowsSurface({ onError }: { onError: (message: string) => vo
             {workflows ? `${workflows.length} recipe${workflows.length === 1 ? "" : "s"}` : "loading…"}
           </p>
         </div>
-        <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
-          <RefreshCw size={16} />
-        </button>
+        <div className="panel-actions">
+          <button className="icon-button" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
+            <Plus size={16} />
+          </button>
+          <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="stage-body">
+        {building ? (
+          <WorkflowBuilder
+            subagents={subagentNames}
+            onCancel={() => setBuilding(false)}
+            onSaved={(name) => {
+              setBuilding(false);
+              void load().then(() => setSelected(name));
+            }}
+          />
+        ) : (
+          <>
         {workflows && !workflows.length ? (
           <div className="subagent-row">
             <div>
@@ -154,6 +188,14 @@ export function WorkflowsSurface({ onError }: { onError: (message: string) => vo
                 {running ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
                 Run
               </button>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => void removeWorkflow(current.name)}
+                title="Delete this workflow"
+              >
+                <Trash2 size={14} /> Delete
+              </button>
             </div>
           </>
         ) : null}
@@ -178,6 +220,8 @@ export function WorkflowsSurface({ onError }: { onError: (message: string) => vo
             ) : null}
           </div>
         ) : null}
+          </>
+        )}
       </div>
     </section>
   );

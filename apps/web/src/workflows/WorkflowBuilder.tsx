@@ -1,0 +1,207 @@
+import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
+import { useState } from "react";
+
+import { api } from "../lib/api";
+
+// Author a workflow recipe from the console (Sprint C): name + inputs + steps
+// (id, subagent, prompt, depends_on) + output → POST /api/workflows, which
+// validates against the live subagent registry + DAG and saves it (immediately
+// runnable). Step ordering/parallelism is expressed via depends_on; the server
+// is the source of truth for validity.
+
+type Step = { id: string; subagent: string; prompt: string; dependsOn: string[] };
+type Input = { name: string; required: boolean };
+
+export function WorkflowBuilder({
+  subagents,
+  onSaved,
+  onCancel,
+}: {
+  subagents: string[];
+  onSaved: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const fallback = subagents[0] || "researcher";
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [inputs, setInputs] = useState<Input[]>([{ name: "topic", required: true }]);
+  const [steps, setSteps] = useState<Step[]>([
+    { id: "step1", subagent: fallback, prompt: "", dependsOn: [] },
+  ]);
+  const [output, setOutput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const setStep = (i: number, patch: Partial<Step>) =>
+    setSteps((s) => s.map((st, j) => (j === i ? { ...st, ...patch } : st)));
+  const addStep = () =>
+    setSteps((s) => [...s, { id: `step${s.length + 1}`, subagent: fallback, prompt: "", dependsOn: [] }]);
+  const removeStep = (i: number) => setSteps((s) => s.filter((_, j) => j !== i));
+
+  const toggleDep = (i: number, depId: string) =>
+    setStep(i, {
+      dependsOn: steps[i].dependsOn.includes(depId)
+        ? steps[i].dependsOn.filter((d) => d !== depId)
+        : [...steps[i].dependsOn, depId],
+    });
+
+  const valid =
+    name.trim() !== "" &&
+    steps.length > 0 &&
+    steps.every((st) => st.id.trim() && st.subagent && st.prompt.trim());
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    const last = steps[steps.length - 1].id.trim();
+    const recipe: Record<string, unknown> = {
+      name: name.trim(),
+      version: 1,
+      inputs: inputs
+        .filter((i) => i.name.trim())
+        .map((i) => ({ name: i.name.trim(), required: i.required })),
+      steps: steps.map((st) => ({
+        id: st.id.trim(),
+        subagent: st.subagent,
+        prompt: st.prompt,
+        ...(st.dependsOn.length ? { depends_on: st.dependsOn } : {}),
+      })),
+      output: output.trim() || `{{steps.${last}.output}}`,
+    };
+    if (description.trim()) recipe.description = description.trim();
+    try {
+      const r = await api.saveWorkflow(recipe);
+      onSaved(r.name || name.trim());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="workflow-builder">
+      <div className="panel-header compact">
+        <h2>New workflow</h2>
+        <button className="icon-button" type="button" onClick={onCancel} title="Cancel">
+          <X size={16} />
+        </button>
+      </div>
+
+      <label className="field">
+        <span>Name *</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
+      </label>
+      <label className="field">
+        <span>Description</span>
+        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
+      </label>
+
+      <div className="builder-section">
+        <div className="builder-section-head">
+          <span>Inputs</span>
+          <button className="ghost-button" type="button" onClick={() => setInputs((x) => [...x, { name: "", required: false }])}>
+            <Plus size={13} /> add input
+          </button>
+        </div>
+        {inputs.map((inp, i) => (
+          <div className="builder-row" key={i}>
+            <input
+              value={inp.name}
+              placeholder="input name"
+              onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, name: e.target.value } : v)))}
+            />
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={inp.required}
+                onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, required: e.target.checked } : v)))}
+              />
+              <span>required</span>
+            </label>
+            <button className="icon-button" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="builder-section">
+        <div className="builder-section-head">
+          <span>Steps</span>
+          <button className="ghost-button" type="button" onClick={addStep}>
+            <Plus size={13} /> add step
+          </button>
+        </div>
+        {steps.map((step, i) => (
+          <div className="builder-step" key={i}>
+            <div className="builder-row">
+              <input
+                value={step.id}
+                placeholder="step id"
+                onChange={(e) => setStep(i, { id: e.target.value })}
+              />
+              <select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
+                {(subagents.length ? subagents : [fallback]).map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              {steps.length > 1 && (
+                <button className="icon-button" type="button" onClick={() => removeStep(i)} title="Remove step">
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+            <textarea
+              className="builder-prompt"
+              value={step.prompt}
+              rows={2}
+              placeholder="Prompt for this step — use {{inputs.x}} and {{steps.other.output}}"
+              onChange={(e) => setStep(i, { prompt: e.target.value })}
+            />
+            {steps.filter((_, j) => j !== i).length > 0 && (
+              <div className="builder-deps">
+                <span>depends on:</span>
+                {steps
+                  .filter((_, j) => j !== i)
+                  .map((other) => (
+                    <label className="checkbox-field" key={other.id}>
+                      <input
+                        type="checkbox"
+                        checked={step.dependsOn.includes(other.id)}
+                        onChange={() => toggleDep(i, other.id)}
+                      />
+                      <span>{other.id || "(unnamed)"}</span>
+                    </label>
+                  ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <label className="field">
+        <span>Output</span>
+        <input
+          value={output}
+          onChange={(e) => setOutput(e.target.value)}
+          placeholder={`default: {{steps.${steps[steps.length - 1].id.trim() || "lastStep"}.output}}`}
+        />
+      </label>
+
+      {error && <p className="workflow-failed">{error}</p>}
+
+      <div className="panel-actions">
+        <button className="ghost-button" type="button" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button className="primary-button" type="button" onClick={() => void save()} disabled={!valid || saving}>
+          {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+          Save workflow
+        </button>
+      </div>
+    </div>
+  );
+}

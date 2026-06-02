@@ -1,21 +1,18 @@
-"""Project-notes tools — let the agent read/write the operator console's Notes
-panel tabs, respecting each tab's per-tab ``agentRead`` / ``agentWrite``
-permission toggles.
+"""Notes tools — let the agent read/write the operator console's Notes panel
+tabs, respecting each tab's per-tab ``agentRead`` / ``agentWrite`` permission
+toggles.
 
-The Notes panel persists a workspace at ``<project>/.automaker/notes/workspace.json``
-(see ``operator_api/notes.py``). Each tab carries
-``permissions: {agentRead, agentWrite}`` — the operator decides which tabs the
-agent may see or edit. These tools are the bridge that makes those toggles
-mean something; without them the agent can't see the operator's notes at all
-(it would otherwise confuse them with its private ``memory_*`` store).
-
-The project defaults to the server's working directory (the repo root the Notes
-panel shows by default); pass ``project_path`` to target another project.
+The Notes panel persists a single, agent-global workspace (see
+``operator_api/notes.py``) — one notebook the agent and the console share, not
+a per-project file. Each tab carries ``permissions: {agentRead, agentWrite}`` —
+the operator decides which tabs the agent may see or edit. These tools are the
+bridge that makes those toggles mean something; without them the agent can't
+see the operator's notes at all (it would otherwise confuse them with its
+private ``memory_*`` store).
 """
 
 from __future__ import annotations
 
-import os
 import time
 
 from langchain_core.tools import tool
@@ -23,10 +20,6 @@ from langchain_core.tools import tool
 from operator_api.notes import NotesService
 
 _notes = NotesService()
-
-
-def _project(project_path: str) -> str:
-    return project_path.strip() or os.getcwd()
 
 
 def _find_tab(workspace: dict, name: str):
@@ -39,20 +32,16 @@ def _find_tab(workspace: dict, name: str):
 
 
 @tool
-async def notes_list(project_path: str = "") -> str:
+async def notes_list() -> str:
     """List the operator's Notes panel tabs and which ones the agent may
     read/write. Use this to discover the operator's notes (e.g. a "Todo" tab)
     before reading them. These are the human-curated notes in the console's
     Notes panel — distinct from your private ``memory_*`` store.
-
-    Args:
-        project_path: Project whose notes to list. Defaults to the current
-            project (the repo root shown in the Notes panel).
     """
-    ws = _notes.load_workspace(_project(project_path))
+    ws = _notes.load_workspace()
     tabs = ws.get("tabs") or {}
     if not tabs:
-        return "No notes tabs exist for this project."
+        return "No notes tabs exist yet."
     order = ws.get("tabOrder") or list(tabs.keys())
     lines = [f"{len(tabs)} notes tab(s):"]
     for tid in order:
@@ -69,7 +58,7 @@ async def notes_list(project_path: str = "") -> str:
 
 
 @tool
-async def notes_read(tab: str = "", project_path: str = "") -> str:
+async def notes_read(tab: str = "") -> str:
     """Read the operator's Notes panel tab content (only tabs the operator has
     marked agent-readable). Use this when the operator asks what's in their
     notes / a specific tab (e.g. "what's on my Todo tab?").
@@ -77,9 +66,8 @@ async def notes_read(tab: str = "", project_path: str = "") -> str:
     Args:
         tab: Tab name to read (case-insensitive). Leave blank to read every
             agent-readable tab.
-        project_path: Project whose notes to read. Defaults to the current project.
     """
-    ws = _notes.load_workspace(_project(project_path))
+    ws = _notes.load_workspace()
     tabs = ws.get("tabs") or {}
 
     if tab.strip():
@@ -104,7 +92,7 @@ async def notes_read(tab: str = "", project_path: str = "") -> str:
 
 
 @tool
-async def notes_write(tab: str, content: str, mode: str = "append", project_path: str = "") -> str:
+async def notes_write(tab: str, content: str, mode: str = "append") -> str:
     """Write to an operator Notes panel tab (only tabs the operator has marked
     agent-writable). Use this to record something into the operator's notes
     (e.g. add an item to their Todo tab).
@@ -113,10 +101,8 @@ async def notes_write(tab: str, content: str, mode: str = "append", project_path
         tab: Tab name to write (case-insensitive). Must already exist.
         content: Text to write.
         mode: "append" (default — add to the end on a new line) or "replace".
-        project_path: Project whose notes to write. Defaults to the current project.
     """
-    proj = _project(project_path)
-    ws = _notes.load_workspace(proj)
+    ws = _notes.load_workspace()
     tid, found = _find_tab(ws, tab)
     if found is None:
         return f"No notes tab named {tab!r}. Use notes_list to see available tabs."
@@ -138,14 +124,14 @@ async def notes_write(tab: str, content: str, mode: str = "append", project_path
     ws["workspaceVersion"] = int(ws.get("workspaceVersion", 0)) + 1
 
     try:
-        _notes.save_workspace(proj, ws)
+        _notes.save_workspace(ws)
     except Exception as e:  # noqa: BLE001 — surface a readable tool error
         return f"Error: could not save notes: {e}"
     return f"Updated the {found.get('name')!r} tab ({mode}). It now has {len(new_content)} chars."
 
 
 @tool
-async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str:
+async def notes_revert(tab: str, steps: int = 1) -> str:
     """Undo recent writes to a Notes tab, restoring an earlier version.
 
     Use when asked to undo/revert a change to a tab. Reverts ``steps`` versions
@@ -154,10 +140,8 @@ async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str:
     Args:
         tab: Tab name (case-insensitive).
         steps: How many versions to roll back (default 1).
-        project_path: Project whose notes to revert. Defaults to the current project.
     """
-    proj = _project(project_path)
-    ws = _notes.load_workspace(proj)
+    ws = _notes.load_workspace()
     _tid, found = _find_tab(ws, tab)
     if found is None:
         return f"No notes tab named {tab!r}. Use notes_list to see available tabs."
@@ -179,7 +163,7 @@ async def notes_revert(tab: str, steps: int = 1, project_path: str = "") -> str:
     ws["workspaceVersion"] = int(ws.get("workspaceVersion", 0)) + 1
 
     try:
-        _notes.save_workspace(proj, ws)
+        _notes.save_workspace(ws)
     except Exception as e:  # noqa: BLE001
         return f"Error: could not save notes: {e}"
     return f"Reverted the {found.get('name')!r} tab {steps} version(s) back ({len(restored)} chars)."

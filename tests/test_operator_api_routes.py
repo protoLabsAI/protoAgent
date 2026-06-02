@@ -10,11 +10,11 @@ class _Notes:
     def __init__(self) -> None:
         self.saved = None
 
-    def load_workspace(self, project_path: str):
-        return {"project_path": project_path}
+    def load_workspace(self):
+        return {"loaded": True}
 
-    def save_workspace(self, project_path: str, workspace):
-        self.saved = (project_path, workspace)
+    def save_workspace(self, workspace):
+        self.saved = workspace
 
 
 class _Beads:
@@ -81,17 +81,13 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     )
     assert batch.json()["output"] == "batch:2"
 
-    notes_path = str(tmp_path)
-    assert client.get("/api/notes/workspace", params={"project_path": notes_path}).json() == {
-        "workspace": {"project_path": notes_path},
-    }
-    save = client.post(
-        "/api/notes/workspace",
-        json={"project_path": notes_path, "workspace": {"tabs": {}}},
-    )
+    # Notes are agent-global — no project_path in the request or response.
+    assert client.get("/api/notes/workspace").json() == {"workspace": {"loaded": True}}
+    save = client.post("/api/notes/workspace", json={"workspace": {"tabs": {}}})
     assert save.json() == {"ok": True}
-    assert notes.saved == (notes_path, {"tabs": {}})
+    assert notes.saved == {"tabs": {}}
 
+    notes_path = str(tmp_path)
     assert client.get("/api/beads/status", params={"project_path": notes_path}).json() == {
         "initialized": True,
         "project_path": notes_path,
@@ -207,3 +203,55 @@ def test_chat_commands_absent_when_not_wired() -> None:
         subagent_batch=lambda r: None,
     )
     assert TestClient(app).get("/api/chat/commands").status_code == 404
+
+
+def test_workflow_save_validates_saves_and_deletes() -> None:
+    """POST /api/workflows validates the recipe (against known subagents) then
+    saves it; an unknown-subagent recipe is rejected; DELETE removes it."""
+    from graph.workflows.engine import validate_recipe
+
+    saved: dict = {}
+
+    def _save(recipe):
+        errors = validate_recipe(recipe, known_subagents={"researcher"})
+        if errors:
+            raise ValueError("; ".join(errors))
+        saved[recipe["name"]] = recipe
+        return {"saved": True, "name": recipe["name"]}
+
+    def _delete(name):
+        return {"deleted": saved.pop(name, None) is not None}
+
+    async def _run(req):
+        return "ok"
+
+    async def _batch(req):
+        return "ok"
+
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=_run,
+        subagent_batch=_batch,
+        workflows_save=_save,
+        workflows_delete=_delete,
+    )
+    client = TestClient(app)
+
+    good = {
+        "name": "demo",
+        "inputs": [{"name": "topic", "required": True}],
+        "steps": [{"id": "s1", "subagent": "researcher", "prompt": "{{inputs.topic}}"}],
+        "output": "{{steps.s1.output}}",
+    }
+    r = client.post("/api/workflows", json=good)
+    assert r.status_code == 200 and r.json()["saved"] is True
+    assert "demo" in saved
+
+    bad = dict(good, name="bad", steps=[{"id": "s1", "subagent": "ghost", "prompt": "x"}])
+    assert client.post("/api/workflows", json=bad).status_code >= 400
+
+    assert client.delete("/api/workflows/demo").json()["deleted"] is True
+    assert client.delete("/api/workflows/demo").json()["deleted"] is False

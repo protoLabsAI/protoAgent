@@ -10,7 +10,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { ConfirmDialog } from "../app/ConfirmDialog";
-import type { ChatMessage, SlashCommand, ToolCall } from "../lib/types";
+import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
+import { HitlForm } from "./HitlForm";
+import { notifyIfHidden } from "../lib/notify";
 import { chatStore, useChatState } from "./chat-store";
 import { Markdown } from "./LazyMarkdown";
 import { ToolCalls } from "./ToolCalls";
@@ -149,6 +151,7 @@ function ChatSessionSlot({
   const [draft, setDraft] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [taskId, setTaskId] = useState("");
+  const [hitl, setHitl] = useState<HitlPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -205,10 +208,25 @@ function ChatSessionSlot({
 
   async function send() {
     if (!session || !canSend) return;
+    const content = draft.trim();
+    setDraft("");
+    void runTurn(content);
+  }
+
+  // Resume a paused (input-required) turn: submitting the HITL form/question
+  // sends the response as a follow-up on the same session — the server feeds it
+  // to the agent via Command(resume=…). A form response is serialized to JSON.
+  async function resumeHitl(response: Record<string, unknown> | string) {
+    setHitl(null);
+    void runTurn(typeof response === "string" ? response : JSON.stringify(response));
+  }
+
+  async function runTurn(content: string) {
+    if (!session || !content) return;
     const userMessage: ChatMessage = {
       id: messageId(),
       role: "user",
-      content: draft.trim(),
+      content,
       createdAt: Date.now(),
       status: "done",
     };
@@ -235,6 +253,15 @@ function ChatSessionSlot({
         signal: controller.signal,
         onTaskId: setTaskId,
         onStatus: setStatusMessage,
+        onInputRequired: (payload) => {
+          setHitl(payload);
+          // Alert natively if the window is hidden/unfocused (menu-bar-only
+          // desktop, or a backgrounded tab) so the form isn't missed.
+          notifyIfHidden(
+            payload.title || "protoAgent needs your input",
+            payload.question || payload.description,
+          );
+        },
         onText: (text, append) => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
@@ -390,6 +417,15 @@ function ChatSessionSlot({
           ))
         )}
       </div>
+
+      {hitl && (
+        <HitlForm
+          payload={hitl}
+          busy={status === "streaming"}
+          onSubmit={resumeHitl}
+          onCancel={() => setHitl(null)}
+        />
+      )}
 
       <div className="composer-wrap">
         {status === "streaming" && statusMessage ? (

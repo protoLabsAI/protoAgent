@@ -43,8 +43,10 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { BeadsIssue, GoalState, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
+import type { BeadsIssue, NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
 import { ScrollArea } from "./ScrollArea";
+import { StatusPill, type StatusTone } from "./StatusPill";
+import { GoalsPanel } from "./GoalsPanel";
 import { SetupWizard } from "../setup/SetupWizard";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
@@ -52,14 +54,15 @@ import { SetupWizard } from "../setup/SetupWizard";
 type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
 // Studio = the "make the agent do work" surface, ordered by altitude
 // (ADR 0009): goals (autonomy) → workflows (orchestration) → run (execution).
-type StudioTab = "goals" | "workflows" | "run";
+type StudioTab = "workflows" | "run";
 type SystemTab = "runtime" | "telemetry" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox" | "schedule";
-type RightPanel = "notes" | "beads";
+// The agent's persistent working memory, grouped in the right sidebar:
+// its notebook, its task board, and its goals.
+type RightPanel = "notes" | "beads" | "goals";
 type SubagentMode = "single" | "batch";
-type StatusTone = "success" | "warning" | "error" | "muted";
 
 type BatchTask = {
   id: string;
@@ -233,7 +236,7 @@ function groupIssues(issues: BeadsIssue[]) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
-  const [studioTab, setStudioTab] = useState<StudioTab>("goals");
+  const [studioTab, setStudioTab] = useState<StudioTab>("workflows");
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -280,8 +283,6 @@ export function App() {
   const [scheduleJobId, setScheduleJobId] = useState("");
   const [scheduleBusy, setScheduleBusy] = useState(false);
 
-  const [goalsList, setGoalsList] = useState<GoalState[]>([]);
-  const [goalsBusy, setGoalsBusy] = useState(false);
 
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
   const canUndoNote = Boolean(
@@ -343,39 +344,19 @@ export function App() {
     }
   }
 
-  async function refreshGoals() {
-    try {
-      const payload = await api.goals();
-      setGoalsList(payload.goals);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }
-
-  async function clearGoal(sessionId: string) {
-    if (goalsBusy) return;
-    setGoalsBusy(true);
-    try {
-      await api.clearGoal(sessionId);
-      await refreshGoals();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setGoalsBusy(false);
-    }
-  }
-
-  async function refreshProjectState(path = projectPath) {
-    if (!path.trim()) return;
+  // Notes + Beads are agent-global (one persistent store each) — not scoped to
+  // a project. The project / allowed-dirs list is purely the filesystem
+  // security fence; it doesn't gate the agent's notebook or task board.
+  async function refreshProjectState() {
     const [notesPayload, beadsStatus] = await Promise.all([
-      api.getNotes(path),
-      api.beadsStatus(path),
+      api.getNotes(),
+      api.beadsStatus(),
     ]);
     setWorkspace(notesPayload.workspace);
     setNotesDirty(false);
     setBeadsReady(beadsStatus.initialized);
     if (beadsStatus.initialized) {
-      const issuesPayload = await api.beadsIssues(path);
+      const issuesPayload = await api.beadsIssues();
       setBeadsIssues(issuesPayload.issues);
     } else {
       setBeadsIssues([]);
@@ -387,24 +368,13 @@ export function App() {
     setError("");
     try {
       const runtimePayload = await refreshRuntime();
-      const serverDefault = runtimePayload.project.path;
-      let nextProjectPath = projectPath.trim() || serverDefault;
-      try {
-        await refreshProjectState(nextProjectPath);
-      } catch (projErr) {
-        // The persisted project path is stale/invalid — e.g. a previous frozen
-        // (desktop) run stored a PyInstaller _MEI temp dir that no longer
-        // exists. Self-heal by adopting the server's current default project.
-        if (serverDefault && nextProjectPath !== serverDefault) {
-          nextProjectPath = serverDefault;
-          await refreshProjectState(nextProjectPath);
-        } else {
-          throw projErr;
-        }
+      // Adopt the server's default project as the fs working dir if none is
+      // set (it seeds the setup wizard's allowed-dirs); notes/beads load
+      // globally regardless.
+      if (!projectPath.trim() && runtimePayload.project.path) {
+        setProjectPath(runtimePayload.project.path);
       }
-      if (nextProjectPath && nextProjectPath !== projectPath) {
-        setProjectPath(nextProjectPath);
-      }
+      await refreshProjectState();
       setStatus("ready");
     } catch (exc) {
       setStatus("error");
@@ -436,23 +406,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!notesDirty || !workspace || !projectPath.trim()) return;
+    if (!notesDirty || !workspace) return;
     const handle = window.setTimeout(() => {
       void saveWorkspaceSnapshot(workspace, { quiet: true });
     }, 800);
     return () => window.clearTimeout(handle);
-  }, [notesBusy, notesDirty, projectPath, workspace]);
+  }, [notesBusy, notesDirty, workspace]);
 
   // Live notes refresh — the agent (via notes_write) or another tab can change
   // the workspace on disk. Poll while the Notes panel is open and adopt newer
   // server state, but never clobber the user's unsaved edits (notesDirty) and
   // keep their active tab selection.
   useEffect(() => {
-    if (rightPanel !== "notes" || !projectPath.trim()) return;
+    if (rightPanel !== "notes") return;
     const handle = window.setInterval(async () => {
       if (notesDirty || notesBusy) return;
       try {
-        const { workspace: latest } = await api.getNotes(projectPath);
+        const { workspace: latest } = await api.getNotes();
         setWorkspace((current) => {
           if (!current || latest.workspaceVersion <= current.workspaceVersion) return current;
           const keepActive = latest.tabs[current.activeTabId] ? current.activeTabId : latest.activeTabId;
@@ -463,12 +433,14 @@ export function App() {
       }
     }, 4000);
     return () => window.clearInterval(handle);
-  }, [rightPanel, projectPath, notesDirty, notesBusy]);
+  }, [rightPanel, notesDirty, notesBusy]);
 
   useEffect(() => {
     if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
-    if (surface === "studio" && studioTab === "goals") void refreshGoals();
-  }, [surface, studioTab, activityTab]);
+  }, [surface, activityTab]);
+
+  // Goals now own their data via TanStack Query inside <GoalsPanel> (ADR 0013) —
+  // no App-level fetch/poll here.
 
   // Open the server→client event stream (ADR 0003) and track its connection
   // state for the "live" indicator. Surfaces subscribe to named events.
@@ -553,19 +525,6 @@ export function App() {
     setBatchTasks((tasks) => (tasks.length > 1 ? tasks.filter((task) => task.id !== id) : tasks));
   }
 
-  async function loadProject() {
-    setNotesBusy(true);
-    setBeadsBusy(true);
-    setError("");
-    try {
-      await refreshProjectState();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setNotesBusy(false);
-      setBeadsBusy(false);
-    }
-  }
 
   function updateWorkspace(nextWorkspace: NotesWorkspace) {
     setWorkspace(nextWorkspace);
@@ -601,7 +560,7 @@ export function App() {
   }
 
   function saveActiveNote(content: string) {
-    if (!workspace || !activeTab || !projectPath.trim()) return;
+    if (!workspace || !activeTab) return;
     const nextWorkspace: NotesWorkspace = {
       ...workspace,
       workspaceVersion: workspace.workspaceVersion + 1,
@@ -626,11 +585,11 @@ export function App() {
     snapshot: NotesWorkspace,
     options: { quiet?: boolean } = {},
   ) {
-    if (!projectPath.trim() || notesBusy) return;
+    if (notesBusy) return;
     setNotesBusy(true);
     if (!options.quiet) setError("");
     try {
-      await api.saveNotes(projectPath, snapshot);
+      await api.saveNotes(snapshot);
       setNotesDirty(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -714,11 +673,11 @@ export function App() {
   }
 
   async function initBeads() {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      await api.initBeads(projectPath);
+      await api.initBeads();
       await refreshProjectState();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -729,11 +688,11 @@ export function App() {
 
   async function createIssue() {
     const title = issueDraft.title.trim();
-    if (!projectPath.trim() || !title || beadsBusy) return;
+    if (!title || beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.createIssue(projectPath, {
+      const response = await api.createIssue({
         title,
         type: issueDraft.type,
         priority: issueDraft.priority,
@@ -765,11 +724,11 @@ export function App() {
   }
 
   async function updateIssueStatus(issue: BeadsIssue, nextStatus: string) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.updateIssue(projectPath, issue.id, { status: nextStatus });
+      const response = await api.updateIssue(issue.id, { status: nextStatus });
       replaceIssue(response.issue.id ? response.issue : { ...issue, status: nextStatus });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -779,11 +738,11 @@ export function App() {
   }
 
   async function closeIssue(issue: BeadsIssue) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.closeIssue(projectPath, issue.id);
+      const response = await api.closeIssue(issue.id);
       replaceIssue(response.issue.id ? response.issue : { ...issue, status: "closed" });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -793,7 +752,7 @@ export function App() {
   }
 
   function deleteIssue(issue: BeadsIssue) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setConfirmState({
       title: `Delete ${issue.id}?`,
       message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the beads store.`,
@@ -803,11 +762,10 @@ export function App() {
   }
 
   async function doDeleteIssue(issue: BeadsIssue) {
-    if (!projectPath.trim()) return;
     setBeadsBusy(true);
     setError("");
     try {
-      await api.deleteIssue(projectPath, issue.id);
+      await api.deleteIssue(issue.id);
       setBeadsIssues((items) => items.filter((item) => item.id !== issue.id));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -965,11 +923,9 @@ export function App() {
             </div>
           ) : null}
           {surface === "studio" ? (
-            // Ordered by altitude (ADR 0009): outcome → recipe → worker.
+            // Orchestration → execution (ADR 0009). Goals (the autonomy layer)
+            // moved to the right sidebar alongside the agent's notes + beads.
             <div className="stage-subnav">
-              <button className={studioTab === "goals" ? "active" : ""} onClick={() => setStudioTab("goals")}>
-                <Target size={15} /> Goals
-              </button>
               <button className={studioTab === "workflows" ? "active" : ""} onClick={() => setStudioTab("workflows")}>
                 <Workflow size={15} /> Workflows
               </button>
@@ -1203,67 +1159,6 @@ export function App() {
             </section>
           ) : null}
 
-          {surface === "studio" && studioTab === "goals" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <div>
-                  <h1>Goals</h1>
-                  <p className="panel-kicker">{goalsList.length} goal{goalsList.length === 1 ? "" : "s"}</p>
-                </div>
-                <button className="icon-button" type="button" onClick={() => void refreshGoals()} title="Refresh">
-                  {goalsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-                </button>
-              </div>
-              <div className="stage-body">
-                <div className="subagent-list">
-                  {goalsList.length ? (
-                    goalsList.map((goal) => (
-                      <div className="subagent-row" key={goal.session_id}>
-                        <div>
-                          <strong>{goal.condition || goal.session_id}</strong>
-                          <span>
-                            {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}
-                            {goal.last_reason ? ` · ${goal.last_reason.length > 70 ? `${goal.last_reason.slice(0, 70)}…` : goal.last_reason}` : ""}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <StatusPill
-                            label={goal.status}
-                            tone={
-                              goal.status === "achieved"
-                                ? "success"
-                                : goal.status === "active"
-                                  ? "warning"
-                                  : goal.status === "unachievable"
-                                    ? "error"
-                                    : "muted"
-                            }
-                          />
-                          <button
-                            className="icon-button"
-                            type="button"
-                            onClick={() => void clearGoal(goal.session_id)}
-                            disabled={goalsBusy}
-                            title="Clear goal"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="subagent-row">
-                      <div>
-                        <strong>No goals</strong>
-                        <span>set one in chat with <code>/goal …</code></span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
-          ) : null}
-
           {surface === "system" && systemTab === "runtime" ? (
             <section className="panel stage-panel">
               <div className="panel-header">
@@ -1375,22 +1270,6 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          <div className="project-bar">
-            <input
-              value={projectPath}
-              onChange={(event) => setProjectPath(event.target.value)}
-              placeholder="Project path"
-              list="operator-allowed-dirs"
-            />
-            <datalist id="operator-allowed-dirs">
-              {(runtime?.project.allowed_dirs || []).map((dir) => (
-                <option key={dir} value={dir} />
-              ))}
-            </datalist>
-            <button className="icon-button" type="button" onClick={() => void loadProject()} title="Load project">
-              {notesBusy || beadsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            </button>
-          </div>
           <div className="segmented">
             <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
               <FileText size={15} />
@@ -1399,6 +1278,10 @@ export function App() {
             <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
               <Boxes size={15} />
               Beads
+            </button>
+            <button type="button" className={rightPanel === "goals" ? "active" : ""} onClick={() => setRightPanel("goals")}>
+              <Target size={15} />
+              Goals
             </button>
           </div>
 
@@ -1656,6 +1539,8 @@ export function App() {
               </ScrollArea>
             </section>
           ) : null}
+
+          {rightPanel === "goals" ? <GoalsPanel /> : null}
         </aside>
       </div>
 
@@ -1713,10 +1598,6 @@ export function App() {
       />
     </div>
   );
-}
-
-function StatusPill({ label, tone }: { label: string; tone: StatusTone }) {
-  return <span className={`status-pill ${tone}`}>{label}</span>;
 }
 
 function RailButton({

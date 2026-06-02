@@ -78,6 +78,7 @@ _skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
 _workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
 _telemetry_store = None  # TelemetryStore (per-turn cost/latency rollups, ADR 0006), or None.
 _inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
+_beads_store = None    # BeadsStore — in-process issue tracker (Sprint B), or None.
 _storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
@@ -260,8 +261,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     _workflow_registry = _build_workflow_registry(_graph_config)
 
-    global _inbox_store, _storm_guard
+    global _inbox_store, _storm_guard, _beads_store
     _inbox_store = _build_inbox_store(_graph_config)
+    from beads import BeadsStore
+    _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
     if _storm_guard is None:
         from inbox import StormGuard
         _storm_guard = StormGuard()
@@ -270,7 +273,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
         skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
         checkpointer=_checkpointer, workflow_registry=_workflow_registry,
-        inbox_store=_inbox_store,
+        inbox_store=_inbox_store, beads_store=_beads_store,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -2147,6 +2150,39 @@ def _main():
             name=name, inputs=inputs or {},
         )
 
+    def _operator_workflow_save(recipe: dict) -> dict:
+        # Validate against the live subagent registry before writing, so a
+        # UI-authored recipe can't reference an unknown subagent / bad DAG.
+        if _workflow_registry is None:
+            raise RuntimeError("workflows are not available")
+        from graph.subagents.config import SUBAGENT_REGISTRY
+        from graph.workflows.engine import validate_recipe
+        errors = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
+        if errors:
+            raise ValueError("invalid recipe: " + "; ".join(errors))
+        path = _workflow_registry.save(recipe)
+        return {"saved": True, "name": recipe.get("name"), "path": path}
+
+    def _operator_workflow_delete(name: str) -> dict:
+        if _workflow_registry is None:
+            raise RuntimeError("workflows are not available")
+        return {"deleted": _workflow_registry.delete(name)}
+
+    def _publish_activity_terminal(record) -> None:
+        """Terminal hook (ADR 0003): when a turn in the Activity thread completes,
+        push the assistant's visible output to the event bus so connected
+        consoles append it live. No-op for every other context."""
+        if getattr(record, "context_id", "") != ACTIVITY_CONTEXT:
+            return
+        raw = getattr(record, "accumulated_text", "") or ""
+        text = extract_output(raw) or raw
+        if not text.strip():
+            return
+        _event_bus.publish(
+            "activity.message",
+            {"role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT},
+        )
+
     async def _operator_activity_list() -> dict:
         """Return the Activity thread's message history from the checkpointer
         (ADR 0003). The console loads this when opening the Activity surface."""
@@ -2280,6 +2316,7 @@ def _main():
         subagent_list=_operator_subagent_list,
         subagent_run=_operator_subagent_run,
         subagent_batch=_operator_subagent_batch,
+        beads_store=_beads_store,
         allowed_dirs=_operator_allowed_dirs,
         scheduler_list=_operator_scheduler_list,
         scheduler_add=_operator_scheduler_add,
@@ -2289,6 +2326,8 @@ def _main():
         chat_commands=_operator_chat_commands,
         workflows_list=_operator_workflows_list,
         workflows_run=_operator_workflow_run,
+        workflows_save=_operator_workflow_save,
+        workflows_delete=_operator_workflow_delete,
         events_subscribe=_event_bus.subscribe,
         activity_list=_operator_activity_list,
         inbox_add=_operator_inbox_add,

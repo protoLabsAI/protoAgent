@@ -85,6 +85,13 @@ collapsible per-step breakdown, and flags any steps that failed (failures are
 recorded inline so the rest of the DAG still runs). It's backed by
 `GET /api/workflows` and `POST /api/workflows/{name}/run`.
 
+**Author one from the console** — the surface's **＋** opens a builder: name +
+inputs + steps (id, a subagent picker, prompt, and `depends_on` checkboxes for
+ordering/parallelism) + output. Saving validates the recipe against the live
+subagent registry + DAG and writes it to the workflows dir (immediately
+runnable) — `POST /api/workflows`; `DELETE /api/workflows/{name}` removes it.
+Same `WorkflowRegistry.save` path the agent's `save_workflow` tool uses.
+
 ## Deep research with adversarial review
 
 `deep-research.yaml` is the heavyweight, decision-grade counterpart to a single
