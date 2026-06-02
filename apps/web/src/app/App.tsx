@@ -872,11 +872,10 @@ export function App() {
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
-      {/* macOS desktop: a transparent strip behind the native traffic lights
-          that drags the window. The app content is pushed below it (the topbar
-          sits under the stoplights) so there's a clear area to grab. */}
-      {isTauriMac && <div className="tauri-drag-strip" data-tauri-drag-region />}
-      <header className="topbar">
+      {/* macOS desktop: the topbar IS the window's drag region (its brand insets
+          right of the native traffic lights — see `.is-tauri-mac .topbar`).
+          Interactive children (the status dot) stay clickable; harmless on web. */}
+      <header className="topbar" data-tauri-drag-region>
         <div className="brand-lockup">
           <img src="/app/protolabs-icon-outline.svg" alt="" className="brand-mark" />
           <div>
