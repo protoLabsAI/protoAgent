@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A2A agent card advertises a reachable interface URL.** The card's
+  `supportedInterfaces[].url` was built from `f"{agent_name()}:7870"` — i.e. the
+  *agent name* as the hostname plus a hardcoded port (`http://Gina:7870/a2a`),
+  unreachable for any peer and wrong for the dynamic-port desktop sidecar. It's
+  now `_a2a_card_url()`: an explicit **`A2A_PUBLIC_URL`** (set this for deployed
+  agents — the real external base) or, unset, the actually-bound loopback port
+  (`http://127.0.0.1:<port>/a2a`, correct for local/desktop).
+
 ### Changed
 - **Runtime surface + shell runtime read migrated — ADR 0013 console-wide
   migration complete.** System → Runtime extracted into `RuntimePanel`
