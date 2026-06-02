@@ -3,11 +3,9 @@ import {
   BarChart3,
   BookMarked,
   BookOpen,
-  Bot,
   Boxes,
   CalendarClock,
   CircleAlert,
-  Database,
   FileText,
   Gauge,
   Github,
@@ -19,13 +17,13 @@ import {
   Plus,
   Save,
   Settings2,
-  Sparkles,
   Target,
   Undo2,
   Trash2,
   Workflow,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { IntroSplash } from "./IntroSplash";
 
@@ -39,13 +37,15 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { NotesWorkspace, RuntimeStatus, Subagent } from "../lib/types";
+import type { NotesWorkspace } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
 import { RunPanel } from "./RunPanel";
+import { RuntimePanel } from "./RuntimePanel";
 import { SetupWizard } from "../setup/SetupWizard";
+import { runtimeStatusQuery } from "../lib/queries";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -98,15 +98,6 @@ function useLocalStorageState(key: string, fallback: string) {
   return [value, setValue] as const;
 }
 
-function formatBool(value: boolean) {
-  return value ? "on" : "off";
-}
-
-function statusTone(ok?: boolean) {
-  if (ok === undefined) return "muted";
-  return ok ? "success" : "error";
-}
-
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [studioTab, setStudioTab] = useState<StudioTab>("workflows");
@@ -126,10 +117,12 @@ export function App() {
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
-  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
-  const [subagents, setSubagents] = useState<Subagent[]>([]);
+  // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
+  // always renders; the retry doubles as the desktop sidecar boot-probe. The
+  // System → Runtime panel reads the same key via useSuspenseQuery.
+  const runtimeQ = useQuery({ ...runtimeStatusQuery(), retry: 30, retryDelay: 1000 });
+  const runtime = runtimeQ.data ?? null;
   const [workspace, setWorkspace] = useState<NotesWorkspace | null>(null);
-  const [status, setStatus] = useState("ready");
   const [error, setError] = useState("");
 
   const [notesBusy, setNotesBusy] = useState(false);
@@ -142,65 +135,28 @@ export function App() {
     ((activeTab?.metadata as Record<string, unknown> | undefined)?.history as unknown[] | undefined)?.length,
   );
 
-  async function refreshRuntime() {
-    const [runtimePayload, subagentPayload] = await Promise.all([
-      api.runtimeStatus(),
-      api.subagents(),
-    ]);
-    setRuntime(runtimePayload);
-    setSubagents(subagentPayload.subagents);
-    return runtimePayload;
-  }
-
-  // Notes are agent-global (one persistent store). Beads + Goals own their data
-  // via TanStack Query inside their panels (ADR 0013), so this only loads notes.
+  // Notes are agent-global (one persistent store). Beads/Goals/runtime own their
+  // data via TanStack Query (ADR 0013); this only loads the notes workspace.
   async function refreshProjectState() {
-    const notesPayload = await api.getNotes();
-    setWorkspace(notesPayload.workspace);
-    setNotesDirty(false);
-  }
-
-  async function refreshAll() {
-    setStatus("refreshing");
-    setError("");
     try {
-      const runtimePayload = await refreshRuntime();
-      // Adopt the server's default project as the fs working dir if none is
-      // set (it seeds the setup wizard's allowed-dirs); notes/beads load
-      // globally regardless.
-      if (!projectPath.trim() && runtimePayload.project.path) {
-        setProjectPath(runtimePayload.project.path);
-      }
-      await refreshProjectState();
-      setStatus("ready");
+      const notesPayload = await api.getNotes();
+      setWorkspace(notesPayload.workspace);
+      setNotesDirty(false);
     } catch (exc) {
-      setStatus("error");
       setError(exc instanceof Error ? exc.message : String(exc));
     }
   }
 
+  // Load notes once on mount (runtime loads via its own query).
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // The desktop app launches the server as a bundled sidecar, which can
-      // take a few seconds to boot. Probe with backoff before the first load
-      // so the startup gap doesn't surface as an error. In browser mode the
-      // server is already up, so the first probe succeeds immediately.
-      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
-        try {
-          await api.runtimeStatus();
-          break;
-        } catch {
-          if (attempt === 0) setStatus("starting server…");
-          await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        }
-      }
-      if (!cancelled) void refreshAll();
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void refreshProjectState();
   }, []);
+
+  // Adopt the server's default project as the fs working dir if none is set (it
+  // seeds the setup wizard's allowed-dirs) once runtime resolves.
+  useEffect(() => {
+    if (!projectPath.trim() && runtime?.project.path) setProjectPath(runtime.project.path);
+  }, [runtime, projectPath, setProjectPath]);
 
   useEffect(() => {
     if (!notesDirty || !workspace) return;
@@ -418,11 +374,6 @@ export function App() {
     });
   }
 
-  const middleware = useMemo(() => {
-    if (!runtime) return [];
-    return Object.entries(runtime.middleware).sort(([a], [b]) => a.localeCompare(b));
-  }, [runtime]);
-
   // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
   function startRightResize(e: React.MouseEvent) {
     e.preventDefault();
@@ -449,12 +400,20 @@ export function App() {
   const rightCol = rightCollapsed ? "0px" : `${rightWidth}px`;
 
   // One glanceable health light for the topbar (detail on hover; full status in
-  // System → Runtime). Worst-state wins.
+  // System → Runtime). Worst-state wins. Derived from the runtime query — while
+  // it's still loading (no data, e.g. the sidecar booting) we show "starting".
+  const statusLabel = runtimeQ.isError
+    ? "error"
+    : !runtime
+      ? "starting server…"
+      : runtimeQ.isFetching
+        ? "refreshing"
+        : "ready";
   const health: { tone: "ok" | "warning" | "error"; label: string } =
-    runtime && !runtime.setup_complete ? { tone: "warning", label: "setup pending" }
-    : runtime && !runtime.graph_loaded ? { tone: "error", label: "graph offline" }
-    : status === "error" ? { tone: "error", label: "error" }
-    : status === "streaming" || status === "refreshing" || status.includes("…") ? { tone: "warning", label: status }
+    !runtime && runtimeQ.isError ? { tone: "error", label: "error" }
+    : !runtime ? { tone: "warning", label: "starting…" }
+    : !runtime.setup_complete ? { tone: "warning", label: "setup pending" }
+    : !runtime.graph_loaded ? { tone: "error", label: "graph offline" }
     : { tone: "ok", label: "ready" };
 
   // Desktop (macOS) runs with an overlay/invisible title bar — no chrome, the
@@ -487,12 +446,15 @@ export function App() {
           <button
             type="button"
             className={`status-dot tone-${health.tone}`}
-            onClick={() => void refreshAll()}
+            onClick={() => {
+              void runtimeQ.refetch();
+              void refreshProjectState();
+            }}
             title={
               `Setup: ${runtime?.setup_complete ? "complete" : "pending"}\n` +
               `Graph: ${runtime?.graph_loaded ? "loaded" : "offline"}\n` +
               `Event stream: ${live ? "connected" : "offline"}\n` +
-              `Status: ${status}` +
+              `Status: ${statusLabel}` +
               (error ? `\nError: ${error}` : "") +
               `\n\nClick to refresh.`
             }
@@ -603,100 +565,7 @@ export function App() {
 
           {surface === "activity" && activityTab === "schedule" ? <SchedulePanel /> : null}
 
-          {surface === "system" && systemTab === "runtime" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <div>
-                  <h1>Runtime</h1>
-                  <p className="panel-kicker">{runtime?.model?.name || "model not configured"}</p>
-                </div>
-                <StatusPill label={runtime?.scheduler.backend || "scheduler"} tone="muted" />
-              </div>
-              <div className="stage-body">
-              <div className="metric-grid">
-                <Metric icon={<Bot size={16} />} label="Agent" value={runtime?.identity?.name || "protoagent"} />
-                <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime?.model?.provider || "none"} />
-                <Metric icon={<Database size={16} />} label="Knowledge" value={runtime?.knowledge.resolved_path || runtime?.knowledge.configured_path || "disabled"} />
-                <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime?.goal.enabled))} />
-              </div>
-              <p className="panel-kicker">Middleware</p>
-              <div className="table-list">
-                {middleware.map(([name, enabled]) => (
-                  <div className="table-row" key={name}>
-                    <span>{name}</span>
-                    <StatusPill label={formatBool(enabled)} tone={enabled ? "success" : "muted"} />
-                  </div>
-                ))}
-              </div>
-
-              <p className="panel-kicker">Skills</p>
-              <div className="table-list">
-                <div className="table-row">
-                  <span>SKILL.md skills loaded</span>
-                  <StatusPill
-                    label={`${runtime?.skills?.count ?? 0}`}
-                    tone={(runtime?.skills?.count ?? 0) > 0 ? "success" : "muted"}
-                  />
-                </div>
-              </div>
-
-              <p className="panel-kicker">MCP servers</p>
-              <div className="table-list">
-                {runtime?.mcp?.servers?.length ? (
-                  runtime.mcp.servers.map((server) => (
-                    <div className="table-row" key={server.name}>
-                      <span>{server.name} · {server.transport}</span>
-                      <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
-                    </div>
-                  ))
-                ) : (
-                  <div className="table-row">
-                    <span>no MCP servers</span>
-                    <StatusPill label={runtime?.mcp?.enabled ? "enabled" : "off"} tone="muted" />
-                  </div>
-                )}
-              </div>
-
-              <p className="panel-kicker">Plugins</p>
-              <div className="table-list">
-                {runtime?.plugins?.length ? (
-                  runtime.plugins.map((plugin) => (
-                    <div className="table-row" key={plugin.id}>
-                      <span>
-                        {plugin.name}
-                        {plugin.loaded && plugin.tools.length ? ` · ${plugin.tools.length} tool${plugin.tools.length === 1 ? "" : "s"}` : ""}
-                        {plugin.loaded && plugin.skills ? ` · ${plugin.skills} skill${plugin.skills === 1 ? "" : "s"}` : ""}
-                        {plugin.error ? ` · ${plugin.error}` : ""}
-                      </span>
-                      <StatusPill
-                        label={plugin.loaded ? "loaded" : plugin.error ? "error" : plugin.enabled ? "enabled" : "disabled"}
-                        tone={plugin.loaded ? "success" : plugin.error ? "error" : "muted"}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <div className="table-row">
-                    <span>no plugins</span>
-                    <StatusPill label="none" tone="muted" />
-                  </div>
-                )}
-              </div>
-
-              <p className="panel-kicker">Subagents</p>
-              <div className="subagent-list">
-                {subagents.map((subagent) => (
-                  <div className="subagent-row" key={subagent.name}>
-                    <div>
-                      <strong>{subagent.name}</strong>
-                      <span>{subagent.tools.join(", ") || "no tools"}</span>
-                    </div>
-                    <StatusPill label={`${subagent.max_turns} turns`} tone={subagent.enabled ? "success" : "muted"} />
-                  </div>
-                ))}
-              </div>
-              </div>
-            </section>
-          ) : null}
+          {surface === "system" && systemTab === "runtime" ? <RuntimePanel /> : null}
 
           {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
           {surface === "knowledge" ? <PlaybooksSurface onError={setError} /> : null}
@@ -846,7 +715,10 @@ export function App() {
         open={runtime?.setup_complete === false}
         projectPath={projectPath}
         onProjectPathChange={setProjectPath}
-        onFinished={() => void refreshAll()}
+        onFinished={() => {
+          void runtimeQ.refetch();
+          void refreshProjectState();
+        }}
       />
 
       <ConfirmDialog
@@ -890,12 +762,3 @@ function RailButton({
   );
 }
 
-function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="metric">
-      {icon}
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}

@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Runtime surface + shell runtime read migrated — ADR 0013 console-wide
+  migration complete.** System → Runtime extracted into `RuntimePanel`
+  (`useSuspenseQuery` for runtime + subagents). The **App shell** now reads
+  runtime via a non-suspense `useQuery` (topbar health light + SetupWizard +
+  project default) — the retry doubles as the desktop sidecar boot-probe, so the
+  shell never blanks during startup. Retires App's `runtime`/`subagents`/
+  `status` state, `refreshRuntime`/`refreshAll`, and the hand-rolled boot-probe
+  loop. Every console data surface (goals, beads, workflows, telemetry,
+  settings, inbox, schedule, run, runtime) is now on TanStack Query + Suspense +
+  ErrorBoundary; only the live/edit surfaces (Notes, Activity-Thread, Chat) stay
+  intentionally imperative.
 - **Run surface migrated to TanStack Query (ADR 0013).** Studio → Run extracted
   from `App` into `RunPanel`: the subagent registry is a `useSuspenseQuery`, the
   single/batch launch is a `useMutation`. Loading/errors via `<Suspense>` +
