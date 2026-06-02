@@ -17,7 +17,6 @@ import {
   PanelRight,
   Play,
   Plus,
-  RefreshCw,
   Save,
   Settings2,
   Sparkles,
@@ -40,10 +39,11 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { NotesWorkspace, RuntimeStatus, ScheduledJob, Subagent } from "../lib/types";
+import type { NotesWorkspace, RuntimeStatus, Subagent } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
+import { SchedulePanel } from "../schedule/SchedulePanel";
 import { SetupWizard } from "../setup/SetupWizard";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
@@ -162,12 +162,6 @@ export function App() {
   const [notesBusy, setNotesBusy] = useState(false);
   const [notesDirty, setNotesDirty] = useState(false);
 
-  const [scheduleJobs, setScheduleJobs] = useState<ScheduledJob[]>([]);
-  const [scheduleBackend, setScheduleBackend] = useState("local");
-  const [schedulePrompt, setSchedulePrompt] = useState("");
-  const [scheduleWhen, setScheduleWhen] = useState("");
-  const [scheduleJobId, setScheduleJobId] = useState("");
-  const [scheduleBusy, setScheduleBusy] = useState(false);
 
 
   const activeTab = workspace?.tabs[workspace.activeTabId] || null;
@@ -186,48 +180,6 @@ export function App() {
       setSubagentType(subagentPayload.subagents[0]?.name || "researcher");
     }
     return runtimePayload;
-  }
-
-  async function refreshSchedules() {
-    try {
-      const payload = await api.schedules();
-      setScheduleJobs(payload.jobs);
-      setScheduleBackend(payload.backend);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }
-
-  async function createSchedule() {
-    const prompt = schedulePrompt.trim();
-    const schedule = scheduleWhen.trim();
-    if (!prompt || !schedule || scheduleBusy) return;
-    setScheduleBusy(true);
-    setError("");
-    try {
-      await api.addSchedule({ prompt, schedule, job_id: scheduleJobId.trim() || undefined });
-      setSchedulePrompt("");
-      setScheduleWhen("");
-      setScheduleJobId("");
-      await refreshSchedules();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setScheduleBusy(false);
-    }
-  }
-
-  async function cancelScheduleJob(jobId: string) {
-    if (scheduleBusy) return;
-    setScheduleBusy(true);
-    try {
-      await api.cancelSchedule(jobId);
-      await refreshSchedules();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setScheduleBusy(false);
-    }
   }
 
   // Notes are agent-global (one persistent store). Beads + Goals own their data
@@ -310,9 +262,6 @@ export function App() {
     return () => window.clearInterval(handle);
   }, [rightPanel, notesDirty, notesBusy]);
 
-  useEffect(() => {
-    if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
-  }, [surface, activityTab]);
 
   // Goals now own their data via TanStack Query inside <GoalsPanel> (ADR 0013) —
   // no App-level fetch/poll here.
@@ -843,92 +792,7 @@ export function App() {
           {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
 
-          {surface === "activity" && activityTab === "schedule" ? (
-            <section className="panel stage-panel">
-              <div className="panel-header">
-                <div>
-                  <h1>Schedule</h1>
-                  <p className="panel-kicker">{scheduleJobs.length} job{scheduleJobs.length === 1 ? "" : "s"} · {scheduleBackend}</p>
-                </div>
-                <button className="icon-button" type="button" onClick={() => void refreshSchedules()} title="Refresh">
-                  {scheduleBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-                </button>
-              </div>
-
-              <div className="stage-body">
-              <div className="subagent-grid">
-                <label className="field">
-                  <span>When (cron or ISO datetime)</span>
-                  <input
-                    value={scheduleWhen}
-                    onChange={(event) => setScheduleWhen(event.target.value)}
-                    placeholder='e.g. "0 9 * * 1-5"  or  "2026-06-01T15:00:00Z"'
-                  />
-                </label>
-                <label className="field">
-                  <span>Job id (optional)</span>
-                  <input
-                    value={scheduleJobId}
-                    onChange={(event) => setScheduleJobId(event.target.value)}
-                    placeholder="auto"
-                  />
-                </label>
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => void createSchedule()}
-                  disabled={scheduleBusy || !schedulePrompt.trim() || !scheduleWhen.trim()}
-                >
-                  <Plus size={16} />
-                  Schedule
-                </button>
-              </div>
-              <label className="field grow">
-                <span>Prompt (delivered to the agent when it fires)</span>
-                <textarea
-                  value={schedulePrompt}
-                  onChange={(event) => setSchedulePrompt(event.target.value)}
-                  placeholder="What the agent should do when this fires"
-                  rows={5}
-                />
-              </label>
-
-              <div className="subagent-list">
-                {scheduleJobs.length ? (
-                  scheduleJobs.map((job) => (
-                    <div className="subagent-row" key={job.id}>
-                      <div>
-                        <strong>{job.id}</strong>
-                        <span>
-                          {job.schedule}
-                          {job.next_fire ? ` · next ${job.next_fire}` : ""}
-                          {" · "}
-                          {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
-                        </span>
-                      </div>
-                      <button
-                        className="icon-button"
-                        type="button"
-                        onClick={() => void cancelScheduleJob(job.id)}
-                        disabled={scheduleBusy}
-                        title="Cancel job"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="subagent-row">
-                    <div>
-                      <strong>No scheduled jobs</strong>
-                      <span>{scheduleBackend !== "local" && scheduleBackend !== "disabled" ? `jobs may be managed remotely by ${scheduleBackend}` : "create one above"}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              </div>
-            </section>
-          ) : null}
+          {surface === "activity" && activityTab === "schedule" ? <SchedulePanel /> : null}
 
           {surface === "system" && systemTab === "runtime" ? (
             <section className="panel stage-panel">

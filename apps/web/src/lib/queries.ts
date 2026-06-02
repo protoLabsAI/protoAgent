@@ -13,6 +13,7 @@ export const queryKeys = {
   telemetry: ["telemetry"] as const,
   settings: ["settings", "schema"] as const,
   inbox: ["inbox"] as const,
+  schedules: ["schedules"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -82,4 +83,11 @@ export const inboxQuery = () =>
   queryOptions({
     queryKey: queryKeys.inbox,
     queryFn: () => api.inbox("later", false),
+  });
+
+// Scheduled jobs over the active SchedulerBackend. Invalidated on add/cancel.
+export const schedulesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.schedules,
+    queryFn: () => api.schedules(),
   });
