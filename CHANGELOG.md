@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Schedule surface migrated to TanStack Query (ADR 0013).** Activity →
+  Schedule (extracted from `App` into `SchedulePanel`) reads jobs via
+  `useSuspenseQuery` and adds/cancels via `useMutation` (invalidating the list);
+  loading/errors via `<Suspense>` + `<ErrorBoundary>`. Retires the schedule
+  state + handlers + refresh-on-tab effect from `App`.
 - **Inbox panel migrated to TanStack Query (ADR 0013).** Activity → Inbox reads
   via `useSuspenseQuery`, invalidates on the live `inbox.item` event, and
   dismisses via a `useMutation` (optimistic hide held above the Suspense
