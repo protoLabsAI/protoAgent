@@ -40,7 +40,7 @@ output: "{{ steps.brief.output }}"  # optional; default = last step's output
 ## Where recipes live
 
 - **Bundled examples**: the repo's `workflows/` dir (ships with
-  `research-and-brief.yaml`).
+  `research-and-brief.yaml` and `deep-research.yaml`).
 - **Your recipes**: `workflows.dir` in `config/langgraph-config.yaml` (default
   `/sandbox/workflows`, falling back to `~/.protoagent/workflows` for local dev).
   Drop a `*.yaml` recipe there; it's loaded on the next start/reload.
@@ -84,6 +84,33 @@ inputs, and runs it with a one-click form — the same path the agent's
 collapsible per-step breakdown, and flags any steps that failed (failures are
 recorded inline so the rest of the DAG still runs). It's backed by
 `GET /api/workflows` and `POST /api/workflows/{name}/run`.
+
+## Deep research with adversarial review
+
+`deep-research.yaml` is the heavyweight, decision-grade counterpart to a single
+`researcher` call. It's a six-stage DAG ([ADR 0011](/adr/0011-deep-research-workflow))
+that builds in the *opposing* context a lone researcher can't give itself:
+
+```
+research ∥ dissent  →  gap_fill  →  antagonist ∥ verify  →  synthesize
+```
+
+- **research ∥ dissent** — a mainstream gather and a deliberately contrarian
+  pass run in parallel, so the critical angle is sourced *at gather time*.
+- **gap_fill** — finds and fills 1-3 genuine gaps against the original question.
+- **antagonist ∥ verify** — a red-team [`antagonist`](/guides/subagents) (steelmans
+  the opposing case, attacks weak claims, hunts disconfirming evidence) and an
+  independent [`verifier`](/guides/subagents) (labels material claims
+  supported/unsupported/uncertain) run in parallel.
+- **synthesize** — a [`synthesizer`](/guides/subagents) writes the balanced
+  report: it *addresses* the opposition in a "Counterpoints & caveats" section,
+  drops unverified claims, and only earns `Confidence: high` if the opposition
+  was genuinely answered.
+
+Run it on a genuinely deep question — `` /deep-research is X the right
+architecture `` or `run_workflow("deep-research", {"topic": "…", "depth": "deep"})`.
+It's more subagent calls (and latency) than the single researcher, so gate it to
+asks that warrant it; use the plain `researcher` for quick inline lookups.
 
 ## The agent can author them (closed loop)
 

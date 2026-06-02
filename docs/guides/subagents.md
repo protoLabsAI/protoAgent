@@ -141,6 +141,26 @@ _graph = create_agent_graph(
 
 This drops the `task()` tool from the lead's toolset. No runtime hit.
 
+## The adversarial-research roles
+
+Beyond `researcher`, the template ships three roles that exist specifically to
+make a research report *honest* — used by the `deep-research`
+[workflow](/guides/workflows) ([ADR 0011](/adr/0011-deep-research-workflow)).
+They're separate agents on purpose: no agent should grade its own homework.
+
+- **`antagonist`** — adversarial reviewer. Steelmans the strongest *opposing*
+  case, attacks weak/unsupported claims, and uses its own `web_search`/`fetch_url`
+  to hunt disconfirming evidence. Outputs an "Opposition & weaknesses" memo.
+- **`verifier`** — independent claim-checker. Extracts the load-bearing factual
+  claims and labels each supported/unsupported/uncertain against sources.
+- **`synthesizer`** — writes the final balanced report, folding the antagonist's
+  opposition into a "Counterpoints & caveats" section, dropping anything the
+  verifier didn't support, and only earning a high `Confidence` if the
+  opposition was answered.
+
+They're ordinary `SubagentConfig`s in the registry — reuse, retune, or drop them
+like any other; the `deep-research` recipe just wires them into a DAG.
+
 ## What you get for free
 
 Every subagent call:
