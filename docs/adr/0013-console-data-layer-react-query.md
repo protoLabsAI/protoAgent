@@ -1,6 +1,6 @@
 # ADR 0013 — Console data layer: TanStack Query + Suspense + ErrorBoundary
 
-- **Status:** Accepted (2026-06-02) — foundation + first surface (Goals) shipped; remaining surfaces migrate in follow-up PRs
+- **Status:** Accepted (2026-06-02) — **COMPLETE**. All read surfaces migrated (goals, beads, workflows, telemetry, settings, inbox, schedule, run, runtime); the App shell reads runtime via a non-suspense `useQuery` (topbar) while panels use `useSuspenseQuery`. Notes / Activity-Thread / Chat stay intentionally imperative (edit/live-stream state).
 - **Date:** 2026-06-02
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** console, frontend, dx
