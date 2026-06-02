@@ -209,14 +209,24 @@ pub fn run() {
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
             );
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+            let mut win = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("protoAgent")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(980.0, 640.0)
                 .resizable(true)
                 .center()
-                .initialization_script(&init)
-                .build()?;
+                .initialization_script(&init);
+            // Invisible title bar (macOS): no opaque chrome — content fills the
+            // frame and the native traffic lights float top-left. The web shell
+            // restores window-dragging + insets its topbar for the lights
+            // (apps/web `.is-tauri`). ADR-adjacent polish for the desktop build.
+            #[cfg(target_os = "macos")]
+            {
+                win = win
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true);
+            }
+            win.build()?;
 
             // Menu-bar-only: build the tray, and only drop the dock icon
             // (Accessory) if it succeeds — so a tray failure leaves us reachable

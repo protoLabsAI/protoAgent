@@ -175,6 +175,13 @@ h2 {
   background: var(--bg);
 }
 
+/* macOS desktop (invisible title bar): inset the brand so it clears the native
+   traffic lights that float top-left over the content. The topbar carries
+   `data-tauri-drag-region`, so this strip also drags the window. */
+.app-shell.is-tauri-mac .topbar {
+  padding-left: 84px;
+}
+
 .brand-lockup {
   min-width: 0;
   display: flex;

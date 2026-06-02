@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-off flakes that still clear the majority.
 
 ### Changed
+- **Desktop: invisible title bar + macOS bundle hardening (production prep).**
+  The window uses an overlay/hidden title bar on macOS (`titleBarStyle: Overlay`
+  + `hiddenTitle`) — no chrome, native traffic lights float over the content;
+  the console insets its topbar for the lights and acts as the drag region
+  (`.is-tauri-mac`). The macOS bundle now sets `hardenedRuntime`, an explicit
+  `entitlements.plist` (network client/server + WKWebView JIT only) and
+  `Info.plist` (copyright), and `minimumSystemVersion: 13.0` — the config
+  prerequisites for signing/notarization (the signing itself still needs certs).
 - **Desktop is now a menu-bar app with the protoLabs robot tray icon.** The
   Tauri shell uses the robot mark at the proper menu-bar size (44×44, template /
   system-tinted — `icons/tray-robot.png`) instead of the squished default app

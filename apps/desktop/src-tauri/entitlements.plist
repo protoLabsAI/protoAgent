@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The bundled server makes outbound calls (LLM gateway, web tools) and
+         binds a localhost port for the console/A2A. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- Tauri's WKWebView runs JavaScriptCore under the hardened runtime, so it
+         needs the JIT exception. Keep this narrow; do not add camera/microphone
+         or broader code-signing exceptions unless a shipped feature requires it. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+</dict>
+</plist>
