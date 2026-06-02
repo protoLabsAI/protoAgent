@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Notes are now agent-global, like beads.** The notes workspace is a single
+  persistent, instance-scoped store (`$NOTES_PATH`, default
+  `/sandbox/notes/workspace.json`) that the `notes_*` tools and the console
+  Notes panel share — no longer per-project (`.automaker/notes/` inside project
+  dirs is gone). Scattering the agent's notebook across whatever directory was
+  "the project" was confusing; the agent has one notebook now. The `notes_*`
+  tools and the notes/beads APIs drop their `project_path` argument (still
+  accepted-and-ignored on the HTTP layer for back-compat). The console's
+  right-panel **project selector is removed**: `operator.allowed_dirs` is purely
+  the filesystem security fence for file/shell tools, unrelated to notes/beads.
+
 ### Added
 - **Workflow builder in the console (Sprint C).** The Workflows surface gains a
   **＋ New workflow** builder — name + inputs + steps (id, subagent picker,

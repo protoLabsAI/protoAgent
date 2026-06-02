@@ -365,17 +365,19 @@ export function App() {
     }
   }
 
-  async function refreshProjectState(path = projectPath) {
-    if (!path.trim()) return;
+  // Notes + Beads are agent-global (one persistent store each) — not scoped to
+  // a project. The project / allowed-dirs list is purely the filesystem
+  // security fence; it doesn't gate the agent's notebook or task board.
+  async function refreshProjectState() {
     const [notesPayload, beadsStatus] = await Promise.all([
-      api.getNotes(path),
-      api.beadsStatus(path),
+      api.getNotes(),
+      api.beadsStatus(),
     ]);
     setWorkspace(notesPayload.workspace);
     setNotesDirty(false);
     setBeadsReady(beadsStatus.initialized);
     if (beadsStatus.initialized) {
-      const issuesPayload = await api.beadsIssues(path);
+      const issuesPayload = await api.beadsIssues();
       setBeadsIssues(issuesPayload.issues);
     } else {
       setBeadsIssues([]);
@@ -387,24 +389,13 @@ export function App() {
     setError("");
     try {
       const runtimePayload = await refreshRuntime();
-      const serverDefault = runtimePayload.project.path;
-      let nextProjectPath = projectPath.trim() || serverDefault;
-      try {
-        await refreshProjectState(nextProjectPath);
-      } catch (projErr) {
-        // The persisted project path is stale/invalid — e.g. a previous frozen
-        // (desktop) run stored a PyInstaller _MEI temp dir that no longer
-        // exists. Self-heal by adopting the server's current default project.
-        if (serverDefault && nextProjectPath !== serverDefault) {
-          nextProjectPath = serverDefault;
-          await refreshProjectState(nextProjectPath);
-        } else {
-          throw projErr;
-        }
+      // Adopt the server's default project as the fs working dir if none is
+      // set (it seeds the setup wizard's allowed-dirs); notes/beads load
+      // globally regardless.
+      if (!projectPath.trim() && runtimePayload.project.path) {
+        setProjectPath(runtimePayload.project.path);
       }
-      if (nextProjectPath && nextProjectPath !== projectPath) {
-        setProjectPath(nextProjectPath);
-      }
+      await refreshProjectState();
       setStatus("ready");
     } catch (exc) {
       setStatus("error");
@@ -436,23 +427,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!notesDirty || !workspace || !projectPath.trim()) return;
+    if (!notesDirty || !workspace) return;
     const handle = window.setTimeout(() => {
       void saveWorkspaceSnapshot(workspace, { quiet: true });
     }, 800);
     return () => window.clearTimeout(handle);
-  }, [notesBusy, notesDirty, projectPath, workspace]);
+  }, [notesBusy, notesDirty, workspace]);
 
   // Live notes refresh — the agent (via notes_write) or another tab can change
   // the workspace on disk. Poll while the Notes panel is open and adopt newer
   // server state, but never clobber the user's unsaved edits (notesDirty) and
   // keep their active tab selection.
   useEffect(() => {
-    if (rightPanel !== "notes" || !projectPath.trim()) return;
+    if (rightPanel !== "notes") return;
     const handle = window.setInterval(async () => {
       if (notesDirty || notesBusy) return;
       try {
-        const { workspace: latest } = await api.getNotes(projectPath);
+        const { workspace: latest } = await api.getNotes();
         setWorkspace((current) => {
           if (!current || latest.workspaceVersion <= current.workspaceVersion) return current;
           const keepActive = latest.tabs[current.activeTabId] ? current.activeTabId : latest.activeTabId;
@@ -463,7 +454,7 @@ export function App() {
       }
     }, 4000);
     return () => window.clearInterval(handle);
-  }, [rightPanel, projectPath, notesDirty, notesBusy]);
+  }, [rightPanel, notesDirty, notesBusy]);
 
   useEffect(() => {
     if (surface === "activity" && activityTab === "schedule") void refreshSchedules();
@@ -601,7 +592,7 @@ export function App() {
   }
 
   function saveActiveNote(content: string) {
-    if (!workspace || !activeTab || !projectPath.trim()) return;
+    if (!workspace || !activeTab) return;
     const nextWorkspace: NotesWorkspace = {
       ...workspace,
       workspaceVersion: workspace.workspaceVersion + 1,
@@ -626,11 +617,11 @@ export function App() {
     snapshot: NotesWorkspace,
     options: { quiet?: boolean } = {},
   ) {
-    if (!projectPath.trim() || notesBusy) return;
+    if (notesBusy) return;
     setNotesBusy(true);
     if (!options.quiet) setError("");
     try {
-      await api.saveNotes(projectPath, snapshot);
+      await api.saveNotes(snapshot);
       setNotesDirty(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -714,11 +705,11 @@ export function App() {
   }
 
   async function initBeads() {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      await api.initBeads(projectPath);
+      await api.initBeads();
       await refreshProjectState();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -729,11 +720,11 @@ export function App() {
 
   async function createIssue() {
     const title = issueDraft.title.trim();
-    if (!projectPath.trim() || !title || beadsBusy) return;
+    if (!title || beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.createIssue(projectPath, {
+      const response = await api.createIssue({
         title,
         type: issueDraft.type,
         priority: issueDraft.priority,
@@ -765,11 +756,11 @@ export function App() {
   }
 
   async function updateIssueStatus(issue: BeadsIssue, nextStatus: string) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.updateIssue(projectPath, issue.id, { status: nextStatus });
+      const response = await api.updateIssue(issue.id, { status: nextStatus });
       replaceIssue(response.issue.id ? response.issue : { ...issue, status: nextStatus });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -779,11 +770,11 @@ export function App() {
   }
 
   async function closeIssue(issue: BeadsIssue) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setBeadsBusy(true);
     setError("");
     try {
-      const response = await api.closeIssue(projectPath, issue.id);
+      const response = await api.closeIssue(issue.id);
       replaceIssue(response.issue.id ? response.issue : { ...issue, status: "closed" });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -793,7 +784,7 @@ export function App() {
   }
 
   function deleteIssue(issue: BeadsIssue) {
-    if (!projectPath.trim() || beadsBusy) return;
+    if (beadsBusy) return;
     setConfirmState({
       title: `Delete ${issue.id}?`,
       message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the beads store.`,
@@ -803,11 +794,10 @@ export function App() {
   }
 
   async function doDeleteIssue(issue: BeadsIssue) {
-    if (!projectPath.trim()) return;
     setBeadsBusy(true);
     setError("");
     try {
-      await api.deleteIssue(projectPath, issue.id);
+      await api.deleteIssue(issue.id);
       setBeadsIssues((items) => items.filter((item) => item.id !== issue.id));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -1375,30 +1365,25 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          <div className="project-bar">
-            <input
-              value={projectPath}
-              onChange={(event) => setProjectPath(event.target.value)}
-              placeholder="Project path"
-              list="operator-allowed-dirs"
-            />
-            <datalist id="operator-allowed-dirs">
-              {(runtime?.project.allowed_dirs || []).map((dir) => (
-                <option key={dir} value={dir} />
-              ))}
-            </datalist>
-            <button className="icon-button" type="button" onClick={() => void loadProject()} title="Load project">
+          <div className="right-panel-nav">
+            <div className="segmented">
+              <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
+                <FileText size={15} />
+                Notes
+              </button>
+              <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
+                <Boxes size={15} />
+                Beads
+              </button>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => void loadProject()}
+              disabled={notesBusy || beadsBusy}
+              title="Refresh notes & beads"
+            >
               {notesBusy || beadsBusy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            </button>
-          </div>
-          <div className="segmented">
-            <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
-              <FileText size={15} />
-              Notes
-            </button>
-            <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
-              <Boxes size={15} />
-              Beads
             </button>
           </div>
 

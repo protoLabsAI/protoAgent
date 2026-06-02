@@ -1866,10 +1866,14 @@ textarea {
   font-size: 13px;
 }
 
-.project-bar {
+/* Right-panel tab row: the Notes/Beads segmented control + a refresh button.
+   (The per-project selector was removed — notes/beads are agent-global; the
+   project/allowed-dirs list is purely the filesystem fence.) */
+.right-panel-nav {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: stretch;
 }
 
 .segmented {

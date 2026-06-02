@@ -3,8 +3,8 @@ from __future__ import annotations
 from operator_api.notes import NotesService
 
 
-def test_notes_service_returns_default_workspace_for_new_project(tmp_path) -> None:
-    workspace = NotesService().load_workspace(str(tmp_path))
+def test_notes_service_returns_default_workspace_when_empty(tmp_path) -> None:
+    workspace = NotesService(path=str(tmp_path / "workspace.json")).load_workspace()
 
     assert workspace["version"] == 1
     assert workspace["activeTabId"] in workspace["tabs"]
@@ -12,7 +12,8 @@ def test_notes_service_returns_default_workspace_for_new_project(tmp_path) -> No
 
 
 def test_notes_service_saves_and_loads_workspace(tmp_path) -> None:
-    service = NotesService()
+    # Agent-global notebook: one instance-scoped workspace, no project_path.
+    service = NotesService(path=str(tmp_path / "notes" / "workspace.json"))
     workspace = {
         "version": 1,
         "workspaceVersion": 2,
@@ -29,7 +30,7 @@ def test_notes_service_saves_and_loads_workspace(tmp_path) -> None:
         },
     }
 
-    service.save_workspace(str(tmp_path), workspace)
+    service.save_workspace(workspace)
 
-    assert service.load_workspace(str(tmp_path)) == workspace
-    assert service.workspace_path(str(tmp_path)).exists()
+    assert service.load_workspace() == workspace
+    assert service.workspace_path().exists()
