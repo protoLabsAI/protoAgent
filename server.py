@@ -1258,6 +1258,18 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(getattr(value, "content", value))
 
 
+def _interrupt_payload(val) -> dict:
+    """Shape a LangGraph interrupt value into the ``input-required`` payload the
+    A2A layer parks and the console renders. Richer HITL shapes pass through:
+    ``ask_human`` → ``{"question": …}``; ``request_user_input`` → ``{"kind":"form",
+    "title", "description", "steps":[…]}``. Anything else degrades to a question
+    with the stringified value. The console renders by shape (prompt vs JSON-schema
+    form); the resume value is a string for a question, a dict for a form."""
+    if isinstance(val, dict) and (val.get("question") or val.get("kind") == "form"):
+        return val
+    return {"question": (str(val) if val is not None else "Input required.")}
+
+
 async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None):
     """Run one graph turn over ``astream_events``.
 
@@ -1388,8 +1400,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         pending = []
     if pending:
         val = getattr(pending[0], "value", pending[0])
-        question = val.get("question") if isinstance(val, dict) else str(val)
-        yield ("input_required", {"question": question or "Input required."})
+        yield ("input_required", _interrupt_payload(val))
         return
 
     yield ("__raw__", accumulated_raw)

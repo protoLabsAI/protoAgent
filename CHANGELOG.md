@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`request_user_input` HITL form tool (Sprint A, server side).** Generalizes
+  `ask_human` from a free-text question to a **JSON-schema form** (multi-step =
+  wizard): the agent calls `request_user_input(title, steps, description?)`, the
+  turn pauses via the existing LangGraph `interrupt()` → A2A `input-required`, and
+  the submitted form object is returned. The interrupt→`input_required` payload
+  now passes richer shapes through (`{kind:"form", …}` alongside `{question}`) so
+  the console can render a form vs a prompt. (Console form-card + desktop
+  notification + the run_command approval gate are the next Sprint-A slices.)
 - **protoLabs.studio launch splash + console footer links.** A brand bumper
   (`IntroSplash`) shows the protoLabs.studio mark for ~2.5s on launch, then hands
   off to the app via the View Transitions API (clean cross-fade; plain unmount
