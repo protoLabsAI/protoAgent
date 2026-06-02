@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Structured-skill executor finalizer (#476).** Completes the protoAgent side
+  of schema-enforced skill outputs. When a turn carries a `skillHint` for a
+  skill that declares an `output_schema`, the `ProtoAgentExecutor` runs a
+  forced-tool-call finalizer (`graph/structured_skill.py`:
+  `create_llm(...).bind_tools([submit_skill_tool(id, schema)], tool_choice=…)`
+  → `validate_skill_args` → one repair → `emit_skill_result`) and appends the
+  validated object as a typed DataPart alongside the text (degrades to text-only
+  on failure). Uses the shared `protolabs_a2a` v0.2.0 helpers (LLM-free wire
+  layer); enforcement is runtime-local per ADR-0006. Mirrors jon's live-proven
+  reference.
 - **Structured-skill declaration scaffolding (#476, protoAgent side).** A skill
   spec (`_SKILL_SPECS`) may declare an `output_schema` (JSON Schema) +
   `result_mime`; `_agent_skills()` then advertises the MIME in that skill's
@@ -23,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `protolabs_a2a` helper exists; this is the non-blocking declaration/card half.
 
 ### Fixed
+- **A2A request-level metadata was being dropped (trace + skill dispatch).**
+  `_extract_caller_trace` read only `context.message.metadata`, missing
+  `SendMessageRequest`-level `context.metadata` — where clients (the hub) put
+  `a2a.trace` and `skillHint`. New `_request_metadata()` merges request-level
+  (preferred) over message-level, fixing Langfuse cross-trace propagation and
+  enabling the structured-skill dispatch. Found via jon's reference; fleet-wide
+  correctness win.
 - **Scheduled jobs fire again on A2A 1.0 (#477).** `LocalScheduler._fire`'s
   loopback POST to the agent's own `/a2a` was still 0.3-shaped, so the a2a-sdk
   1.1 handler rejected every scheduled fire (`-32009 VERSION_NOT_SUPPORTED`,

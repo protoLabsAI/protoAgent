@@ -2789,9 +2789,21 @@ def _main():
     asyncio.run(initialize_a2a_stores(task_store, push_config_store))
     log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
 
+    async def _structured_finalizer(skill_id: str, final_text: str):
+        """Enforce a declared skill's output_schema on the lead's free-text
+        answer + emit it as a DataPart (#476). None ⇒ text-only. Closes over the
+        skill registry so the executor needn't import server (no circular dep)."""
+        spec = structured_skill_schema(skill_id)
+        if not spec:
+            return None
+        from graph.structured_skill import finalize_structured
+        return await finalize_structured(
+            skill_id, spec["schema"], spec["mime"], final_text, _graph_config
+        )
+
     _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(_chat_langgraph_stream),
+        agent_executor=ProtoAgentExecutor(_chat_langgraph_stream, structured_finalizer=_structured_finalizer),
         task_store=task_store,
         agent_card=a2a_card,
         push_config_store=push_config_store,

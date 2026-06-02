@@ -144,11 +144,34 @@ class ProtoAgentExecutor(AgentExecutor):
     def __init__(
         self,
         stream_fn_factory: Callable[..., AsyncGenerator[tuple[str, Any], None]],
+        structured_finalizer: Callable[[str, str], Any] | None = None,
     ) -> None:
         # ``stream_fn_factory(text, context_id, *, resume, caller_trace)`` →
         # async generator of (event_type, payload). This is protoAgent's
         # ``_chat_langgraph_stream``.
         self._stream_factory = stream_fn_factory
+        # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict
+        # or None (#476). Injected by server.py so the executor stays decoupled
+        # from the skill registry (no circular import).
+        self._structured_finalizer = structured_finalizer
+
+    async def _append_structured(
+        self, parts: list[Part], context: RequestContext, final_text: str
+    ) -> list[Part]:
+        """If the turn targets a structured skill (``skillHint`` + a declared
+        schema), append the schema-enforced result as a DataPart (#476). No-op
+        otherwise; a finalizer error degrades to the text-only parts."""
+        if self._structured_finalizer is None or not final_text:
+            return parts
+        skill = _extract_skill_hint(context)
+        if not skill:
+            return parts
+        try:
+            emit = await self._structured_finalizer(skill, final_text)
+        except Exception:  # noqa: BLE001
+            logger.exception("[structured] finalizer raised for skill %s", skill)
+            return parts
+        return [*parts, _ext_data_part(emit)] if emit else parts
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
@@ -258,6 +281,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         final_text, deltas, usage if had_usage else None,
                         cost_usd, confidence, confidence_expl, success=True,
                     )
+                    parts = await self._append_structured(parts, context, final_text)
                     if parts:
                         await updater.add_artifact(parts, last_chunk=True)
                     await updater.complete()
@@ -277,6 +301,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 accumulated, deltas, usage if had_usage else None,
                 cost_usd, confidence, confidence_expl, success=True,
             )
+            parts = await self._append_structured(parts, context, accumulated)
             if parts:
                 await updater.add_artifact(parts, last_chunk=True)
             await updater.complete()
@@ -304,18 +329,43 @@ def _is_input_required(task: Any) -> bool:
         return False
 
 
+def _request_metadata(context: RequestContext) -> dict:
+    """Merged A2A request metadata: message-level (fallback) overlaid by
+    request-level (preferred). The a2a-sdk surfaces ``SendMessageRequest``-level
+    metadata on ``context.metadata`` (a dict) — that's where clients (e.g. the
+    hub) put routing keys like ``skillHint`` + ``a2a.trace``, so request-level
+    must win. Reading only ``context.message.metadata`` silently misses all of
+    it (the latent bug found via jon's reference)."""
+    merged: dict = {}
+    msg = getattr(context, "message", None)
+    if msg is not None and getattr(msg, "metadata", None):
+        try:
+            merged.update(json_format.MessageToDict(msg.metadata))
+        except Exception:  # noqa: BLE001
+            pass
+    req = getattr(context, "metadata", None)
+    if isinstance(req, dict):
+        merged.update(req)
+    elif req is not None:
+        try:
+            merged.update(json_format.MessageToDict(req))
+        except Exception:  # noqa: BLE001
+            pass
+    return merged
+
+
 def _extract_caller_trace(context: RequestContext) -> dict:
-    """Pull the ``a2a.trace`` metadata off the inbound message (Langfuse
-    cross-trace propagation), or {} when absent."""
-    msg = context.message
-    if msg is None:
-        return {}
-    try:
-        meta = json_format.MessageToDict(msg.metadata) if msg.metadata else {}
-    except Exception:  # noqa: BLE001
-        return {}
-    trace = meta.get("a2a.trace")
+    """The ``a2a.trace`` metadata (Langfuse cross-trace propagation), or {}."""
+    trace = _request_metadata(context).get("a2a.trace")
     return trace if isinstance(trace, dict) else {}
+
+
+def _extract_skill_hint(context: RequestContext) -> str:
+    """The ``skillHint`` the caller set to invoke a specific skill — the
+    structured-finalizer dispatch (A2A has no skill field on the message).
+    '' when absent."""
+    hint = _request_metadata(context).get("skillHint")
+    return hint if isinstance(hint, str) else ""
 
 
 def _tool_call_part(event_type: str, payload: Any) -> Part | None:
