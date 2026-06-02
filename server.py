@@ -4,9 +4,10 @@ This is the main entry point. It:
 
 1. Initializes LangGraph (``graph/agent.py``) + the LiteLLM gateway
    connection via ``graph/llm.py``.
-2. Mounts the full A2A surface (``a2a_handler.register_a2a_routes``)
+2. Mounts the full A2A 1.0 surface (``a2a-sdk`` ``DefaultRequestHandler`` +
+   ``a2a_executor.ProtoAgentExecutor``, conventions via ``protolabs_a2a``)
    — JSON-RPC on ``POST /a2a``, SSE streaming, push notifications,
-   ``tasks/*`` CRUD, agent card at ``/.well-known/agent.json``.
+   ``tasks/*`` CRUD, agent card at ``/.well-known/agent-card.json``.
 3. Mounts an OpenAI-compatible chat-completions endpoint so the agent
    can be registered as a model in the LiteLLM gateway / OpenWebUI.
 4. Optionally mounts a Gradio chat UI for direct operator access.
@@ -15,8 +16,8 @@ This is the main entry point. It:
 
 ### Forking checklist
 
-- Change the agent identity in ``_build_agent_card`` (name, description,
-  skills, extensions).
+- Change the agent identity in ``_build_agent_card_proto`` /
+  ``protolabs_a2a.build_agent_card`` (name, description, skills, extensions).
 - Drop ``SOUL.md`` in the workspace to override the default agent prompt.
 - Add your real tools to ``tools/lg_tools.py`` and wire them into
   ``graph/subagents/config.py`` if you want specialized delegation.
@@ -1456,8 +1457,8 @@ async def _chat_langgraph_stream(
     resume: bool = False,
 ):
     """Async generator — yields (event_type, payload) tuples from the
-    LangGraph run. Consumed by ``a2a_handler.register_a2a_routes`` to
-    drive the background task runner + SSE streaming.
+    LangGraph run. Consumed by ``a2a_executor.ProtoAgentExecutor`` to
+    drive the SDK task lifecycle + SSE streaming.
 
     Event contract (matches what the A2A handler expects):
 
