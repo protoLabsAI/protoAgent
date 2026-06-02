@@ -100,6 +100,27 @@ _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # streams to connected consoles.
 
 
+def _resolve_operator_project_root() -> str:
+    """The operator console's default project root (+ its always-allowed dir).
+
+    In a source checkout this is the repo root (``__file__``'s dir). But in a
+    PyInstaller-frozen sidecar (the desktop app) ``__file__`` lives inside the
+    ephemeral ``_MEIxxxx`` onefile extraction dir — which doesn't persist and
+    isn't a real workspace, so the console's project-scoped APIs (notes/beads)
+    fail with "project_path does not exist". Resolve a stable, writable dir
+    instead: an explicit ``PROTOAGENT_PROJECT_DIR`` wins; else (when frozen) the
+    per-user app dir the desktop already provides via ``PROTOAGENT_CONFIG_DIR``,
+    else the home dir."""
+    env = os.environ.get("PROTOAGENT_PROJECT_DIR")
+    if env:
+        return str(Path(env).expanduser().resolve())
+    if getattr(sys, "frozen", False):
+        cfg = os.environ.get("PROTOAGENT_CONFIG_DIR")
+        base = Path(cfg) if cfg else Path.home()
+        return str(base.expanduser().resolve())
+    return str(Path(__file__).parent.resolve())
+
+
 def _install_parent_death_watchdog() -> None:
     """Exit if the launcher process (``PROTOAGENT_PARENT_PID``) goes away.
 
@@ -2045,7 +2066,7 @@ def _main():
         run_manual_subagent_batch as _operator_run_manual_subagent_batch,
     )
 
-    _operator_repo_root = str(Path(__file__).parent.resolve())
+    _operator_repo_root = _resolve_operator_project_root()
 
     def _operator_allowed_dirs() -> list[str]:
         # The repo root is always operable (it's the default project);

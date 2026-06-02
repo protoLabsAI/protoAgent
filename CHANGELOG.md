@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already `protolabs/reasoning`; this just clears the dead alias from examples.
 
 ### Fixed
+- **Frozen desktop: console project APIs hit a nonexistent path** — the operator
+  console's default project root was `__file__`'s dir, which in a PyInstaller
+  onefile is the ephemeral `_MEIxxxx` extraction dir, so notes/beads failed with
+  "project_path does not exist". It now resolves a stable dir when frozen
+  (`PROTOAGENT_PROJECT_DIR` override → the desktop's `PROTOAGENT_CONFIG_DIR` →
+  home); a source checkout still uses the repo root.
 - **Desktop orphaned its sidecar server on exit** — a PyInstaller onefile runs
   as a bootloader + re-exec'd child, so the Tauri shell killing the tracked
   process on quit left the real server alive (holding its port; they accumulated
