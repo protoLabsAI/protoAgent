@@ -40,7 +40,7 @@ export function IntroSplash() {
   return (
     <div className="intro-splash" role="img" aria-label="protoLabs.studio">
       <div className="intro-splash-rise">
-        <img src="/app/protolabs-icon-outline.svg" alt="" className="intro-splash-mark" />
+        <img src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" className="intro-splash-mark" />
         <div className="intro-splash-word">protoLabs.studio</div>
       </div>
     </div>

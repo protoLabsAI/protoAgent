@@ -204,11 +204,15 @@ pub fn run() {
             }
             app.manage(SidecarProcess::default());
 
-            // Pick a free port, boot the sidecar on it, and create the window
-            // ourselves so we can inject the chosen API base *before* any page
-            // script runs (race-free). The web client reads
-            // `window.__PROTOAGENT_API_BASE__` (see apps/web/src/lib/api.ts).
-            let port = pick_free_port();
+            // Pin the sidecar to the fixed port the web client falls back to in
+            // the Tauri context (apps/web/src/lib/api.ts → http://127.0.0.1:7870).
+            // The dynamic-free-port + window-injection handoff proved unreliable
+            // across Tauri v2 webview contexts: the page couldn't see the injected
+            // `__PROTOAGENT_API_BASE__`, fell back to a (then-dead) port, and every
+            // request failed ("Load failed"). A fixed port makes the fallback the
+            // live server — no handoff needed. (Trades multi-agent port
+            // coexistence for a desktop console that actually connects.)
+            let port: u16 = 7870;
             spawn_sidecar(app.handle(), port);
             let init = format!(
                 "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"

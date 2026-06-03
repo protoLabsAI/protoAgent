@@ -4,5 +4,14 @@
 <dict>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright (c) 2026 protoLabs Studio</string>
+    <!-- The webview talks to the bundled sidecar over http://127.0.0.1:<port>.
+         WKWebView's App Transport Security blocks insecure (http) loads by
+         default, silently failing every API/chat request ("Load failed").
+         Allow local networking (loopback + .local) only. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
 </dict>
 </plist>
