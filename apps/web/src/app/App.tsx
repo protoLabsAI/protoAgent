@@ -122,6 +122,12 @@ export function App() {
   // System → Runtime panel reads the same key via useSuspenseQuery.
   const runtimeQ = useQuery({ ...runtimeStatusQuery(), retry: 30, retryDelay: 1000 });
   const runtime = runtimeQ.data ?? null;
+  // White-label the window/tab title to the configured identity (default
+  // protoAgent), so a fork's title follows its name without a rebuild.
+  useEffect(() => {
+    const name = runtime?.identity?.name;
+    if (name) document.title = name;
+  }, [runtime]);
   const [workspace, setWorkspace] = useState<NotesWorkspace | null>(null);
   const [error, setError] = useState("");
 
@@ -436,9 +442,14 @@ export function App() {
           Interactive children (the status dot) stay clickable; harmless on web. */}
       <header className="topbar" data-tauri-drag-region>
         <div className="brand-lockup">
-          <img src="/app/protolabs-icon-outline.svg" alt="" className="brand-mark" />
+          {/* BASE_URL is "/app/" in dev and "./" in the desktop build — a
+              hardcoded "/app/…" 404s in the bundle (assets sit at the root). */}
+          <img src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" className="brand-mark" />
           <div>
-            <div className="brand-name">protoAgent</div>
+            {/* White-label: the brand name follows the configured identity
+                (Settings → Identity), defaulting to protoAgent for the template.
+                A fork sets its name once and the whole UI follows. */}
+            <div className="brand-name">{runtime?.identity?.name || "protoAgent"}</div>
             <div className="brand-subline">protoLabs.studio</div>
           </div>
         </div>

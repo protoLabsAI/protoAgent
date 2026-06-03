@@ -62,6 +62,34 @@ def _client(*, run=None):
     return TestClient(app), notes
 
 
+class _FakeBeadsStore:
+    """In-process agent-global store (no project scope) — what server.py wires
+    when available, so the routes use the adapter that ignores project_path."""
+
+    def list(self):
+        return [{"id": "bd-1"}]
+
+
+def test_beads_store_route_ignores_project_path() -> None:
+    """With an in-process store wired, beads endpoints don't require a
+    project_path (regression: an unconfigured agent bound the CLI service and
+    returned 400 'project_path is required')."""
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda req: "",
+        subagent_batch=lambda req: "",
+        notes_service=_Notes(),
+        beads_store=_FakeBeadsStore(),  # in-process → agent-global adapter
+    )
+    client = TestClient(app)
+    # no project_path supplied — must not 400
+    assert client.get("/api/beads/status").json() == {"initialized": True}
+    assert client.get("/api/beads/issues").status_code == 200
+
+
 def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     client, notes = _client()
 
