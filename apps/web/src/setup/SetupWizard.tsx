@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Bot,
   Check,
   ChevronLeft,
@@ -111,6 +112,9 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  // Result of the last "Test connection" probe (a real completion). null = not
+  // yet tested; invalidated whenever the key/base/model changes.
+  const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
 
   const index = steps.indexOf(step);
 
@@ -136,6 +140,11 @@ export function SetupWizard({
       alive = false;
     };
   }, [open]);
+
+  // A changed key/base/model invalidates a prior connection test.
+  useEffect(() => {
+    setTested(null);
+  }, [state.apiBase, state.apiKey, state.modelName]);
 
   const canGoNext = useMemo(() => {
     if (step === "model") return state.apiBase.trim() && state.modelName.trim();
@@ -170,6 +179,22 @@ export function SetupWizard({
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The real auth check: a 1-token completion down the same path as chat, so a
+  // bad key / wrong model is caught here in the UI rather than as a failed turn.
+  async function testConnection() {
+    setBusy(true);
+    setError("");
+    setTested(null);
+    try {
+      const r = await api.testModel(state.apiBase.trim(), state.apiKey.trim(), state.modelName.trim());
+      setTested({ ok: r.ok, error: r.error || "" });
+    } catch (exc) {
+      setTested({ ok: false, error: exc instanceof Error ? exc.message : String(exc) });
     } finally {
       setBusy(false);
     }
@@ -334,7 +359,26 @@ export function SetupWizard({
                   {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
                   Probe
                 </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void testConnection()}
+                  disabled={busy || !state.apiBase.trim() || !state.modelName.trim()}
+                >
+                  {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+                  Test connection
+                </button>
               </div>
+              {tested ? (
+                <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
+                  {tested.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
+                  <span>
+                    {tested.ok
+                      ? "Connection OK — the model responded."
+                      : `Connection failed — ${tested.error || "the model did not respond."}`}
+                  </span>
+                </div>
+              ) : null}
               <div className="setup-grid three">
                 <label className="field">
                   <span>Temperature</span>

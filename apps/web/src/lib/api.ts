@@ -326,6 +326,15 @@ export const api = {
     });
   },
 
+  // Real completion probe — the true auth check (unlike `models`, which only
+  // lists). Blank fields fall back to the saved config (Settings re-test).
+  testModel(apiBase: string, apiKey: string, model: string) {
+    return request<{ ok: boolean; error: string }>("/api/config/test-model", {
+      method: "POST",
+      body: { api_base: apiBase, api_key: apiKey, model },
+    });
+  },
+
   finishSetup(config: Partial<AgentConfig>, soul: string) {
     return request<{ ok: boolean; message: string }>("/api/config/setup", {
       method: "POST",
@@ -474,6 +483,11 @@ export const api = {
       onText?: (text: string, append: boolean) => void;
       onToolCall?: (evt: ToolEvent) => void;
       onInputRequired?: (payload: HitlPayload) => void;
+      // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
+      // turn (bad API key → 401). Carries the gateway's error text. Without this
+      // the failure only flashed in the transient status line and the turn
+      // looked like a silent "no response".
+      onFailed?: (message: string) => void;
       onDone?: () => void;
     } = {},
   ) {
@@ -535,6 +549,9 @@ export const api = {
         // / 1.0 `TASK_STATE_INPUT_REQUIRED`). Surface the form/question payload.
         if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
           handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
+        }
+        if (state === "failed" || state === "TASK_STATE_FAILED") {
+          handlers.onFailed?.(messageText || "the turn failed");
         }
       }
 

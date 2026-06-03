@@ -505,6 +505,69 @@ def list_gateway_models(
     return ids, ""
 
 
+def validate_model_connection(
+    api_base: str,
+    api_key: str = "",
+    model: str = "",
+    timeout: float = 20.0,
+) -> tuple[bool, str]:
+    """Probe the model with a minimal real completion — the *true* auth check.
+
+    ``list_gateway_models`` only hits ``/models``, which gateways answer for
+    keys that can't actually run a completion (e.g. the proto-labs LiteLLM
+    gateway lists models but rejects a non-``sk-`` virtual key at
+    ``/chat/completions`` with a 401). This sends a 1-token completion down the
+    same path the agent uses, so a bad key / wrong model / unreachable gateway
+    is caught *before* setup completes instead of surfacing as a cryptic failed
+    chat turn. Returns ``(ok, error_message)`` — the message is the gateway's
+    own human-readable detail (e.g. "expected to start with 'sk-'") when it has
+    one, so the UI can show something actionable.
+    """
+    import httpx
+
+    if not api_base:
+        return False, "api_base is empty"
+    if not model:
+        return False, "model is empty"
+
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    url = api_base.rstrip("/") + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "temperature": 0,
+    }
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as e:
+        return False, f"connection failed: {e}"
+
+    if resp.status_code < 400:
+        return True, ""
+
+    # Surface the gateway's own error message when present (OpenAI-shaped
+    # ``{"error": {"message": ...}}``), else the raw body, capped.
+    detail = ""
+    try:
+        body = resp.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            detail = err.get("message") or ""
+        elif isinstance(err, str):
+            detail = err
+    except ValueError:
+        detail = ""
+    if not detail:
+        detail = (resp.text or "")[:300]
+    return False, f"HTTP {resp.status_code}: {detail}" if detail else f"HTTP {resp.status_code}"
+
+
 # ---------------------------------------------------------------------------
 # Tool registry introspection
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { AlertTriangle, RotateCcw, Save } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
@@ -68,6 +68,23 @@ function SettingsBody() {
     onError: (e) => setStatus(`save failed: ${e instanceof Error ? e.message : String(e)}`),
   });
 
+  // Verify the model can actually complete — tests the pending edits if any
+  // (e.g. a freshly-typed key), else the saved config (blanks fall back server
+  // side). Real completion probe, the same auth path as chat.
+  const asStr = (v: unknown) => (typeof v === "string" ? v : "");
+  const testConn = useMutation({
+    mutationFn: () =>
+      api.testModel(
+        asStr(dirty["model.api_base"]),
+        asStr(dirty["model.api_key"]),
+        asStr(dirty["model.name"]),
+      ),
+    onMutate: () => setStatus("testing connection…"),
+    onSuccess: (r) =>
+      setStatus(r.ok ? "connection OK — the model responded." : `connection failed — ${r.error || "no response"}`),
+    onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
+
   function discard() {
     setDirty({});
     setStatus("");
@@ -83,6 +100,10 @@ function SettingsBody() {
           </p>
         </div>
         <div className="settings-actions">
+          <button className="secondary-button" type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
+            {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+            Test connection
+          </button>
           <button className="secondary-button" type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
             <RotateCcw size={15} />
             Discard

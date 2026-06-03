@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Setup validates the model connection before completing — no more silently
+  broken agents.** The wizard accepted any API key (the models-list probe passes
+  for keys that can't actually complete), so a bad/blank key only surfaced as a
+  cryptic failed chat turn with no UI signal. Now: a new `validate_model_connection`
+  runs a real 1-token completion (the same auth path as chat), enforced
+  **server-side in `finish_setup`** — setup can't complete if the model can't
+  respond, and the gateway's own message is returned to the wizard (e.g. "expected
+  to start with 'sk-'"); **"Test connection"** buttons in the wizard *and* Settings
+  (`POST /api/config/test-model`, offloaded so it never freezes the loop); and a
+  terminal `TASK_STATE_FAILED` chat turn now renders as an errored message with an
+  actionable hint (check your API key in Settings) instead of a silent "no
+  response". Everything fixable in the UI.
 - **White-label brand name (driven by `identity.name`).** The console topbar +
   window/tab title now follow the configured agent name (Settings → Identity),
   defaulting to `protoAgent` — a fork sets its name once and the whole UI follows,

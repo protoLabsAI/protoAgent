@@ -21,6 +21,26 @@ function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Append an actionable pointer when a turn fails on something the operator can
+// fix in the UI — chiefly model auth (a bad/blank API key 401s). Keeps the raw
+// gateway detail (it's specific, e.g. "expected to start with 'sk-'") but tells
+// the user where to fix it instead of leaving a cryptic error.
+function withConfigHint(detail: string): string {
+  const d = detail.toLowerCase();
+  const looksAuth =
+    d.includes("401") ||
+    d.includes("403") ||
+    d.includes("api key") ||
+    d.includes("api_key") ||
+    d.includes("auth") ||
+    d.includes("virtual key") ||
+    d.includes("sk-");
+  if (looksAuth) {
+    return `${detail}\n\n→ Check your model API key in **System → Settings** (or re-run setup), then “Test connection”.`;
+  }
+  return detail;
+}
+
 function useSession(sessionId: string) {
   const state = useChatState();
   return state.sessions.find((session) => session.id === sessionId) || null;
@@ -253,6 +273,25 @@ function ChatSessionSlot({
         signal: controller.signal,
         onTaskId: setTaskId,
         onStatus: setStatusMessage,
+        onFailed: (detail) => {
+          // The turn failed terminally (e.g. the model 401'd on a bad key).
+          // Surface it as an errored assistant message + an actionable hint,
+          // instead of a silent "no response" with the error lost to the
+          // transient status line.
+          const friendly = withConfigHint(detail);
+          onError(friendly);
+          setStatusMessage("failed");
+          chatStore.setSessionStatus(session.id, "error");
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (latest) {
+            chatStore.updateMessages(
+              session.id,
+              latest.messages.map((item) =>
+                item.id === assistantId ? { ...item, content: friendly, status: "error" } : item,
+              ),
+            );
+          }
+        },
         onInputRequired: (payload) => {
           setHitl(payload);
           // Alert natively if the window is hidden/unfocused (menu-bar-only

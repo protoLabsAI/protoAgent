@@ -1049,10 +1049,27 @@ def _build_settings_callbacks() -> dict[str, Any]:
             split_secret_updates,
             strip_secrets_from_doc,
             validate_config_dict,
+            validate_model_connection,
             write_soul,
         )
 
         messages: list[str] = []
+
+        # 0. Verify the model can actually complete BEFORE we touch anything —
+        # otherwise the graph compiles fine but every chat 401s, with no UI
+        # signal (the bug that motivated this gate). A real 1-token completion
+        # exercises the same auth path as chat, so a bad key / wrong model /
+        # unreachable gateway is caught here and returned to the wizard verbatim
+        # (e.g. "expected to start with 'sk-'"). Setup stays incomplete, so the
+        # operator fixes it in the UI and retries — no file editing required.
+        if config is not None and isinstance(config.get("model"), dict):
+            m = config["model"]
+            test_base = m.get("api_base") or (_graph_config.api_base if _graph_config else "")
+            test_key = m.get("api_key") or (_graph_config.api_key if _graph_config else "")
+            test_model = m.get("name") or (_graph_config.model_name if _graph_config else "")
+            ok, verr = validate_model_connection(test_base, test_key, test_model)
+            if not ok:
+                return False, f"model connection failed — {verr}"
 
         # 1. Persist (secrets to the untracked overlay, never the tracked YAML)
         if config is not None:
@@ -2652,6 +2669,9 @@ def _main():
     class ModelsProbeRequest(PydanticBaseModel):
         api_base: str = ""
         api_key: str = ""
+        # Only used by the connection test (a real completion needs a model);
+        # the model-list probe ignores it. Blank falls back to the saved config.
+        model: str = ""
 
     @fastapi_app.post("/api/config/models")
     async def _api_list_models(req: ModelsProbeRequest | None = None):
@@ -2670,6 +2690,25 @@ def _main():
         key = body.api_key or (_graph_config.api_key if _graph_config else "")
         models, error = list_gateway_models(base, key)
         return {"models": models, "error": error}
+
+    @fastapi_app.post("/api/config/test-model")
+    async def _api_test_model(req: ModelsProbeRequest | None = None):
+        """Verify the model can actually complete (the true auth check).
+
+        Powers the wizard's + Settings' "Test connection" button. POST (body)
+        so the key never lands in a URL/log. A blank field falls back to the
+        saved config, so Settings can re-test the live agent with one click.
+        Offloaded to a thread — a real completion is a blocking network call,
+        and we never want the connection test to freeze the event loop.
+        """
+        from graph.config_io import validate_model_connection
+
+        body = req or ModelsProbeRequest()
+        base = body.api_base or (_graph_config.api_base if _graph_config else "")
+        key = body.api_key or (_graph_config.api_key if _graph_config else "")
+        model = body.model or (_graph_config.model_name if _graph_config else "")
+        ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
+        return {"ok": ok, "error": error}
 
     # --- Setup wizard state -------------------------------------------------
     @fastapi_app.get("/api/config/setup-status")
