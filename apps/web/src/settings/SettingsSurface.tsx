@@ -1,6 +1,11 @@
-import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { AlertTriangle, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
+
+// Setup walkthroughs live in the template's (protoAgent) docs — forks don't ship
+// their own docs site, so the in-app help links point at the canonical docs.
+const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
+const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google#oauth-client";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
@@ -85,6 +90,38 @@ function SettingsBody() {
     onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
   });
 
+  // Verify a Discord bot token (pending edit or saved). Shows the bot name.
+  const testDiscord = useMutation({
+    mutationFn: () => api.testDiscord(asStr(dirty["discord.bot_token"])),
+    onMutate: () => setStatus("testing Discord…"),
+    onSuccess: (r) =>
+      setStatus(
+        r.ok
+          ? `Discord OK — connected as ${r.bot_user || "your bot"}.`
+          : `Discord connection failed — ${r.error || "check the token"}`,
+      ),
+    onError: (e) => setStatus(`Discord test failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
+
+  // Google surface (ADR 0017): show connection status + a "Connect Google"
+  // button that runs the OAuth consent (opens the operator's browser).
+  const googleStatus = useQuery({ queryKey: ["google-status"], queryFn: () => api.googleStatus() });
+  const googleConnect = useMutation({
+    mutationFn: () => api.googleConnect(),
+    onMutate: () => setStatus("opening Google consent in your browser…"),
+    onSuccess: (r) => {
+      setStatus(
+        r.ok
+          ? `Google connected${r.email ? ` as ${r.email}` : ""}.`
+          : `Google connect failed — ${r.error || "try again"}`,
+      );
+      void googleStatus.refetch();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+    onError: (e) => setStatus(`Google connect failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
+  const dirtyGoogleClient = "google.client_id" in dirty || "google.client_secret" in dirty;
+
   function discard() {
     setDirty({});
     setStatus("");
@@ -135,6 +172,46 @@ function SettingsBody() {
                 onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
               />
             ))}
+            {group.section === "Discord" ? (
+              <div className="settings-group-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => testDiscord.mutate()}
+                  disabled={testDiscord.isPending || save.isPending}
+                >
+                  {testDiscord.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+                  Test connection
+                </button>
+                <a className="settings-help-link" href={DISCORD_GUIDE_URL} target="_blank" rel="noreferrer">
+                  How to create a bot <ExternalLink size={13} />
+                </a>
+              </div>
+            ) : null}
+            {group.section === "Google" ? (
+              <div className="settings-group-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => googleConnect.mutate()}
+                  disabled={googleConnect.isPending || save.isPending || dirtyGoogleClient}
+                  title={dirtyGoogleClient ? "Save the client ID + secret first" : undefined}
+                >
+                  {googleConnect.isPending ? <Loader2 className="spin" size={15} /> : <Link2 size={15} />}
+                  {googleStatus.data?.connected ? "Reconnect Google" : "Connect Google"}
+                </button>
+                <span className="settings-inline-status">
+                  {googleStatus.data?.connected
+                    ? `Connected${googleStatus.data.email ? ` as ${googleStatus.data.email}` : ""}`
+                    : dirtyGoogleClient
+                      ? "Save the client ID + secret, then connect"
+                      : "Not connected"}
+                </span>
+                <a className="settings-help-link" href={GOOGLE_GUIDE_URL} target="_blank" rel="noreferrer">
+                  Get an OAuth client <ExternalLink size={13} />
+                </a>
+              </div>
+            ) : null}
           </section>
         ))}
       </div>

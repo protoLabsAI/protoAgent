@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Connect Google (Gmail + Calendar) from the app — no files, no CLI (ADR 0017).**
+  The Google MCP surface (Slice 2) needed a `credentials.json`, a CLI consent run,
+  and a hand-edited `mcp.servers` — unreachable from the desktop app, so the agent
+  had no calendar/mail. Now: a `google` config section (`client_id` / `client_secret`
+  → secrets.yaml / `tz`), a **"Connect Google"** button in Settings + an OAuth-client
+  step in the wizard that runs the consent flow (`POST /api/config/google/connect`
+  opens your browser, caches a refreshable token in the per-user config dir), and a
+  status probe (`GET /api/config/google/status` → connected account email). When
+  enabled + connected the google MCP server is **auto-wired** (no `mcp.servers`
+  editing) and **frozen-aware** (the bundled binary re-invokes itself, `--mcp-google`,
+  since it has no `python`); the headless subprocess is load-only so it never pops a
+  browser. Env/`credentials.json` remain a Docker fallback.
+- **Connect Discord from the app — no env vars, no file editing (ADR 0016).**
+  The Discord surface (ADR 0015) was env-only (`DISCORD_BOT_TOKEN`), started once
+  at boot — invisible to the desktop app (no shell to export into; the frozen
+  sidecar can't read a repo `.env`, so it connected as whatever bot was in the
+  ambient env). Now Discord is configured in-app: a `discord` config section
+  (`enabled` / `bot_token` → secrets.yaml / `admin_ids`), a **"Connect Discord"**
+  step in the setup wizard and a **Discord section in System → Settings**, each
+  with a **"Test connection"** button (a real `GET /users/@me` identity probe via
+  `POST /api/config/test-discord` — shows the bot's name, catches a bad token in
+  the UI). The gateway reads the config (env vars remain a Docker fallback) and
+  **reconnects live on save** — no restart. Both surfaces link to a docs
+  walkthrough for creating the bot + enabling the Message Content intent.
 - **Setup validates the model connection before completing — no more silently
   broken agents.** The wizard accepted any API key (the models-list probe passes
   for keys that can't actually complete), so a bad/blank key only surfaced as a
@@ -55,7 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now auto-clears when the engine reports ready (`graph_loaded` flips true), and
   the boot gate holds over the compile window. (Inline compile is the root cause —
   offloading it is tracked in #497.)
-- **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
 - **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
   console's `streamChat` still spoke A2A **0.3** (`message/stream` with
   `parts:[{kind:'text'}]`), but the server moved to A2A 1.0 (a2a-sdk) — which

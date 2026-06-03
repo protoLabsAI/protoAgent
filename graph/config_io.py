@@ -87,6 +87,8 @@ SECRETS_YAML_PATH = _LIVE_CONFIG_DIR / "secrets.yaml"
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
     ("model", "api_key"),
     ("auth", "token"),
+    ("discord", "bot_token"),
+    ("google", "client_secret"),
 )
 
 # Setup wizard state.
@@ -236,6 +238,17 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
         },
         "auth": {
             "token": "",
+        },
+        "discord": {
+            "enabled": config.discord_enabled,
+            "bot_token": "",  # redacted — secret, mirrors api_key / auth.token
+            "admin_ids": list(config.discord_admin_ids),
+        },
+        "google": {
+            "enabled": config.google_enabled,
+            "client_id": config.google_client_id,
+            "client_secret": "",  # redacted — secret
+            "tz": config.google_tz,
         },
         "runtime": {
             "autostart_on_boot": config.autostart_on_boot,

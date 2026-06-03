@@ -57,6 +57,25 @@ COLLECT_ALL = [
     # the import-scan misses them — collect explicitly.
     "aiosqlite",
     "sqlalchemy",
+    # The native Discord surface (ADR 0015) is lazy-imported in the server
+    # startup hook, so the import-scan misses it; the gateway also imports
+    # ``websockets`` lazily. Collect both so Discord works in the frozen app.
+    "surfaces",
+    "websockets",
+    # Google surface (ADR 0017): the MCP SDK (FastMCP) + the repo's google MCP
+    # server module, lazily imported via the --mcp-google self-reinvoke entry.
+    "mcp",
+    "mcp_servers",
+]
+
+# Google client libraries (ADR 0017) — bundled only when installed in the build
+# env (``requirements-google.txt``). Keeps a lean build (no google) working;
+# install the extra to ship Gmail/Calendar in the frozen app.
+OPTIONAL_COLLECT_ALL = [
+    "google.auth",
+    "google.oauth2",
+    "google_auth_oauthlib",
+    "googleapiclient",
 ]
 
 # Gradio (and the chat_ui module that imports it) is dead weight in headless
@@ -88,6 +107,16 @@ def main() -> None:
     collect: list[str] = []
     for pkg in COLLECT_ALL:
         collect += ["--collect-all", pkg]
+    # Optional Google libs: collect only what's importable in this build env.
+    import importlib.util
+
+    for pkg in OPTIONAL_COLLECT_ALL:
+        if importlib.util.find_spec(pkg) is not None:
+            collect += ["--collect-all", pkg]
+        else:
+            print(f"note: optional package not installed, skipping: {pkg} "
+                  "(install requirements-google.txt to ship Gmail/Calendar)",
+                  file=sys.stderr)
     exclude: list[str] = []
     for mod in EXCLUDE:
         exclude += ["--exclude-module", mod]

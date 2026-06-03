@@ -1,0 +1,6 @@
+# Google MCP server deps (Slice 2) — install only when enabling the Google
+# surface: `pip install -r requirements-google.txt`. The server runs as a
+# subprocess; the core agent doesn't import these.
+mcp>=1.2
+google-api-python-client>=2.120
+google-auth-oauthlib>=1.2
