@@ -226,7 +226,7 @@ h2 {
 }
 
 /* Cold-start boot gate (sits below the 2.5s brand splash at z-90, above the
-   app). Holds "Starting Gina…" over the app while the frozen desktop sidecar
+   app). Holds "Starting <agent>…" over the app while the frozen desktop sidecar
    warms up, instead of flashing "Load failed". */
 .boot-gate {
   position: fixed;
