@@ -14,6 +14,10 @@ export default defineConfig({
   // VitePress treats dead links as fatal, so skip just the localhost ones.
   ignoreDeadLinks: "localhostLinks",
 
+  // docs/dev/ is the team's internal engineering area (handoffs + notes) — it
+  // lives in the repo (committed, shared) but is NOT part of the published site.
+  srcExclude: ["dev/**"],
+
   head: [["link", { rel: "icon", href: "/protoAgent/favicon.svg" }]],
 
   themeConfig: {
