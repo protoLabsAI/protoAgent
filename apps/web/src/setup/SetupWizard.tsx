@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Bot,
+  CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -20,13 +21,14 @@ import type { ReactNode } from "react";
 import { api } from "../lib/api";
 import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
 
-type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "discord" | "finish";
+type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "discord" | "google" | "finish";
 
-const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "discord", "finish"];
+const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "discord", "google", "finish"];
 
-// Bot-setup walkthrough (Developer Portal steps + Message Content intent). The
-// wizard + Settings link here for users who want the full how-to.
-const DISCORD_GUIDE_URL = "https://protolabsai.github.io/gina/guides/discord#bot-setup";
+// Setup walkthroughs live in the template's (protoAgent) canonical docs — forks
+// don't ship their own docs site, so the in-app help links point there.
+const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
+const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google#oauth-client";
 
 type WizardState = {
   agentName: string;
@@ -50,6 +52,11 @@ type WizardState = {
   discordEnabled: boolean;
   discordToken: string;
   discordAdminId: string;
+  // Google surface (optional). Collect the OAuth client here; authorizing
+  // ("Connect Google") happens in Settings after setup (it opens the browser).
+  googleClientId: string;
+  googleClientSecret: string;
+  googleTz: string;
 };
 
 function defaultState(): WizardState {
@@ -78,6 +85,9 @@ function defaultState(): WizardState {
     discordEnabled: false,
     discordToken: "",
     discordAdminId: "",
+    googleClientId: "",
+    googleClientSecret: "",
+    googleTz: "",
   };
 }
 
@@ -108,6 +118,9 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
     discordEnabled: Boolean(config.discord?.enabled),
     discordToken: "",
     discordAdminId: (config.discord?.admin_ids || []).join(", "),
+    googleClientId: config.google?.client_id || "",
+    googleClientSecret: "",
+    googleTz: config.google?.tz || "",
   };
 }
 
@@ -315,6 +328,15 @@ export function SetupWizard({
               .split(/[\n,]/)
               .map((id) => id.trim())
               .filter(Boolean),
+          },
+          // Google: store the OAuth client; enabling happens, but the managed MCP
+          // server only starts once "Connect Google" (Settings) mints a token.
+          // client_secret only sent when entered (blank preserves the stored one).
+          google: {
+            enabled: Boolean(state.googleClientId.trim()),
+            client_id: state.googleClientId.trim(),
+            ...(state.googleClientSecret.trim() ? { client_secret: state.googleClientSecret.trim() } : {}),
+            tz: state.googleTz.trim(),
           },
         },
         state.soul,
@@ -577,6 +599,48 @@ export function SetupWizard({
                   </span>
                 </div>
               ) : null}
+            </StepBody>
+          ) : null}
+
+          {step === "google" ? (
+            <StepBody icon={<CalendarDays size={20} />} title="Google" kicker="Optional">
+              <p className="field-hint" style={{ marginTop: 0 }}>
+                Give {state.agentName || "your agent"} read access to Gmail + Calendar. Paste your
+                Google Cloud <strong>Desktop app</strong> OAuth client below — after setup, click
+                <strong> Connect Google</strong> in System → Settings to authorize (it opens your
+                browser). Optional — skip to do it later.{" "}
+                <a href={GOOGLE_GUIDE_URL} target="_blank" rel="noreferrer" className="setup-link">
+                  Get an OAuth client <ExternalLink size={12} />
+                </a>
+              </p>
+              <div className="setup-grid two">
+                <label className="field">
+                  <span>OAuth client ID</span>
+                  <input
+                    value={state.googleClientId}
+                    onChange={(event) => update({ googleClientId: event.target.value })}
+                    placeholder="…apps.googleusercontent.com"
+                  />
+                </label>
+                <label className="field">
+                  <span>OAuth client secret</span>
+                  <input
+                    type="password"
+                    value={state.googleClientSecret}
+                    onChange={(event) => update({ googleClientSecret: event.target.value })}
+                    autoComplete="off"
+                    placeholder="Leave blank to skip Google"
+                  />
+                </label>
+              </div>
+              <label className="field">
+                <span>Timezone (IANA, optional)</span>
+                <input
+                  value={state.googleTz}
+                  onChange={(event) => update({ googleTz: event.target.value })}
+                  placeholder="e.g. America/Los_Angeles — sets the day bounds for “today”"
+                />
+              </label>
             </StepBody>
           ) : null}
 

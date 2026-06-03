@@ -2093,6 +2093,16 @@ def _a2a_terminal(outcome) -> None:
 def _main():
     global _active_port
 
+    # Frozen-binary entrypoint for the managed Google MCP server (ADR 0017): the
+    # bundled desktop app has no `python` on PATH, so the google MCP entry
+    # re-invokes this binary with --mcp-google instead of `-m
+    # mcp_servers.google.server`. Handle it before argparse/server startup.
+    if "--mcp-google" in sys.argv:
+        from mcp_servers.google.server import main as _google_mcp_main
+
+        _google_mcp_main()
+        return
+
     parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
@@ -2814,6 +2824,57 @@ def _main():
             "error": error,
             "bot_user": (bot_user or {}).get("username") if ok else None,
         }
+
+    def _google_env_from_config() -> None:
+        """Mirror the configured Google OAuth client + token path into the env so
+        ``mcp_servers.google.auth`` (which reads env) can run the consent/status
+        in-process for the connect + status endpoints."""
+        from graph.config_io import _live_config_dir
+
+        cid = (_graph_config.google_client_id if _graph_config else "") or ""
+        sec = (_graph_config.google_client_secret if _graph_config else "") or ""
+        if cid:
+            os.environ["GOOGLE_CLIENT_ID"] = cid
+        if sec:
+            os.environ["GOOGLE_CLIENT_SECRET"] = sec
+        os.environ["GOOGLE_TOKEN_PATH"] = str(_live_config_dir() / "google-token.json")
+
+    @fastapi_app.get("/api/config/google/status")
+    async def _api_google_status():
+        """Report (configured, connected, email) for the Google surface."""
+        try:
+            from mcp_servers.google.auth import connection_status
+        except Exception as e:  # noqa: BLE001 — google extra may be absent
+            return {"configured": False, "connected": False, "email": None,
+                    "error": f"google support unavailable: {e}"}
+        _google_env_from_config()
+        try:
+            return await asyncio.to_thread(connection_status)
+        except Exception as e:  # noqa: BLE001
+            return {"configured": False, "connected": False, "email": None, "error": str(e)}
+
+    @fastapi_app.post("/api/config/google/connect")
+    async def _api_google_connect():
+        """Run the OAuth consent (opens the operator's browser), cache the token,
+        enable the Google surface, and reload so the tools register. Long-lived:
+        it blocks until the operator approves in the browser (3-min cap)."""
+        try:
+            from mcp_servers.google.auth import run_consent
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"google support unavailable: {e}"}
+        if not (_graph_config and _graph_config.google_client_id and _graph_config.google_client_secret):
+            return {"ok": False, "error": "Set the OAuth client ID + secret first, then connect."}
+        _google_env_from_config()
+        try:
+            email = await asyncio.wait_for(asyncio.to_thread(run_consent), timeout=180)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "Timed out waiting for Google consent (3 min). Try again."}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+        # Persist enabled + reload so the managed google MCP server starts and the
+        # tools register without a restart.
+        ok, msg = _apply_settings_changes(config={"google": {"enabled": True}})
+        return {"ok": True, "email": email, "reload": msg if ok else None}
 
     # --- Setup wizard state -------------------------------------------------
     @fastapi_app.get("/api/config/setup-status")

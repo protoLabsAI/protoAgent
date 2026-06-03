@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Connect Google (Gmail + Calendar) from the app — no files, no CLI (ADR 0017).**
+  The Google MCP surface (Slice 2) needed a `credentials.json`, a CLI consent run,
+  and a hand-edited `mcp.servers` — unreachable from the desktop app, so the agent
+  had no calendar/mail. Now: a `google` config section (`client_id` / `client_secret`
+  → secrets.yaml / `tz`), a **"Connect Google"** button in Settings + an OAuth-client
+  step in the wizard that runs the consent flow (`POST /api/config/google/connect`
+  opens your browser, caches a refreshable token in the per-user config dir), and a
+  status probe (`GET /api/config/google/status` → connected account email). When
+  enabled + connected the google MCP server is **auto-wired** (no `mcp.servers`
+  editing) and **frozen-aware** (the bundled binary re-invokes itself, `--mcp-google`,
+  since it has no `python`); the headless subprocess is load-only so it never pops a
+  browser. Env/`credentials.json` remain a Docker fallback.
 - **Connect Discord from the app — no env vars, no file editing (ADR 0016).**
   The Discord surface (ADR 0015) was env-only (`DISCORD_BOT_TOKEN`), started once
   at boot — invisible to the desktop app (no shell to export into; the frozen

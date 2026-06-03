@@ -132,6 +132,20 @@ FIELDS: list[Field] = [
     Field("discord.admin_ids", "discord_admin_ids", "Admin user IDs", "string_list", "Discord",
           "Discord user IDs allowed to DM the bot (one per line). Empty = anyone."),
 
+    # ── Google (ADR 0017) ────────────────────────────────────────────────────
+    # The OAuth client lives here; "Connect Google" (a button, not a field) runs
+    # the consent flow and caches the token. Editing client id/secret is rare —
+    # most operators use the wizard/Settings "Connect Google" button.
+    Field("google.enabled", "google_enabled", "Enable Google", "bool", "Google",
+          "Gmail + Calendar tools. Needs the OAuth client below + a completed "
+          "“Connect Google”. Reconnects the tools live on save."),
+    Field("google.client_id", "google_client_id", "OAuth client ID", "string", "Google",
+          "From your Google Cloud “Desktop app” OAuth client."),
+    Field("google.client_secret", "google_client_secret", "OAuth client secret", "secret", "Google",
+          "From the same OAuth client. Stored in secrets.yaml."),
+    Field("google.tz", "google_tz", "Timezone (IANA)", "string", "Google",
+          "e.g. America/Los_Angeles — sets the day bounds for “today”. Blank = UTC."),
+
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
           "Install/remove the boot LaunchAgent.", restart=True),

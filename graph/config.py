@@ -105,6 +105,19 @@ class LangGraphConfig:
     discord_enabled: bool = False
     discord_bot_token: str = ""
     discord_admin_ids: list[str] = field(default_factory=list)
+
+    # Google surface (ADR 0017) — Gmail + Calendar via the bundled MCP server,
+    # connected in-app with an OAuth consent flow (no credentials.json / CLI).
+    # The OAuth client (client_id + client_secret) comes from the operator's
+    # Google Cloud "Desktop app" client; the refreshable token is cached in the
+    # per-user config dir. `client_secret` lives in the secrets overlay. When
+    # enabled + connected, the config layer auto-wires the google MCP server, so
+    # the operator never edits `mcp.servers`. `tz` sets day bounds for "today".
+    google_enabled: bool = False
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_tz: str = ""
+
     # Enforcement gate — opt-in safety middleware that blocks tool calls
     # before they execute (deny list + per-tool rate limits). Off by default;
     # forks enable it and supply a deny list / rate limits (and can attach a
@@ -364,6 +377,7 @@ class LangGraphConfig:
         secrets = _load_secrets_doc(p.parent)
 
         discord = data.get("discord", {})
+        google = data.get("google", {})
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -382,6 +396,7 @@ class LangGraphConfig:
         secret_api_key = secrets.get("model", {}).get("api_key")
         secret_auth_token = secrets.get("auth", {}).get("token")
         secret_discord_token = secrets.get("discord", {}).get("bot_token")
+        secret_google_secret = secrets.get("google", {}).get("client_secret")
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -403,6 +418,10 @@ class LangGraphConfig:
             discord_enabled=discord.get("enabled", cls.discord_enabled),
             discord_bot_token=secret_discord_token or discord.get("bot_token", cls.discord_bot_token),
             discord_admin_ids=list(discord.get("admin_ids", []) or []),
+            google_enabled=google.get("enabled", cls.google_enabled),
+            google_client_id=google.get("client_id", cls.google_client_id),
+            google_client_secret=secret_google_secret or google.get("client_secret", cls.google_client_secret),
+            google_tz=google.get("tz", cls.google_tz),
             enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
             enforcement_disallowed_tools=(
                 data.get("enforcement", {}).get("disallowed_tools", [])

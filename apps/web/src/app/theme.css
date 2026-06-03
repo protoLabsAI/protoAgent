@@ -2754,6 +2754,10 @@ textarea {
   gap: 14px;
   margin-top: 10px;
 }
+.settings-inline-status {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
 .settings-help-link,
 .setup-link {
   display: inline-flex;

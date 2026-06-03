@@ -130,7 +130,7 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # strand fork-added fields outside the drawer's round-trip.
     assert set(d.keys()) == {
         "model", "subagents", "middleware", "knowledge", "skills", "mcp", "plugins",
-        "identity", "auth", "discord", "runtime", "operator",
+        "identity", "auth", "discord", "google", "runtime", "operator",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature

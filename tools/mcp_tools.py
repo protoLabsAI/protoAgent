@@ -20,6 +20,63 @@ from typing import Any
 log = logging.getLogger("protoagent.mcp")
 
 
+def _google_server_entry(config) -> dict | None:
+    """Build the managed Google MCP server entry, or None if google is off.
+
+    The OAuth client (id/secret) + token path + tz are passed to the subprocess
+    via ``env``. Launch is frozen-aware: the bundled desktop binary has no
+    ``python`` on PATH, so it re-invokes itself (``<binary> --mcp-google``); in a
+    normal interpreter it runs ``-m mcp_servers.google.server``.
+    """
+    if not getattr(config, "google_enabled", False):
+        return None
+    client_id = (getattr(config, "google_client_id", "") or "").strip()
+    client_secret = (getattr(config, "google_client_secret", "") or "").strip()
+    if not (client_id and client_secret):
+        log.info("[google] enabled but OAuth client not set — server not started")
+        return None
+
+    import sys
+
+    try:
+        from graph.config_io import _live_config_dir
+
+        token_path = str(_live_config_dir() / "google-token.json")
+    except Exception:  # noqa: BLE001
+        token_path = "google-token.json"
+
+    # Only start the headless MCP server once authorized (a cached token exists).
+    # Before "Connect Google" there's nothing to load — starting it would just
+    # register tools that error on every call. The connect endpoint reloads once
+    # the token is written, so the server comes up then.
+    if not os.path.exists(token_path):
+        log.info("[google] enabled but not connected yet — server starts after Connect Google")
+        return None
+
+    if getattr(sys, "frozen", False):
+        command, args = sys.executable, ["--mcp-google"]
+    else:
+        command, args = sys.executable, ["-m", "mcp_servers.google.server"]
+
+    env = {
+        "GOOGLE_CLIENT_ID": client_id,
+        "GOOGLE_CLIENT_SECRET": client_secret,
+        "GOOGLE_TOKEN_PATH": token_path,
+    }
+    tz = (getattr(config, "google_tz", "") or "").strip()
+    if tz:
+        env["GOOGLE_TZ"] = tz
+
+    return {
+        "name": "google",
+        "enabled": True,
+        "transport": "stdio",
+        "command": command,
+        "args": args,
+        "env": env,
+    }
+
+
 def _server_connection(server: dict) -> dict | None:
     """Map a config ``mcp.servers[]`` entry to a langchain-mcp-adapters
     connection dict. Returns ``None`` for an entry missing its essential fields
@@ -136,10 +193,22 @@ def build_mcp_tools(config) -> tuple[list, list, list[dict]]:
     tools: list = []
     meta: list[dict] = []
 
-    if not getattr(config, "mcp_enabled", False):
+    # The Google surface (ADR 0017) is a managed MCP server: when google is
+    # enabled in config, inject its entry (frozen-aware launch + OAuth env) and
+    # treat MCP as enabled, so the operator never edits mcp.servers. A
+    # user-defined 'google' entry is replaced by the managed one.
+    servers = list(getattr(config, "mcp_servers", []) or [])
+    google_entry = _google_server_entry(config)
+    if google_entry is not None:
+        servers = [
+            s for s in servers
+            if not (isinstance(s, dict) and str(s.get("name") or "") == "google")
+        ]
+        servers.append(google_entry)
+
+    if not (getattr(config, "mcp_enabled", False) or google_entry is not None):
         return clients, tools, meta
 
-    servers = getattr(config, "mcp_servers", []) or []
     timeout = float(getattr(config, "mcp_timeout_seconds", 20.0))
     denylist = set(getattr(config, "mcp_denylist", []) or [])
     core_names = _core_tool_names()
