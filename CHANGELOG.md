@@ -64,6 +64,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Retry" affordance covers the engine never coming up. (Copy is name-driven.)
 
 ### Fixed
+- **Config reload no longer freezes the server (#497).** `_reload_langgraph_agent`
+  (graph recompile + MCP/plugin builds) ran **synchronously on the event loop**
+  from the finish-setup / settings / model-change routes, so the whole server
+  stopped serving for the rebuild's duration (~30s on the frozen desktop sidecar —
+  every concurrent poller got a connection refusal). The reload is now **offloaded
+  to a worker thread** (`asyncio.to_thread`) at those routes. The follow-up
+  scheduler / Discord restart still runs **on** the loop: a new
+  `_run_on_server_loop` helper marshals it onto the captured `_main_loop` via
+  `run_coroutine_threadsafe` when called from the worker thread — avoiding the trap
+  where the old `get_running_loop()` path silently dropped the scheduler start
+  (killing the briefing). Verified: the status endpoint stays responsive
+  throughout a reload, and toggling the scheduler off→on over the offloaded route
+  correctly stops + restarts it.
 - **Desktop webview connects to the sidecar (was "Load failed").** Two desktop
   bugs: (1) macOS WKWebView's App Transport Security blocks plain
   `http://127.0.0.1:<port>` loopback loads by default, silently failing every
