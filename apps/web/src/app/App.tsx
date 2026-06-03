@@ -26,6 +26,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { IntroSplash } from "./IntroSplash";
+import { BootGate } from "./BootGate";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -119,8 +120,16 @@ export function App() {
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
   // always renders; the retry doubles as the desktop sidecar boot-probe. The
-  // System → Runtime panel reads the same key via useSuspenseQuery.
-  const runtimeQ = useQuery({ ...runtimeStatusQuery(), retry: 30, retryDelay: 1000 });
+  // System → Runtime panel reads the same key via useSuspenseQuery. Keep polling
+  // until the graph is compiled (`graph_loaded`) so the BootGate observes the
+  // engine coming up — the post-setup compile runs inline on the server loop and
+  // briefly freezes it, so we want to notice the moment it's live again.
+  const runtimeQ = useQuery({
+    ...runtimeStatusQuery(),
+    retry: 30,
+    retryDelay: 1000,
+    refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
+  });
   const runtime = runtimeQ.data ?? null;
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
@@ -128,6 +137,15 @@ export function App() {
     const name = runtime?.identity?.name;
     if (name) document.title = name;
   }, [runtime]);
+  // BootGate gating: show the app once the engine is ready (graph compiled) OR
+  // the setup wizard is due (no graph expected pre-setup). `bootOverride` is the
+  // manual escape hatch (BootGate's "Continue anyway") for a graph that never
+  // compiles. The graph-ready transition also clears the stale connection-error
+  // strip left behind by the compile-window freeze (see effect below).
+  const [bootOverride, setBootOverride] = useState(false);
+  const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
+  const engineReady = Boolean(runtime?.graph_loaded);
+  const bootReady = bootOverride || setupPending || engineReady;
   const [workspace, setWorkspace] = useState<NotesWorkspace | null>(null);
   const [error, setError] = useState("");
 
@@ -157,6 +175,15 @@ export function App() {
   useEffect(() => {
     void refreshProjectState();
   }, []);
+
+  // Clear the stale "Load failed" strip once the engine reports ready. The
+  // graph compile (cold start, finishing setup, or a model change) runs inline
+  // on the server loop and freezes it, so concurrent pollers fail and set the
+  // strip — which is otherwise only cleared by a user action. When `graph_loaded`
+  // flips true the connection is healthy again, so that transient error is moot.
+  useEffect(() => {
+    if (engineReady) setError((prev) => (prev ? "" : prev));
+  }, [engineReady]);
 
   // Adopt the server's default project as the fs working dir if none is set (it
   // seeds the setup wizard's allowed-dirs) once runtime resolves.
@@ -437,6 +464,16 @@ export function App() {
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
+      {/* Cold-start gate: holds over the app until the runtime probe first
+          resolves (engine up), so the ~30s frozen-sidecar boot shows
+          "Starting <agent>…" rather than a "Load failed" flash. */}
+      <BootGate
+        ready={bootReady}
+        failed={!runtime && runtimeQ.isError}
+        name={runtime?.identity?.name || "protoAgent"}
+        onRetry={() => void runtimeQ.refetch()}
+        onContinue={() => setBootOverride(true)}
+      />
       {/* macOS desktop: the topbar IS the window's drag region (its brand insets
           right of the native traffic lights — see `.is-tauri-mac .topbar`).
           Interactive children (the status dot) stay clickable; harmless on web. */}

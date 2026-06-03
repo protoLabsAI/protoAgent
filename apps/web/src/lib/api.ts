@@ -88,8 +88,16 @@ function defaultApiBase() {
   if (savedBase) return savedBase.replace(/\/$/, "");
 
   // The Tauri desktop shell boots its bundled server on a dynamically-chosen
-  // free port and injects the base URL here before any page script runs
-  // (apps/desktop/src-tauri/src/lib.rs). Prefer it over the legacy fixed port.
+  // free port and hands it to the webview two ways (lib.rs): a `window` global,
+  // and `?__apiPort=` on the URL. The URL is always visible to the page (the
+  // global sometimes isn't, in which case we'd otherwise fall back to a dead
+  // legacy port → "Load failed"). Try the URL first, then the global.
+  try {
+    const p = new URLSearchParams(window.location.search).get("__apiPort");
+    if (p && /^\d+$/.test(p)) return `http://127.0.0.1:${p}`;
+  } catch {
+    /* no-op */
+  }
   const injected = (window as unknown as { __PROTOAGENT_API_BASE__?: string })
     .__PROTOAGENT_API_BASE__;
   if (injected) return injected.replace(/\/$/, "");

@@ -16,8 +16,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window/tab title now follow the configured agent name (Settings → Identity),
   defaulting to `protoAgent` — a fork sets its name once and the whole UI follows,
   no hardcoded rebrand.
+- **Cold-start boot gate for the desktop app.** First launch unpacks the frozen
+  PyInstaller sidecar and compiles the LangGraph agent (~30s); until it answered,
+  the webview flashed WKWebView's opaque "Load failed" then snapped to the setup
+  wizard. A full-screen gate (`BootGate`, adapted from ORBIS's `BootStatus`) now
+  holds "Starting <agent>…" over the app until the **engine is ready** — it gates
+  on `graph_loaded` (not just "runtime reachable"), so it stays down while the
+  setup wizard is due and re-engages for the post-setup graph compile. The runtime
+  probe polls until the graph is live; an escape-hatch ("Continue anyway", after a
+  grace period) means a graph that never compiles can't trap the operator, and a
+  "Retry" affordance covers the engine never coming up. (Copy is name-driven.)
 
 ### Fixed
+- **Desktop webview connects to the sidecar (was "Load failed").** Two desktop
+  bugs: (1) macOS WKWebView's App Transport Security blocks plain
+  `http://127.0.0.1:<port>` loopback loads by default, silently failing every
+  API/chat request — added `NSAllowsLocalNetworking` to the bundle `Info.plist`.
+  (2) The dynamic-free-port → `window.__PROTOAGENT_API_BASE__` injection handoff
+  was unreliable across Tauri v2 webview contexts (page fell back to a dead port);
+  the sidecar is now pinned to the fixed fallback port (`7870`), and the client
+  also reads `?__apiPort=` off the URL as a more reliable channel.
+- **"Load failed" no longer sticks after finishing setup.** The setup-finish (and
+  model-change) path compiles the graph inline on the event loop, freezing the
+  sidecar for ~30s — concurrent pollers got connection refusals and the error
+  strip (only cleared by a user action) lingered long after recovery. The strip
+  now auto-clears when the engine reports ready (`graph_loaded` flips true), and
+  the boot gate holds over the compile window. (Inline compile is the root cause —
+  offloading it is tracked in #497.)
+- **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
 - **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
   console's `streamChat` still spoke A2A **0.3** (`message/stream` with
   `parts:[{kind:'text'}]`), but the server moved to A2A 1.0 (a2a-sdk) — which
