@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Docs
+- **ADR 0015 — optional native Discord surface.** Decision record for shipping
+  Discord as an opt-in template surface (off unless `DISCORD_BOT_TOKEN` set): a
+  native inbound Gateway-v10 listener routed through the ADR-0003 reactive inbox
+  (burst debounce, conversation continuity, slow-response reactions,
+  auto-threading, admin allowlist, return-address identity capture) + stateless
+  outbound REST tools. Ports the proven `-deprecated-gina` patterns to the whole
+  fleet; the inbound gateway is native (not MCP — MCP can't host a persistent
+  stateful connection). Design only; implementation to follow.
 - **Internal dev-docs area (`docs/dev/`).** A committed, team-shared home for
   engineering working-context that isn't user-facing docs or a durable ADR:
   `docs/dev/handoffs/` (dated session handoffs) + `docs/dev/notes/` (engineering
