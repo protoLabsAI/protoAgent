@@ -268,6 +268,30 @@ These bridge the Notes panel's permission toggles to the agent — without them,
 "what's on my Todo tab?" never reaches the notes (the agent would only see its
 `memory_*` store).
 
+## `discord_send` / `discord_read` / `discord_react`
+
+**Off unless `DISCORD_BOT_TOKEN` is set** — the outbound (REST) half of the
+optional Discord surface ([ADR 0015](/adr/0015-discord-ingress-surface)). Raw
+Discord REST **v10** over `httpx` (no `discord.py`). When the token is absent
+these tools are **not registered** (`get_all_tools` gates on
+`discord_configured()`); a direct call degrades to a readable error.
+
+```python
+@tool
+async def discord_send(channel_id: str, content: str) -> str     # markdown; auto-splits at 2000 chars
+async def discord_read(channel_id: str, limit: int = 20) -> str  # newest first, 1–100
+async def discord_react(channel_id: str, message_id: str, emoji: str) -> str
+```
+
+- `channel_id` is required per call — there's no default-channel env var; the
+  persona/operator names the channel. `discord_send` chunks long messages at line
+  boundaries; `discord_read` clamps `limit` to Discord's 1–100; rate limits (429)
+  are surfaced with the `retry_after`.
+- This is the stateless request/response half. The persistent **inbound gateway**
+  (DMs + @-mentions, burst debounce, reactions, threads, return-address capture)
+  is a separate native surface — see [ADR 0015](/adr/0015-discord-ingress-surface).
+- Set up the bot token + Message Content Intent before use (Developer Portal).
+
 ## Adding your own
 
 For tools that shell out, build on `tools/shell.py::run_command` (async; handles timeout/kill, missing-binary → structured error, env merge, stdin/cwd) or `tools/gh_cli.py` for `gh` specifically — don't hand-roll `subprocess`.
