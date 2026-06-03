@@ -58,9 +58,9 @@ in the codebase:
    minimal — token + admin-id + Test — and links out to a **docs walkthrough**
    ([guide](/guides/discord#bot-setup)) for the full how-to. (No generated invite
    URL or guild auto-detect yet — deferred.)
-5. **Scope.** **DM-first** (Gina's working model); designating a server channel
-   is a follow-up. An optional, skippable **wizard step** plus a persistent
-   **Settings → Discord** section.
+5. **Scope.** **DM-first** (the assistant's working model); designating a server
+   channel is a follow-up. An optional, skippable **wizard step** plus a
+   persistent **Settings → Discord** section.
 
 ## 3. Consequences
 
