@@ -34,7 +34,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -291,19 +291,85 @@ async def sweep_expired_tasks(
         return result.rowcount or 0
 
 
+# Non-terminal states a restart leaves dead: a queued (``submitted``) or
+# mid-flight (``working``) task can never progress once its LangGraph runner is
+# gone. We deliberately do NOT touch ``input_required`` / ``auth_required`` —
+# those are HITL / auth *pauses* whose LangGraph checkpoint survives the restart
+# and can resume on the next message, so failing them would be wrong.
+_INTERRUPTED_STATES = ("TASK_STATE_SUBMITTED", "TASK_STATE_WORKING")
+
+
+def _interrupted_status_blob(now: datetime) -> dict:
+    """A serialized ``failed`` ``TaskStatus`` carrying a restart error, in the
+    same proto-JSON shape the SDK store writes (``MessageToDict``)."""
+    import uuid
+
+    from google.protobuf.json_format import MessageToDict
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    from a2a.types import Message, Part, Role, TaskState, TaskStatus
+
+    ts = Timestamp()
+    ts.FromDatetime(now)
+    msg = Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.ROLE_AGENT,
+        parts=[Part(text="Task interrupted by an agent restart; its runner did not survive.")],
+    )
+    status = TaskStatus(state=TaskState.TASK_STATE_FAILED, message=msg, timestamp=ts)
+    return MessageToDict(status)
+
+
+async def reconcile_interrupted_tasks(
+    engine: AsyncEngine, *, now: datetime | None = None
+) -> int:
+    """Fail any task left non-terminal (``submitted`` / ``working``) by a restart.
+
+    The bespoke task store did this; the SDK store doesn't — so an interrupted
+    task lingers as fake-active until the 24h TTL silently *deletes* it, never
+    surfacing a terminal state. A LangGraph runner doesn't survive a restart, so
+    such a task is dead: transition it to ``failed`` with an error a caller can
+    react to. The SDK serializes ``status`` as proto-JSON and itself filters on
+    ``status['state']`` (in ``list_tasks``), so a dialect-agnostic JSON-path
+    UPDATE mirrors ``sweep_expired_tasks``. Returns the rows reconciled. (#486)
+    """
+    now = now or datetime.now(UTC)
+    blob = _interrupted_status_blob(now)
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_maker() as session:
+        result = await session.execute(
+            update(TaskModel)
+            .where(TaskModel.status["state"].as_string().in_(_INTERRUPTED_STATES))
+            .values(status=blob, last_updated=now)
+        )
+        await session.commit()
+        return result.rowcount or 0
+
+
 async def initialize_a2a_stores(
     task_store: DatabaseTaskStore,
     push_store: ValidatingPushNotificationConfigStore,
 ) -> None:
-    """Create the schemas + run the task TTL sweep at boot.
+    """Create the schemas, reconcile restart-interrupted tasks, and run the TTL
+    sweep at boot.
 
-    The bespoke task store also failed any non-terminal task on restart (its
-    LangGraph runner doesn't survive). The SDK store doesn't expose a state
-    index for that, and stale non-terminal rows age out via the 24h sweep, so
-    we run the sweep here and leave the rest to the SDK's own task lifecycle.
+    Restores the bespoke store's restart behavior the #443 migration dropped:
+    non-terminal ``submitted`` / ``working`` tasks (dead — their LangGraph runner
+    didn't survive) are failed *before* the TTL sweep, so they surface as
+    terminal ``failed`` rather than being silently deleted at 24h (#486).
+    ``input_required`` / ``auth_required`` pauses are left alone (resumable from
+    the checkpoint).
     """
     await task_store.initialize()
     await push_store.initialize()
+    try:
+        r = await reconcile_interrupted_tasks(task_store.engine)
+        if r:
+            log.info("[a2a] reconciled %d interrupted task(s) to failed (restart)", r)
+    except Exception:
+        log.exception("[a2a] interrupted-task reconciliation failed; continuing")
     try:
         n = await sweep_expired_tasks(task_store.engine)
         if n:

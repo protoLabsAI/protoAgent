@@ -104,6 +104,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `protolabs_a2a` helper exists; this is the non-blocking declaration/card half.
 
 ### Fixed
+- **A2A restart reconciliation restored — interrupted tasks fail instead of silently vanishing (#486).**
+  The #443 migration to the `a2a-sdk` `DatabaseTaskStore` dropped the bespoke
+  store's boot-time reconciliation, so a task left `submitted`/`working` when the
+  process stopped lingered as fake-active (its LangGraph runner is dead) until
+  the 24h TTL *deleted* it — never surfacing a terminal state to pollers or push
+  consumers. `initialize_a2a_stores` now runs `reconcile_interrupted_tasks`
+  **before** the TTL sweep: a dialect-agnostic JSON-path `UPDATE` (the SDK itself
+  filters on `status['state']`) transitions `submitted`/`working` rows to
+  `failed` with an "interrupted by restart" message. `input_required`/
+  `auth_required` pauses are left alone — their checkpoint survives and can
+  resume. Observed on a Roxy instance (a task stuck in `submitted`); fixes the
+  fork too.
 - **A2A auth: caller bearer token is authoritative + origin guard is browser-only (#482).**
   Two `a2a_auth.py` correctness bugs (found via CodeRabbit on protoPen's port,
   fixed there in protoPen#145). (1) `configure()` collapsed `bearer_token` with
