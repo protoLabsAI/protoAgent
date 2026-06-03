@@ -70,6 +70,21 @@ InvokeFn = Callable[[str, str], Awaitable[str]]
 _invoke: InvokeFn | None = None
 _publish: Callable[[str, dict], None] | None = None
 _delivery_task: "asyncio.Task | None" = None
+# Long-window turn log: None=uninitialized, False=disabled (init failed), else a
+# TurnLog instance. Lazy so an import/DB failure can't break the gateway.
+_turn_log: Any = None
+
+
+def _get_turn_log():
+    global _turn_log
+    if _turn_log is None:
+        try:
+            from surfaces.discord.turn_log import TurnLog
+            _turn_log = TurnLog()
+        except Exception:  # noqa: BLE001
+            log.exception("[discord] turn-log init failed — long-window context disabled")
+            _turn_log = False
+    return _turn_log if _turn_log is not False else None
 
 # Module-level conversation + burst state, started from _run_gateway's loop.
 _conversations = ConversationManager()
@@ -334,6 +349,27 @@ async def _flush_burst(buffer_key: str) -> None:
     if not combined:
         return
 
+    # Long-window context warming: prepend the last N turns for this
+    # (channel, user) so a fresh conversation (after a timeout or restart) still
+    # sees prior exchanges. Record the user turns AFTER reading recent ones so
+    # this burst doesn't appear in its own context block.
+    user_id: str = entry["user_id"]
+    forward_content = combined
+    tlog = _get_turn_log()
+    if tlog is not None:
+        try:
+            recent = tlog.get_recent_turns(channel_id, user_id, limit=8, max_age_hours=24)
+            if recent:
+                from surfaces.discord.context import assemble_discord_context
+                forward_content = assemble_discord_context(recent, combined)
+        except Exception:
+            log.exception("[discord] context assembly failed — proceeding without history")
+        for m in msgs:
+            try:
+                tlog.record_user_turn(channel_id, user_id, m["content"], conversation_id=conversation_id)
+            except Exception:
+                log.exception("[discord] record_user_turn failed (non-fatal)")
+
     typing_task = asyncio.create_task(_keep_typing(channel_id))
     slow_state = {"placed": False}
     slow_task = asyncio.create_task(_slow_reaction_arm(channel_id, msgs, is_dm, slow_state))
@@ -343,7 +379,7 @@ async def _flush_burst(buffer_key: str) -> None:
     surface_tag = "discord-dm" if is_dm else f"discord-channel-{channel_id}"
     session_id = f"{surface_tag}:{conversation_id}"
     try:
-        reply_text = await _ask_agent(combined, session_id)
+        reply_text = await _ask_agent(forward_content, session_id)
     finally:
         slow_task.cancel()
         typing_task.cancel()
@@ -354,6 +390,13 @@ async def _flush_burst(buffer_key: str) -> None:
                       "maybe with a little more detail?")
 
     reply_message_id = await _reply(channel_id, last_message_id, reply_text, is_dm=is_dm)
+
+    # Record the reply so the next turn's warming includes it.
+    if tlog is not None and reply_text.strip():
+        try:
+            tlog.record_assistant_turn(channel_id, user_id, reply_text, conversation_id=conversation_id)
+        except Exception:
+            log.exception("[discord] record_assistant_turn failed (non-fatal)")
 
     # Swap a placed 👀 for ✅; if it never fired (fast reply), leave it clean.
     if not is_dm and slow_state["placed"]:

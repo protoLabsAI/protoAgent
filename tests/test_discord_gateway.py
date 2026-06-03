@@ -26,7 +26,9 @@ def _reset(monkeypatch):
     gw._conversations._conversations.clear()
     gw._invoke = None
     gw._publish = None
+    gw._turn_log = False  # disable long-window warming here — covered in its own test
     yield
+    gw._turn_log = None
     for e in gw._message_buffers.values():
         if e.get("timer"):
             e["timer"].cancel()
