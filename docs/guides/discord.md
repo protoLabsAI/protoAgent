@@ -58,6 +58,22 @@ GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | MESSAGE_CONTENT`.
 | `DISCORD_DM_CONVERSATION_TIMEOUT_S` | `900` | DM conversation-continuity window. |
 | `DISCORD_BURST_DEBOUNCE_S` | `3` | Silence before a message burst is flushed. |
 | `DISCORD_SLOW_REACTION_S` | `4` | Grace window before the 👀 "still working" reaction. |
+| `DISCORD_RETURN_ADDRESS_PATH` | _(instance-scoped default)_ | Override the return-address store location. |
+
+## Proactive delivery (return address)
+
+When you DM the agent, it records that DM channel as your **return address**.
+Scheduler-fired and proactive turns have no originating caller — so reactive
+output that lands in the Activity thread (a fired reminder, an inbox `now` item,
+a scheduled briefing) is **forwarded to your Discord DM**. That's what makes
+"remind me in 30 minutes" actually arrive somewhere.
+
+- Capture is automatic + idempotent on any DM; only **DM** channels are stored
+  (a guild channel isn't a private inbox). Override the file location with
+  `DISCORD_RETURN_ADDRESS_PATH`.
+- Delivery is opt-in by usage: until you've DM'd the bot once, there's no address
+  and nothing is forwarded. Your live Discord replies aren't affected (they use
+  per-conversation contexts, not the Activity thread — no double-posting).
 
 ## One bot per agent
 
@@ -65,8 +81,7 @@ Discord's gateway permits **one concurrent connection per token**. A second
 listener on the same token evicts the first — so don't share a token across
 agents; give each its own bot (cf. [multiple instances](/guides/multi-instance)).
 
-## Not yet (follow-ups)
+## Not yet (follow-up)
 
-Long-window context warming (history beyond the live conversation) and
-return-address delivery (so scheduled / proactive turns deliver to your DM) are
-tracked as follow-up slices in the ADR-0015 build.
+Long-window context warming — seeding a fresh conversation with the last N turns
+across a conversation timeout or restart — is the remaining ADR-0015 slice.

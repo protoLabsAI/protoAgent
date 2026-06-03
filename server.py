@@ -2443,7 +2443,11 @@ def _main():
                     if m.get("role") == "assistant" and m.get("content")
                 )
 
-            _start_discord(_discord_invoke, publish=_event_bus.publish)
+            # subscribe enables return-address delivery: reactive Activity-thread
+            # output (scheduler/inbox/proactive) is forwarded to the operator's
+            # captured Discord DM (ADR 0015).
+            _start_discord(_discord_invoke, publish=_event_bus.publish,
+                           subscribe=_event_bus.subscribe)
         except Exception:
             log.exception("[discord] gateway startup failed")
 
