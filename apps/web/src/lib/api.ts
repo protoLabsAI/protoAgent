@@ -184,35 +184,83 @@ function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
     .join("");
 }
 
+// Parse complete SSE events (`\n\n`-delimited) out of a buffer, dispatching each
+// frame. Returns the unconsumed remainder. Shared by the streaming + buffered
+// paths so both decode frames identically.
+function drainSseBuffer(buffer: string, onFrame: (frame: A2AFrame) => void): string {
+  let boundary = buffer.indexOf("\n\n");
+  while (boundary !== -1) {
+    const rawEvent = buffer.slice(0, boundary);
+    buffer = buffer.slice(boundary + 2);
+    boundary = buffer.indexOf("\n\n");
+
+    const data = rawEvent
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+    if (data) onFrame(JSON.parse(data) as A2AFrame);
+  }
+  return buffer;
+}
+
+async function consumeBuffered(
+  response: Response,
+  onFrame: (frame: A2AFrame) => void,
+): Promise<void> {
+  // Await the whole body, then parse every frame at once. Loses token-by-token
+  // streaming but always renders the turn — the fallback for environments that
+  // don't expose a readable fetch stream.
+  const text = await response.text();
+  drainSseBuffer(text.endsWith("\n\n") ? text : `${text}\n\n`, onFrame);
+}
+
 async function consumeSse(
   response: Response,
   onFrame: (frame: A2AFrame) => void,
 ): Promise<void> {
+  // WKWebView (the desktop shell) doesn't reliably expose a readable stream on a
+  // fetch response — `response.body` can be null, or the reader can throw before
+  // the first chunk — which left the desktop chat with NO response at all (the
+  // agent replied, but the SSE never rendered). Clone up front so we can fall
+  // back to a buffered read (the clone keeps its own body once we lock the
+  // original via getReader()).
+  let fallback: Response | null = null;
+  try {
+    fallback = response.clone();
+  } catch {
+    fallback = null;
+  }
+
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("streaming response has no body");
+  if (!reader) {
+    return consumeBuffered(fallback ?? response, onFrame);
+  }
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let streamed = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const rawEvent = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf("\n\n");
-
-      const data = rawEvent
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n");
-      if (!data) continue;
-      onFrame(JSON.parse(data) as A2AFrame);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      streamed = true;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = drainSseBuffer(buffer, onFrame);
     }
+  } catch (err) {
+    // Reader threw. If we never saw a chunk and have a clone, retry buffered;
+    // otherwise a mid-stream failure is real — propagate it.
+    if (streamed || !fallback) throw err;
+    return consumeBuffered(fallback, onFrame);
+  }
+
+  // Reader completed but delivered nothing (WKWebView can hand back a reader
+  // that immediately reports `done` without ever surfacing the buffered body) —
+  // render via the buffered fallback so the turn isn't silently lost.
+  if (!streamed && fallback) {
+    return consumeBuffered(fallback, onFrame);
   }
 }
 
