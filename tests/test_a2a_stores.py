@@ -21,8 +21,10 @@ from a2a.types import TaskPushNotificationConfig
 import a2a_stores
 from a2a_stores import (
     ValidatingPushNotificationConfigStore,
+    initialize_a2a_stores,
     is_safe_webhook_url,
     make_sqlite_engine,
+    reconcile_interrupted_tasks,
     sweep_expired_tasks,
 )
 from a2a.server.tasks import DatabaseTaskStore
@@ -129,6 +131,74 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
     assert deleted == 1
     assert await store.get("stale", ctx) is None
     assert await store.get("fresh", ctx) is not None
+    await engine.dispose()
+
+
+# ── (a2) restart reconciliation: interrupted tasks fail, not linger (#486) ───────
+
+
+async def _seed_states(tmp_path) -> tuple:
+    """A store seeded with one task per interesting state."""
+    from a2a.types import a2a_pb2
+
+    ctx = _ctx()
+    engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    for tid, state in [
+        ("submitted", a2a_pb2.TASK_STATE_SUBMITTED),
+        ("working", a2a_pb2.TASK_STATE_WORKING),
+        ("waiting", a2a_pb2.TASK_STATE_INPUT_REQUIRED),
+        ("done", a2a_pb2.TASK_STATE_COMPLETED),
+    ]:
+        await store.save(
+            a2a_pb2.Task(id=tid, context_id="c", status=a2a_pb2.TaskStatus(state=state)), ctx
+        )
+    return store, engine, ctx
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fails_only_interrupted_states(tmp_path):
+    """submitted + working → failed; input_required + completed left alone."""
+    from a2a.types import a2a_pb2
+
+    store, engine, ctx = await _seed_states(tmp_path)
+    n = await reconcile_interrupted_tasks(engine)
+    assert n == 2  # only submitted + working
+
+    assert (await store.get("submitted", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    assert (await store.get("working", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    # input_required is a resumable HITL/auth pause — must NOT be failed.
+    assert (await store.get("waiting", ctx)).status.state == a2a_pb2.TASK_STATE_INPUT_REQUIRED
+    assert (await store.get("done", ctx)).status.state == a2a_pb2.TASK_STATE_COMPLETED
+
+    # the terminal failure carries an error message a caller can react to.
+    failed = await store.get("submitted", ctx)
+    assert failed.status.message.parts[0].text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_is_idempotent(tmp_path):
+    """A second pass touches nothing (already-failed isn't an interrupted state)."""
+    store, engine, ctx = await _seed_states(tmp_path)
+    assert await reconcile_interrupted_tasks(engine) == 2
+    assert await reconcile_interrupted_tasks(engine) == 0
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_initialize_reconciles_before_sweep(tmp_path):
+    """initialize_a2a_stores fails interrupted tasks at boot so they surface as
+    terminal `failed` (not silently deleted)."""
+    from a2a.types import a2a_pb2
+
+    store, engine, ctx = await _seed_states(tmp_path)
+    push_store = ValidatingPushNotificationConfigStore(engine)
+    await initialize_a2a_stores(store, push_store)
+
+    assert (await store.get("submitted", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    assert (await store.get("working", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
     await engine.dispose()
 
 
