@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Docs
+- **Internal dev-docs area (`docs/dev/`).** A committed, team-shared home for
+  engineering working-context that isn't user-facing docs or a durable ADR:
+  `docs/dev/handoffs/` (dated session handoffs) + `docs/dev/notes/` (engineering
+  logs / investigations). Excluded from the published VitePress site via
+  `srcExclude: ["dev/**"]` (build verified — it doesn't render or ship to the
+  site). `docs/dev/README.md` documents the convention and how it relates to
+  ADRs, the gitignored local `HANDOFF.md`, and agent memory. Seeded with the
+  v0.10.0 handoff and a roxy upstream-sync playbook.
 - **Fix stale release instructions.** `docs/guides/releasing.md` + the
   `prepare-release.yml` header/PR-body/comments said the release was cut by
   *dispatching* `release.yml` (and implied Prepare Release auto-merges +
