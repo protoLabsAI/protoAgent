@@ -81,7 +81,11 @@ Discord's gateway permits **one concurrent connection per token**. A second
 listener on the same token evicts the first — so don't share a token across
 agents; give each its own bot (cf. [multiple instances](/guides/multi-instance)).
 
-## Not yet (follow-up)
+## Long-window context
 
-Long-window context warming — seeding a fresh conversation with the last N turns
-across a conversation timeout or restart — is the remaining ADR-0015 slice.
+Every Discord exchange is logged to a small SQLite turn store (separate from the
+knowledge DB; `DISCORD_LOG_PATH` to override). When a conversation has gone cold
+(the continuity window expired) or the process restarted, the next message is
+**warmed** with the last few turns for that `(channel, user)` — prepended as a
+`<recent_conversation>` block — so continuity survives timeouts and restarts.
+It's best-effort: if the store can't init, the gateway just runs without warming.

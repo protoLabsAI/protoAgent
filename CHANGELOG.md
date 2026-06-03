@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Discord long-window context (ADR 0015, slice 4 — completes #489).** Every
+  Discord exchange is logged to a small SQLite turn store
+  (`surfaces/discord/turn_log.py`, separate from the knowledge DB,
+  instance-scoped, `DISCORD_LOG_PATH` to override). When a conversation has gone
+  cold (continuity window expired) or the process restarted, the next message is
+  **warmed** with the last few turns for that `(channel, user)` — prepended as a
+  `<recent_conversation>` envelope (`context.py`) — restoring continuity across
+  timeouts/restarts. Best-effort: a store-init failure just disables warming.
+  (The recent-turns query tie-breaks by insertion id so same-millisecond bursts
+  stay deterministic.)
 - **Discord return-address delivery (ADR 0015, slice 3).** When the operator DMs
   the agent, the gateway records that DM channel as a **return address**; reactive
   Activity-thread output (scheduler-fired reminders, inbox `now` items, scheduled
