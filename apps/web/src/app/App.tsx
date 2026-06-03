@@ -466,10 +466,11 @@ export function App() {
       <IntroSplash />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
-          "Starting Gina…" rather than a "Load failed" flash. */}
+          "Starting <agent>…" rather than a "Load failed" flash. */}
       <BootGate
         ready={bootReady}
         failed={!runtime && runtimeQ.isError}
+        name={runtime?.identity?.name || "protoAgent"}
         onRetry={() => void runtimeQ.refetch()}
         onContinue={() => setBootOverride(true)}
       />

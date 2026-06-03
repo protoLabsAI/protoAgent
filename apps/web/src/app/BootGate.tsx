@@ -27,13 +27,15 @@ type BootGateProps = {
   ready: boolean;
   /** True once the probe has exhausted its retries without ever reaching the engine. */
   failed: boolean;
+  /** Agent display name (from identity.name), so the gate copy is white-labelled. */
+  name: string;
   /** Re-arm the runtime probe (manual retry after a give-up). */
   onRetry: () => void;
   /** Dismiss the gate manually (escape hatch when the engine is slow to compile). */
   onContinue: () => void;
 };
 
-export function BootGate({ ready, failed, onRetry, onContinue }: BootGateProps) {
+export function BootGate({ ready, failed, name, onRetry, onContinue }: BootGateProps) {
   const [stuck, setStuck] = useState(false);
 
   useEffect(() => {
@@ -54,7 +56,7 @@ export function BootGate({ ready, failed, onRetry, onContinue }: BootGateProps) 
         />
         {failed ? (
           <>
-            <div className="boot-gate-title">Gina isn’t responding</div>
+            <div className="boot-gate-title">{name} isn’t responding</div>
             <p className="boot-gate-detail">
               The engine didn’t come up in time. It may still be warming up — give
               it another moment, then retry.
@@ -66,7 +68,7 @@ export function BootGate({ ready, failed, onRetry, onContinue }: BootGateProps) 
         ) : (
           <>
             <div className="boot-gate-spinner" aria-hidden="true" />
-            <div className="boot-gate-title">Starting Gina…</div>
+            <div className="boot-gate-title">Starting {name}…</div>
             <p className="boot-gate-detail">
               {stuck
                 ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
