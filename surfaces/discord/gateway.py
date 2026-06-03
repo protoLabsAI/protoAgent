@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 import httpx
 
+from surfaces.discord import return_address
 from surfaces.discord.conversation import ConversationManager
 
 log = logging.getLogger("protoagent.discord")
@@ -68,6 +69,7 @@ def _admin_ids() -> set[str]:
 InvokeFn = Callable[[str, str], Awaitable[str]]
 _invoke: InvokeFn | None = None
 _publish: Callable[[str, dict], None] | None = None
+_delivery_task: "asyncio.Task | None" = None
 
 # Module-level conversation + burst state, started from _run_gateway's loop.
 _conversations = ConversationManager()
@@ -186,6 +188,40 @@ def _emit(event: str, data: dict) -> None:
         log.debug("[discord] bus publish failed (non-fatal)", exc_info=True)
 
 
+# ── return-address delivery (reactive output → operator's DM) ─────────────────
+
+
+async def _deliver_event(evt: dict) -> bool:
+    """Forward a reactive Activity-thread message to the operator's Discord DM.
+
+    Returns True if delivered. Live Discord replies use per-conversation contexts
+    (not ``system:activity``), so only scheduler/inbox/proactive output publishes
+    ``activity.message`` — there's no double-post of the gateway's own replies."""
+    if evt.get("event") != "activity.message":
+        return False
+    text = ((evt.get("data") or {}).get("text") or "").strip()
+    if not text:
+        return False
+    channel_id = return_address.get()
+    if not channel_id:
+        return False  # no DM captured yet — nothing to deliver to
+    await _reply(channel_id, "", text, is_dm=True)
+    return True
+
+
+async def _delivery_loop(subscribe: Callable[[], Any]) -> None:
+    """Subscribe to the event bus and deliver reactive output to the return
+    address. Runs for the process lifetime; cancelled on shutdown."""
+    try:
+        async for evt in subscribe():
+            try:
+                await _deliver_event(evt)
+            except Exception:
+                log.exception("[discord] activity delivery failed")
+    except asyncio.CancelledError:
+        return
+
+
 # ── message handling ──────────────────────────────────────────────────────────
 
 
@@ -226,6 +262,12 @@ async def _handle_message(d: dict, bot_id: str) -> None:
              author.get("username"), user_id, channel_id, content[:80])
     _emit("discord.message", {"channel_id": channel_id, "user_id": user_id,
                               "username": author.get("username"), "is_dm": is_dm})
+
+    # Capture the DM channel as the operator's return address so scheduler-fired /
+    # proactive turns have somewhere to deliver. Only DM channels — a guild
+    # channel is not a private inbox. Idempotent + best-effort.
+    if is_dm:
+        return_address.record(channel_id)
 
     # Buffer + (re)arm the debounce timer. No immediate reaction — fast replies
     # leave the channel clean; the slow 👀 is armed in _flush_burst.
@@ -401,20 +443,38 @@ async def _run_gateway() -> None:
             await asyncio.sleep(5)
 
 
-def start_in_background(invoke: InvokeFn, *, publish: Callable[[str, dict], None] | None = None) -> "asyncio.Task | None":
+def start_in_background(
+    invoke: InvokeFn,
+    *,
+    publish: Callable[[str, dict], None] | None = None,
+    subscribe: Callable[[], Any] | None = None,
+) -> "asyncio.Task | None":
     """Launch the gateway listener as a background task, wiring the agent
-    ``invoke(prompt, session_id)`` callable (and an optional bus ``publish``).
-    Returns ``None`` when no ``DISCORD_BOT_TOKEN`` is set (opt-in)."""
-    global _invoke, _publish
+    ``invoke(prompt, session_id)`` callable, an optional bus ``publish``, and an
+    optional bus ``subscribe`` (enables return-address delivery of reactive
+    output to the operator's DM). Returns ``None`` when no ``DISCORD_BOT_TOKEN``
+    is set (opt-in)."""
+    global _invoke, _publish, _delivery_task
     if not _token():
         log.info("[discord] DISCORD_BOT_TOKEN not set — gateway listener disabled")
         return None
     _invoke = invoke
     _publish = publish
+    if subscribe is not None:
+        _delivery_task = asyncio.create_task(_delivery_loop(subscribe))
     log.info("[discord] starting gateway listener")
     return asyncio.create_task(_run_gateway())
 
 
 async def stop() -> None:
-    """Stop the conversation sweeper (the gateway task is cancelled by the loop)."""
+    """Stop the delivery loop + conversation sweeper (the gateway task is
+    cancelled by the loop)."""
+    global _delivery_task
+    if _delivery_task is not None:
+        _delivery_task.cancel()
+        try:
+            await _delivery_task
+        except asyncio.CancelledError:
+            pass
+        _delivery_task = None
     await _conversations.stop()
