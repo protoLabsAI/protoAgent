@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **White-label brand name (driven by `identity.name`).** The console topbar +
+  window/tab title now follow the configured agent name (Settings → Identity),
+  defaulting to `protoAgent` — a fork sets its name once and the whole UI follows,
+  no hardcoded rebrand.
+
+### Fixed
+- **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
+  console's `streamChat` still spoke A2A **0.3** (`message/stream` with
+  `parts:[{kind:'text'}]`), but the server moved to A2A 1.0 (a2a-sdk) — which
+  returns `-32601 Method not found` (HTTP 200), so the SSE reader waited forever.
+  Updated to 1.0: `SendStreamingMessage`, `role:'ROLE_USER'`, member-discriminated
+  `parts:[{text}]` + `messageId`/`contextId`, `A2A-Version: 1.0` header, and frame
+  parsing for the 1.0 `task`/`statusUpdate`/`artifactUpdate` shapes (0.3 kept as
+  fallback). Turn-complete = SSE stream close. Also fixes the brand logo path
+  (hardcoded `/app/…` 404s in the desktop bundle → `import.meta.env.BASE_URL`).
+- **Desktop chat renders the agent's reply (was a silent "no response").** The
+  console reads the A2A turn over SSE via `response.body.getReader()`, but
+  WKWebView (the desktop shell) doesn't reliably expose a readable fetch stream
+  (`response.body` can be null, or the reader reports `done` with no chunks).
+  `consumeSse` now clones the response up front and **falls back to a buffered
+  read** when streaming yields nothing — the turn always renders (streaming is
+  kept wherever the browser supports it).
+- **Beads no longer requires a `project_path` for an unconfigured agent.** The
+  in-process (agent-global) beads store is now ensured before route registration,
+  so first launch (pre-setup) no longer binds the CLI fallback that raises
+  `project_path is required` and breaks the console's Beads panel during setup.
+
 ## [0.11.0] - 2026-06-03
 
 ### Added
