@@ -690,6 +690,11 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_
     from tools.peer_tools import get_peer_tools, list_env_peers
     if list_env_peers():
         tools.extend(get_peer_tools())
+    # Outbound Discord tools — only when DISCORD_BOT_TOKEN is set (ADR 0015:
+    # off by default, so non-Discord forks aren't cluttered).
+    from tools.discord_tools import discord_configured, get_discord_tools
+    if discord_configured():
+        tools.extend(get_discord_tools())
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
     if scheduler is not None:

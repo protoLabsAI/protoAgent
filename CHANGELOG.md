@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Outbound Discord tools (ADR 0015, slice 1).** `discord_send` / `discord_read`
+  / `discord_react` — the stateless REST half of the optional Discord surface.
+  Raw Discord REST v10 over `httpx` (no `discord.py`). **Off by default:**
+  registered only when `DISCORD_BOT_TOKEN` is set (`get_all_tools` gates on
+  `discord_configured()`), so non-Discord forks aren't cluttered; a direct call
+  with no token degrades to a readable error. `discord_send` auto-splits long
+  messages at 2000 chars, `discord_read` clamps to Discord's 1–100, 429s surface
+  the `retry_after`. The persistent inbound gateway (the native half) is a
+  separate follow-up slice. Ported from `-deprecated-gina`, template-neutralized.
+
 ### Docs
 - **ADR 0015 — optional native Discord surface.** Decision record for shipping
   Discord as an opt-in template surface (off unless `DISCORD_BOT_TOKEN` set): a
