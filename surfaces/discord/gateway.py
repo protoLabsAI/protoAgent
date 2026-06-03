@@ -56,13 +56,64 @@ def _f(env: str, default: float) -> float:
         return default
 
 
+# In-app config (ADR 0016), injected by the server from the live config before
+# start. `None` means "not configured via the UI" — fall back to the env vars so
+# Docker/repo deploys keep working. The UI path is what lets the bundled desktop
+# app carry a per-user token (secrets.yaml) instead of an ambient env var.
+_cfg_token: str | None = None
+_cfg_admin_ids: set[str] | None = None
+
+
+def configure(token: str | None, admin_ids: list[str] | None) -> None:
+    """Set the in-app Discord config (call before ``start_in_background``).
+
+    A blank/None token leaves the env var as the source (back-compat). A
+    non-None ``admin_ids`` (even empty) overrides the env CSV.
+    """
+    global _cfg_token, _cfg_admin_ids
+    _cfg_token = (token or "").strip() or None
+    _cfg_admin_ids = (
+        {str(a).strip() for a in admin_ids if str(a).strip()}
+        if admin_ids is not None
+        else None
+    )
+
+
 def _token() -> str | None:
-    return os.environ.get("DISCORD_BOT_TOKEN")
+    return _cfg_token or os.environ.get("DISCORD_BOT_TOKEN")
 
 
 def _admin_ids() -> set[str]:
+    if _cfg_admin_ids is not None:
+        return _cfg_admin_ids
     raw = os.environ.get("DISCORD_ADMIN_IDS", "").strip()
     return {s.strip() for s in raw.split(",") if s.strip()} if raw else set()
+
+
+async def validate_token(token: str) -> tuple[bool, dict | None, str]:
+    """Verify a bot token by fetching its own user (Developer Portal identity).
+
+    Returns ``(ok, bot_user, error)`` — ``bot_user`` is Discord's ``/users/@me``
+    payload (``username`` / ``id``) on success. Powers the UI "Test connection"
+    so a bad token is caught before it's saved, mirroring the model probe.
+    """
+    token = (token or "").strip()
+    if not token:
+        return False, None, "bot token is empty"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{_DISCORD_API}/users/@me",
+                headers={"Authorization": f"Bot {token}"},
+            )
+    except httpx.HTTPError as e:
+        return False, None, f"connection failed: {e}"
+    if resp.status_code == 200:
+        return True, resp.json(), ""
+    if resp.status_code == 401:
+        return False, None, "invalid bot token (Discord returned 401 Unauthorized)"
+    detail = (resp.text or "")[:200]
+    return False, None, f"HTTP {resp.status_code}: {detail}" if detail else f"HTTP {resp.status_code}"
 
 
 # Injected by start_in_background — the agent invocation + (optional) bus publish.

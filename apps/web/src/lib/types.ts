@@ -267,6 +267,11 @@ export type AgentConfig = {
   auth: {
     token: string;
   };
+  discord?: {
+    enabled: boolean;
+    bot_token?: string;
+    admin_ids: string[];
+  };
   runtime: {
     autostart_on_boot: boolean;
   };

@@ -123,6 +123,15 @@ FIELDS: list[Field] = [
     Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",
           "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live."),
 
+    # ── Discord (ADR 0015 + 0016) ────────────────────────────────────────────
+    Field("discord.enabled", "discord_enabled", "Enable Discord", "bool", "Discord",
+          "Inbound DM gateway. Needs the bot token below; reconnects live on save."),
+    Field("discord.bot_token", "discord_bot_token", "Bot token", "secret", "Discord",
+          "Discord bot token (Developer Portal → your app → Bot → Reset Token). Stored "
+          "in secrets.yaml. Use “Test connection” to verify before saving."),
+    Field("discord.admin_ids", "discord_admin_ids", "Admin user IDs", "string_list", "Discord",
+          "Discord user IDs allowed to DM the bot (one per line). Empty = anyone."),
+
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
           "Install/remove the boot LaunchAgent.", restart=True),

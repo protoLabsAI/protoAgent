@@ -5,8 +5,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  ExternalLink,
   KeyRound,
   Loader2,
+  MessageCircle,
   Network,
   Search,
   ShieldCheck,
@@ -18,9 +20,13 @@ import type { ReactNode } from "react";
 import { api } from "../lib/api";
 import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
 
-type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "finish";
+type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "discord" | "finish";
 
-const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "finish"];
+const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "discord", "finish"];
+
+// Bot-setup walkthrough (Developer Portal steps + Message Content intent). The
+// wizard + Settings link here for users who want the full how-to.
+const DISCORD_GUIDE_URL = "https://protolabsai.github.io/gina/guides/discord#bot-setup";
 
 type WizardState = {
   agentName: string;
@@ -39,6 +45,11 @@ type WizardState = {
   knowledgeTopK: number;
   allowedDirs: string;
   initBeads: boolean;
+  // Discord surface (optional, skippable). `discordAdminId` accepts one or more
+  // IDs (comma/newline) — the operator's own user ID(s) allowed to DM the bot.
+  discordEnabled: boolean;
+  discordToken: string;
+  discordAdminId: string;
 };
 
 function defaultState(): WizardState {
@@ -64,6 +75,9 @@ function defaultState(): WizardState {
     knowledgeTopK: 5,
     allowedDirs: "",
     initBeads: false,
+    discordEnabled: false,
+    discordToken: "",
+    discordAdminId: "",
   };
 }
 
@@ -91,6 +105,9 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
     knowledgeTopK: Number(config.knowledge.top_k ?? 5),
     allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
     initBeads: false,
+    discordEnabled: Boolean(config.discord?.enabled),
+    discordToken: "",
+    discordAdminId: (config.discord?.admin_ids || []).join(", "),
   };
 }
 
@@ -115,6 +132,8 @@ export function SetupWizard({
   // Result of the last "Test connection" probe (a real completion). null = not
   // yet tested; invalidated whenever the key/base/model changes.
   const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
+  // Discord "Test connection" result (null = not tested; carries the bot name).
+  const [discordTested, setDiscordTested] = useState<null | { ok: boolean; error: string; bot: string | null }>(null);
 
   const index = steps.indexOf(step);
 
@@ -145,6 +164,11 @@ export function SetupWizard({
   useEffect(() => {
     setTested(null);
   }, [state.apiBase, state.apiKey, state.modelName]);
+
+  // A changed token invalidates a prior Discord test.
+  useEffect(() => {
+    setDiscordTested(null);
+  }, [state.discordToken]);
 
   const canGoNext = useMemo(() => {
     if (step === "model") return state.apiBase.trim() && state.modelName.trim();
@@ -195,6 +219,22 @@ export function SetupWizard({
       setTested({ ok: r.ok, error: r.error || "" });
     } catch (exc) {
       setTested({ ok: false, error: exc instanceof Error ? exc.message : String(exc) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Verify the Discord bot token before finishing — fetches the bot identity so
+  // a bad token is caught in the UI (and the operator sees the bot's name).
+  async function testDiscord() {
+    setBusy(true);
+    setError("");
+    setDiscordTested(null);
+    try {
+      const r = await api.testDiscord(state.discordToken.trim());
+      setDiscordTested({ ok: r.ok, error: r.error || "", bot: r.bot_user });
+    } catch (exc) {
+      setDiscordTested({ ok: false, error: exc instanceof Error ? exc.message : String(exc), bot: null });
     } finally {
       setBusy(false);
     }
@@ -264,6 +304,17 @@ export function SetupWizard({
           },
           operator: {
             allowed_dirs: allowedDirs,
+          },
+          // Discord is enabled when a token is present (this run or already
+          // stored). bot_token is only sent when entered — blank preserves the
+          // existing secret, same as the model api_key.
+          discord: {
+            enabled: Boolean(state.discordToken.trim()) || state.discordEnabled,
+            ...(state.discordToken.trim() ? { bot_token: state.discordToken.trim() } : {}),
+            admin_ids: state.discordAdminId
+              .split(/[\n,]/)
+              .map((id) => id.trim())
+              .filter(Boolean),
           },
         },
         state.soul,
@@ -475,6 +526,57 @@ export function SetupWizard({
                 <input type="checkbox" checked={state.initBeads} onChange={(event) => update({ initBeads: event.target.checked })} />
                 <span>Initialize beads</span>
               </label>
+            </StepBody>
+          ) : null}
+
+          {step === "discord" ? (
+            <StepBody icon={<MessageCircle size={20} />} title="Discord" kicker="Optional">
+              <p className="field-hint" style={{ marginTop: 0 }}>
+                Connect a Discord bot so you can DM {state.agentName || "your agent"} from
+                Discord. Optional — skip it and set it up later in System → Settings.{" "}
+                <a href={DISCORD_GUIDE_URL} target="_blank" rel="noreferrer" className="setup-link">
+                  How to create a bot <ExternalLink size={12} />
+                </a>
+              </p>
+              <label className="field">
+                <span>Bot token</span>
+                <input
+                  type="password"
+                  value={state.discordToken}
+                  onChange={(event) => update({ discordToken: event.target.value })}
+                  autoComplete="off"
+                  placeholder="Leave blank to skip Discord"
+                />
+              </label>
+              <div className="setup-grid model-row">
+                <label className="field">
+                  <span>Your Discord user ID(s)</span>
+                  <input
+                    value={state.discordAdminId}
+                    onChange={(event) => update({ discordAdminId: event.target.value })}
+                    placeholder="e.g. 249386616806834177 — comma-separated; empty = anyone"
+                  />
+                </label>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void testDiscord()}
+                  disabled={busy || !state.discordToken.trim()}
+                >
+                  {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+                  Test connection
+                </button>
+              </div>
+              {discordTested ? (
+                <div className={`setup-test ${discordTested.ok ? "ok" : "err"}`} role="status">
+                  {discordTested.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
+                  <span>
+                    {discordTested.ok
+                      ? `Connected as ${discordTested.bot || "your bot"}.`
+                      : `Connection failed — ${discordTested.error || "check the token."}`}
+                  </span>
+                </div>
+              ) : null}
             </StepBody>
           ) : null}
 

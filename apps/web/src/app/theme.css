@@ -2747,6 +2747,26 @@ textarea {
 .settings-group {
   margin-bottom: 40px;
 }
+/* Per-group action row (e.g. the Discord "Test connection" + help link). */
+.settings-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.settings-help-link,
+.setup-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: #818cf8;
+  text-decoration: none;
+}
+.settings-help-link:hover,
+.setup-link:hover {
+  text-decoration: underline;
+}
 .settings-group-title {
   margin: 0 0 4px;
   font-size: 0.72rem;

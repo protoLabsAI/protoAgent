@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Connect Discord from the app — no env vars, no file editing (ADR 0016).**
+  The Discord surface (ADR 0015) was env-only (`DISCORD_BOT_TOKEN`), started once
+  at boot — invisible to the desktop app (no shell to export into; the frozen
+  sidecar can't read a repo `.env`, so it connected as whatever bot was in the
+  ambient env). Now Discord is configured in-app: a `discord` config section
+  (`enabled` / `bot_token` → secrets.yaml / `admin_ids`), a **"Connect Discord"**
+  step in the setup wizard and a **Discord section in System → Settings**, each
+  with a **"Test connection"** button (a real `GET /users/@me` identity probe via
+  `POST /api/config/test-discord` — shows the bot's name, catches a bad token in
+  the UI). The gateway reads the config (env vars remain a Docker fallback) and
+  **reconnects live on save** — no restart. Both surfaces link to a docs
+  walkthrough for creating the bot + enabling the Message Content intent.
 - **Setup validates the model connection before completing — no more silently
   broken agents.** The wizard accepted any API key (the models-list probe passes
   for keys that can't actually complete), so a bad/blank key only surfaced as a

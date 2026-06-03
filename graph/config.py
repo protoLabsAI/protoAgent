@@ -96,6 +96,15 @@ class LangGraphConfig:
     memory_middleware: bool = True
     scheduler_enabled: bool = True
 
+    # Discord surface (ADR 0015 + 0016) — inbound DM gateway. Configured in-app
+    # (wizard step + Settings) rather than env-only, so the bundled desktop app
+    # has a per-user place for the token. ``bot_token`` lives in the secrets
+    # overlay; ``admin_ids`` are the Discord user IDs allowed to talk to the bot
+    # (empty ⇒ anyone). Off until a token is set. The env vars (DISCORD_BOT_TOKEN
+    # / DISCORD_ADMIN_IDS) remain a fallback for Docker.
+    discord_enabled: bool = False
+    discord_bot_token: str = ""
+    discord_admin_ids: list[str] = field(default_factory=list)
     # Enforcement gate — opt-in safety middleware that blocks tool calls
     # before they execute (deny list + per-tool rate limits). Off by default;
     # forks enable it and supply a deny list / rate limits (and can attach a
@@ -354,6 +363,7 @@ class LangGraphConfig:
 
         secrets = _load_secrets_doc(p.parent)
 
+        discord = data.get("discord", {})
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -371,6 +381,7 @@ class LangGraphConfig:
         # value still lets create_llm / set_a2a_token fall back to env.
         secret_api_key = secrets.get("model", {}).get("api_key")
         secret_auth_token = secrets.get("auth", {}).get("token")
+        secret_discord_token = secrets.get("discord", {}).get("bot_token")
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -389,6 +400,9 @@ class LangGraphConfig:
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),
             scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
+            discord_enabled=discord.get("enabled", cls.discord_enabled),
+            discord_bot_token=secret_discord_token or discord.get("bot_token", cls.discord_bot_token),
+            discord_admin_ids=list(discord.get("admin_ids", []) or []),
             enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
             enforcement_disallowed_tools=(
                 data.get("enforcement", {}).get("disallowed_tools", [])
