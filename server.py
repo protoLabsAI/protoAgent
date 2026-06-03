@@ -265,7 +265,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
     global _inbox_store, _storm_guard, _beads_store
     _inbox_store = _build_inbox_store(_graph_config)
     from beads import BeadsStore
-    _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
+    if _beads_store is None:  # may have been created early (pre-setup) for the routes
+        _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
     if _storm_guard is None:
         from inbox import StormGuard
         _storm_guard = StormGuard()
@@ -2372,6 +2373,17 @@ def _main():
                     "usage": f"/{wf['name']}{req}{opt}",
                 })
         return {"commands": commands}
+
+    # The in-process beads store is agent-global + graph-independent, but it's
+    # otherwise created in _init_langgraph_agent (which only runs once setup is
+    # complete). For a fresh, unconfigured agent (first launch, before the wizard)
+    # ensure it exists now — otherwise the beads routes bind the CLI fallback
+    # service that raises "project_path is required" (the agent-global adapter
+    # ignores project_path). Reused by _init_langgraph_agent later.
+    global _beads_store
+    if _beads_store is None:
+        from beads import BeadsStore
+        _beads_store = BeadsStore()
 
     register_operator_routes(
         fastapi_app,
