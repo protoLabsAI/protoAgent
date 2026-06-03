@@ -436,9 +436,11 @@ export function App() {
           Interactive children (the status dot) stay clickable; harmless on web. */}
       <header className="topbar" data-tauri-drag-region>
         <div className="brand-lockup">
-          <img src="/app/protolabs-icon-outline.svg" alt="" className="brand-mark" />
+          {/* BASE_URL is "/app/" in dev and "./" in the desktop build — a
+              hardcoded "/app/…" 404s in the bundle (assets sit at the root). */}
+          <img src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" className="brand-mark" />
           <div>
-            <div className="brand-name">protoAgent</div>
+            <div className="brand-name">Gina</div>
             <div className="brand-subline">protoLabs.studio</div>
           </div>
         </div>
