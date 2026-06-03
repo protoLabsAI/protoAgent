@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Discord return-address delivery (ADR 0015, slice 3).** When the operator DMs
+  the agent, the gateway records that DM channel as a **return address**; reactive
+  Activity-thread output (scheduler-fired reminders, inbox `now` items, scheduled
+  briefings) is then forwarded to the operator's Discord DM — so "remind me in 30
+  minutes" actually arrives. A bus subscriber forwards `activity.message` to the
+  captured channel; live Discord replies use per-conversation contexts (not the
+  Activity thread), so there's no double-post. Capture is DM-only, idempotent,
+  best-effort, and instance-scoped (`DISCORD_RETURN_ADDRESS_PATH` to override).
+  Opt-in by usage — no DM, no address, nothing forwarded.
 - **Inbound Discord gateway (ADR 0015, slice 2).** A native, opt-in listener
   (`surfaces/discord/`) — DMs + channel @-mentions reach the agent, replies post
   back. Raw Discord Gateway/REST v10 over `httpx` + `websockets` (both already
