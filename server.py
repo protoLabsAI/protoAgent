@@ -101,6 +101,13 @@ _goal_controller = None  # Optional GoalController (goal mode). Parses /goal
 _discord_task = None     # The inbound Discord gateway task (ADR 0015/0016).
                          # Held so a config change (Settings/wizard) can stop +
                          # restart it live, not just at process boot.
+_main_loop = None        # The server's event loop, captured at startup (#497).
+                         # A config reload's heavy graph compile is offloaded to a
+                         # worker thread so it no longer freezes the loop; the
+                         # scheduler/Discord restart that follows still has to run
+                         # ON the loop, so the worker thread schedules it here via
+                         # run_coroutine_threadsafe instead of get_running_loop()
+                         # (which would silently no-op in the thread — the trap).
 
 _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # lifetime singleton; producers publish, /api/events
@@ -636,40 +643,50 @@ def _resolve_skills_db(configured: str) -> str:
     return str(fallback)
 
 
-def _start_scheduler_async(backend: "SchedulerBackend") -> None:
-    """Fire-and-forget scheduler.start() onto the running loop.
+def _run_on_server_loop(make_coro, what: str) -> None:
+    """Fire-and-forget a coroutine onto the server's event loop.
 
-    Reload paths are sync but invoked from FastAPI request handlers,
-    so the running loop is available. Awaiting would force the entire
-    reload chain to become async — not worth it for one no-await
-    coroutine.
+    Works whether we're called **on** the loop (a direct, on-loop reload) or
+    **from a worker thread** (the reload offloaded off the loop, #497). In the
+    thread case ``get_running_loop()`` raises, and the old code logged + dropped
+    the coroutine — silently killing the scheduler/briefing on every offloaded
+    reload (the trap). We instead schedule it on the captured ``_main_loop`` via
+    ``run_coroutine_threadsafe``. ``make_coro`` is a zero-arg factory so the
+    coroutine is only created once we have a loop to run it on (no
+    "coroutine was never awaited" leak when none is available).
     """
     import asyncio
+
     try:
-        asyncio.get_running_loop().create_task(backend.start())
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        log.warning(
-            "[reload] no running event loop; scheduler will start "
-            "on next process boot",
-        )
-    except Exception:
-        log.exception("[reload] scheduler start failed")
+        loop = None
+
+    if loop is not None:
+        try:
+            loop.create_task(make_coro())
+        except Exception:
+            log.exception("[reload] %s failed", what)
+        return
+
+    if _main_loop is not None and _main_loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(make_coro(), _main_loop)
+        except Exception:
+            log.exception("[reload] %s failed (threadsafe)", what)
+        return
+
+    log.warning("[reload] no event loop available; %s deferred to next process boot", what)
+
+
+def _start_scheduler_async(backend: "SchedulerBackend") -> None:
+    """Start the scheduler on the server loop (see :func:`_run_on_server_loop`)."""
+    _run_on_server_loop(lambda: backend.start(), "scheduler start")
 
 
 def _stop_scheduler_async(backend: "SchedulerBackend") -> None:
-    """Fire-and-forget scheduler.stop() onto the running loop.
-
-    Used when the YAML toggle flips off mid-reload. The polling task
-    cancels cleanly; the next graph rebuild registers no scheduler
-    tools.
-    """
-    import asyncio
-    try:
-        asyncio.get_running_loop().create_task(backend.stop())
-    except RuntimeError:
-        log.warning("[reload] no running event loop; scheduler not stopped")
-    except Exception:
-        log.exception("[reload] scheduler stop failed")
+    """Stop the scheduler on the server loop (used when the toggle flips off)."""
+    _run_on_server_loop(lambda: backend.stop(), "scheduler stop")
 
 
 def _build_scheduler(config) -> "SchedulerBackend | None":
@@ -962,19 +979,9 @@ def _start_discord_surface() -> None:
 def _restart_discord_async() -> None:
     """Fire-and-forget: stop the running gateway, then start from new config.
 
-    Reload paths are sync but run inside a request handler, so the loop is live
-    (same idiom as ``_start_scheduler_async``). Skips the work entirely when no
-    loop is running (early-boot reload) — startup will start it.
+    Scheduled on the server loop via :func:`_run_on_server_loop`, so it works
+    from an offloaded (worker-thread) reload too — not just an on-loop one.
     """
-    import asyncio
-
-    global _discord_task
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-
     async def _swap() -> None:
         global _discord_task
         try:
@@ -991,7 +998,7 @@ def _restart_discord_async() -> None:
         except Exception:
             log.exception("[discord] restart failed")
 
-    loop.create_task(_swap())
+    _run_on_server_loop(_swap, "discord restart")
 
 
 def _sync_autostart_with_config(config: dict | None) -> str | None:
@@ -2543,6 +2550,13 @@ def _main():
     # around it.
     @fastapi_app.on_event("startup")
     async def _scheduler_startup() -> None:
+        # Capture the server's event loop so an offloaded reload (#497) can
+        # schedule the scheduler/Discord restart back onto it from a worker
+        # thread (see _run_on_server_loop).
+        global _main_loop
+        import asyncio
+
+        _main_loop = asyncio.get_running_loop()
         if _scheduler is not None:
             try:
                 await _scheduler.start()
@@ -2756,7 +2770,11 @@ def _main():
 
     @fastapi_app.post("/api/config")
     async def _api_post_config(req: ConfigReloadRequest):
-        ok, messages = _apply_settings_changes(config=req.config, soul=req.soul)
+        # Offload off the event loop (#497) — the reload's graph compile is heavy
+        # and would otherwise freeze the server for its duration.
+        ok, messages = await asyncio.to_thread(
+            _apply_settings_changes, config=req.config, soul=req.soul
+        )
         return {"ok": ok, "messages": messages}
 
     class ModelsProbeRequest(PydanticBaseModel):
@@ -2873,7 +2891,9 @@ def _main():
             return {"ok": False, "error": str(e)}
         # Persist enabled + reload so the managed google MCP server starts and the
         # tools register without a restart.
-        ok, msg = _apply_settings_changes(config={"google": {"enabled": True}})
+        ok, msg = await asyncio.to_thread(
+            _apply_settings_changes, config={"google": {"enabled": True}}
+        )
         return {"ok": True, "email": email, "reload": msg if ok else None}
 
     # --- Setup wizard state -------------------------------------------------
@@ -2892,7 +2912,9 @@ def _main():
         setup complete, optionally installs autostart, then reloads.
         """
         callbacks = _build_settings_callbacks()
-        ok, msg = callbacks["finish_setup"](req.config, req.soul)
+        # Offload off the event loop (#497) — finish-setup validates the model +
+        # compiles the graph, both heavy; running inline froze the server ~30s.
+        ok, msg = await asyncio.to_thread(callbacks["finish_setup"], req.config, req.soul)
         return {"ok": ok, "message": msg}
 
     @fastapi_app.post("/api/config/reset-setup")
@@ -2933,7 +2955,10 @@ def _main():
         ok, err = validate_flat(req.updates)
         if not ok:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
-        ok, messages = _apply_settings_changes(config=nest_updates(req.updates))
+        # Offload off the event loop (#497) — a model change recompiles the graph.
+        ok, messages = await asyncio.to_thread(
+            _apply_settings_changes, config=nest_updates(req.updates)
+        )
         return {"ok": ok, "messages": messages, "restart_required": restart_keys(req.updates)}
 
     # --- OpenAI-compatible chat completions --------------------------------
