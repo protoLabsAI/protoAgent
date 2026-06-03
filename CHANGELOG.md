@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-03
+
 ### Added
 - **Discord long-window context (ADR 0015, slice 4 — completes #489).** Every
   Discord exchange is logged to a small SQLite turn store
