@@ -96,14 +96,7 @@ jobs:
             --base main \
             --head "${BRANCH}" \
             --title "chore: release v${VERSION}" \
-            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then push the tag to cut the release:
-
-\`\`\`sh
-git checkout main && git pull
-git tag -a v${VERSION} -m \"Release v${VERSION}\" && git push origin v${VERSION}
-\`\`\`
-
-The tag push triggers release.yml (Docker tags + GitHub Release + Discord). Don't \`workflow_dispatch\` release.yml afterward — that's redundant and 422s on the duplicate.")
+            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then push the tag to cut the release: \`git checkout main && git pull && git tag -a v${VERSION} -m 'Release v${VERSION}' && git push origin v${VERSION}\`. The tag push triggers release.yml (Docker tags + GitHub Release + Discord) — don't also workflow_dispatch release.yml afterward (redundant; 422s on the duplicate).")
           echo "Opened: ${PR_URL}"
 
           # We do NOT auto-merge or tag here (fleet policy, 2026-06-02:
