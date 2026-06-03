@@ -2428,6 +2428,25 @@ def _main():
             import asyncio
             _checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
+        # Inbound Discord gateway (ADR 0015) — opt-in via DISCORD_BOT_TOKEN. A
+        # Discord DM is conversational, so it invokes the agent as a chat surface
+        # with a per-conversation session_id (the LangGraph thread key), NOT the
+        # single system:activity inbox thread. Best-effort bus publish for
+        # console visibility.
+        try:
+            from surfaces.discord import start_in_background as _start_discord
+
+            async def _discord_invoke(prompt: str, session_id: str) -> str:
+                result = await chat(prompt, session_id)
+                return "\n\n".join(
+                    m["content"] for m in result
+                    if m.get("role") == "assistant" and m.get("content")
+                )
+
+            _start_discord(_discord_invoke, publish=_event_bus.publish)
+        except Exception:
+            log.exception("[discord] gateway startup failed")
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
         if _scheduler is not None:
@@ -2440,6 +2459,11 @@ def _main():
                 await _cache_warmer.stop()
             except Exception:
                 log.exception("[cache-warmer] shutdown failed")
+        try:
+            from surfaces.discord import stop as _stop_discord
+            await _stop_discord()
+        except Exception:
+            log.exception("[discord] shutdown failed")
         if _checkpoint_prune_task is not None:
             _checkpoint_prune_task.cancel()
 

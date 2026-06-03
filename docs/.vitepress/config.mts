@@ -57,6 +57,7 @@ export default defineConfig({
             { text: "Plugins", link: "/guides/plugins" },
             { text: "Goal mode", link: "/guides/goal-mode" },
             { text: "Scheduler", link: "/guides/scheduler" },
+            { text: "Discord surface", link: "/guides/discord" },
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },

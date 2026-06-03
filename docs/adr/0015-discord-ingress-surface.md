@@ -52,20 +52,28 @@ configured — the same opt-in posture as the `--ui` tiers (ADR 0010) and the
 scheduler. Port the proven UX **in full** (the patterns above are cheaper to
 carry forward than to re-derive). Two layers:
 
-### 2.1 Inbound gateway → routed through the reactive inbox
+### 2.1 Inbound gateway → invokes the agent as a chat surface
 
 A native background task (uvicorn lifespan hook, shares the event loop), **off
 unless `DISCORD_BOT_TOKEN` is set**. It owns the persistent Gateway v10
 connection and the stateful UX (debounce, continuity, reactions, threads,
-allowlist, identity capture).
+allowlist).
 
-**Modernization vs the original:** `-deprecated-gina` predated the inbox and
-called `/v1/chat/completions` directly. Here, an accepted inbound message is
-**published to the event bus as an inbox stimulus** ([ADR 0003](./0003-reactive-agent-activity-thread.md))
-— Discord becomes another *stimulus source* alongside the scheduler and the
-authed HTTP inbox, with one ingress substrate, one audit trail, one auth model.
-The gateway is a thin, well-tested **adapter**; the agent-invocation,
-threading, and provenance live in the shared substrate.
+**Refined during implementation (#490-series):** the original framing here was
+"route Discord inbound *through* the ADR-0003 inbox as a stimulus." On building
+it, that turned out wrong for a 1:1 DM, which is **conversational** — the inbox
+fires into a *single* `system:activity` thread, which would collapse every
+Discord conversation into one thread and destroy the per-DM continuity that
+makes Discord useful. So the gateway instead invokes the agent as a **chat
+surface**: it calls the in-process `chat(prompt, session_id)` entry with a
+**per-conversation `session_id`** (the LangGraph thread key, surface-tagged
+`discord-dm:…` / `discord-channel-…` for provenance), so each conversation keeps
+its own thread. It still **publishes a `discord.message` bus event** so the
+console can surface Discord activity (the ADR-0003 visibility touchpoint). The
+inbox stays the right substrate for *non-conversational* pushes (webhooks, cron);
+a live DM is a chat turn, not a one-shot stimulus. The agent invoker is injected
+(`start_in_background(invoke, publish=…)`), keeping the surface decoupled and
+unit-testable.
 
 ### 2.2 Outbound tools (stateless REST v10)
 

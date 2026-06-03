@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Inbound Discord gateway (ADR 0015, slice 2).** A native, opt-in listener
+  (`surfaces/discord/`) — DMs + channel @-mentions reach the agent, replies post
+  back. Raw Discord Gateway/REST v10 over `httpx` + `websockets` (both already
+  core); **off unless `DISCORD_BOT_TOKEN` is set**. A Discord DM is
+  conversational, so it invokes the agent as a **chat surface** with a
+  per-conversation `session_id` (the LangGraph thread key) rather than the single
+  `system:activity` inbox thread — preserving per-DM continuity — and publishes a
+  `discord.message` bus event for console visibility. Ported the proven
+  `-deprecated-gina` UX: burst debounce, conversation continuity, slow-response
+  reactions (👀→✅ only when slow), auto-threading, admin allowlist
+  (`DISCORD_ADMIN_IDS`). The agent invoker is injected, keeping the surface
+  decoupled + tested. Long-window context + return-address delivery are
+  follow-up slices. New guide: [Discord surface](docs/guides/discord.md).
 - **Outbound Discord tools (ADR 0015, slice 1).** `discord_send` / `discord_read`
   / `discord_react` — the stateless REST half of the optional Discord surface.
   Raw Discord REST v10 over `httpx` (no `discord.py`). **Off by default:**
