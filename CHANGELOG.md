@@ -80,7 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the boot gate holds over the compile window. (Inline compile is the root cause —
   offloading it is tracked in #497.)
 - **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
-- **Console chat fixed for A2A 1.0 (was a never-resolving spinner).** The React
   console's `streamChat` still spoke A2A **0.3** (`message/stream` with
   `parts:[{kind:'text'}]`), but the server moved to A2A 1.0 (a2a-sdk) — which
   returns `-32601 Method not found` (HTTP 200), so the SSE reader waited forever.
