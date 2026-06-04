@@ -7,23 +7,25 @@ The template ships an autonomous release pipeline. Wire it up once and every mer
 | Trigger | Workflow | Result |
 |---|---|---|
 | Push to `main` | `docker-publish.yml` | `ghcr.io/<owner>/<image>:latest` + `sha-<short>` |
-| Non-release PR merged | `prepare-release.yml` | Opens `prepare-release/vX.Y.Z` bump PR, auto-merges, tags `vX.Y.Z` |
+| Manual (`workflow_dispatch`) | `prepare-release.yml` | Opens a `prepare-release/vX.Y.Z` bump PR (**no auto-merge, no tag** — a human merges it, then pushes the tag) |
 | `vX.Y.Z` tag pushed | `release.yml` | Pushes semver Docker tags, creates GitHub release, posts Discord embed |
 
-Rolling `latest` is handled only by `docker-publish.yml`. Stable semver tags are handled only by `release.yml`. The two workflows never collide.
+Rolling `latest` is handled only by `docker-publish.yml`. Stable semver tags are handled only by `release.yml`. The two workflows never collide. The release cadence is **manual** (fleet policy): you dispatch `prepare-release.yml`, merge the bump PR, then push the tag.
 
-## 1. Un-freeze the repo guards
+## 1. Un-freeze the release pipeline
 
-Three files gate on `github.repository == 'protoLabsAI/protoAgent'`. Update them to your fork's path:
+The release workflows are **opt-in via a repo variable** — there is no
+`github.repository ==` guard to swap. Set it on your fork:
 
-- `.github/workflows/prepare-release.yml`
-- `.github/workflows/release.yml`
+```bash
+gh variable set RELEASE_ENABLED --body true
+```
 
-The `docker-publish.yml` workflow doesn't have this guard — it runs on any push to `main` in any clone.
+`prepare-release.yml` and `release.yml` gate on `if: vars.RELEASE_ENABLED == 'true'`. `docker-publish.yml` has no guard — it runs on any push to `main` in any clone.
 
 ## 2. Point the image name at your repo
 
-In all three workflow files, update `IMAGE_NAME`:
+In `release.yml` and `docker-publish.yml`, update `IMAGE_NAME`:
 
 ```yaml
 env:
@@ -33,7 +35,7 @@ env:
 
 ## 3. Grant `GH_PAT` access
 
-`prepare-release.yml` needs a PAT (not the default `GITHUB_TOKEN`) to push tags that trigger downstream workflows — `GITHUB_TOKEN`-pushed tags do not fire `on: push: tags` handlers, by GitHub's design.
+`prepare-release.yml` needs a PAT (not the default `GITHUB_TOKEN`) to push the release branch so its CI checks fire — branches/tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, by GitHub's design.
 
 Create a fine-grained PAT with `contents: write` on the repo, then add it as a secret named `GH_PAT` in **Settings → Secrets → Actions**.
 

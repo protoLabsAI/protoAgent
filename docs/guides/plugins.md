@@ -1,10 +1,16 @@
 # Plugins
 
 Plugins are **drop-in packages** that extend protoAgent without forking it. A
-plugin contributes **tools** and **bundled skills** today (subagent and
-middleware contributions are planned). Plugins run **in-process** with the
-agent's privileges, so they're **disabled by default** and you opt in
+plugin contributes **tools**, bundled **skills**, FastAPI **routes**, background
+**surfaces**, **subagents**, and managed **MCP servers** — plus its own
+**config / secrets / Settings** (ADR 0018/0019). (Middleware is the only
+extension point not yet plugin-contributable.) Plugins run **in-process** with
+the agent's privileges, so they're **disabled by default** and you opt in
 explicitly — only enable plugins you trust.
+
+> The first-party **Discord** and **Google** integrations ship as plugins
+> (`plugins/discord/`, `plugins/google/`) — disable either with
+> `plugins: { disabled: [discord] }` / `[google]`, no core edit.
 
 > **Trust model.** This is the in-process / trusted model (matching Hermes): an
 > enabled plugin's `register()` runs as the agent. Don't enable code you
@@ -52,7 +58,7 @@ def register(registry):
     registry.register_skill_dir("skills")  # bundle SKILL.md skills (relative to the plugin)
 ```
 
-`register` is called once at load. The registry accepts **five** contribution
+`register` is called once at load. The registry accepts **six** contribution
 types — a fork adds any of them as a plugin, never editing core `server.py`:
 
 | Method | Contributes | Lifecycle |
@@ -96,6 +102,11 @@ before any surface starts; guard for `None`):
 - `host.invoke(prompt, session_id)` — run a chat turn (one conversation per
   `session_id`), returns the assistant text.
 - `host.publish(event, data)` / `host.subscribe()` — the server→client event bus.
+- `host.config()` — the live `LangGraphConfig` (current resolved values, incl.
+  `plugin_config`), so a route reads fresh config instead of a load-time snapshot.
+- `host.apply_settings(patch)` — persist a nested config patch + reload once
+  (heavy — call via `asyncio.to_thread`). Lets a route apply config (e.g. Google's
+  Connect flow flips `enabled` and reloads).
 
 ```python
 def register(registry):
@@ -130,7 +141,9 @@ def register(registry):
     registry.register_router(_build_router(greeting))    # close over it
 ```
 
-A plugin section colliding with a built-in (`model`, `discord`, …) is ignored.
+A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`,
+…) is ignored. (`discord` and `google` are **not** reserved — they're claimed by
+the first-party Discord/Google plugins.)
 The **wizard step** is not yet plugin-contributable (Settings + a docs link
 suffice for now).
 
@@ -138,7 +151,9 @@ suffice for now).
 config reload reuses them, so changing `plugins.enabled` needs a restart
 (ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and
 never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
-example uses all five. Plugin contributions show in `GET /api/runtime/status`.
+example demonstrates the contribution types. Plugin contributions show in
+`GET /api/runtime/status`. The `plugins/discord` and `plugins/google` first-party
+plugins are worked examples of a surface + route and a managed MCP server + route.
 
 ## Where plugins live & how they're enabled
 

@@ -113,19 +113,20 @@ subagents:
 
 ## 4. Teach the lead agent
 
-The lead's `task()` tool docstring is how the LLM learns what subagents exist. It's generated automatically from `SUBAGENT_REGISTRY`, but the lead also needs to *know when to delegate*. Update `graph/prompts.py::build_system_prompt`:
+The lead's `task()` tool docstring is how the LLM learns what subagents exist. It's generated automatically from `SUBAGENT_REGISTRY`, but the lead also needs to *know when to delegate*. Add that guidance to your persona file, **`config/SOUL.md`** (read into the system prompt by `graph/prompts.py::build_system_prompt` — you don't edit `prompts.py`):
 
-```python
-SYSTEM_PROMPT = """You are my-agent.
-
+```markdown
 Available subagents (invoke via the `task` tool):
 - `researcher` — gathers + synthesizes background on a topic, returns a sourced brief
 - `summarizer` — condenses long source text into a ≤200-word brief
 
 Delegate to researcher when a user asks an open-ended "find out about X"
 question. Handle short factual queries yourself.
-"""
 ```
+
+> **No-fork path:** a subagent can also be shipped as a [plugin](/guides/plugins)
+> (`register_subagent`) — added to `SUBAGENT_REGISTRY` at load with no edit to
+> `graph/subagents/config.py` or `graph/config.py`.
 
 ## 5. Turn subagents off entirely
 

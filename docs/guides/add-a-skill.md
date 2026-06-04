@@ -12,7 +12,7 @@ You don't need a skill for "things the chat UI does" — the Gradio chat is alre
 
 ## 1. Add to the card
 
-Edit `server.py::_build_agent_card`. The `skills` array is where entries go:
+Edit the `_SKILL_SPECS` list in `server.py` (the card builder `_build_agent_card_proto` turns it into the card's `skills` via `_agent_skills()`). Each spec is a dict — this is where entries go:
 
 ```python
 "skills": [
@@ -73,19 +73,17 @@ Only declare effects for skills that actually mutate shared state. Over-declarin
 
 Skill dispatch doesn't add code paths — the A2A handler just forwards the caller's message to the same LangGraph runtime that handles chat. What makes a skill *do something* is that the system prompt teaches the LLM how to behave when it sees a request matching the skill's intent.
 
-Edit `graph/prompts.py::build_system_prompt` and add the skill's behaviour description:
+Add the skill's behaviour description to your persona file, **`config/SOUL.md`** (the wizard writes it; `graph/prompts.py::build_system_prompt` reads it into the system prompt — you don't edit `prompts.py`):
 
-```python
-SYSTEM_PROMPT = """You are my-agent. You handle general chat plus these skills:
+```markdown
+You handle general chat plus these skills:
 
 - **summarize_pr** — when the user sends a GitHub PR URL, fetch the PR
-  with gh_pr_view, then return a three-bullet summary: what changed,
+  with `github_get_pr`, then return a three-bullet summary: what changed,
   why, and any risks. Keep each bullet under two sentences.
-
-..."""
 ```
 
-The LLM routes by reading the user's message. Skill IDs on the card exist for callers; skill *behaviour* lives in the prompt.
+The LLM routes by reading the user's message. Skill IDs on the card exist for callers; skill *behaviour* lives in `SOUL.md`.
 
 ## 4. Verify on the card
 
@@ -120,9 +118,8 @@ Add to `tests/test_a2a_integration.py`:
 
 ```python
 def test_agent_card_includes_summarize_pr_skill():
-    from server import _build_agent_card
-    card = _build_agent_card("my-agent:7870")
-    skill_ids = {s["id"] for s in card["skills"]}
+    from server import _SKILL_SPECS
+    skill_ids = {s["id"] for s in _SKILL_SPECS}
     assert "summarize_pr" in skill_ids
 ```
 

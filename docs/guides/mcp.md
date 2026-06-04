@@ -49,6 +49,17 @@ other servers.
 - `GET /api/runtime/status` reports `mcp.enabled`, the connected `servers`
   (`name`, `transport`, `tool_count`), and total `tool_count`.
 
+## Plugin-managed servers
+
+A **plugin** can contribute a managed MCP server (you never hand-edit
+`mcp.servers`) via `register_mcp_server(factory)` — `factory(config)` returns an
+`mcp.servers[]` entry, or `None` when the server shouldn't run (off / not yet
+connected), so the server comes and goes with config. A plugin entry whose `name`
+matches a configured server **replaces** it, and a plugin contributing a server
+**activates MCP even when `mcp.enabled` is off**. The first-party **Google**
+plugin (`plugins/google/`) is the worked example: an OAuth-gated Gmail/Calendar
+server, launched frozen via `--mcp-plugin google`. See [Plugins](./plugins.md).
+
 ## Keeping tools out of context (allowlist + lazy connect)
 
 A single MCP server can export dozens or hundreds of tools, and **every bound

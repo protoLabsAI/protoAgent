@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- **Docs audit & refresh (24 files).** Swept the docs against current code after
+  the Discord/Google→plugins migration and the desktop fixes. Highlights:
+  Discord/Google now documented as **first-party plugins** (config lives in
+  plugin-declared `discord:` / `google:` sections, not typed fields; disable via
+  `plugins.disabled`); `register_mcp_server` + the `--mcp-plugin <id>` frozen
+  entrypoint + `host.config()`/`host.apply_settings()` added to the plugins guide;
+  the plugin contribution count corrected (five → six) across guide + architecture
+  + README. Reference fixes: `configuration.md` gained `tools.disabled`,
+  `plugins.disabled`, the plugin-config model, `routing.aux_model`, and the
+  `checkpoint` / `workflows` sections, and the **filesystem** defaults corrected
+  (now on-by-default + `run_requires_approval`); `environment-variables.md` dropped
+  the non-existent `GRADIO_SERVER_*` vars and the wrong "not set by the template"
+  claims, and documents the Discord/Google env fallbacks + `PROTOAGENT_*` paths;
+  `starter-tools.md` recounted + added `request_user_input`/beads and the
+  discord-as-plugin note; `agent-card.md` renamed `_build_agent_card` →
+  `_build_agent_card_proto` and reflects the four default extensions. Fixed broken
+  fork/deploy instructions (the removed `github.repository` guard → `RELEASE_ENABLED`
+  variable; dropped the `sed`-rename anti-guidance) and tutorial drift
+  (`WORKER_CONFIG`→`RESEARCHER_CONFIG`, `SYSTEM_PROMPT`→`SOUL.md`, `gh_pr_view`→
+  `github_get_pr`). Documented the desktop non-streaming `/api/chat` chat contract
+  and the frozen build's plugins/tools bundling in the React+Tauri guide.
+
 ### Fixed
 - **Desktop chat showed a blank assistant reply (no response).** WKWebView (the
   Tauri shell) doesn't deliver a `text/event-stream` body through `fetch()` at all

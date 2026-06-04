@@ -16,7 +16,7 @@ log = logging.getLogger("protoagent.plugins")
 class PluginRegistry:
     """Collects a single plugin's contributions during ``register()``.
 
-    Contribution types (ADR 0001 + 0018):
+    Contribution types (ADR 0001 + 0018 + 0019):
 
     - ``tools`` — LangChain ``BaseTool``s (``register_tool[s]``).
     - ``skill_dirs`` — ``SKILL.md`` skill directories (``register_skill_dir``).
@@ -26,6 +26,8 @@ class PluginRegistry:
       ``stop``) run on the server loop (``register_surface``).
     - ``subagents`` — ``SubagentConfig``s added to ``SUBAGENT_REGISTRY``
       (``register_subagent``).
+    - ``mcp_servers`` — managed MCP server factories ``config -> entry|None``
+      injected into MCP discovery (``register_mcp_server``).
 
     Routes mount + surfaces start **once** at process init; a config reload reuses
     them — changing ``plugins.enabled`` needs a restart (ADR 0018).

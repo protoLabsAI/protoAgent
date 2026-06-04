@@ -60,7 +60,7 @@ All sampling params are optional — omit to use the gateway / model-card defaul
 
 ## Secrets
 
-Two fields are secrets and are **never written to the tracked config YAML**: the model `api_key` and the A2A `auth.token`. The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
+Two **core** fields are secrets and are **never written to the tracked config YAML**: the model `api_key` and the A2A `auth.token`. (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
 
 ```yaml
 # config/secrets.yaml — never committed
@@ -212,6 +212,7 @@ execute_code:
 
 ```yaml
 tools:
+  disabled: []              # core tool names to DROP (a fork's denylist)
   deferred:
     enabled: false          # OFF by default — the full tool set is shown
     keep: []                # always-on tool names; empty = built-in base
@@ -219,6 +220,7 @@ tools:
 
 | Key | Default | What |
 |---|---|---|
+| `disabled` | `[]` | Core tool names to **drop** from the agent without editing `get_all_tools` — a fork keeps what it wants by listing the rest. Live-reloadable. Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
 | `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
 | `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
 
@@ -241,12 +243,13 @@ telemetry:
 
 ## `filesystem`
 
-Fenced multi-project filesystem toolset ([ADR 0007](../adr/0007-directory-aware-operator-agent.md)) — a generic, **opt-in, off-by-default** primitive that gives the agent read/write/list/search + fenced command execution over a registry of project directories. Inert unless `enabled` **and** `projects` is non-empty. The capability a forked operator (e.g. "Roxy") composes into a multi-project manager — see the [operator-fork guide](../guides/operator-fork.md).
+Fenced multi-project filesystem toolset ([ADR 0007](../adr/0007-directory-aware-operator-agent.md)) — a generic primitive that gives the agent read/write/list/search + fenced command execution over a registry of project directories. It is **ON by default**, fenced to a default `workspace` dir when no explicit `projects` are set (override with `PROTOAGENT_WORKSPACE`). The capability a forked operator (e.g. "Roxy") composes into a multi-project manager — see the [operator-fork guide](../guides/operator-fork.md).
 
 ```yaml
 filesystem:
-  enabled: true        # off by default
-  allow_run: false     # add the dual-use run_command power tool
+  enabled: true                  # ON by default
+  allow_run: true                # run_command available (ON); HITL-gated below
+  run_requires_approval: true    # each run_command pauses for operator approval
   projects:
     - { name: orbis, path: /Users/kj/dev/ORBIS, write: false }   # read-only monitor
     - { name: pixelgen, path: /Users/kj/dev/pixelgen, write: true }
@@ -254,9 +257,10 @@ filesystem:
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `false` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`). |
-| `allow_run` | `false` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). |
-| `projects` | `[]` | Managed workspaces: `{name, path, write}`. **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; invalid paths are skipped. |
+| `enabled` | `true` | Expose the fs tools (`list_projects`/`read_file`/`list_dir`/`find_files`/`search_files`/`write_file`/`edit_file`). Off → no fs tools. |
+| `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). |
+| `run_requires_approval` | `true` | Each `run_command` call pauses for HITL operator approval (A2A `input-required`). Drop to `false` to let commands run unattended. |
+| `projects` | `[]` | Managed workspaces: `{name, path, write}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; invalid paths are skipped. |
 
 **Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4.
 
@@ -279,12 +283,18 @@ Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fe
 
 ## `routing`
 
-Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback).
+Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback). `aux_model` is a separate, optional cheap/fast alias for non-reasoning calls.
 
 ```yaml
 routing:
   fallback_models: [claude-haiku-4-5, gpt-5]
+  aux_model: ""        # cheap/fast alias for summarization, goal-verify, subagent delegation
 ```
+
+| Key | Default | What |
+|---|---|---|
+| `fallback_models` | `[]` | Models to retry on a primary-model error, in order (same gateway). Empty = no fallback. |
+| `aux_model` | `""` | Single cheap/fast alias for non-reasoning calls (compaction summarizer, goal verifier, subagent delegation). Blank = everything runs on the main model; each path's own override still wins. |
 
 ## `goal`
 
@@ -361,16 +371,71 @@ Per-server `tools.include` is an **allowlist** (only those tools bind) — the f
 
 Servers are discovered at startup/reload. `GET /api/runtime/status` reports `mcp.servers` and `mcp.tool_count`. See the [MCP guide](../guides/mcp.md) and `examples/mcp/echo_server.py`.
 
+## `checkpoint`
+
+The conversation-history checkpointer (durable chat memory across restarts) and its pruning/harvest knobs.
+
+```yaml
+checkpoint:
+  db_path: /sandbox/checkpoints.db   # blank = in-memory (history lost on restart)
+  keep_per_thread: 5
+  max_age_days: 30
+  prune_interval_hours: 6
+  harvest_enabled: true
+```
+
+| Key | Default | What |
+|---|---|---|
+| `db_path` | `/sandbox/checkpoints.db` | SQLite path (`/sandbox`→`~/.protoagent` fallback, instance-scoped). Blank → in-memory (chat history doesn't survive a restart). |
+| `keep_per_thread` | `5` | How many checkpoints to retain per conversation thread. |
+| `max_age_days` | `30` | Drop checkpoints older than this. |
+| `prune_interval_hours` | `6` | How often the background pruner runs. |
+| `harvest_enabled` | `true` | On thread retire, harvest its history into the knowledge store before purging. |
+
+## `workflows`
+
+Declarative multi-step recipes over subagents ([ADR 0002](../adr/0002-reusable-subagent-workflows.md)) — the `run_workflow` / `save_workflow` tools.
+
+```yaml
+workflows:
+  enabled: true
+  dir: /sandbox/workflows   # writable recipe root
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `true` | Expose `run_workflow` / `save_workflow` and load `*.yaml` recipes. |
+| `dir` | `/sandbox/workflows` | Writable recipe root (`/sandbox`→`~/.protoagent` fallback). Bundled recipes also load from `workflows/`. |
+
 ## `plugins`
 
-Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools and bundled skills. They run **in-process** with the agent's privileges, so they're **disabled by default** — only enable plugins you trust.
+Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools, bundled skills, FastAPI routes, background surfaces, subagents, and managed MCP servers (ADR 0018/0019). They run **in-process** with the agent's privileges, so a third-party plugin is **disabled by default** — only enable plugins you trust. (First-party bundled plugins like `discord`/`google` ship `enabled: true` in their own manifest.)
 
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `[]` | Plugin `id`s to load. A plugin also loads if its own manifest has `enabled: true`. |
+| `disabled` | `[]` | Plugin `id`s to force **OFF** even when their manifest says `enabled: true` — the way a fork drops a bundled first-party plugin (e.g. `discord`, `google`) without deleting its directory or editing core. |
 | `dir` | `""` | Override the writable plugins root (default `<config-dir>/plugins`). |
 
-Plugins load from two roots — bundled (`plugins/`, e.g. the `hello` example) and writable (`<config-dir>/plugins/`); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`). See the [Plugins guide](../guides/plugins.md).
+Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `discord`, `google`) and writable (`<config-dir>/plugins/`); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`, routes/surfaces/subagents counts). See the [Plugins guide](../guides/plugins.md).
+
+### Plugin-declared config sections (ADR 0019)
+
+A plugin can **claim a top-level config section** and declare its keys/secrets/Settings in its manifest (`config_section` / `config` defaults / `secrets` / `settings`). The section is resolved (manifest defaults ⊕ YAML ⊕ secrets overlay) into `config.plugin_config["<section>"]` and surfaced as a Settings group — with **no** edit to `config.py` / `config_io.py` / `settings_schema.py`. This is where the **Discord** and **Google** config now lives:
+
+```yaml
+discord:                 # claimed by plugins/discord/ — NOT a core config field
+  enabled: false
+  admin_ids: []
+  # bot_token → secrets.yaml (plugin-declared secret)
+google:                  # claimed by plugins/google/
+  enabled: false
+  client_id: ""
+  tz: ""
+  # client_secret → secrets.yaml
+```
+
+A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`, …) is ignored. Plugin secrets (e.g. `discord.bot_token`, `google.client_secret`) route to `secrets.yaml` dynamically — see **Secrets** above.
 
 ## Scheduler
 

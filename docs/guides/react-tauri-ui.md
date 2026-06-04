@@ -242,9 +242,19 @@ Port the Ava chat store and session-pool model:
 - per-session status map for background work indicators
 - session-scoped goal status panel using `/api/goal/{session_id}`
 
-For streaming, prefer A2A `message/stream` first because it already emits task
-state and tool progress. A later pass can add an AI-SDK-compatible `/api/chat`
-stream if we want to use `@ai-sdk/react` directly.
+For streaming, the browser path uses A2A **`SendStreamingMessage`** (A2A 1.0;
+0.3's `message/stream` is back-compat-parsed on read but no longer used to send)
+because it already emits task state and tool progress.
+
+> **Desktop (WKWebView) exception — important.** WKWebView does **not** deliver a
+> `text/event-stream` body through `fetch()` (neither `body.getReader()` nor a
+> buffered `clone().text()` returns the bytes), so the streaming turn would render
+> as a blank assistant bubble. The shipped `streamChat` (`apps/web/src/lib/api.ts`)
+> detects the shell via `isDesktopWebview()` and, in the desktop, routes the turn
+> through the **non-streaming `POST /api/chat`** (plain JSON, which WKWebView reads
+> fine — same as every other console call): one request, full reply, rendered
+> once. No live token streaming or tool-call cards in the desktop chat; browsers
+> keep the streaming `/a2a` path.
 
 The shipped chat surface already renders assistant markdown
 (`apps/web/src/chat/Markdown.tsx`), slash-command autocomplete from
@@ -311,12 +321,18 @@ Desktop requirements:
 - global hotkey to show/hide
 - hide-on-close
 - bundled static React app
-- Python sidecar or "connect to existing local server" mode
+- bundled Python sidecar
 - OS-standard data dirs mapped to memory/knowledge/config paths
 
-For the first desktop cut, prefer connect-to-local-server mode. Bundling and
-supervising the Python sidecar is a separate packaging problem and should not
-block React UI validation.
+**The sidecar now ships.** `apps/desktop/sidecar/build_sidecar.py` PyInstaller-freezes
+the headless server (`binaries/protoagent-server-<triple>`), and `src-tauri/src/lib.rs`
+spawns it via `externalBin` with `--ui console` on a fixed port (`7870`). The
+frozen build bundles the **`plugins/` tree** (`--add-data plugins:plugins`) and
+**`--collect-all tools`** (alongside `surfaces`, `mcp`, `mcp_servers`, `websockets`)
+— plugins are loaded by file path (importlib), which PyInstaller's import-scan
+misses, so without these the Discord/Google plugins fail to load in the frozen app
+(`No module named 'tools.discord_tools'`). Gradio is excluded. A frozen plugin's
+managed MCP server is launched via the generic `--mcp-plugin <id>` shim.
 
 ## Migration Slices
 

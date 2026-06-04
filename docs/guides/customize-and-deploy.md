@@ -16,41 +16,33 @@ gh repo create protoLabsAI/my-agent \
 cd my-agent
 ```
 
-Or: `Use this template → Create a new repository` from the browser. Pick a short slug (`jon`, `echo-agent`, `product-director`) — it ends up as the image name, metric prefix, Langfuse tag, and release-workflow repo guard.
+Or: `Use this template → Create a new repository` from the browser. Pick a short slug (`jon`, `echo-agent`, `product-director`) — it ends up as the image name, metric prefix (`AGENT_NAME`), and Langfuse tag.
 
-## 2. Rename `protoagent` throughout
+## 2. Set your name — don't rename `protoagent`
 
-The template uses `protoagent` as the placeholder everywhere. Do one pass:
+**Do NOT `sed`-rename `protoagent` across the tree.** The internal `protoagent`
+identifier is the logger namespace, the `~/.protoagent` data dir, the `PROTOAGENT_*`
+env prefix, and the `protoagent.plugin.yaml` manifest name — renaming it rewrites
+~120 files and conflicts on every upstream merge, for zero functional gain. The
+**user-facing** name is data, not code:
 
-```bash
-# macOS / BSD sed
-git grep -li protoagent | xargs sed -i '' 's/protoagent/my-agent/g'
-git grep -li protoAgent | xargs sed -i '' 's/protoAgent/MyAgent/g'
+- `identity.name` in `config/langgraph-config.yaml` (set by the wizard) — drives the console brand, window title, and agent card. A fork sets this once and the whole UI follows.
+- `AGENT_NAME` env — the short slug for the Prometheus metric prefix, Langfuse tag, and the `<AGENT_NAME>_API_KEY` auth header.
 
-# Linux / GNU sed — drop the empty-string backup suffix
-git grep -li protoagent | xargs sed -i 's/protoagent/my-agent/g'
-git grep -li protoAgent | xargs sed -i 's/protoAgent/MyAgent/g'
-```
-
-Review the diff. Key hits:
-
-- `Dockerfile` — the `/opt/protoagent/` paths become `/opt/my-agent/`.
-- `entrypoint.sh` — same.
-- `server.py` — `AGENT_NAME_ENV` fallback becomes `my-agent`.
-- `chat_ui.py` — branding strings (service worker label, apple-mobile-web-app-title).
-- Workflow files — the repo guards check `protoLabsAI/my-agent` instead.
-
-The runtime name (`identity.name` in `config/langgraph-config.yaml`, set by the wizard) is separate — keep both in sync unless you have a reason not to.
+Leave the internal `protoagent` identifier alone. See [Fork the template](/guides/fork-the-template) for the full no-rename rationale.
 
 ## 3. Un-freeze the release pipeline
 
-The release workflows gate on the template's repo path so third-party clones don't accidentally cut releases:
+The release workflows are **opt-in via a repo variable** (so a fork enables them
+without editing the workflow files — upstream changes then don't conflict on
+re-sync). There is **no `github.repository ==` guard to swap.** Just set the
+variable on your fork:
 
-- `.github/workflows/prepare-release.yml`
-- `.github/workflows/release.yml`
-- `.github/workflows/docker-publish.yml`
+```bash
+gh variable set RELEASE_ENABLED --body true   # in your fork's repo
+```
 
-Each has a `if: github.repository == 'protoLabsAI/protoAgent'` (or similar) check. Swap `protoLabsAI/protoAgent` for `<your-org>/<your-repo>` in all three, or the pipeline won't fire on merges.
+`prepare-release.yml` and `release.yml` gate on `if: vars.RELEASE_ENABLED == 'true'`.
 
 ## 3b. Stay conformant with the fleet workspace-config standard
 
@@ -83,7 +75,7 @@ nothing to copy or maintain.
 
 ## 4. Rewrite the agent card
 
-`server.py::_build_agent_card` ships with placeholder skills:
+`server.py::_build_agent_card_proto` ships with placeholder skills:
 
 ```python
 "skills": [
@@ -95,13 +87,13 @@ Replace with the skills your agent actually advertises over A2A. The `name` and 
 
 ## 5. (Optional) Add domain tools
 
-`tools/lg_tools.py` ships with `current_time`, `calculator`, `web_search`, `fetch_url` plus 5 memory tools (`memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log`) bound to the bundled `KnowledgeStore`. The 3 scheduler tools (`schedule_task`, `list_schedules`, `cancel_schedule`) are wired in separately by `server.py::_build_scheduler` when the scheduler backend is enabled. Keep the ones you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of `tools/lg_tools.py`. Any tool returned from there (or from `_build_scheduler_tools`) becomes a checkbox in the wizard and drawer automatically.
+See [Starter tools](/reference/starter-tools) for the full default set. To **drop** a core tool, list it in `tools.disabled` (config — no code edit). To **add** tools, ship a [plugin](/guides/plugins) (`register_tools`) — that's the no-fork path that survives upstream merges. Editing `get_all_tools()` in `tools/lg_tools.py` directly still works but is the legacy core-edit that conflicts on re-sync. Any tool the agent ends up with becomes a checkbox in the wizard and drawer automatically.
 
 The memory tools are dropped automatically when `middleware.knowledge: false`; the scheduler tools when `middleware.scheduler: false`. See [Schedule future work](/guides/scheduler) and [Configuration](/reference/configuration#middleware) for the toggles.
 
 ## 6. (Optional) Configure subagents
 
-`graph/subagents/config.py` ships with one `researcher`. Register more `SubagentConfig` instances in `SUBAGENT_REGISTRY` and add matching fields in `graph/config.py::LangGraphConfig`. The lead agent delegates via the `task` tool; the subagent delegation rules are built from the registry.
+`graph/subagents/config.py` ships with one `researcher`. Register more `SubagentConfig` instances in `SUBAGENT_REGISTRY` and add matching fields in `graph/config.py::LangGraphConfig` — or ship a subagent as a [plugin](/guides/plugins) (`register_subagent`) with no core edit. The lead agent delegates via the `task` tool; the subagent delegation rules are built from the registry.
 
 ## 7. Build and ship the image
 
@@ -111,7 +103,7 @@ docker build -t ghcr.io/my-org/my-agent:local .
 # local test — mount the config volume so wizard completions persist
 docker run --rm -p 7870:7870 \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-    -v my-agent-config:/opt/my-agent/config \
+    -v my-agent-config:/opt/protoagent/config \
     ghcr.io/my-org/my-agent:local
 ```
 

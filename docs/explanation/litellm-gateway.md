@@ -60,7 +60,7 @@ The one gotcha: `stream_usage=True` (passed in `graph/llm.py`) is required to ge
 
 ## What about cost tracking at the gateway?
 
-LiteLLM exposes per-call cost in its callback hooks. The template doesn't capture that today — cost-v1 emission includes token usage and duration, not USD. Forks that want to include `costUsd` on the cost-v1 payload can plumb `response_cost` from a LiteLLM callback into `TaskRecord.usage`. It's on the roadmap but not shipped.
+LiteLLM exposes per-call cost in its callback hooks, but the template computes `costUsd` **in-process** instead (via `pricing.py`, accumulated across the turn's LLM calls) and emits it on the `cost-v1` DataPart — so cost tracking doesn't depend on a gateway callback. See [Cost & trace propagation](/explanation/cost-and-trace).
 
 ## Why not just use an OpenAI key directly?
 

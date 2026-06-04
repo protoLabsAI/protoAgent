@@ -23,8 +23,12 @@ No files, no CLI ([ADR 0017](/adr/0017-google-ui-config)):
    `google__calendar_today`, etc. — no restart.
 
 The client secret is stored in the gitignored `secrets.yaml`; the token never
-leaves the per-user config dir. Both are managed for you — the agent auto-wires
-the Google MCP server (you never edit `mcp.servers`).
+leaves the per-user config dir. Both are managed for you — Google ships as a
+**first-party plugin** (`plugins/google/`, ADR 0019) that contributes a managed
+MCP server via `register_mcp_server` (started only once enabled + an OAuth client
+is set + a token is cached), so **you never edit `mcp.servers`**. Disable it with
+`plugins: { disabled: [google] }`, or replace it with your own integration — no
+core edit. See [Plugins](./plugins.md).
 
 ## <a id="oauth-client"></a>Get an OAuth client
 
@@ -51,7 +55,12 @@ This is the one part that happens on Google's side:
 - The client secret + token are **gitignored / per-user**; never commit them.
 - This surface backs the [morning briefing](/guides/scheduler) — with Google off,
   the briefing just skips the mail/calendar sections.
-- **Env/CLI fallback** (Docker/headless): set `GOOGLE_CREDENTIALS_PATH` to a
-  Desktop-app `credentials.json` and run `python -m mcp_servers.google.server`
-  once to mint `token.json`, then add a `google` entry under `mcp.servers`. The
-  in-app flow above is the recommended path.
+- **Env/CLI fallback** (Docker/headless): set the OAuth client + token path via
+  env (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_TOKEN_PATH`, plus
+  optional `GOOGLE_TZ`) — or `GOOGLE_CREDENTIALS_PATH` to a Desktop-app
+  `credentials.json` — and mint the token once with `python -m
+  mcp_servers.google.server`. The Google **plugin** then injects the managed
+  server automatically; you don't add a `google` entry to `mcp.servers` (the
+  plugin's entry replaces any same-named one). In a frozen desktop build the
+  server is launched via `--mcp-plugin google`. The in-app flow above is the
+  recommended path.
