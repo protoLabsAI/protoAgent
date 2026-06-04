@@ -973,6 +973,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if discord_changed:
         _restart_discord_async()
 
+    # Plugin surfaces with a reload hook (ADR 0018/0019) — let them reconnect on a
+    # config change (e.g. a migrated Discord/Google surface) without a restart.
+    _reload_plugin_surfaces(new_config)
+
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
         return True, "config reloaded • setup not complete"
@@ -1023,6 +1027,31 @@ def _start_discord_surface() -> None:
     _discord_task = _start_discord(
         _discord_invoke, publish=_event_bus.publish, subscribe=_event_bus.subscribe
     )
+
+
+def _reload_plugin_surfaces(new_config) -> None:
+    """Notify started plugin surfaces of a config change (ADR 0018/0019).
+
+    Each surface that registered a ``reload`` callback gets it called with the new
+    ``LangGraphConfig`` on the server loop, so a migrated Discord/Google-style
+    surface can reconnect on a Settings save without a restart. Best-effort.
+    """
+    for h in _plugin_surface_handles:
+        reload_cb = h.get("reload")
+        if not callable(reload_cb):
+            continue
+
+        def _make(cb=reload_cb, name=h.get("name")):
+            async def _run():
+                try:
+                    res = cb(new_config)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception:
+                    log.exception("[plugins] surface %s reload failed", name)
+            return _run()
+
+        _run_on_server_loop(_make, f"surface reload ({h.get('name')})")
 
 
 def _restart_discord_async() -> None:
@@ -2655,7 +2684,9 @@ def _main():
                 res = s["start"]()
                 if asyncio.iscoroutine(res):
                     res = await res
-                _plugin_surface_handles.append({"name": s["name"], "stop": s.get("stop"), "handle": res})
+                _plugin_surface_handles.append(
+                    {"name": s["name"], "stop": s.get("stop"), "reload": s.get("reload"), "handle": res}
+                )
                 log.info("[plugins] started surface: %s", s["name"])
             except Exception:
                 log.exception("[plugins] surface %s failed to start", s.get("name"))
