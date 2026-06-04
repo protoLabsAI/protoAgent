@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Plugins: multi-module support.** The plugin loader now imports a plugin's
+  `__init__.py` as a package — registered in `sys.modules` before exec with a
+  sanitized module name — so a plugin can have sibling modules and use relative
+  imports (`from .tools import …`). Previously a hyphenated plugin id produced an
+  illegal module name and the relative import failed at load. Regression test added.
 - **Discord "Test connection" ignored the entered token** (always reported "bot
   token is empty", even for a valid token). The discord plugin route's request
   model was a *function-local* Pydantic class, but the plugin module uses
