@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Discord ingress is now a first-party plugin (`plugins/discord`, #509).** The
+  Discord DM gateway, the `POST /api/config/test-discord` route, the outbound
+  `discord_*` tools, and the `discord` config/secrets/Settings group all moved
+  out of `server.py` + the core config layer into a self-contained plugin (ADR
+  0018/0019). Behaviour is unchanged — the Settings group, wizard step, Test
+  button and live-reconnect-on-save all work as before — but a fork can now
+  **disable Discord entirely** with `plugins: { disabled: [discord] }` (drops the
+  surface *and* the tools), or swap in its own ingress plugin, with no core edit.
+  No config migration needed: the plugin claims the existing top-level `discord`
+  section, so saved tokens/admin IDs keep working.
+
 ### Added
 - **Plugin host context — `registry.host` (#509 prereq).** A plugin surface/route
   can now reach the **agent invoke** + the **event bus** (`host.invoke(prompt,
