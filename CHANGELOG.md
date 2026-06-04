@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Discord plugin failed to load in the frozen desktop app (`No module named
+  'tools.discord_tools'`).** Migrating Discord to a plugin (#513) removed the only
+  static import of `tools.discord_tools` from `tools/lg_tools.py`, so PyInstaller's
+  import-scan no longer saw it (the plugin imports it, but plugins are loaded by
+  file path — invisible to the scan) and it was dropped from the bundle. The
+  sidecar build now collects the whole `tools` package, so plugin-only tool
+  imports resolve in the frozen app. Caught by running the frozen binary directly;
+  the Google plugin was unaffected (its modules are collected via `mcp_servers`).
+
 ### Added
 - **Plugins can contribute managed MCP servers — `register_mcp_server` (ADR
   0019, #509).** A plugin ships an **MCP server the agent connects to** via a
