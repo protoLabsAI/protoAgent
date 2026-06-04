@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugins can contribute config, settings & secrets (ADR 0019, #508).** A
+  plugin **declares its config in the manifest** (`config_section` / `config`
+  defaults / `secrets` / `settings`) — known at config-load time without importing
+  the plugin. It claims a top-level config section and gets: a resolved config
+  (manifest defaults ⊕ YAML ⊕ secrets overlay, read via `registry.config`),
+  secret routing to `secrets.yaml` (via a dynamic `secret_paths()`), and an
+  auto-generated **System → Settings** group — with no `config.py` /
+  `config_io.py` / `settings_schema.py` edit. A section colliding with a built-in
+  is ignored. Completes the plugin reach (config + ADR 0018's surface/route/
+  subagent), so a fork ships a fully self-contained configurable surface as a
+  plugin — the prerequisite for migrating the built-in Discord/Google surfaces
+  (#509). The `plugins/hello` example now declares a config section + secret.
 - **Plugins can contribute surfaces, routes & subagents (ADR 0018, #506).** The
   plugin `register(registry)` contract gained `register_router` (a FastAPI
   `APIRouter`, mounted under `/plugins/<id>`), `register_surface` (a lifecycle

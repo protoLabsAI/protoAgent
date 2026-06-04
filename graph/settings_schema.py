@@ -155,6 +155,28 @@ _BY_KEY = {f.key: f for f in FIELDS}
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 
 
+def _plugin_field_specs():
+    """Plugin-declared settings fields (ADR 0019) as (schema, full_key, key, spec)
+    — ``full_key`` is the dotted YAML path ``<section>.<key>`` the save writes to.
+    Best-effort; empty when no plugin declares settings."""
+    try:
+        from graph.plugins.pconfig import live_plugin_config_schemas
+
+        out = []
+        for sch in live_plugin_config_schemas():
+            for spec in sch.settings:
+                key = spec.get("key")
+                if key:
+                    out.append((sch, f"{sch.section}.{key}", key, spec))
+        return out
+    except Exception:  # noqa: BLE001 — plugin discovery is best-effort
+        return []
+
+
+def _plugin_group(sch, spec) -> str:
+    return spec.get("group") or sch.section.replace("_", " ").title()
+
+
 def build_schema(config, *, model_options: list[str] | None = None) -> list[dict[str, Any]]:
     """Return the settings schema grouped by section, with current values.
 
@@ -184,15 +206,55 @@ def build_schema(config, *, model_options: list[str] | None = None) -> list[dict
         if f.maximum is not None:
             entry["maximum"] = f.maximum
         groups.setdefault(f.section, {"section": f.section, "fields": []})["fields"].append(entry)
+
+    # Plugin-declared settings fields (ADR 0019) — value from config.plugin_config,
+    # rendered + saved through the same generic Settings surface (key = dotted
+    # YAML path, so apply_updates_to_yaml + secret routing handle it for free).
+    plugin_cfg = getattr(config, "plugin_config", {}) or {}
+    for sch, full_key, key, spec in _plugin_field_specs():
+        section_cfg = plugin_cfg.get(sch.section) or sch.defaults
+        current = section_cfg.get(key)
+        ftype = spec.get("type", "string")
+        group = _plugin_group(sch, spec)
+        entry = {
+            "key": full_key,
+            "label": spec.get("label", key),
+            "type": ftype,
+            "section": group,
+            "description": spec.get("description", ""),
+            "restart": bool(spec.get("restart", False)),
+            "options": list(spec.get("options", []) or []),
+            "default": _jsonable(sch.defaults.get(key)),
+        }
+        if ftype == "secret":
+            entry["value"] = ""
+            entry["is_set"] = bool(current)
+        else:
+            entry["value"] = _jsonable(current)
+        if spec.get("minimum") is not None:
+            entry["minimum"] = spec["minimum"]
+        if spec.get("maximum") is not None:
+            entry["maximum"] = spec["maximum"]
+        groups.setdefault(group, {"section": group, "fields": []})["fields"].append(entry)
+
     return list(groups.values())
 
 
 def validate_flat(updates: dict[str, Any]) -> tuple[bool, str | None]:
     """Light per-field validation against the registry before persisting."""
+    plugin_keys = {full: spec for _, full, _, spec in _plugin_field_specs()}
     for key, val in updates.items():
         f = _BY_KEY.get(key)
         if f is None:
-            return False, f"unknown setting: {key}"
+            spec = plugin_keys.get(key)
+            if spec is None:
+                return False, f"unknown setting: {key}"
+            t = spec.get("type", "string")
+            if t == "bool" and not isinstance(val, bool):
+                return False, f"{key} must be a boolean"
+            if t == "number" and (not isinstance(val, (int, float)) or isinstance(val, bool)):
+                return False, f"{key} must be a number"
+            continue
         if f.type == "bool" and not isinstance(val, bool):
             return False, f"{key} must be a boolean"
         if f.type == "number":

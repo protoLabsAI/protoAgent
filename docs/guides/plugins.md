@@ -71,6 +71,35 @@ def register(registry):
     registry.register_subagent(_build_subagent())    # delegate via task/task_batch
 ```
 
+## Config, secrets & settings (ADR 0019)
+
+A configurable plugin **declares its config in the manifest** (data, so it's known
+at config-load time before `register()` imports). It claims a top-level config
+section (default: the plugin id) and gets a Settings group + secrets routing —
+no `config.py` / `settings_schema.py` edit:
+
+```yaml
+# protoagent.plugin.yaml
+config_section: hello          # top-level YAML section (default: the id)
+config: { greeting: "Hello", api_key: "" }   # defaults
+secrets: [api_key]             # → secrets.yaml (redacted in the UI)
+settings:                      # System → Settings group (named after the section)
+  - { key: greeting, label: "Greeting word", type: string }
+  - { key: api_key,  label: "API key",       type: secret }
+```
+
+Read the resolved config (manifest defaults ⊕ YAML ⊕ secrets) in `register()`:
+
+```python
+def register(registry):
+    greeting = registry.config.get("greeting", "Hello")  # ADR 0019
+    registry.register_router(_build_router(greeting))    # close over it
+```
+
+A plugin section colliding with a built-in (`model`, `discord`, …) is ignored.
+The **wizard step** is not yet plugin-contributable (Settings + a docs link
+suffice for now).
+
 **Routes + surfaces are wired once at process init and don't hot-reload** — a
 config reload reuses them, so changing `plugins.enabled` needs a restart
 (ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and

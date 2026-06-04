@@ -36,6 +36,37 @@ def _load_secrets_doc(config_dir: Path) -> dict:
         return {}
 
 
+def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
+    """Resolve each enabled plugin's declared config section (ADR 0019).
+
+    For every plugin that claims a top-level section, merge: manifest defaults ⊕
+    the (secret-stripped) YAML section ⊕ the secrets overlay for its secret keys.
+    Best-effort — never breaks config load. Returns ``{section: resolved_dict}``.
+    """
+    try:
+        from graph.plugins.pconfig import discover_plugin_config, plugin_roots_from
+
+        plugins = data.get("plugins") or {}
+        roots = plugin_roots_from(config_dir, str(plugins.get("dir") or ""))
+        schemas = discover_plugin_config(roots, set(plugins.get("enabled") or []))
+    except Exception:  # noqa: BLE001 — plugin config is best-effort
+        return {}
+
+    out: dict = {}
+    for sch in schemas:
+        section_yaml = data.get(sch.section) or {}
+        sec_overlay = secrets.get(sch.section) or {}
+        resolved = dict(sch.defaults)
+        resolved.update({k: v for k, v in section_yaml.items() if k not in sch.secrets})
+        for k in sch.secrets:
+            v = sec_overlay.get(k)
+            if v is None:
+                v = section_yaml.get(k)  # belt-and-suspenders if not yet stripped
+            resolved[k] = v if v is not None else resolved.get(k, "")
+        out[sch.section] = resolved
+    return out
+
+
 @dataclass
 class SubagentDef:
     enabled: bool = True
@@ -291,6 +322,10 @@ class LangGraphConfig:
     # See graph/plugins/ and docs/guides/plugins.md.
     plugins_enabled: list[str] = field(default_factory=list)
     plugins_dir: str = ""
+    # Plugin-declared config sections (ADR 0019), keyed by the claimed top-level
+    # section. Each value is the section's resolved config (manifest defaults ⊕
+    # YAML ⊕ secrets overlay). A plugin reads its own via plugin_config["<section>"].
+    plugin_config: dict = field(default_factory=dict)
 
     # Identity — captured by the setup wizard, editable via the drawer.
     # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
@@ -498,6 +533,7 @@ class LangGraphConfig:
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
+            plugin_config=_resolve_plugin_config(data, secrets, p.parent),
         )
 
         for name in ("researcher",):

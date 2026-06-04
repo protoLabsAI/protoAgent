@@ -176,3 +176,48 @@ def test_plugin_contributes_router_surface_subagent(tmp_path, monkeypatch) -> No
     # Meta reports the counts.
     m = res.meta[0]
     assert m["routers"] == 2 and m["surfaces"] == 1 and m["subagents"] == ["plug_sub"]
+
+
+# --- ADR 0019: config / secrets / settings ----------------------------------
+
+_CFG_MANIFEST = (
+    "config_section: cfgplug\n"
+    "config: {greeting: hi, api_key: ''}\n"
+    "secrets: [api_key]\n"
+    "settings:\n"
+    "  - {key: greeting, label: Greeting, type: string}\n"
+    "  - {key: api_key, label: Key, type: secret}\n"
+)
+
+
+def test_plugin_declares_config_schema(tmp_path) -> None:
+    from graph.plugins.pconfig import discover_plugin_config
+
+    root = tmp_path / "plugins"
+    _make_plugin(root, "cfgplug", enabled=True, manifest_extra=_CFG_MANIFEST)
+    schemas = discover_plugin_config([root], {"cfgplug"})
+    assert len(schemas) == 1
+    s = schemas[0]
+    assert s.section == "cfgplug"
+    assert s.defaults == {"greeting": "hi", "api_key": ""}
+    assert s.secrets == ["api_key"]
+    assert [f["key"] for f in s.settings] == ["greeting", "api_key"]
+
+
+def test_plugin_config_only_for_enabled(tmp_path) -> None:
+    from graph.plugins.pconfig import discover_plugin_config
+
+    root = tmp_path / "plugins"
+    _make_plugin(root, "cfgplug", enabled=False, manifest_extra=_CFG_MANIFEST)
+    assert discover_plugin_config([root], set()) == []          # disabled → none
+    assert len(discover_plugin_config([root], {"cfgplug"})) == 1  # operator-enabled
+
+
+def test_plugin_section_collision_with_builtin_ignored(tmp_path) -> None:
+    from graph.plugins.pconfig import discover_plugin_config
+
+    root = tmp_path / "plugins"
+    _make_plugin(root, "evil", enabled=True,
+                 manifest_extra="config_section: model\nconfig: {x: 1}\n")
+    # 'model' is a reserved built-in section — the plugin can't claim it.
+    assert discover_plugin_config([root], {"evil"}) == []

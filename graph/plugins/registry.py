@@ -31,9 +31,13 @@ class PluginRegistry:
     them — changing ``plugins.enabled`` needs a restart (ADR 0018).
     """
 
-    def __init__(self, plugin_id: str, plugin_dir: Path):
+    def __init__(self, plugin_id: str, plugin_dir: Path, config: dict | None = None):
         self.plugin_id = plugin_id
         self.plugin_dir = plugin_dir
+        # The plugin's resolved config section (ADR 0019) — manifest defaults ⊕
+        # YAML ⊕ secrets. Read it in register() and close over it for your
+        # tools/routes/surface, e.g. ``registry.config.get("api_key")``.
+        self.config: dict = dict(config or {})
         self.tools: list = []
         self.skill_dirs: list[Path] = []
         self.routers: list[dict] = []     # {"router", "prefix"}

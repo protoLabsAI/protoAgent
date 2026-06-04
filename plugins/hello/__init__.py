@@ -29,15 +29,16 @@ async def hello(name: str = "world") -> str:
     return f"Hello, {name}! (from the example protoAgent plugin)"
 
 
-def _build_router():
-    """A tiny FastAPI router — mounted at ``/plugins/hello`` (ADR 0018)."""
+def _build_router(greeting: str):
+    """A tiny FastAPI router — mounted at ``/plugins/hello`` (ADR 0018). Closes
+    over the plugin's configured greeting (ADR 0019) to prove it reads its config."""
     from fastapi import APIRouter
 
     router = APIRouter()
 
     @router.get("/ping")
     async def _ping() -> dict:
-        return {"ok": True, "plugin": "hello"}
+        return {"ok": True, "plugin": "hello", "greeting": greeting}
 
     return router
 
@@ -68,8 +69,9 @@ def _build_subagent():
 
 def register(registry) -> None:
     """Entry point — called once at load with a PluginRegistry."""
+    greeting = registry.config.get("greeting", "Hello")   # plugin config (ADR 0019)
     registry.register_tool(hello)
     registry.register_skill_dir("skills")            # bundled SKILL.md folder
-    registry.register_router(_build_router())        # → /plugins/hello/ping (ADR 0018)
+    registry.register_router(_build_router(greeting))  # → /plugins/hello/ping (ADR 0018)
     registry.register_surface(_surface_start, stop=_surface_stop, name="hello-surface")
     registry.register_subagent(_build_subagent())
