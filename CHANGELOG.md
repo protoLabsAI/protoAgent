@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-04
+
 ### Added
 - **Connect Google (Gmail + Calendar) from the app — no files, no CLI (ADR 0017).**
   The Google MCP surface (Slice 2) needed a `credentials.json`, a CLI consent run,
