@@ -39,22 +39,24 @@ class PluginConfigSchema:
     settings: list = field(default_factory=list)
 
 
-def discover_plugin_config(roots, enabled_ids) -> list[PluginConfigSchema]:
-    """Config schemas of **enabled** plugins that declare config/secrets/settings.
+def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[PluginConfigSchema]:
+    """Config schemas of **active** plugins that declare config/secrets/settings.
 
-    ``roots`` are plugin directories (bundle + live); ``enabled_ids`` the
-    operator's ``plugins.enabled`` set (a manifest ``enabled: true`` also counts).
-    A section colliding with a built-in (or a second plugin) is dropped (logged).
-    Never raises — bad discovery yields no plugin config, not a broken boot.
+    ``roots`` are plugin directories (bundle + live); ``enabled_ids`` the operator's
+    ``plugins.enabled`` set (a manifest ``enabled: true`` also counts);
+    ``disabled_ids`` (``plugins.disabled``) turns one off regardless. A section
+    colliding with a built-in (or a second plugin) is dropped (logged). Never
+    raises — bad discovery yields no plugin config, not a broken boot.
     """
     try:
         from graph.plugins.loader import discover_plugins
 
         enabled = set(enabled_ids or set())
+        disabled = set(disabled_ids or set())
         out: list[PluginConfigSchema] = []
         claimed: dict[str, str] = {}
         for m in discover_plugins(list(roots)):
-            if not (m.enabled or m.id in enabled):
+            if m.id in disabled or not (m.enabled or m.id in enabled):
                 continue
             if not (m.config or m.settings or m.secrets):
                 continue
@@ -94,7 +96,9 @@ def live_plugin_config_schemas() -> list[PluginConfigSchema]:
         data = load_yaml_doc() or {}
         plugins = data.get("plugins") or {}
         roots = plugin_roots_from(_live_config_dir(), str(plugins.get("dir") or ""))
-        return discover_plugin_config(roots, set(plugins.get("enabled") or []))
+        return discover_plugin_config(
+            roots, set(plugins.get("enabled") or []), set(plugins.get("disabled") or []),
+        )
     except Exception:  # noqa: BLE001
         log.exception("[plugins] live config-schema discovery failed")
         return []

@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`plugins.disabled` denylist + plugin surface `reload` hook (#509 prereqs).**
+  `plugins.disabled` turns off a bundled first-party plugin even if its manifest
+  says `enabled: true` — so a fork drops a built-in surface without deleting it.
+  `register_surface(..., reload=fn)` lets a surface reconnect on a config change
+  (the server calls `reload(new_config)` on the loop), so a config-driven surface
+  keeps live-reconnect instead of needing a restart. Both pave the way for
+  migrating the Discord/Google surfaces to plugins (#509).
 - **Plugins can contribute config, settings & secrets (ADR 0019, #508).** A
   plugin **declares its config in the manifest** (`config_section` / `config`
   defaults / `secrets` / `settings`) — known at config-load time without importing

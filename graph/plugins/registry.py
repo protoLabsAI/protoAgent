@@ -80,18 +80,23 @@ class PluginRegistry:
         eff = f"/plugins/{self.plugin_id}" if prefix is None else str(prefix)
         self.routers.append({"router": router, "prefix": eff})
 
-    def register_surface(self, start, stop=None, name: str | None = None) -> None:
+    def register_surface(self, start, stop=None, name: str | None = None, reload=None) -> None:
         """Register a lifecycle-managed background surface (ADR 0018).
 
         ``start`` (sync or async, no args) runs in the server's startup hook — so
         it has the running loop, like the Discord gateway — and may return a task/
-        handle. ``stop`` (optional, sync or async) runs in shutdown. Best-effort:
-        a failing surface logs and never breaks boot. Started once at init.
+        handle. ``stop`` (optional) runs in shutdown. ``reload`` (optional, called
+        with the new ``LangGraphConfig`` on a config reload) lets a surface
+        reconnect when its config changes — without it, surfaces wire once and a
+        config change needs a restart. Best-effort: a failing surface logs, never
+        breaks boot.
         """
         if not callable(start):
             log.warning("[plugins] %s: register_surface needs a callable start", self.plugin_id)
             return
-        self.surfaces.append({"name": name or self.plugin_id, "start": start, "stop": stop})
+        self.surfaces.append(
+            {"name": name or self.plugin_id, "start": start, "stop": stop, "reload": reload}
+        )
 
     def register_subagent(self, config) -> None:
         """Add a ``SubagentConfig`` to ``SUBAGENT_REGISTRY`` (ADR 0018).

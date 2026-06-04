@@ -221,3 +221,13 @@ def test_plugin_section_collision_with_builtin_ignored(tmp_path) -> None:
                  manifest_extra="config_section: model\nconfig: {x: 1}\n")
     # 'model' is a reserved built-in section — the plugin can't claim it.
     assert discover_plugin_config([root], {"evil"}) == []
+
+
+def test_plugins_disabled_overrides_manifest_enabled(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    _make_plugin(root, "onplug", enabled=True, tool="on_tool")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    # manifest enabled: true → loads
+    assert [t.name for t in load_plugins(_cfg()).tools] == ["on_tool"]
+    # plugins.disabled wins → not loaded
+    assert load_plugins(_cfg(plugins_disabled=["onplug"])).tools == []

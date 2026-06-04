@@ -87,10 +87,13 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     result = PluginLoadResult()
     roots = _plugin_roots(config)
     enabled_ids = set(getattr(config, "plugins_enabled", []) or [])
+    disabled_ids = set(getattr(config, "plugins_disabled", []) or [])
     seen_tool_names = set(core_tool_names or set())
 
     for manifest in discover_plugins(roots):
-        enabled = manifest.enabled or manifest.id in enabled_ids
+        # plugins.disabled wins — turn off a bundled plugin (e.g. a first-party
+        # surface) without deleting it or editing core.
+        enabled = (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
         entry = {
             "id": manifest.id,
             "name": manifest.name,

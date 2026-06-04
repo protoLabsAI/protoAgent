@@ -48,7 +48,9 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
 
         plugins = data.get("plugins") or {}
         roots = plugin_roots_from(config_dir, str(plugins.get("dir") or ""))
-        schemas = discover_plugin_config(roots, set(plugins.get("enabled") or []))
+        schemas = discover_plugin_config(
+            roots, set(plugins.get("enabled") or []), set(plugins.get("disabled") or []),
+        )
     except Exception:  # noqa: BLE001 — plugin config is best-effort
         return {}
 
@@ -321,6 +323,10 @@ class LangGraphConfig:
     # ``<config_dir>/plugins``); shipped examples live in ``plugins/``.
     # See graph/plugins/ and docs/guides/plugins.md.
     plugins_enabled: list[str] = field(default_factory=list)
+    # Denylist — turn OFF a plugin even if its manifest says ``enabled: true``.
+    # Lets a fork disable a bundled first-party plugin (e.g. the Discord surface)
+    # without deleting its directory or editing core.
+    plugins_disabled: list[str] = field(default_factory=list)
     plugins_dir: str = ""
     # Plugin-declared config sections (ADR 0019), keyed by the claimed top-level
     # section. Each value is the section's resolved config (manifest defaults ⊕
@@ -519,6 +525,7 @@ class LangGraphConfig:
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
             mcp_denylist=list(mcp.get("denylist", []) or []),
             plugins_enabled=list(plugins.get("enabled", []) or []),
+            plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
