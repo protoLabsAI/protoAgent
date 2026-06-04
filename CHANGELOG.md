@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Docs
+- **agent-card.md corrected against the live card.** Introspected a running
+  `/.well-known/agent-card.json` (and the `protolabs_a2a` package): the reference
+  now shows the real A2A 1.0 proto shape — `supportedInterfaces` (not a top-level
+  `url`), the correct `provider` (`protoLabs AI` / `https://protolabs.ai`), the
+  nested `securitySchemes` (`apiKeySecurityScheme` / `httpAuthSecurityScheme`) +
+  `securityRequirements`, and all four declared extensions (`cost-v1`,
+  `confidence-v1`, `worldstate-delta-v1`, `tool-call-v1`). Dropped the stale
+  hand-written literal (flat `securitySchemes`, `stateTransitionHistory`).
 - **Docs audit & refresh (24 files).** Swept the docs against current code after
   the Discord/Google→plugins migration and the desktop fixes. Highlights:
   Discord/Google now documented as **first-party plugins** (config lives in
