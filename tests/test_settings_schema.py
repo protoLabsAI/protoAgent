@@ -18,7 +18,11 @@ def test_schema_groups_and_values():
     # Grouped, ordered, every field carries the metadata the UI needs.
     assert [g["section"] for g in groups][:3] == ["Model", "Routing", "Compaction"]
     fields = [f for g in groups for f in g["fields"]]
-    assert len(fields) == len(FIELDS)
+    # Every core FIELD is present. (build_schema also appends plugin-declared
+    # settings — e.g. the discord plugin — so count only the core-keyed fields,
+    # which keeps this robust to whichever plugins are installed.)
+    core_keys = {f.key for f in FIELDS}
+    assert len([f for f in fields if f["key"] in core_keys]) == len(FIELDS)
     for f in fields:
         assert {"key", "label", "type", "value", "default", "restart", "description"} <= set(f)
     # The model select is populated from the probed options.

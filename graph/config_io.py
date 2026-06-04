@@ -87,8 +87,9 @@ SECRETS_YAML_PATH = _LIVE_CONFIG_DIR / "secrets.yaml"
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
     ("model", "api_key"),
     ("auth", "token"),
-    ("discord", "bot_token"),
     ("google", "client_secret"),
+    # ("discord", "bot_token") is now declared by the discord plugin's manifest
+    # and added dynamically via secret_paths() (ADR 0019).
 )
 
 
@@ -254,11 +255,8 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
         "auth": {
             "token": "",
         },
-        "discord": {
-            "enabled": config.discord_enabled,
-            "bot_token": "",  # redacted — secret, mirrors api_key / auth.token
-            "admin_ids": list(config.discord_admin_ids),
-        },
+        # `discord` is now a plugin section (ADR 0019) — surfaced via the
+        # plugin_config loop below, not a hardcoded block.
         "google": {
             "enabled": config.google_enabled,
             "client_id": config.google_client_id,

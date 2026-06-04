@@ -123,14 +123,8 @@ FIELDS: list[Field] = [
     Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",
           "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live."),
 
-    # ── Discord (ADR 0015 + 0016) ────────────────────────────────────────────
-    Field("discord.enabled", "discord_enabled", "Enable Discord", "bool", "Discord",
-          "Inbound DM gateway. Needs the bot token below; reconnects live on save."),
-    Field("discord.bot_token", "discord_bot_token", "Bot token", "secret", "Discord",
-          "Discord bot token (Developer Portal → your app → Bot → Reset Token). Stored "
-          "in secrets.yaml. Use “Test connection” to verify before saving."),
-    Field("discord.admin_ids", "discord_admin_ids", "Admin user IDs", "string_list", "Discord",
-          "Discord user IDs allowed to DM the bot (one per line). Empty = anyone."),
+    # Discord's Settings group is now declared by the discord plugin's manifest
+    # (ADR 0019) and rendered via the plugin-fields path in build_schema.
 
     # ── Google (ADR 0017) ────────────────────────────────────────────────────
     # The OAuth client lives here; "Connect Google" (a button, not a field) runs

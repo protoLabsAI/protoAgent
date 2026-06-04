@@ -130,17 +130,15 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # strand fork-added fields outside the drawer's round-trip.
     assert set(d.keys()) == {
         "model", "subagents", "middleware", "knowledge", "skills", "mcp", "plugins",
-        "identity", "auth", "discord", "google", "runtime", "operator",
+        "identity", "auth", "google", "runtime", "operator",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
     # Secrets are redacted out of the UI-facing dict.
     assert d["model"]["api_key"] == ""
     assert d["auth"]["token"] == ""
-    # Discord bot token is a secret too — redacted, with enabled/admin_ids exposed.
-    assert d["discord"]["bot_token"] == ""
-    assert d["discord"]["enabled"] == cfg.discord_enabled
-    assert d["discord"]["admin_ids"] == list(cfg.discord_admin_ids)
+    # (Discord is now a plugin section — present only when the discord plugin is
+    # enabled, surfaced via plugin_config, not this core block.)
     assert d["subagents"]["researcher"]["tools"] == list(cfg.researcher.tools)
     assert d["middleware"]["audit"] == cfg.audit_middleware
     assert d["knowledge"]["top_k"] == cfg.knowledge_top_k

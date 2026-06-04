@@ -103,9 +103,6 @@ _cache_warmer = None   # Optional CacheWarmer (off by default). Same start/stop
                        # lifecycle as _scheduler; keeps the prompt cache warm.
 _goal_controller = None  # Optional GoalController (goal mode). Parses /goal
                          # control messages and runs the goal-completion loop.
-_discord_task = None     # The inbound Discord gateway task (ADR 0015/0016).
-                         # Held so a config change (Settings/wizard) can stop +
-                         # restart it live, not just at process boot.
 _main_loop = None        # The server's event loop, captured at startup (#497).
                          # A config reload's heavy graph compile is offloaded to a
                          # worker thread so it no longer freezes the loop; the
@@ -962,19 +959,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if pending_start is not None:
         _start_scheduler_async(pending_start)
 
-    # Discord surface: reconnect live if its config changed (token / admin_ids /
-    # enabled), so a Settings save or wizard finish applies without a restart.
-    discord_changed = (
-        old_config is None
-        or old_config.discord_enabled != new_config.discord_enabled
-        or old_config.discord_bot_token != new_config.discord_bot_token
-        or list(old_config.discord_admin_ids) != list(new_config.discord_admin_ids)
-    )
-    if discord_changed:
-        _restart_discord_async()
-
-    # Plugin surfaces with a reload hook (ADR 0018/0019) — let them reconnect on a
-    # config change (e.g. a migrated Discord/Google surface) without a restart.
+    # Plugin surfaces with a reload hook (ADR 0018/0019) reconnect on a config
+    # change without a restart — this is how the Discord plugin live-reconnects
+    # when its token/admin/enabled changes (was a bespoke discord_changed block).
     _reload_plugin_surfaces(new_config)
 
     if new_graph is None:
@@ -983,50 +970,6 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     log.info("LangGraph agent reloaded (model: %s)", _graph_config.model_name)
     return True, f"reloaded • model={_graph_config.model_name}"
-
-
-def _start_discord_surface() -> None:
-    """(Re)start the inbound Discord gateway from the live config (ADR 0016).
-
-    Start rule: the UI path starts only when ``discord.enabled`` is on AND a
-    token is configured; the env path (Docker ``DISCORD_BOT_TOKEN``, no UI token)
-    starts as before for back-compat. Injects token + admin_ids via
-    ``configure`` so the bundled desktop app uses its per-user secret, not an
-    ambient env var. Stores the task in ``_discord_task`` for live restart.
-    """
-    global _discord_task
-    import os as _os
-
-    from surfaces.discord import configure as _configure
-    from surfaces.discord import start_in_background as _start_discord
-
-    cfg_token = (_graph_config.discord_bot_token or "").strip() if _graph_config else ""
-    env_token = (_os.environ.get("DISCORD_BOT_TOKEN") or "").strip()
-    admin_ids = list(_graph_config.discord_admin_ids) if _graph_config else []
-    enabled = bool(_graph_config.discord_enabled) if _graph_config else False
-
-    _configure(cfg_token, admin_ids)
-
-    # UI token requires the enabled toggle; a bare env token (no UI token) starts
-    # for back-compat (Docker deploys that only set DISCORD_BOT_TOKEN).
-    should_start = (bool(cfg_token) and enabled) or (not cfg_token and bool(env_token))
-    if not should_start:
-        log.info("[discord] gateway not started (enabled=%s, token=%s)",
-                 enabled, "set" if (cfg_token or env_token) else "unset")
-        return
-
-    async def _discord_invoke(prompt: str, session_id: str) -> str:
-        result = await chat(prompt, session_id)
-        return "\n\n".join(
-            m["content"] for m in result
-            if m.get("role") == "assistant" and m.get("content")
-        )
-
-    # subscribe enables return-address delivery: reactive Activity-thread output
-    # (scheduler/inbox/proactive) is forwarded to the operator's captured DM.
-    _discord_task = _start_discord(
-        _discord_invoke, publish=_event_bus.publish, subscribe=_event_bus.subscribe
-    )
 
 
 async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:
@@ -1075,31 +1018,6 @@ def _reload_plugin_surfaces(new_config) -> None:
             return _run()
 
         _run_on_server_loop(_make, f"surface reload ({h.get('name')})")
-
-
-def _restart_discord_async() -> None:
-    """Fire-and-forget: stop the running gateway, then start from new config.
-
-    Scheduled on the server loop via :func:`_run_on_server_loop`, so it works
-    from an offloaded (worker-thread) reload too — not just an on-loop one.
-    """
-    async def _swap() -> None:
-        global _discord_task
-        try:
-            from surfaces.discord import stop as _discord_stop
-
-            if _discord_task is not None:
-                _discord_task.cancel()
-                _discord_task = None
-            await _discord_stop()
-        except Exception:
-            log.exception("[discord] stop during restart failed")
-        try:
-            _start_discord_surface()
-        except Exception:
-            log.exception("[discord] restart failed")
-
-    _run_on_server_loop(_swap, "discord restart")
 
 
 def _sync_autostart_with_config(config: dict | None) -> str | None:
@@ -2691,15 +2609,8 @@ def _main():
             import asyncio
             _checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
-        # Inbound Discord gateway (ADR 0015/0016) — started from the live config
-        # (UI token in secrets, or the DISCORD_BOT_TOKEN env fallback). A Discord
-        # DM is conversational, so it invokes the agent as a chat surface with a
-        # per-conversation session_id (the LangGraph thread key), NOT the single
-        # system:activity inbox thread.
-        try:
-            _start_discord_surface()
-        except Exception:
-            log.exception("[discord] gateway startup failed")
+        # (The inbound Discord gateway now starts as the discord plugin's surface,
+        # below — ADR 0018/0019.)
 
         # Plugin-contributed surfaces (ADR 0018) — start each on the loop. `start`
         # may be sync or async and may return a handle (kept for shutdown).
@@ -2962,27 +2873,8 @@ def _main():
         ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
         return {"ok": ok, "error": error}
 
-    class DiscordProbeRequest(PydanticBaseModel):
-        bot_token: str = ""
-
-    @fastapi_app.post("/api/config/test-discord")
-    async def _api_test_discord(req: DiscordProbeRequest | None = None):
-        """Verify a Discord bot token by fetching its identity (Test connection).
-
-        POST (body) so the token never lands in a URL/log. Blank falls back to
-        the saved token, so Settings can re-test the live config. Returns the bot
-        username so the UI can show "Connected as <bot>".
-        """
-        from surfaces.discord import validate_token
-
-        body = req or DiscordProbeRequest()
-        token = body.bot_token or (_graph_config.discord_bot_token if _graph_config else "")
-        ok, bot_user, error = await validate_token(token or "")
-        return {
-            "ok": ok,
-            "error": error,
-            "bot_user": (bot_user or {}).get("username") if ok else None,
-        }
+    # `/api/config/test-discord` is now mounted by the discord plugin's router
+    # (ADR 0018/0019), at the same path — the console Test button is unchanged.
 
     def _google_env_from_config() -> None:
         """Mirror the configured Google OAuth client + token path into the env so
