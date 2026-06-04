@@ -92,6 +92,35 @@ def test_enabled_via_manifest(tmp_path, monkeypatch) -> None:
     assert [t.name for t in res.tools] == ["m_tool"]
 
 
+def test_multi_module_plugin_with_relative_import(tmp_path, monkeypatch) -> None:
+    """A plugin whose id has a hyphen AND whose __init__.py uses a relative import
+    (``from .tools import …``) must load. Regression: the loader used the raw id as
+    the module name (a hyphen is illegal) and didn't register it in sys.modules, so
+    the relative import failed with "No module named protoagent_plugin_<id>".
+    """
+    root = tmp_path / "plugins"
+    d = root / "multi-mod"
+    d.mkdir(parents=True)
+    (d / "protoagent.plugin.yaml").write_text(
+        "id: multi-mod\nname: Multi mod\nversion: 0.1.0\nenabled: true\n", encoding="utf-8")
+    (d / "tools.py").write_text(
+        "from langchain_core.tools import tool\n"
+        "@tool\n"
+        "def mm_tool() -> str:\n"
+        "    '''sibling-module tool'''\n"
+        "    return 'ok'\n"
+        "def get_tools():\n"
+        "    return [mm_tool]\n", encoding="utf-8")
+    (d / "__init__.py").write_text(
+        "from .tools import get_tools\n"
+        "def register(registry):\n"
+        "    registry.register_tools(get_tools())\n", encoding="utf-8")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg())
+    assert [t.name for t in res.tools] == ["mm_tool"]
+    assert res.meta[0]["loaded"] is True
+
+
 def test_tool_collision_skipped(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
     _make_plugin(root, "c", enabled=True, tool="current_time")  # core tool name

@@ -13,6 +13,8 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,19 +62,40 @@ def _entry_file(manifest: PluginManifest) -> Path | None:
     return None
 
 
-def _import_register(manifest: PluginManifest):
-    """Import a plugin's entry module and return its ``register`` callable."""
-    entry = _entry_file(manifest)
-    if entry is None:
-        raise RuntimeError("no entry module (expected __init__.py or plugin.py)")
-    mod_name = f"protoagent_plugin_{manifest.id}"
+def _plugin_module_name(plugin_id: str) -> str:
+    """A valid Python module name for a plugin id. Non-identifier chars (e.g. the
+    hyphen in ``finance-data``) become ``_`` — a hyphen in the module name breaks
+    the relative-import machinery."""
+    return "protoagent_plugin_" + re.sub(r"\W", "_", plugin_id)
+
+
+def _load_plugin_module(manifest: PluginManifest, entry: Path):
+    """Import a plugin's entry ``__init__.py`` as a **package** so it can have
+    sibling modules and use relative imports (``from .tools import …``). The
+    module is registered in ``sys.modules`` BEFORE exec — relative imports resolve
+    the parent package there — and the name is sanitized to a valid identifier."""
+    mod_name = _plugin_module_name(manifest.id)
     spec = importlib.util.spec_from_file_location(
         mod_name, str(entry), submodule_search_locations=[str(manifest.path)]
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not create import spec for {entry}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[mod_name] = module  # so `from .x import y` finds the parent
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(mod_name, None)
+        raise
+    return module
+
+
+def _import_register(manifest: PluginManifest):
+    """Import a plugin's entry module and return its ``register`` callable."""
+    entry = _entry_file(manifest)
+    if entry is None:
+        raise RuntimeError("no entry module (expected __init__.py or plugin.py)")
+    module = _load_plugin_module(manifest, entry)
     register = getattr(module, "register", None)
     if not callable(register):
         raise RuntimeError("plugin module has no callable register(registry)")
@@ -97,14 +120,7 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
         entry = _entry_file(manifest)
         if entry is None:
             raise RuntimeError(f"plugin {plugin_id!r} has no entry module")
-        mod_name = f"protoagent_plugin_{manifest.id}"
-        spec = importlib.util.spec_from_file_location(
-            mod_name, str(entry), submodule_search_locations=[str(manifest.path)]
-        )
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"could not import plugin {plugin_id!r}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = _load_plugin_module(manifest, entry)
         mcp_main = getattr(module, "mcp_main", None)
         if not callable(mcp_main):
             raise RuntimeError(f"plugin {plugin_id!r} has no mcp_main()")
