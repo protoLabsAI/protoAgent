@@ -86,7 +86,12 @@ _mcp_tools = []          # MCP-server tools appended to the active graph.
 _mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
 _plugin_tools = []       # Tools contributed by enabled plugins.
 _plugin_skill_dirs = []  # SKILL.md dirs bundled by enabled plugins.
-_plugin_meta = []        # Per-plugin {id, name, enabled, loaded, tools, skills} for status.
+_plugin_routers = []     # FastAPI routers contributed by plugins (ADR 0018) —
+                         # mounted ONCE at init; not hot-reloaded.
+_plugin_surfaces = []    # Lifecycle surfaces (start/stop) from plugins (ADR 0018)
+                         # — started in the startup hook, stopped on shutdown.
+_plugin_surface_handles = []  # Started surfaces ({name, stop, handle}) for shutdown.
+_plugin_meta = []        # Per-plugin {id, name, enabled, loaded, tools, skills, ...} for status.
 _active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
@@ -269,6 +274,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
         _plugins.tools, _plugins.skill_dirs, _plugins.meta,
     )
+    # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
+    # here and consumed once by _main (mount) + the startup hook (start) — they
+    # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
+    # build below so the first compile (and every reload) can delegate to them.
+    global _plugin_routers, _plugin_surfaces
+    _plugin_routers, _plugin_surfaces = _plugins.routers, _plugins.surfaces
+    _register_plugin_subagents(_plugins.subagents)
 
     # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
@@ -390,6 +402,34 @@ def _build_mcp(config):
     except Exception as exc:  # noqa: BLE001 — MCP is optional, never fatal
         log.warning("[mcp] init failed: %s; running without MCP tools", exc)
         return [], [], []
+
+
+_plugin_subagent_names: set[str] = set()
+
+
+def _register_plugin_subagents(subagents) -> None:
+    """Add plugin-contributed SubagentConfigs to SUBAGENT_REGISTRY (ADR 0018).
+
+    Idempotent by name (re-registering a plugin's own subagent on a later call is
+    fine) but won't let a plugin shadow a built-in subagent (logged + skipped).
+    """
+    if not subagents:
+        return
+    try:
+        from graph.subagents.config import SUBAGENT_REGISTRY
+    except Exception:  # noqa: BLE001
+        log.warning("[plugins] subagent registry unavailable; skipping plugin subagents")
+        return
+    for cfg in subagents:
+        name = getattr(cfg, "name", None)
+        if not name:
+            continue
+        if name in SUBAGENT_REGISTRY and name not in _plugin_subagent_names:
+            log.warning("[plugins] subagent %r collides with a built-in — skipped", name)
+            continue
+        SUBAGENT_REGISTRY[name] = cfg
+        _plugin_subagent_names.add(name)
+        log.info("[plugins] registered subagent: %s", name)
 
 
 def _build_plugins(config, existing_tools=None):
@@ -2550,6 +2590,16 @@ def _main():
         inbox_deliver=_operator_inbox_deliver,
     )
 
+    # Plugin-contributed routes (ADR 0018) — mounted after the core routes,
+    # under each plugin's namespaced prefix (default /plugins/<id>). Once, here;
+    # routes don't hot-reload. Best-effort so one bad router can't break boot.
+    for r in _plugin_routers:
+        try:
+            fastapi_app.include_router(r["router"], prefix=r["prefix"])
+            log.info("[plugins] mounted router from %s at %s", r["plugin_id"], r["prefix"] or "/")
+        except Exception:
+            log.exception("[plugins] failed to mount router from %s", r.get("plugin_id"))
+
     # --- Scheduler lifecycle ------------------------------------------------
     # The local scheduler needs an asyncio polling task; the Workstacean
     # adapter is a no-op start/stop. Both implement the same contract so
@@ -2596,8 +2646,33 @@ def _main():
         except Exception:
             log.exception("[discord] gateway startup failed")
 
+        # Plugin-contributed surfaces (ADR 0018) — start each on the loop. `start`
+        # may be sync or async and may return a handle (kept for shutdown).
+        # Best-effort: a failing surface logs, never breaks boot.
+        global _plugin_surface_handles
+        for s in _plugin_surfaces:
+            try:
+                res = s["start"]()
+                if asyncio.iscoroutine(res):
+                    res = await res
+                _plugin_surface_handles.append({"name": s["name"], "stop": s.get("stop"), "handle": res})
+                log.info("[plugins] started surface: %s", s["name"])
+            except Exception:
+                log.exception("[plugins] surface %s failed to start", s.get("name"))
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
+        # Stop plugin surfaces first (ADR 0018) — best-effort.
+        for h in _plugin_surface_handles:
+            stop = h.get("stop")
+            if not callable(stop):
+                continue
+            try:
+                res = stop()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                log.exception("[plugins] surface %s failed to stop", h.get("name"))
         if _scheduler is not None:
             try:
                 await _scheduler.stop()

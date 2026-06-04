@@ -52,8 +52,30 @@ def register(registry):
     registry.register_skill_dir("skills")  # bundle SKILL.md skills (relative to the plugin)
 ```
 
-`register` is called once at load. The registry currently accepts
-`register_tool(tool)` / `register_tools(iterable)` and `register_skill_dir(path)`.
+`register` is called once at load. The registry accepts **five** contribution
+types — a fork adds any of them as a plugin, never editing core `server.py`:
+
+| Method | Contributes | Lifecycle |
+|---|---|---|
+| `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
+| `register_skill_dir(path)` | A `SKILL.md` directory | graph build |
+| `register_router(router, prefix=None)` | A FastAPI `APIRouter` | **mounted once** at init (default prefix `/plugins/<id>`) |
+| `register_surface(start, stop=None, name=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown |
+| `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
+
+```python
+def register(registry):
+    registry.register_tool(hello)
+    registry.register_router(_build_router())        # → GET /plugins/<id>/...
+    registry.register_surface(_start, stop=_stop, name="my-surface")
+    registry.register_subagent(_build_subagent())    # delegate via task/task_batch
+```
+
+**Routes + surfaces are wired once at process init and don't hot-reload** — a
+config reload reuses them, so changing `plugins.enabled` needs a restart
+(ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and
+never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
+example uses all five. Plugin contributions show in `GET /api/runtime/status`.
 
 ## Where plugins live & how they're enabled
 

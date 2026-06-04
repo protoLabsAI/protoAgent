@@ -26,6 +26,9 @@ log = logging.getLogger("protoagent.plugins")
 class PluginLoadResult:
     tools: list = field(default_factory=list)
     skill_dirs: list = field(default_factory=list)
+    routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
+    surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
+    subagents: list = field(default_factory=list)   # SubagentConfig
     meta: list[dict] = field(default_factory=list)
 
 
@@ -130,12 +133,24 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
 
         result.tools.extend(kept)
         result.skill_dirs.extend(registry.skill_dirs)
+        # Surfaces / routes / subagents (ADR 0018) — tagged with the plugin id so
+        # the server can namespace + report them.
+        for r in registry.routers:
+            result.routers.append({"plugin_id": manifest.id, **r})
+        for s in registry.surfaces:
+            result.surfaces.append({"plugin_id": manifest.id, **s})
+        result.subagents.extend(registry.subagents)
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         entry["skills"] = len(registry.skill_dirs)
+        entry["routers"] = len(registry.routers)
+        entry["surfaces"] = len(registry.surfaces)
+        entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
         result.meta.append(entry)
-        log.info("[plugins] loaded %s: %d tool(s), %d skill dir(s)",
-                 manifest.id, len(kept), len(registry.skill_dirs))
+        log.info("[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "
+                 "%d surface(s), %d subagent(s)",
+                 manifest.id, len(kept), len(registry.skill_dirs),
+                 len(registry.routers), len(registry.surfaces), len(registry.subagents))
 
     return result
 

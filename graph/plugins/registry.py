@@ -16,9 +16,19 @@ log = logging.getLogger("protoagent.plugins")
 class PluginRegistry:
     """Collects a single plugin's contributions during ``register()``.
 
-    Current contribution types: ``tools`` (LangChain ``BaseTool``s) and
-    ``skill_dirs`` (directories of ``SKILL.md`` skills to load). Subagent and
-    middleware contributions are planned follow-ups.
+    Contribution types (ADR 0001 + 0018):
+
+    - ``tools`` — LangChain ``BaseTool``s (``register_tool[s]``).
+    - ``skill_dirs`` — ``SKILL.md`` skill directories (``register_skill_dir``).
+    - ``routers`` — FastAPI ``APIRouter``s, mounted under ``/plugins/<id>``
+      (``register_router``).
+    - ``surfaces`` — lifecycle-managed background surfaces, a ``start`` (+ optional
+      ``stop``) run on the server loop (``register_surface``).
+    - ``subagents`` — ``SubagentConfig``s added to ``SUBAGENT_REGISTRY``
+      (``register_subagent``).
+
+    Routes mount + surfaces start **once** at process init; a config reload reuses
+    them — changing ``plugins.enabled`` needs a restart (ADR 0018).
     """
 
     def __init__(self, plugin_id: str, plugin_dir: Path):
@@ -26,6 +36,9 @@ class PluginRegistry:
         self.plugin_dir = plugin_dir
         self.tools: list = []
         self.skill_dirs: list[Path] = []
+        self.routers: list[dict] = []     # {"router", "prefix"}
+        self.surfaces: list[dict] = []    # {"name", "start", "stop"}
+        self.subagents: list = []         # SubagentConfig instances
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -48,3 +61,42 @@ class PluginRegistry:
         if not p.is_absolute():
             p = self.plugin_dir / p
         self.skill_dirs.append(p)
+
+    def register_router(self, router, prefix: str | None = None) -> None:
+        """Mount a FastAPI ``APIRouter`` on the server (ADR 0018).
+
+        Defaults to the namespaced prefix ``/plugins/<id>`` so a plugin can't
+        silently shadow a core route. Pass ``prefix=""`` (or your own) to mount
+        elsewhere — an escape hatch, logged. Mounted once at process init; routes
+        don't hot-reload (a ``plugins.enabled`` change needs a restart).
+        """
+        if router is None or not hasattr(router, "routes"):
+            log.warning("[plugins] %s: register_router got a non-router: %r", self.plugin_id, router)
+            return
+        eff = f"/plugins/{self.plugin_id}" if prefix is None else str(prefix)
+        self.routers.append({"router": router, "prefix": eff})
+
+    def register_surface(self, start, stop=None, name: str | None = None) -> None:
+        """Register a lifecycle-managed background surface (ADR 0018).
+
+        ``start`` (sync or async, no args) runs in the server's startup hook — so
+        it has the running loop, like the Discord gateway — and may return a task/
+        handle. ``stop`` (optional, sync or async) runs in shutdown. Best-effort:
+        a failing surface logs and never breaks boot. Started once at init.
+        """
+        if not callable(start):
+            log.warning("[plugins] %s: register_surface needs a callable start", self.plugin_id)
+            return
+        self.surfaces.append({"name": name or self.plugin_id, "start": start, "stop": stop})
+
+    def register_subagent(self, config) -> None:
+        """Add a ``SubagentConfig`` to ``SUBAGENT_REGISTRY`` (ADR 0018).
+
+        Picked up by every graph build, so the lead agent can delegate to it via
+        ``task`` / ``task_batch`` — no edit to ``graph/subagents/config.py``.
+        """
+        if config is None or not getattr(config, "name", None):
+            log.warning("[plugins] %s: register_subagent got an invalid config: %r",
+                        self.plugin_id, config)
+            return
+        self.subagents.append(config)

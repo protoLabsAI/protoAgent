@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugins can contribute surfaces, routes & subagents (ADR 0018, #506).** The
+  plugin `register(registry)` contract gained `register_router` (a FastAPI
+  `APIRouter`, mounted under `/plugins/<id>`), `register_surface` (a lifecycle
+  `start`/`stop` background surface, run on the server loop like the Discord
+  gateway), and `register_subagent` (a `SubagentConfig` added to
+  `SUBAGENT_REGISTRY`) — on top of the existing tools + skills. So a fork ships
+  its own ingress / HTTP endpoint / delegate as a `plugins/<id>/` directory with
+  **no `server.py` / registry / `SUBAGENT_REGISTRY` edit** — the last fork
+  re-sync friction point. Routes + surfaces wire once at init (a `plugins.enabled`
+  change needs a restart); contributions show in `GET /api/runtime/status`. The
+  shipped `plugins/hello` example now demonstrates all five contribution types.
+
 ### Changed
 - **Fork & re-sync ergonomics — customize via config/plugins/env, not core
   edits.** A fork-extensibility audit found the biggest re-sync tax was the fork

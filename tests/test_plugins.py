@@ -135,3 +135,44 @@ def test_from_yaml_parses_plugins(tmp_path) -> None:
     p.write_text("plugins:\n  enabled: [hello]\n  dir: /tmp/p\n")
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.plugins_enabled == ["hello"] and cfg.plugins_dir == "/tmp/p"
+
+
+# --- ADR 0018: routers / surfaces / subagents -------------------------------
+
+_EXT_PLUGIN = '''
+class _FakeRouter:
+    routes = []
+
+class _Sub:
+    name = "plug_sub"
+
+def _start():
+    return None
+
+def _stop():
+    return None
+
+def register(registry):
+    registry.register_router(_FakeRouter())            # default prefix /plugins/<id>
+    registry.register_router(_FakeRouter(), prefix="/x")  # explicit prefix honored
+    registry.register_surface(_start, stop=_stop, name="surf")
+    registry.register_subagent(_Sub())
+'''
+
+
+def test_plugin_contributes_router_surface_subagent(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    _make_plugin(root, "ext", enabled=True, body=_EXT_PLUGIN)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg())
+
+    # Routers: default prefix is namespaced to the plugin id; explicit honored.
+    assert sorted(r["prefix"] for r in res.routers) == ["/plugins/ext", "/x"]
+    assert all(r["plugin_id"] == "ext" for r in res.routers)
+    # Surface + subagent collected, tagged with the plugin id.
+    assert [s["name"] for s in res.surfaces] == ["surf"]
+    assert all(s["plugin_id"] == "ext" for s in res.surfaces)
+    assert [getattr(s, "name", None) for s in res.subagents] == ["plug_sub"]
+    # Meta reports the counts.
+    m = res.meta[0]
+    assert m["routers"] == 2 and m["surfaces"] == 1 and m["subagents"] == ["plug_sub"]
