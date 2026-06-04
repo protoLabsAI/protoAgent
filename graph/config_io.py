@@ -603,6 +603,18 @@ def validate_model_connection(
         detail = ""
     if not detail:
         detail = (resp.text or "")[:300]
+    # Sanitize: gateways (e.g. LiteLLM) dump the masked key, a token *hash*, and
+    # internal table names into auth errors — never echo those into the setup UI.
+    # Keep the leading human-readable cause, drop everything from the first
+    # secret-ish marker on, and cap the length.
+    import re as _re
+    detail = _re.split(
+        r"\s*(?:Received API Key|Key Hash|Unable to find token|Token=)",
+        detail, maxsplit=1,
+    )[0].strip().rstrip(".,")
+    detail = detail[:200]
+    if resp.status_code in (401, 403) and not detail:
+        detail = "authentication failed — check the API key"
     return False, f"HTTP {resp.status_code}: {detail}" if detail else f"HTTP {resp.status_code}"
 
 
