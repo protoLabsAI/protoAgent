@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-06-04
+
 ### Fixed
 - **Eval `ask()` capped every turn at 30s — slow cases ReadTimeout'd.** A2A 1.0's
   non-streaming `SendMessage` *blocks* until the task is terminal (the 0.3
