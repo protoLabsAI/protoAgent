@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-04
+
 ### Docs
 - **agent-card.md corrected against the live card.** Introspected a running
   `/.well-known/agent-card.json` (and the `protolabs_a2a` package): the reference
