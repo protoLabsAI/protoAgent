@@ -67,6 +67,11 @@ COLLECT_ALL = [
     # Collect both so Discord works in the frozen app.
     "surfaces",
     "websockets",
+    # The `tools` package — the discord plugin imports `tools.discord_tools`
+    # (and future plugins may import other tool modules). Plugins are loaded by
+    # file path, so PyInstaller's import-scan never sees these; collect the whole
+    # package so plugin-only tool imports resolve in the frozen app.
+    "tools",
     # Google surface (ADR 0017): the MCP SDK (FastMCP) + the repo's google MCP
     # server module, loaded by the google plugin and re-invoked frozen via the
     # ``--mcp-plugin google`` self-reinvoke entry.
