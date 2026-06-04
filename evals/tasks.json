@@ -21,11 +21,11 @@
     "id": "streaming_status_updates",
     "category": "a2a-protocol",
     "kind": "stream",
-    "name": "message/stream surfaces status-update events ending in final=true",
+    "name": "SendStreamingMessage surfaces statusUpdate events ending in final=true",
     "prompt": "Hi.",
     "expected_tools": [],
     "expected_patterns": [],
-    "expected_event_kinds": ["status-update"]
+    "expected_event_kinds": ["statusUpdate"]
   },
 
   {

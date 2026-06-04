@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Eval harness spoke the retired A2A 0.3 wire shape — every case failed.** The
+  A2A 1.0 migration (ADR 0014) moved the server to `a2a-sdk` (≥1.1), which serves
+  proto method names (`SendMessage`/`GetTask`/`SendStreamingMessage`/`CancelTask`),
+  requires an `A2A-Version: 1.0` request header (a missing header is read as 0.3,
+  so the 1.0 methods 404 with `-32601`), and emits untyped parts (`{"text": …}`,
+  no `kind`) with `TASK_STATE_*` states. `evals/client.py` + `evals/runner.py`
+  were left on the 0.3 shape (`message/send`, `role: "user"`, `{"kind": "text"}`,
+  no version header), so `python -m evals.runner` failed *every* case with
+  "method not found". Migrated the eval client/runner to the 1.0 wire shape
+  (header + proto method names + `ROLE_USER` + untyped parts + `TASK_STATE_*`
+  normalization + the streaming `statusUpdate`/`artifactUpdate` oneof frames).
+  Regression test (`tests/test_eval_client_a2a_1_0.py`) drives the real client
+  against an in-process `a2a-sdk` app and pins that the legacy shape is rejected.
 - **Plugins: multi-module support.** The plugin loader now imports a plugin's
   `__init__.py` as a package — registered in `sys.modules` before exec with a
   sanitized module name — so a plugin can have sibling modules and use relative

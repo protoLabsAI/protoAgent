@@ -105,17 +105,18 @@ async def _run_auth_check(client: AgentClient, case: dict) -> CaseResult:
     bad = case.get("bad_token", "")
     headers = {
         "Content-Type": "application/json",
+        "A2A-Version": "1.0",
         "Authorization": f"Bearer {bad}",
     }
     headers.update(case.get("headers") or {})
     payload = {
         "jsonrpc": "2.0",
         "id": "auth-check",
-        "method": "message/send",
+        "method": "SendMessage",
         "params": {
             "message": {
-                "role": "user",
-                "parts": [{"kind": "text", "text": "ping"}],
+                "role": "ROLE_USER",
+                "parts": [{"text": "ping"}],
                 "messageId": "auth-check",
             }
         },
@@ -136,15 +137,15 @@ async def _run_auth_check(client: AgentClient, case: dict) -> CaseResult:
 
 
 async def _run_ask(client: AgentClient, case: dict) -> CaseResult:
-    """Send via ``message/send`` + poll. Teardown always runs."""
+    """Send via ``SendMessage`` + poll. Teardown always runs."""
     return await _run_prompt_case(client, case, streaming=False)
 
 
 async def _run_stream(client: AgentClient, case: dict) -> CaseResult:
-    """Send via ``message/stream`` + SSE. Same assertion shape as ``ask``,
-    plus an optional ``expected_event_kinds`` list that asserts the SSE
-    stream surfaced the named event kinds (``status-update``, ``task``,
-    etc.) at least once."""
+    """Send via ``SendStreamingMessage`` + SSE. Same assertion shape as
+    ``ask``, plus an optional ``expected_event_kinds`` list that asserts the
+    SSE stream surfaced the named event kinds (``statusUpdate``,
+    ``artifactUpdate``, ``task``, …) at least once."""
     return await _run_prompt_case(client, case, streaming=True)
 
 
