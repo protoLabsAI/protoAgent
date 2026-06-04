@@ -4,25 +4,43 @@ Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by
 
 ## Full shape
 
+The card is the **A2A 1.0** (`a2a-sdk` proto) shape, assembled by
+`protolabs_a2a.build_agent_card`. A live card (`/.well-known/agent-card.json`):
+
 ```json
 {
   "name": "my-agent",
   "description": "One-sentence statement of what this agent is for.",
-  "url": "http://my-agent:7870/a2a",
-  "version": "0.2.1",
+  "supportedInterfaces": [
+    {
+      "url": "http://my-agent:7870/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
   "provider": {
-    "organization": "protoLabsAI",
-    "url": "https://github.com/protoLabsAI"
+    "url": "https://protolabs.ai",
+    "organization": "protoLabs AI"
   },
+  "version": "0.2.1",
   "capabilities": {
     "streaming": true,
     "pushNotifications": true,
-    "stateTransitionHistory": false,
     "extensions": [
       {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"},
-      {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"}
+      {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"},
+      {"uri": "https://proto-labs.ai/a2a/ext/worldstate-delta-v1"},
+      {"uri": "https://proto-labs.ai/a2a/ext/tool-call-v1"}
     ]
   },
+  "securitySchemes": {
+    "apiKey": {
+      "apiKeySecurityScheme": {"location": "header", "name": "X-API-Key"}
+    }
+  },
+  "securityRequirements": [
+    {"schemes": {"apiKey": {}}}
+  ],
   "defaultInputModes": ["text/plain"],
   "defaultOutputModes": ["text/markdown"],
   "skills": [
@@ -33,12 +51,14 @@ Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by
       "tags": ["template"],
       "examples": ["hello", "what can you do?"]
     }
-  ],
-  "securitySchemes": {
-    "apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
-  }
+  ]
 }
 ```
+
+> The `provider` block, the four `capabilities.extensions`, and the
+> `securitySchemes` / `securityRequirements` shapes are owned by
+> `protolabs_a2a` (not editable per-fork in `server.py`). Fork the `name`,
+> `description`, `version`, and `skills`.
 
 ## Field reference
 
@@ -50,9 +70,9 @@ Short agent identifier. Same value you pass via `AGENT_NAME`.
 
 One sentence. Used by planners and human consumers alike — write it for both audiences.
 
-### `url`
+### `supportedInterfaces`
 
-Must end with `/a2a`. The spec field points at the JSON-RPC endpoint, not the server root. Clients that use `/a2a` as-is are fine; clients that strip the path and POST to `/` get a 405 from FastAPI.
+A2A 1.0 lists transports here (rather than a single top-level `url`). The template advertises one entry: `{url, protocolBinding: "JSONRPC", protocolVersion: "1.0"}`. The `url` must end with `/a2a` (the JSON-RPC endpoint, not the server root) — clients that strip the path and POST to `/` get a 405 from FastAPI.
 
 ### `version`
 
@@ -62,10 +82,9 @@ Your agent's version, not the A2A spec version. Semver is conventional.
 
 | Key | What it means |
 |---|---|
-| `streaming: true` | `message/stream` works — consumers switch to the SSE path |
+| `streaming: true` | `SendStreamingMessage` works — consumers switch to the SSE path |
 | `pushNotifications: true` | `tasks/pushNotificationConfig/*` works — consumers can register webhooks |
-| `stateTransitionHistory` | Returns historical state per task. Template defaults to `false` |
-| `extensions` | See [Extensions](/reference/extensions) |
+| `extensions` | The four protoLabs DataPart extensions, declared by default — `cost-v1`, `confidence-v1`, `worldstate-delta-v1`, `tool-call-v1`. See [Extensions](/reference/extensions) |
 
 Lying about capabilities breaks consumers silently. If you disable streaming (for example), also strip the handler routes — otherwise clients see a mismatch.
 
@@ -85,7 +104,7 @@ Each entry describes one dispatchable capability:
 }
 ```
 
-- `id` — **sticky**. `cost-v1` samples, `effect-domain-v1` declarations, and Workstacean's routing all key on it. Don't rename.
+- `id` — **sticky**. `cost-v1` samples, `worldstate-delta-v1` declarations, and Workstacean's routing all key on it. Don't rename.
 - `tags` — free-form. Workstacean's planner does substring matching against goals.
 - `examples` — few-shot-ish prompts consumers can surface in their UI.
 - `inputModes` / `outputModes` — override `defaultInputModes` / `defaultOutputModes` for this specific skill.
@@ -94,23 +113,25 @@ Each entry describes one dispatchable capability:
 
 MIME types the agent accepts/produces. Template ships `text/plain` in, `text/markdown` out.
 
-### `securitySchemes`
+### `securitySchemes` / `securityRequirements`
 
-Standard OpenAPI-style security scheme declaration. The template's default is an `X-API-Key` header.
+A2A 1.0 proto schemes. `apiKey` is **always** declared — an `X-API-Key` header
+(`{"apiKeySecurityScheme": {"location": "header", "name": "X-API-Key"}}`), with a
+matching `securityRequirements` entry (`{"schemes": {"apiKey": {}}}`).
 
-Set the expected value via `<AGENT_NAME>_API_KEY` env var:
+Set the expected key value via the `<AGENT_NAME>_API_KEY` env var:
 
 ```bash
 MY_AGENT_API_KEY=sk-abc123...
 ```
 
-If the env var is unset, the API key check is skipped entirely — useful for local dev, not appropriate for production.
+If the env var is unset, the API-key check is skipped entirely — useful for local dev, not appropriate for production.
 
-When an A2A bearer token is configured (`auth.token` / `A2A_AUTH_TOKEN`), the
-card adds a `bearer` scheme **and** lists it in the `security` requirement
-alongside `apiKey` (`[{"apiKey": []}, {"bearer": []}]` — either is accepted), so
-a consumer reading the card actually learns bearer is an option rather than
-seeing only `apiKey`.
+When an A2A **bearer** token is configured (`auth.token` / `A2A_AUTH_TOKEN`), the
+card *also* declares a `bearer` scheme (`{"httpAuthSecurityScheme": {"scheme":
+"bearer"}}`) and appends it to `securityRequirements` as an OR-alternative — so a
+consumer reading the card learns bearer is accepted, not just `apiKey`. (Both
+shapes come from `protolabs_a2a.security_schemes(bearer=…)`.)
 
 ## Fork this file
 
