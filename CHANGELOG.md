@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **First-run setup left plugin routes unmounted until restart.** Plugin routers
+  (e.g. `POST /api/config/test-discord`, `GET /api/config/google/status`,
+  `POST /api/config/google/connect`) mount once at process init — but on a fresh
+  pre-setup boot the graph-build path returned early *before* loading plugins, so
+  nothing mounted, and completing setup via the wizard reloaded the graph without
+  mounting them. Result: a brand-new agent's **Connect Discord / Connect Google /
+  Test-connection buttons 404'd during first-run setup** until the app was
+  relaunched. Plugins are now loaded for their routes + surfaces even without a
+  compiled graph (they need no graph; they're how the wizard *configures* the
+  agent), so the routes are live from boot. Found by driving a fresh agent through
+  setup against a live server.
+- **Model-connection error leaked a token hash into the setup UI.** A bad-but-
+  well-formed API key made the gateway (LiteLLM) return a 401 whose body included
+  the masked key, an internal **token hash**, and table names — surfaced verbatim
+  in the wizard's "Test connection" error. The validator now keeps the actionable
+  cause (e.g. "Authentication Error, Invalid proxy server token passed") and
+  strips everything from the first secret-ish marker on, so no token/hash/internal
+  detail reaches the UI.
+
 ## [0.13.0] - 2026-06-04
 
 ### Docs

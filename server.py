@@ -190,6 +190,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     global _workflow_registry
     global _mcp_clients, _mcp_tools, _mcp_meta
     global _plugin_tools, _plugin_skill_dirs, _plugin_meta
+    global _plugin_routers, _plugin_surfaces
 
     from graph.config import LangGraphConfig
     from graph.config_io import (
@@ -235,8 +236,21 @@ def _init_langgraph_agent(headless_setup: bool = False):
         else:
             _graph = None
             _knowledge_store = None
+            # Load plugins for their ROUTES + SURFACES even without a compiled
+            # graph. The Connect Discord / Connect Google / Test-connection routes
+            # are how the setup wizard *configures* the agent, so they must be
+            # mounted during first-run setup — not only after a restart. (Without
+            # this the first-run wizard's Connect/Test buttons 404 until the app is
+            # relaunched.) register() needs no graph; the tools/subagents that feed
+            # the graph are (re)loaded when setup completes and the graph builds.
+            _pre = _build_plugins(_graph_config)
+            _plugin_routers, _plugin_surfaces, _plugin_meta = (
+                _pre.routers, _pre.surfaces, _pre.meta,
+            )
+            _register_plugin_subagents(_pre.subagents)
             log.info(
-                "Setup wizard has not been completed — graph not compiled. "
+                "Setup wizard has not been completed — graph not compiled "
+                "(plugin routes/surfaces still mounted). "
                 "Open the UI to finish setup (or run headless: --ui none / --setup).",
             )
             return
@@ -274,7 +288,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
     # build below so the first compile (and every reload) can delegate to them.
-    global _plugin_routers, _plugin_surfaces
+    # (`global _plugin_routers, _plugin_surfaces` is declared at the top of the fn.)
     _plugin_routers, _plugin_surfaces = _plugins.routers, _plugins.surfaces
     _register_plugin_subagents(_plugins.subagents)
 
