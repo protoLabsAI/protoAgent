@@ -79,6 +79,28 @@ a schema-driven generic wizard step can come later.
 - `plugins.enabled` changes still need a restart (config sections are resolved at
   boot) — consistent with ADR 0018.
 
+## 3a. Addendum — managed MCP servers + host additions (#509)
+
+Migrating the **Google** surface to a plugin needed one capability ADR 0018's
+contribution set didn't cover: the agent reaches Google through a *managed MCP
+server*, injected into MCP discovery based on live config (OAuth-gated, started
+only once a token exists). Added under this ADR:
+
+- **`register_mcp_server(factory)`** — a plugin contributes a factory
+  `factory(config) -> entry | None`, called at every graph build with the live
+  `LangGraphConfig`. A returned entry is injected like a configured `mcp.servers`
+  entry (and replaces a same-named one); its presence activates MCP even when
+  `mcp.enabled` is off. Plugins now load **before** MCP discovery so their
+  factories are available (MCP tools are namespaced `<server>__<tool>`, so the
+  earlier collision set is unaffected).
+- **Generic frozen entrypoint** — the google-specific `--mcp-google` shim became
+  `--mcp-plugin <id>`, which imports the named plugin's module and calls its
+  `mcp_main()`. No core reference to any specific plugin remains.
+- **Host additions** — `host.config()` (the live config) + `host.apply_settings(
+  patch)` (persist + reload) so a plugin *route* can read live config and apply a
+  change (Google's Connect flow flips `enabled` and reloads). The desktop sidecar
+  bundles the `plugins/` tree so plugins load in the frozen app.
+
 ## 4. Alternatives considered
 
 - **Imperative `register_config()` in `register()`.** Rejected — config/secrets/

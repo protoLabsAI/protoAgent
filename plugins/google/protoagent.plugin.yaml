@@ -1,0 +1,24 @@
+id: google
+name: Google
+version: 0.1.0
+description: >-
+  Gmail + Calendar via a managed MCP server (ADR 0017), connected in-app with an
+  OAuth consent flow (no credentials.json / CLI) — as a first-party plugin (ADR
+  0019). Off until you set an OAuth client + click “Connect Google”. Disable
+  entirely with `plugins: { disabled: [google] }`, or replace it with your own
+  Google integration — no server.py edit.
+enabled: true
+requires_env: []
+# Config section (ADR 0019) — claims the top-level `google` section, so the
+# existing Settings group + wizard step + Connect button keep working unchanged.
+config_section: google
+config:
+  enabled: false
+  client_id: ""
+  tz: ""
+secrets: [client_secret]
+settings:
+  - { key: enabled, label: "Enable Google", type: bool, description: "Gmail + Calendar tools. Needs the OAuth client below + a completed “Connect Google”. Reconnects the tools live on save." }
+  - { key: client_id, label: "OAuth client ID", type: string, description: "From your Google Cloud “Desktop app” OAuth client." }
+  - { key: client_secret, label: "OAuth client secret", type: secret, description: "From the same OAuth client. Stored in secrets.yaml." }
+  - { key: tz, label: "Timezone (IANA)", type: string, description: "e.g. America/Los_Angeles — sets the day bounds for “today”. Blank = UTC." }

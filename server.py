@@ -258,15 +258,14 @@ def _init_langgraph_agent(headless_setup: bool = False):
     global _scheduler
     _scheduler = _build_scheduler(_graph_config)
 
-    # MCP — external Model Context Protocol servers; their tools become agent
-    # tools (namespaced <server>__<tool>). Off unless mcp.enabled.
-    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(_graph_config)
-
-    # Plugins — drop-in packages (tools + bundled skills). Loaded after the
-    # core + MCP tools so plugin tools that would shadow them are skipped.
+    # Plugins — drop-in packages (tools + bundled skills + surfaces/routes +
+    # managed MCP servers). Loaded BEFORE MCP so a plugin's managed MCP server
+    # (register_mcp_server, e.g. Google) is injected into the MCP discovery
+    # below. Collision check uses core tools only — MCP tools are namespaced
+    # (<server>__<tool>) so they can't be shadowed by a plugin tool anyway.
     _plugins = _build_plugins(
         _graph_config,
-        existing_tools=get_all_tools(_knowledge_store, scheduler=_scheduler) + _mcp_tools,
+        existing_tools=get_all_tools(_knowledge_store, scheduler=_scheduler),
     )
     _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
         _plugins.tools, _plugins.skill_dirs, _plugins.meta,
@@ -278,6 +277,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     global _plugin_routers, _plugin_surfaces
     _plugin_routers, _plugin_surfaces = _plugins.routers, _plugins.surfaces
     _register_plugin_subagents(_plugins.subagents)
+
+    # MCP — external Model Context Protocol servers; their tools become agent
+    # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
+    # contributes a managed server (ADR 0019).
+    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(
+        _graph_config, plugin_servers=[s["factory"] for s in _plugins.mcp_servers]
+    )
 
     # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
@@ -382,8 +388,12 @@ def _build_skills_index(config, extra_skill_dirs=None):
         return None
 
 
-def _build_mcp(config):
+def _build_mcp(config, plugin_servers=None):
     """Discover tools from configured MCP servers. Returns (clients, tools, meta).
+
+    ``plugin_servers`` are managed-MCP-server factories contributed by plugins
+    (``register_mcp_server``, ADR 0019) — e.g. the Google surface's OAuth-gated
+    server — injected alongside the configured ``mcp.servers``.
 
     Best-effort and per-server isolated (see tools/mcp_tools.build_mcp_tools):
     a bad/unreachable server is logged and skipped, never fatal. Returns empty
@@ -392,7 +402,7 @@ def _build_mcp(config):
     try:
         from tools.mcp_tools import build_mcp_tools
 
-        clients, tools, meta = build_mcp_tools(config)
+        clients, tools, meta = build_mcp_tools(config, plugin_servers=plugin_servers)
         if tools:
             log.info("[mcp] %d tool(s) from %d server(s)", len(tools), len(meta))
         return clients, tools, meta
@@ -893,10 +903,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
-            new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(new_config)
+            # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
+            # is injected into the MCP discovery below (matches _main ordering).
             new_plugins = _build_plugins(
                 new_config,
-                existing_tools=get_all_tools(new_store, scheduler=next_scheduler) + new_mcp_tools,
+                existing_tools=get_all_tools(new_store, scheduler=next_scheduler),
+            )
+            new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(
+                new_config, plugin_servers=[s["factory"] for s in new_plugins.mcp_servers]
             )
             new_plugin_tools = new_plugins.tools
             new_plugin_skill_dirs = new_plugins.skill_dirs
@@ -991,6 +1005,8 @@ def _populate_plugin_host() -> None:
         HOST.invoke = _plugin_agent_invoke
         HOST.publish = _event_bus.publish
         HOST.subscribe = _event_bus.subscribe
+        HOST.config = lambda: _graph_config
+        HOST.apply_settings = lambda patch: _apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001
         log.exception("[plugins] failed to populate plugin host")
 
@@ -2119,14 +2135,17 @@ def _a2a_terminal(outcome) -> None:
 def _main():
     global _active_port
 
-    # Frozen-binary entrypoint for the managed Google MCP server (ADR 0017): the
-    # bundled desktop app has no `python` on PATH, so the google MCP entry
-    # re-invokes this binary with --mcp-google instead of `-m
-    # mcp_servers.google.server`. Handle it before argparse/server startup.
-    if "--mcp-google" in sys.argv:
-        from mcp_servers.google.server import main as _google_mcp_main
+    # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
+    # bundled desktop app has no `python` on PATH, so a plugin's managed-server
+    # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m
+    # <module>`. We import that plugin's module and call its `mcp_main()`. Handle
+    # it before argparse/server startup. (The Google plugin is the first user.)
+    if "--mcp-plugin" in sys.argv:
+        i = sys.argv.index("--mcp-plugin")
+        plugin_id = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        from graph.plugins.loader import run_plugin_mcp_main
 
-        _google_mcp_main()
+        run_plugin_mcp_main(plugin_id)
         return
 
     parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
@@ -2873,61 +2892,10 @@ def _main():
         ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
         return {"ok": ok, "error": error}
 
-    # `/api/config/test-discord` is now mounted by the discord plugin's router
-    # (ADR 0018/0019), at the same path — the console Test button is unchanged.
-
-    def _google_env_from_config() -> None:
-        """Mirror the configured Google OAuth client + token path into the env so
-        ``mcp_servers.google.auth`` (which reads env) can run the consent/status
-        in-process for the connect + status endpoints."""
-        from graph.config_io import _live_config_dir
-
-        cid = (_graph_config.google_client_id if _graph_config else "") or ""
-        sec = (_graph_config.google_client_secret if _graph_config else "") or ""
-        if cid:
-            os.environ["GOOGLE_CLIENT_ID"] = cid
-        if sec:
-            os.environ["GOOGLE_CLIENT_SECRET"] = sec
-        os.environ["GOOGLE_TOKEN_PATH"] = str(_live_config_dir() / "google-token.json")
-
-    @fastapi_app.get("/api/config/google/status")
-    async def _api_google_status():
-        """Report (configured, connected, email) for the Google surface."""
-        try:
-            from mcp_servers.google.auth import connection_status
-        except Exception as e:  # noqa: BLE001 — google extra may be absent
-            return {"configured": False, "connected": False, "email": None,
-                    "error": f"google support unavailable: {e}"}
-        _google_env_from_config()
-        try:
-            return await asyncio.to_thread(connection_status)
-        except Exception as e:  # noqa: BLE001
-            return {"configured": False, "connected": False, "email": None, "error": str(e)}
-
-    @fastapi_app.post("/api/config/google/connect")
-    async def _api_google_connect():
-        """Run the OAuth consent (opens the operator's browser), cache the token,
-        enable the Google surface, and reload so the tools register. Long-lived:
-        it blocks until the operator approves in the browser (3-min cap)."""
-        try:
-            from mcp_servers.google.auth import run_consent
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": f"google support unavailable: {e}"}
-        if not (_graph_config and _graph_config.google_client_id and _graph_config.google_client_secret):
-            return {"ok": False, "error": "Set the OAuth client ID + secret first, then connect."}
-        _google_env_from_config()
-        try:
-            email = await asyncio.wait_for(asyncio.to_thread(run_consent), timeout=180)
-        except asyncio.TimeoutError:
-            return {"ok": False, "error": "Timed out waiting for Google consent (3 min). Try again."}
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": str(e)}
-        # Persist enabled + reload so the managed google MCP server starts and the
-        # tools register without a restart.
-        ok, msg = await asyncio.to_thread(
-            _apply_settings_changes, config={"google": {"enabled": True}}
-        )
-        return {"ok": True, "email": email, "reload": msg if ok else None}
+    # `/api/config/test-discord` (discord plugin) and `/api/config/google/status`
+    # + `/connect` (google plugin) are now mounted by their plugin routers (ADR
+    # 0018/0019), at the same paths — the console Test/Connect buttons are
+    # unchanged.
 
     # --- Setup wizard state -------------------------------------------------
     @fastapi_app.get("/api/config/setup-status")

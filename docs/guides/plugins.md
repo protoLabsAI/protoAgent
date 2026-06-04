@@ -60,8 +60,9 @@ types — a fork adds any of them as a plugin, never editing core `server.py`:
 | `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
 | `register_skill_dir(path)` | A `SKILL.md` directory | graph build |
 | `register_router(router, prefix=None)` | A FastAPI `APIRouter` | **mounted once** at init (default prefix `/plugins/<id>`) |
-| `register_surface(start, stop=None, name=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown |
+| `register_surface(start, stop=None, name=None, reload=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown, `reload(cfg)` on config save |
 | `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
+| `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
 
 ```python
 def register(registry):
@@ -69,7 +70,22 @@ def register(registry):
     registry.register_router(_build_router())        # → GET /plugins/<id>/...
     registry.register_surface(_start, stop=_stop, name="my-surface")
     registry.register_subagent(_build_subagent())    # delegate via task/task_batch
+    registry.register_mcp_server(_server_factory)    # a managed MCP server (e.g. Google)
 ```
+
+### Managed MCP servers — `register_mcp_server`
+
+A plugin can ship a **managed MCP server** the agent connects to, instead of
+making the operator hand-edit `mcp.servers`. The factory is called at every graph
+build with the live `LangGraphConfig`; return a `mcp.servers[]` entry (`{name,
+transport, command, args, env, ...}`) when the server should run, or `None` when
+it shouldn't (off / not yet connected) — so the server comes and goes with config.
+A returned entry whose `name` matches a configured server replaces it, and a
+factory that returns an entry activates MCP even when `mcp.enabled` is off. This
+is how the first-party **Google** plugin ships its OAuth-gated Gmail/Calendar
+server (`plugins/google/`). For a frozen desktop build (no `python` on PATH),
+launch via `args: ["--mcp-plugin", "<id>"]` and expose a `mcp_main()` in your
+plugin module — the binary re-invokes itself and the shim runs it.
 
 ## Host services — `registry.host`
 

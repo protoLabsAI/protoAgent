@@ -11,7 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugins can contribute managed MCP servers — `register_mcp_server` (ADR
+  0019, #509).** A plugin ships an **MCP server the agent connects to** via a
+  factory `factory(config) -> entry | None` called at every graph build — return
+  an entry when the server should run, `None` when it shouldn't, so it comes and
+  goes with config. Its presence activates MCP even when `mcp.enabled` is off, and
+  a same-named entry replaces a configured one. For frozen desktop builds (no
+  `python` on PATH), a generic `--mcp-plugin <id>` shim re-invokes the binary and
+  runs the plugin's `mcp_main()`. This is what lets the Google surface ship its
+  OAuth-gated server as a plugin. The plugin host also gained `host.config()` (the
+  live config) + `host.apply_settings(patch)` (persist + reload) so a plugin route
+  can read live config and apply a config change.
+
 ### Changed
+- **Google ingress is now a first-party plugin (`plugins/google`, #509).** The
+  Gmail/Calendar managed MCP server, its OAuth-gated launch, the `GET
+  /api/config/google/status` + `POST /api/config/google/connect` routes, and the
+  `google` config/secrets/Settings group all moved out of `server.py`,
+  `tools/mcp_tools.py`, and the core config layer into a self-contained plugin
+  (ADR 0019), built on the new `register_mcp_server`. Behaviour is unchanged — the
+  Settings group, wizard step, Connect button and live-reconnect-on-save all work
+  as before — but a fork can now **disable Google entirely** with `plugins: {
+  disabled: [google] }`, or swap in its own integration, with no core edit. No
+  config migration: the plugin claims the existing top-level `google` section. The
+  desktop sidecar now bundles the `plugins/` tree so the Discord + Google plugins
+  load in the frozen app.
 - **Discord ingress is now a first-party plugin (`plugins/discord`, #509).** The
   Discord DM gateway, the `POST /api/config/test-discord` route, the outbound
   `discord_*` tools, and the `discord` config/secrets/Settings group all moved

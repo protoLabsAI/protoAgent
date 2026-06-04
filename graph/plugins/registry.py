@@ -48,6 +48,7 @@ class PluginRegistry:
         self.routers: list[dict] = []     # {"router", "prefix"}
         self.surfaces: list[dict] = []    # {"name", "start", "stop"}
         self.subagents: list = []         # SubagentConfig instances
+        self.mcp_servers: list = []       # factories: config -> entry dict | None
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -102,6 +103,22 @@ class PluginRegistry:
         self.surfaces.append(
             {"name": name or self.plugin_id, "start": start, "stop": stop, "reload": reload}
         )
+
+    def register_mcp_server(self, factory) -> None:
+        """Contribute a **managed MCP server** the agent connects to (ADR 0019).
+
+        ``factory`` is a callable ``factory(config) -> dict | None`` returning a
+        ``mcp.servers[]`` entry (``{name, transport, command, args, env, ...}``) or
+        ``None`` when the server shouldn't start (off / not yet connected). It's
+        called at every graph build with the live ``LangGraphConfig``, so the
+        server comes and goes with config — this is how the Google surface ships
+        its OAuth-gated MCP server without a core edit. A returned entry whose
+        ``name`` matches a user-defined ``mcp.servers`` entry replaces it.
+        """
+        if not callable(factory):
+            log.warning("[plugins] %s: register_mcp_server needs a callable", self.plugin_id)
+            return
+        self.mcp_servers.append(factory)
 
     def register_subagent(self, config) -> None:
         """Add a ``SubagentConfig`` to ``SUBAGENT_REGISTRY`` (ADR 0018).

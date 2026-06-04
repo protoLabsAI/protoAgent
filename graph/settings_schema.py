@@ -126,19 +126,9 @@ FIELDS: list[Field] = [
     # Discord's Settings group is now declared by the discord plugin's manifest
     # (ADR 0019) and rendered via the plugin-fields path in build_schema.
 
-    # ── Google (ADR 0017) ────────────────────────────────────────────────────
-    # The OAuth client lives here; "Connect Google" (a button, not a field) runs
-    # the consent flow and caches the token. Editing client id/secret is rare —
-    # most operators use the wizard/Settings "Connect Google" button.
-    Field("google.enabled", "google_enabled", "Enable Google", "bool", "Google",
-          "Gmail + Calendar tools. Needs the OAuth client below + a completed "
-          "“Connect Google”. Reconnects the tools live on save."),
-    Field("google.client_id", "google_client_id", "OAuth client ID", "string", "Google",
-          "From your Google Cloud “Desktop app” OAuth client."),
-    Field("google.client_secret", "google_client_secret", "OAuth client secret", "secret", "Google",
-          "From the same OAuth client. Stored in secrets.yaml."),
-    Field("google.tz", "google_tz", "Timezone (IANA)", "string", "Google",
-          "e.g. America/Los_Angeles — sets the day bounds for “today”. Blank = UTC."),
+    # Google's Settings group is now declared by the google plugin's manifest
+    # (ADR 0019) and rendered via the plugin-fields path in build_schema. The
+    # "Connect Google" button (consent flow) is a console affordance, not a field.
 
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
