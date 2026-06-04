@@ -115,6 +115,22 @@ export function apiUrl(path: string) {
   return base ? `${base}${path.startsWith("/") ? path : `/${path}`}` : path;
 }
 
+/** True inside the desktop (Tauri/WKWebView) shell. WKWebView does NOT deliver a
+ * `text/event-stream` body through `fetch()` — neither via `body.getReader()` nor
+ * a buffered `clone().text()` (both come back empty) — so the streaming chat turn
+ * renders as a blank assistant bubble. In that environment we route the chat turn
+ * through the non-streaming `/api/chat` endpoint instead, which returns ordinary
+ * JSON that WKWebView handles fine (it's how the rest of the console already talks
+ * to the sidecar). Browsers keep the streaming `/a2a` path. */
+export function isDesktopWebview(): boolean {
+  try {
+    const { protocol, hostname } = window.location;
+    return protocol === "tauri:" || protocol === "file:" || hostname === "tauri.localhost";
+  } catch {
+    return false;
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   let body: BodyInit | undefined;
@@ -515,6 +531,42 @@ export const api = {
       onDone?: () => void;
     } = {},
   ) {
+    // Desktop (WKWebView) can't read a streaming SSE body via fetch (see
+    // isDesktopWebview) — the turn would render as a blank assistant bubble. Take
+    // the non-streaming `/api/chat` path: one request, full reply, render once.
+    // No token-by-token streaming or tool-call cards here, but the turn always
+    // shows. Browsers fall through to the streaming `/a2a` path below.
+    if (isDesktopWebview()) {
+      try {
+        const res = await fetch(apiUrl("/api/chat"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: handlers.signal,
+          body: JSON.stringify({ message, session_id: sessionId }),
+        });
+        if (!res.ok) {
+          let detail = `${res.status} ${res.statusText}`;
+          try {
+            const p = (await res.json()) as { detail?: string };
+            if (p?.detail) detail = p.detail;
+          } catch {
+            /* keep status text */
+          }
+          handlers.onFailed?.(detail);
+          return;
+        }
+        const data = (await res.json()) as { response?: string };
+        const reply = (data.response || "").trim();
+        if (reply) handlers.onText?.(reply, false);
+        else handlers.onFailed?.("the turn returned no content");
+      } catch (err) {
+        handlers.onFailed?.(err instanceof Error ? err.message : String(err));
+      } finally {
+        handlers.onDone?.();
+      }
+      return;
+    }
+
     const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const response = await fetch(apiUrl("/a2a"), {
       method: "POST",

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Desktop chat showed a blank assistant reply (no response).** WKWebView (the
+  Tauri shell) doesn't deliver a `text/event-stream` body through `fetch()` at all
+  — neither `body.getReader()` nor a buffered `clone().text()` fallback returns the
+  bytes — so the streaming `/a2a` turn rendered as an empty assistant bubble even
+  though the agent replied. In the desktop shell the chat now uses the
+  non-streaming `/api/chat` endpoint (ordinary JSON, which WKWebView handles fine —
+  it's how the rest of the console already talks to the sidecar): one request, full
+  reply, rendered once. Browsers keep the token-streaming `/a2a` path (with
+  tool-call cards). Found by building + driving the desktop app directly.
 - **Discord plugin failed to load in the frozen desktop app (`No module named
   'tools.discord_tools'`).** Migrating Discord to a plugin (#513) removed the only
   static import of `tools.discord_tools` from `tools/lg_tools.py`, so PyInstaller's
