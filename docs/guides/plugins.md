@@ -71,6 +71,24 @@ def register(registry):
     registry.register_subagent(_build_subagent())    # delegate via task/task_batch
 ```
 
+## Host services — `registry.host`
+
+A surface or route often needs to **call the agent** or the **event bus** — host
+services it can't build. `registry.host` exposes them (the server populates them
+before any surface starts; guard for `None`):
+
+- `host.invoke(prompt, session_id)` — run a chat turn (one conversation per
+  `session_id`), returns the assistant text.
+- `host.publish(event, data)` / `host.subscribe()` — the server→client event bus.
+
+```python
+def register(registry):
+    host = registry.host
+    async def _on_message(text, sid):
+        return await host.invoke(text, sid)        # call the agent
+    registry.register_surface(lambda: _gateway(_on_message), name="my-gateway")
+```
+
 ## Config, secrets & settings (ADR 0019)
 
 A configurable plugin **declares its config in the manifest** (data, so it's known

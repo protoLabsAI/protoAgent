@@ -38,6 +38,11 @@ class PluginRegistry:
         # YAML ⊕ secrets. Read it in register() and close over it for your
         # tools/routes/surface, e.g. ``registry.config.get("api_key")``.
         self.config: dict = dict(config or {})
+        # Host services (agent invoke + event bus) a surface/route can use — the
+        # server populates these before startup; guard for None (e.g. in tests).
+        from graph.plugins.host import HOST
+
+        self.host = HOST
         self.tools: list = []
         self.skill_dirs: list[Path] = []
         self.routers: list[dict] = []     # {"router", "prefix"}
