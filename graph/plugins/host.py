@@ -25,6 +25,15 @@ class PluginHost:
     publish: Optional[Callable[[str, dict], Any]] = None
     # () -> subscription — subscribe to the event bus (e.g. return-address delivery).
     subscribe: Optional[Callable[[], Any]] = None
+    # () -> LangGraphConfig — the *live* server config. A route handler reads this
+    # for the current resolved values (incl. plugin_config) rather than closing
+    # over a load-time snapshot, so it sees Settings changes without a restart.
+    config: Optional[Callable[[], Any]] = None
+    # (patch: dict) -> (ok, messages) — persist a nested config patch to YAML
+    # (secrets routed automatically) and reload the graph once. Heavy (a full
+    # reload) — a route should call it via ``asyncio.to_thread``. Lets a plugin
+    # route apply config + reload (e.g. Google's Connect flow flipping enabled).
+    apply_settings: Optional[Callable[[dict], Any]] = None
 
 
 # Process-lifetime singleton. The server fills it in; plugins read it.

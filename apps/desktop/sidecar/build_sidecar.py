@@ -36,6 +36,11 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     ("config/SOUL.md", "config"),
     ("config/soul-presets", "config/soul-presets"),
     ("static", "static"),
+    # First-party plugins (ADR 0018/0019) — incl. the Discord + Google surfaces.
+    # Loaded by file path (importlib) at runtime, so PyInstaller's import-scan
+    # misses them; ship the tree as data so the frozen app finds them under
+    # _MEIPASS/plugins (the loader's bundle root).
+    ("plugins", "plugins"),
 ]
 
 # Packages PyInstaller's static analysis under-collects (dynamic imports +
@@ -57,13 +62,14 @@ COLLECT_ALL = [
     # the import-scan misses them — collect explicitly.
     "aiosqlite",
     "sqlalchemy",
-    # The native Discord surface (ADR 0015) is lazy-imported in the server
-    # startup hook, so the import-scan misses it; the gateway also imports
-    # ``websockets`` lazily. Collect both so Discord works in the frozen app.
+    # The Discord surface (ADR 0015) is loaded by the discord plugin (and the
+    # gateway imports ``websockets`` lazily), so the import-scan misses it.
+    # Collect both so Discord works in the frozen app.
     "surfaces",
     "websockets",
     # Google surface (ADR 0017): the MCP SDK (FastMCP) + the repo's google MCP
-    # server module, lazily imported via the --mcp-google self-reinvoke entry.
+    # server module, loaded by the google plugin and re-invoked frozen via the
+    # ``--mcp-plugin google`` self-reinvoke entry.
     "mcp",
     "mcp_servers",
 ]

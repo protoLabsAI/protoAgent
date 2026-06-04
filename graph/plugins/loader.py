@@ -29,6 +29,7 @@ class PluginLoadResult:
     routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
     surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
     subagents: list = field(default_factory=list)   # SubagentConfig
+    mcp_servers: list = field(default_factory=list)  # factories: config -> entry|None (ADR 0019)
     meta: list[dict] = field(default_factory=list)
 
 
@@ -76,6 +77,40 @@ def _import_register(manifest: PluginManifest):
     if not callable(register):
         raise RuntimeError("plugin module has no callable register(registry)")
     return register
+
+
+def run_plugin_mcp_main(plugin_id: str) -> None:
+    """Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019).
+
+    Find the plugin by id across the default roots, import its entry module, and
+    call its ``mcp_main()`` (the subprocess body of its managed MCP server). Used
+    by the ``--mcp-plugin <id>`` shim when there's no ``python`` on PATH. Importing
+    the module does NOT call ``register`` — only defines its functions — so this
+    is side-effect-free apart from running the server.
+    """
+    from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+
+    roots = [_BUNDLE_CONFIG_DIR.parent / "plugins", _live_config_dir() / "plugins"]
+    for manifest in discover_plugins(roots):
+        if manifest.id != plugin_id:
+            continue
+        entry = _entry_file(manifest)
+        if entry is None:
+            raise RuntimeError(f"plugin {plugin_id!r} has no entry module")
+        mod_name = f"protoagent_plugin_{manifest.id}"
+        spec = importlib.util.spec_from_file_location(
+            mod_name, str(entry), submodule_search_locations=[str(manifest.path)]
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not import plugin {plugin_id!r}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        mcp_main = getattr(module, "mcp_main", None)
+        if not callable(mcp_main):
+            raise RuntimeError(f"plugin {plugin_id!r} has no mcp_main()")
+        mcp_main()
+        return
+    raise RuntimeError(f"plugin {plugin_id!r} not found for --mcp-plugin")
 
 
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
@@ -146,17 +181,21 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         for s in registry.surfaces:
             result.surfaces.append({"plugin_id": manifest.id, **s})
         result.subagents.extend(registry.subagents)
+        for f in registry.mcp_servers:
+            result.mcp_servers.append({"plugin_id": manifest.id, "factory": f})
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         entry["skills"] = len(registry.skill_dirs)
         entry["routers"] = len(registry.routers)
         entry["surfaces"] = len(registry.surfaces)
         entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
+        entry["mcp_servers"] = len(registry.mcp_servers)
         result.meta.append(entry)
         log.info("[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "
-                 "%d surface(s), %d subagent(s)",
+                 "%d surface(s), %d subagent(s), %d mcp server(s)",
                  manifest.id, len(kept), len(registry.skill_dirs),
-                 len(registry.routers), len(registry.surfaces), len(registry.subagents))
+                 len(registry.routers), len(registry.surfaces),
+                 len(registry.subagents), len(registry.mcp_servers))
 
     return result
 

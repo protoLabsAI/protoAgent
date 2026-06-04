@@ -113,6 +113,45 @@ def test_build_collects_tools_and_meta(monkeypatch) -> None:
     assert len(clients) == 1
 
 
+def test_plugin_server_injected_and_activates_mcp(monkeypatch) -> None:
+    # A plugin-contributed managed server (register_mcp_server) is connected even
+    # when mcp.enabled is off — its presence alone activates MCP discovery.
+    _fake_client_factory(monkeypatch, by_server={"g": [SimpleNamespace(name="g__send")]})
+    entry = {"name": "g", "transport": "stdio", "command": "python", "args": ["g.py"]}
+    cfg = LangGraphConfig(mcp_enabled=False, mcp_servers=[])
+    _clients, tools, meta = build_mcp_tools(cfg, plugin_servers=[lambda c: entry])
+    assert [t.name for t in tools] == ["g__send"]
+    assert meta[0]["name"] == "g"
+
+
+def test_plugin_server_none_skipped(monkeypatch) -> None:
+    # A factory returning None (surface off / not connected) contributes nothing,
+    # and with no configured servers MCP stays inert.
+    _fake_client_factory(monkeypatch, by_server={})
+    cfg = LangGraphConfig(mcp_enabled=False, mcp_servers=[])
+    clients, tools, meta = build_mcp_tools(cfg, plugin_servers=[lambda c: None])
+    assert (clients, tools, meta) == ([], [], [])
+
+
+def test_plugin_server_replaces_same_named_config_entry(monkeypatch) -> None:
+    # A plugin entry named like a configured server replaces it (managed wins).
+    _fake_client_factory(monkeypatch, by_server={"g": [SimpleNamespace(name="g__managed")]})
+    managed = {"name": "g", "transport": "stdio", "command": "python", "args": ["managed.py"]}
+    cfg = _cfg([{"name": "g", "transport": "stdio", "command": "python", "args": ["user.py"]}])
+    _clients, tools, _meta = build_mcp_tools(cfg, plugin_servers=[lambda c: managed])
+    assert [t.name for t in tools] == ["g__managed"]
+
+
+def test_plugin_server_factory_error_isolated(monkeypatch) -> None:
+    # A throwing factory is logged + skipped, never fatal; other config servers run.
+    _fake_client_factory(monkeypatch, by_server={"echo": [SimpleNamespace(name="echo__echo")]})
+    def _boom(c):
+        raise RuntimeError("bad factory")
+    cfg = _cfg([{"name": "echo", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    _clients, tools, _meta = build_mcp_tools(cfg, plugin_servers=[_boom])
+    assert [t.name for t in tools] == ["echo__echo"]
+
+
 def test_denylist_and_core_collision_filtered(monkeypatch) -> None:
     _fake_client_factory(monkeypatch, by_server={
         "s": [
