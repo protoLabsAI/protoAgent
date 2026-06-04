@@ -2,52 +2,62 @@
 
 Same checklist as `TEMPLATE.md` in the repo, kept in sync. Use this when you've forked before and don't need the tutorial walkthrough — just the list.
 
-## 0. Pick a name
+> **Re-sync is the design goal.** Everything below customizes via **config,
+> SOUL.md, plugins, and env** — *not* by editing core files. The fewer tracked
+> files you touch, the cleaner `git merge upstream/main` (or a cherry-pick)
+> stays. `CHANGELOG.md` is set to `merge=union` (`.gitattributes`), so your
+> entries and upstream's coexist instead of conflicting.
 
-One short slug. Ends up in:
+## 0. Name + identity (config, not a rename)
 
-- `AGENT_NAME` env var
-- Prometheus metric prefix (`<name>_llm_calls_total`, etc.)
-- Langfuse trace tag
-- Docker image label + GHCR path
-- Release pipeline repo guards
+Set your agent's **user-facing** name in **config** — it flows to the console
+brand, window/tab title, agent card, and system prompt:
 
-## 1. Rename
+- `identity.name` in `config/langgraph-config.yaml` (or the setup wizard), and
+- `config/SOUL.md` for persona — it's loaded into the system prompt, so you don't
+  edit `graph/prompts.py`. (Keep the `<scratch_pad>`/`<output>` protocol block if
+  you ever do touch prompts — the A2A handler's output extraction depends on it.)
+
+**Do NOT `sed` the internal `protoagent` identifier.** It's the stable template
+name for logger namespaces, the `~/.protoagent` data dir, `PROTOAGENT_*` env
+vars, and the plugin namespace — all internal, never user-facing. Renaming it
+rewrites ~120 files and makes *every* upstream merge conflict, for zero
+functional gain. Leave it.
+
+The few places that genuinely want your slug are **env-driven**, no file edit:
+
+- `AGENT_NAME` env var (Prometheus prefix, Langfuse tag, A2A `<NAME>_API_KEY`).
+- Docker image label / GHCR path — set in *your* deploy, not the template.
+
+## 1. Enable the release pipeline (no workflow edit)
+
+Set the **`RELEASE_ENABLED` repo variable** to `true`:
 
 ```bash
-git grep -li protoagent | xargs sed -i 's/protoagent/<your-name>/g'
-git grep -li protoAgent | xargs sed -i 's/protoAgent/<YourName>/g'
+gh variable set RELEASE_ENABLED --body true
 ```
 
-Review the diff. Key hits: `Dockerfile` (`/opt/protoagent`), `IMAGE_NAME` in the workflow files, `chat_ui.py` branding.
+The release workflows gate on it, so you enable releases without touching
+`prepare-release.yml` / `release.yml` — and upstream changes to those files
+re-sync cleanly. Until the variable is set, releases won't fire (intentional).
 
-## 2. Un-freeze release pipeline
+## 2. Tools — keep / drop / add (config + plugins, no core edit)
 
-Change the `github.repository == 'protoLabsAI/protoAgent'` guard in:
+The starter tools ship by default: `current_time`, `calculator`, `web_search`,
+`fetch_url` (keyless general) plus the memory, scheduler, notes, GitHub, and
+beads tools.
 
-- `.github/workflows/prepare-release.yml`
-- `.github/workflows/release.yml`
+- **Drop** the ones you don't want via config — list them under `tools.disabled`
+  in `config/langgraph-config.yaml` (live-reloadable). No `get_all_tools()` edit.
+- **Add** your own as a **plugin** (`plugins/<id>/` with a `register(registry)`),
+  so they're discovered without touching core. See [Plugins](/guides/plugins).
 
-Until this lands, releases won't fire. Intentional, not a bug.
-
-## 3. Rewrite identity
-
-| File | What goes in it |
-|---|---|
-| `config/SOUL.md` | Persona doc loaded into workspace at session start |
-| `graph/prompts.py::build_system_prompt` | Lead agent system prompt |
-| `graph/prompts.py::build_subagent_prompt` | Per-subagent delegation prompt |
-| `server.py::_build_agent_card` | `name`, `description`, `skills`, declared extensions |
-
-Keep the `<scratch_pad>` / `<output>` protocol block in `prompts.py` — the A2A handler's output extraction depends on it.
-
-## 4. Replace the starter tools
-
-Twelve tools ship by default: `current_time`, `calculator`, `web_search`, `fetch_url` (keyless general) plus `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` (bound to the bundled `KnowledgeStore`) plus `schedule_task`, `list_schedules`, `cancel_schedule` (bound to the scheduler backend). Keep what you want, drop the rest, add your own. Update `get_all_tools()` at the bottom of `tools/lg_tools.py`.
+(Editing `tools/lg_tools.py::get_all_tools()` directly still works, but it's a
+core edit that conflicts on every upstream re-sync — prefer config + plugins.)
 
 See the [starter tools reference](/reference/starter-tools) for the shapes of the shipped ones.
 
-## 5. Configure subagents (optional)
+## 3. Configure subagents (optional)
 
 `graph/subagents/config.py` ships with one `researcher`. Either:
 
@@ -56,7 +66,7 @@ See the [starter tools reference](/reference/starter-tools) for the shapes of th
 
 See [Configure subagents](/guides/subagents) for the full pattern.
 
-## 6. Point at a model
+## 4. Point at a model
 
 Edit `config/langgraph-config.yaml::model.name`. Two options:
 
@@ -65,10 +75,10 @@ Edit `config/langgraph-config.yaml::model.name`. Two options:
 
 Option 1 is preferred.
 
-## 7. Deploy
+## 5. Deploy
 
 See [Deploy via GHCR](/guides/deploy). The Dockerfile uses a single `COPY . /opt/protoagent/` so new files don't need Dockerfile updates.
 
-## 8. Delete `TEMPLATE.md`
+## 6. Delete `TEMPLATE.md`
 
 Once the checklist is done, delete it and rewrite `README.md` to describe your specific agent.

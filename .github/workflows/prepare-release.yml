@@ -34,8 +34,10 @@ jobs:
   prepare:
     name: Prepare Release
     runs-on: namespace-profile-protolabs-linux
-    # Repo-scope guard: don't run in forks.
-    if: github.repository == 'protoLabsAI/protoAgent'
+    # Opt-in guard (fork-friendly): set the `RELEASE_ENABLED` repo variable to
+    # `true` to enable the release pipeline. Forks enable it without editing this
+    # workflow — so upstream changes to the file don't conflict on re-sync.
+    if: vars.RELEASE_ENABLED == 'true'
     permissions:
       contents: write
       pull-requests: write

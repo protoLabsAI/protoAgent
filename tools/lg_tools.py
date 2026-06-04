@@ -343,6 +343,18 @@ def _extract_text_from_html(content: bytes) -> str:
 _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
 
+# Fork tool denylist — names dropped from ``get_all_tools``. Set once from config
+# (``tools.disabled``) by ``set_disabled_tools`` at config load/reload, so a fork
+# removes core tools via YAML instead of editing ``get_all_tools`` (a core edit
+# that would conflict on every upstream re-sync). Plugins still ADD tools.
+_disabled_tools: set[str] = set()
+
+
+def set_disabled_tools(names) -> None:
+    """Set the fork tool denylist (config ``tools.disabled``)."""
+    global _disabled_tools
+    _disabled_tools = {str(n).strip() for n in (names or []) if str(n).strip()}
+
 # Stable list of scheduler tool names. Exposed as a module-level
 # constant so ``graph/config_io.py::list_available_tools`` can show
 # the wizard the right surface even when the runtime hasn't yet
@@ -703,6 +715,10 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_
         tools.extend(_build_inbox_tools(inbox_store))
     if beads_store is not None:
         tools.extend(_build_beads_tools(beads_store))
+    # Fork denylist (config ``tools.disabled``): drop named core tools without
+    # editing this function. Applied last so it covers every branch above.
+    if _disabled_tools:
+        tools = [t for t in tools if getattr(t, "name", None) not in _disabled_tools]
     return tools
 
 
