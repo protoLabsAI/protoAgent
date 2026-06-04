@@ -19,8 +19,10 @@ features:
     details: Every terminal task emits a cost-v1 DataPart with token usage and wall time. a2a.trace metadata nests this agent's Langfuse trace under the caller's.
   - title: Free starter tools
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
-  - title: Autonomous release pipeline
-    details: Merge a PR → semver bump → GHCR image → GitHub release → Discord embed. Update the repo guard in three workflow files and you're done.
+  - title: Plugin system
+    details: Drop-in packages add tools, skills, FastAPI routes, background surfaces, subagents and managed MCP servers without forking. Discord ingress and Google (Gmail+Calendar) ship as first-party plugins.
+  - title: Release pipeline
+    details: Dispatch prepare-release → semver bump PR → merge → tag → GHCR image → GitHub release → Discord embed. Flip the RELEASE_ENABLED repo variable to enable it on a fork.
 ---
 
 ## Documentation Structure

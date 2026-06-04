@@ -1,16 +1,18 @@
 # Starter tools
 
-Sixteen tools ship by default:
+The default tool set (from `tools/lg_tools.py::get_all_tools`):
 
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
+- Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a structured multi-step form) — pause the turn (A2A `input-required`) for the operator and resume with their answer (lead-agent only).
 - Four **GitHub read tools** — `github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff` (`tools/github_tools.py`) — over the `gh` CLI. Each requires an explicit `repo` (`owner/name`, no default); they degrade to a readable error if `gh`/auth is missing. Auth via `GITHUB_TOKEN`/`GH_TOKEN` env, else gh's ambient login.
-- Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)).
-- Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)).
-- One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
-- One **HITL tool** — `ask_human` — pauses the turn (A2A `input-required`) to ask the operator and resumes with their answer (lead-agent only).
 - Four **notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent (one agent-global notebook), gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
+- Five **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats`, `daily_log` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
+- Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
+- Four **beads tools** — `beads_create`, `beads_list`, `beads_update`, `beads_close` — the agent's in-process planning board, bridged to the console Beads panel. Bound when a beads store is present (default in `server.py`).
+- One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
+- **Peer-consult tools** (`peer_list` / `peer_consult`) — added only when at least one `PEER_<HANDLE>_URL` is set (A2A federation).
 
-`get_all_tools(knowledge_store, scheduler)` is the registry. When `knowledge_store` is `None` the memory tools are omitted; when `scheduler` is `None` the scheduler tools are omitted. Both backends are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false` in `config/langgraph-config.yaml`.
+`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). To **drop** a core tool without editing this function, list it in `tools.disabled`; to **add** tools, ship a [plugin](/guides/plugins) (`register_tools`) — editing `get_all_tools` is the legacy core-edit path that conflicts on re-sync.
 
 ## `current_time`
 
@@ -270,11 +272,13 @@ These bridge the Notes panel's permission toggles to the agent — without them,
 
 ## `discord_send` / `discord_read` / `discord_react`
 
-**Off unless `DISCORD_BOT_TOKEN` is set** — the outbound (REST) half of the
-optional Discord surface ([ADR 0015](/adr/0015-discord-ingress-surface)). Raw
-Discord REST **v10** over `httpx` (no `discord.py`). When the token is absent
-these tools are **not registered** (`get_all_tools` gates on
-`discord_configured()`); a direct call degrades to a readable error.
+**Provided by the first-party `discord` plugin** (`plugins/discord/`, ADR
+0018/0019), not by `get_all_tools` — the outbound (REST) half of the Discord
+surface ([ADR 0015](/adr/0015-discord-ingress-surface)). Raw Discord REST **v10**
+over `httpx` (no `discord.py`). The plugin registers them only when a token is set
+(`discord.bot_token` in Settings or `DISCORD_BOT_TOKEN`); disabling the plugin
+(`plugins.disabled: [discord]`) removes the surface **and** these tools. A direct
+call without a token degrades to a readable error.
 
 ```python
 @tool

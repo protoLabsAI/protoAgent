@@ -82,9 +82,17 @@ GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | MESSAGE_CONTENT`.
 
 ## Configuration
 
+Discord ships as a **first-party plugin** (`plugins/discord/`, ADR 0018/0019) —
+the gateway, the `test-discord` route, the outbound tools, and this `discord`
+config section are all declared by `plugins/discord/protoagent.plugin.yaml`, not
+wired in `server.py`. Disable it entirely with `plugins: { disabled: [discord] }`,
+or replace it with your own ingress plugin — no core edit. See [Plugins](./plugins.md).
+
 The token, admin list, and on/off toggle are set **in the app** (Settings →
 Discord, or the setup wizard) and stored in the per-agent config — `bot_token`
-in the gitignored `secrets.yaml`, the rest in `langgraph-config.yaml`:
+in the gitignored `secrets.yaml`, the rest under the `discord:` section of
+`langgraph-config.yaml` (resolved into `plugin_config["discord"]` — a
+plugin-declared section, not a typed config field):
 
 | Field (Settings → Discord) | YAML | Purpose |
 |---|---|---|

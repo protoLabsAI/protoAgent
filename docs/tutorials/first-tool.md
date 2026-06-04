@@ -35,27 +35,26 @@ async def git_sha(short: bool = True) -> str:
 Then register it in `get_all_tools()` at the bottom of the same file:
 
 ```python
-def get_all_tools(knowledge_store=None):
-    return [
-        current_time,
-        calculator,
-        web_search,
-        fetch_url,
-        git_sha,   # ← new
-    ]
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None):
+    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
+    tools.append(git_sha)   # ← new
+    # ... the function then extends `tools` with github/notes/memory/scheduler/
+    #     inbox/beads/peer tools and applies the `tools.disabled` denylist.
+    return tools
 ```
+
+(For a real fork the no-edit path is a [plugin](/guides/plugins) — `register_tools([git_sha])` — which adds the tool without touching `get_all_tools`. Editing the function directly, as here, is the quickest way to see it work in the tutorial.)
 
 ## 2. Allow the subagent to use it (optional)
 
 If you want the researcher subagent to be able to call `git_sha`, add it to the allowlist in `graph/subagents/config.py`. Append rather than replace — dropping the bundled defaults removes the researcher's memory tools:
 
 ```python
-WORKER_CONFIG = SubagentConfig(
+RESEARCHER_CONFIG = SubagentConfig(
     # ...
     tools=[
-        "current_time", "calculator", "web_search", "fetch_url",
-        "memory_ingest", "memory_recall", "memory_list", "memory_stats",
-        "daily_log",
+        "current_time", "web_search", "fetch_url",
+        "memory_recall", "memory_list",
         "git_sha",   # ← new
     ],
     # ...
@@ -76,11 +75,11 @@ docker run --rm -p 7870:7870 \
 
 ## 4. Ask the agent
 
-In the Gradio UI:
+In the chat UI:
 
 > What SHA is the agent running right now?
 
-You should see a tool-start frame (`🔧 git_sha: ...`), a tool-end frame (`✅ git_sha → a1b2c3d`), and then a response weaving the SHA into natural language.
+You should see a tool-call card for `git_sha` (running → done, with the result), and then a response weaving the SHA into natural language. (In the React console it renders as a collapsible tool-call card; the legacy Gradio `--ui full` tier shows `🔧`/`✅` frames.)
 
 ## What to notice
 
@@ -108,5 +107,5 @@ The template runs tests via `pytest` with `pytest-asyncio` in auto mode — no e
 ## Where to go next
 
 - [Add a custom skill](/guides/add-a-skill) — advertise new capabilities on the agent card so A2A callers can find them
-- [Starter tools reference](/reference/starter-tools) — the shapes of all twelve tools that ship by default
-- [Configure subagents](/guides/subagents) — add specialized delegates beyond the placeholder `worker`
+- [Starter tools reference](/reference/starter-tools) — the shapes of the tools that ship by default
+- [Configure subagents](/guides/subagents) — add specialized delegates beyond the shipped `researcher`

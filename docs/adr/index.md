@@ -23,7 +23,7 @@ decision, numbered, never deleted (supersede instead).
 | [0012](./0012-eval-strategy-and-model-comparison.md) | Eval strategy: model-tagged tracking & model comparison | Accepted |
 | [0013](./0013-console-data-layer-react-query.md) | Console data layer: TanStack Query + Suspense + ErrorBoundary | Accepted |
 | [0014](./0014-a2a-1.0-migration.md) | A2A 0.3 → 1.0: adopt `a2a-sdk` + `protolabs-a2a` | Accepted (shipped #453) |
-| [0015](./0015-discord-ingress-surface.md) | Optional native Discord surface (ingress + outbound) | Accepted (design; impl to follow) |
+| [0015](./0015-discord-ingress-surface.md) | Optional native Discord surface (ingress + outbound) | Accepted (shipped as `plugins/discord`) |
 | [0016](./0016-discord-ui-config.md) | In-app Discord configuration (token, admin list, live connect) | Accepted |
 | [0017](./0017-google-ui-config.md) | In-app Google (Gmail + Calendar) connect flow | Accepted |
 | [0018](./0018-plugin-surfaces-routes-subagents.md) | Plugins contribute surfaces, routes & subagents | Accepted |

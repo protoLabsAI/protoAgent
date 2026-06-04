@@ -10,7 +10,7 @@ Task-oriented procedures. Assumes you already have a running agent (see [Tutoria
 | [Configure subagents](/guides/subagents) | You want specialized delegates beyond the shipped `researcher` |
 | [Skills (`SKILL.md`)](/guides/skills) | You want to drop in reusable, auto-retrieved skill instructions in the AgentSkills `SKILL.md` format |
 | [Connect MCP servers](/guides/mcp) | You want to plug external tools into the agent via the Model Context Protocol (stdio / HTTP) |
-| [Plugins](/guides/plugins) | You want drop-in packages that add tools + bundled skills without forking |
+| [Plugins](/guides/plugins) | You want drop-in packages that add tools, skills, routes, background surfaces, subagents and managed MCP servers without forking (Discord + Google ship this way) |
 | [React + Tauri UI migration](/guides/react-tauri-ui) | You want to replace Gradio with the multi-chat React console and package it for desktop |
 | [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
 | [Eval your fork](/guides/evals) | You want a baseline pass-rate for the tools / memory / A2A surface in your fork |

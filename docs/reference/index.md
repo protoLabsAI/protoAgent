@@ -9,4 +9,4 @@ Information-oriented. Look up exact shapes and values here.
 | [Starter tools](/reference/starter-tools) | Shipped LangChain tools and their signatures |
 | [Environment variables](/reference/environment-variables) | Every env knob |
 | [Configuration](/reference/configuration) | `config/langgraph-config.yaml` schema |
-| [Extensions](/reference/extensions) | `cost-v1`, `effect-domain-v1`, `a2a.trace` |
+| [Extensions](/reference/extensions) | A2A DataPart extensions (`cost-v1`, `confidence-v1`, `effect-domain-v1`, `tool-call-v1`, …) + `a2a.trace` |

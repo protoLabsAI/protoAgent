@@ -1,6 +1,6 @@
 # Agent card
 
-Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by `server.py::_build_agent_card`.
+Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by `server.py::_build_agent_card_proto` (which assembles it via `protolabs_a2a.build_agent_card`; skills come from `_SKILL_SPECS` / `_agent_skills()`).
 
 ## Full shape
 
@@ -19,7 +19,8 @@ Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by
     "pushNotifications": true,
     "stateTransitionHistory": false,
     "extensions": [
-      {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"}
+      {"uri": "https://proto-labs.ai/a2a/ext/cost-v1"},
+      {"uri": "https://proto-labs.ai/a2a/ext/confidence-v1"}
     ]
   },
   "defaultInputModes": ["text/plain"],
@@ -113,11 +114,10 @@ seeing only `apiKey`.
 
 ## Fork this file
 
-The card lives in `server.py::_build_agent_card`. The template ships a placeholder with one `chat` skill and the cost-v1 extension declared. At a minimum, every fork should replace:
+The card lives in `server.py::_build_agent_card_proto`. The template declares four custom extensions by default — **cost** / **confidence** / **worldstate-delta** / **tool-call** (the URIs come from `protolabs_a2a`; see [Extensions](/reference/extensions)). At a minimum, every fork should replace:
 
 - `name` + `description`
-- `skills` (delete `chat`, add your real ones)
-- `capabilities.extensions` (add `effect-domain-v1` if you mutate shared state)
+- `skills` (sourced from `_SKILL_SPECS` / `_agent_skills()` — add your real ones)
 
 ## Related
 
