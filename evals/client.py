@@ -148,20 +148,21 @@ class AgentClient:
         set a goal on one turn and trigger the loop on the next.
         """
         mid = str(uuid.uuid4())
-        params: dict = {
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": prompt}],
-                "messageId": mid,
-            }
+        message: dict = {
+            "role": "ROLE_USER",
+            "parts": [{"text": prompt}],
+            "messageId": mid,
         }
+        # contextId is a field of Message in 1.0 — SendMessageRequest itself only
+        # has {tenant, message, configuration, metadata}, so putting it at params
+        # level is a -32602.
         if context_id is not None:
-            params["contextId"] = context_id
+            message["contextId"] = context_id
         payload = {
             "jsonrpc": "2.0",
             "id": mid,
             "method": "SendMessage",
-            "params": params,
+            "params": {"message": message},
         }
         start = time.time()
 
@@ -228,20 +229,18 @@ class AgentClient:
         runs in a known session (e.g. one a goal was set on).
         """
         mid = str(uuid.uuid4())
-        params: dict = {
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": prompt}],
-                "messageId": mid,
-            }
+        message: dict = {
+            "role": "ROLE_USER",
+            "parts": [{"text": prompt}],
+            "messageId": mid,
         }
-        if context_id is not None:
-            params["contextId"] = context_id
+        if context_id is not None:  # see ask(): contextId lives inside the message
+            message["contextId"] = context_id
         payload = {
             "jsonrpc": "2.0",
             "id": mid,
             "method": "SendStreamingMessage",
-            "params": params,
+            "params": {"message": message},
         }
         events: list[dict] = []
         final: TaskResult | None = None

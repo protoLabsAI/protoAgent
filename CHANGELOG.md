@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no version header), so `python -m evals.runner` failed *every* case with
   "method not found". Migrated the eval client/runner to the 1.0 wire shape
   (header + proto method names + `ROLE_USER` + untyped parts + `TASK_STATE_*`
-  normalization + the streaming `statusUpdate`/`artifactUpdate` oneof frames).
+  normalization + the streaming `statusUpdate`/`artifactUpdate` oneof frames +
+  `contextId` moved inside the message, where 1.0's `SendMessageRequest` expects
+  it — at params level it's a `-32602`, which would have broken goal-mode cases).
   Regression test (`tests/test_eval_client_a2a_1_0.py`) drives the real client
   against an in-process `a2a-sdk` app and pins that the legacy shape is rejected.
 - **Plugins: multi-module support.** The plugin loader now imports a plugin's
