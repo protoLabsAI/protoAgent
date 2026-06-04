@@ -203,6 +203,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
     _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    # Fork tool denylist (config ``tools.disabled``) — applied before any
+    # get_all_tools() call so dropped tools never reach the graph.
+    from tools.lg_tools import set_disabled_tools
+    set_disabled_tools(_graph_config.tools_disabled)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     import egress
     egress.set_allowed_hosts(_graph_config.egress_allowed_hosts)
@@ -806,6 +810,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     except Exception as e:
         log.exception("[reload] config load failed")
         return False, f"config load failed: {e}"
+
+    # Fork tool denylist — apply the new config's denylist before the rebuild's
+    # get_all_tools() calls (live-reloadable like the rest of the config).
+    from tools.lg_tools import set_disabled_tools
+    set_disabled_tools(new_config.tools_disabled)
 
     # Build the graph FIRST (when setup is complete) — only commit
     # runtime state after the rebuild succeeds. Doing the swap first

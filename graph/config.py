@@ -187,6 +187,13 @@ class LangGraphConfig:
     tools_deferred_enabled: bool = False
     tools_deferred_keep: list[str] = field(default_factory=list)
 
+    # Tool denylist — drop named core tools from the agent without editing
+    # ``tools/lg_tools.py::get_all_tools``. A fork keeps what it wants by listing
+    # the rest here (config ``tools.disabled``); plugins still ADD tools. So
+    # "keep what you want, drop the rest, add your own" is fully config + plugin
+    # driven — no core edit that conflicts on upstream re-sync.
+    tools_disabled: list[str] = field(default_factory=list)
+
     # Model routing / failover — wires langchain's ModelFallbackMiddleware.
     # On primary error, retry on each fallback model (same gateway) in order.
     routing_fallback_models: list[str] = field(default_factory=list)
@@ -446,6 +453,7 @@ class LangGraphConfig:
             execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
+            tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),

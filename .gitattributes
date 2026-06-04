@@ -1,0 +1,5 @@
+# Append-only files conflict on every fork merge / upstream cherry-pick because
+# both sides add entries at the top. `merge=union` keeps BOTH sides instead of
+# raising a conflict — a fork's entries and upstream's coexist (re-order/dedupe
+# by hand at release time if needed). Confirmed pain across every downstream port.
+CHANGELOG.md merge=union

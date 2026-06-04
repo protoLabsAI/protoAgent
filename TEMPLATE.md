@@ -17,41 +17,38 @@ Now what?
 This is the change list to turn a fresh template clone into a
 working agent. Work top-down — later steps assume earlier ones.
 
-## 0. Decide on an agent name
+> **Customize via config, SOUL.md, plugins, and env — not by editing core
+> files.** The fewer tracked files you touch, the cleaner you can pull upstream
+> fixes (`git merge upstream/main`). `CHANGELOG.md` is `merge=union`, so it never
+> conflicts. The steps below reflect that — in particular, **don't rename the
+> internal `protoagent` identifier.**
 
-Pick a short slug (`quinn`, `jon`, `matt`). It will end up in:
+## 0. Decide on an agent name (set it in config, don't rename)
 
-- `AGENT_NAME` env var at runtime
-- Prometheus metric prefix (`<name>_llm_calls_total`, etc.)
-- Langfuse trace tag
-- Docker image label + GHCR path
-- Release pipeline repo guards
+Pick a short slug (`quinn`, `jon`, `matt`). Set the **user-facing** name in
+**config** — `identity.name` in `config/langgraph-config.yaml` (or the setup
+wizard) — and it flows to the console brand, window title, agent card, and
+system prompt. Persona goes in `config/SOUL.md` (loaded into the prompt).
 
-The template uses `protoagent` as the placeholder. Do a
-case-insensitive find-and-replace of `protoagent` / `protoAgent`
-across the repo when forking:
+**Do NOT find-and-replace `protoagent` across the repo.** That internal name is
+the logger namespace, the `~/.protoagent` data dir, the `PROTOAGENT_*` env vars,
+and the plugin namespace — all internal, never shown to a user. A `sed` rewrites
+~120 files and turns every upstream merge into a conflict, for zero functional
+gain. Leave it. The only slug that's worth wiring is the **`AGENT_NAME` env var**
+(Prometheus prefix / Langfuse tag / A2A `<NAME>_API_KEY`) — an env value, not a
+file edit. The Docker image label / GHCR path lives in *your* deploy config.
+
+## 1. Enable the release pipeline (a repo variable, not a workflow edit)
+
+Set the **`RELEASE_ENABLED` repo variable** to `true`:
 
 ```bash
-git grep -li protoagent | xargs sed -i 's/protoagent/<your-name>/g'
-git grep -li protoAgent | xargs sed -i 's/protoAgent/<YourName>/g'
+gh variable set RELEASE_ENABLED --body true
 ```
 
-Review the diff before committing — the replacement hits
-Dockerfile paths (`/opt/protoagent`), GHCR image name, workflow
-repo guards, and the Gradio UI branding. All of those want the
-new name.
-
-## 1. Claim the repo name in workflow guards
-
-Three workflow files have `github.repository == 'protoLabsAI/protoAgent'`
-guards so the template itself doesn't trigger releases:
-
-- `.github/workflows/prepare-release.yml`
-- `.github/workflows/release.yml`
-- `.github/workflows/docker-publish.yml`
-
-Change all three to your fork's owner/repo. Until you do, releases
-won't fire — intentional, not a bug.
+`prepare-release.yml` and `release.yml` gate on it, so you enable releases
+without editing the workflow files — and upstream changes to them re-sync
+cleanly. Until the variable is set, releases won't fire (intentional).
 
 All workflows must stay on the org-owned runner
 (`runs-on: namespace-profile-protolabs-linux`); `checks.yml` runs
@@ -80,8 +77,14 @@ handler's output extraction depends on it.
 `tools/lg_tools.py` ships with a small keyless starter set so a
 fresh clone can demonstrate a real research loop: `current_time`,
 `calculator` (safe AST eval — no `eval()`), `web_search` (DuckDuckGo
-via `ddgs`), and `fetch_url`. Keep the ones you want, drop the rest,
-and add your own:
+via `ddgs`), and `fetch_url`.
+
+**Keep / drop / add without editing core:** drop tools you don't want via
+config — list them under `tools.disabled` in `config/langgraph-config.yaml`
+(live-reloadable). Add your own as a **plugin** (`plugins/<id>/` with a
+`register(registry)` — see [Plugins](./docs/guides/plugins.md)). Both keep
+upstream re-syncs clean. Editing `get_all_tools()` directly (below) still works,
+but it's a core edit that conflicts on every upstream merge.
 
 ```python
 from langchain_core.tools import tool

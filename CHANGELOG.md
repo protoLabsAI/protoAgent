@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Fork & re-sync ergonomics — customize via config/plugins/env, not core
+  edits.** A fork-extensibility audit found the biggest re-sync tax was the fork
+  guide telling forks to `sed s/protoagent/<name>/` (~120 files diverge → every
+  upstream merge conflicts) for a purely cosmetic internal rename — the
+  user-facing name is already `identity.name`-driven. Quick wins:
+  - **`.gitattributes`: `CHANGELOG.md merge=union`** — the changelog no longer
+    conflicts on a fork merge / upstream cherry-pick (both sides' entries coexist).
+  - **Tool denylist** — drop named core tools via config (`tools.disabled`,
+    live-reloadable) instead of editing `tools/lg_tools.py::get_all_tools()`.
+    "Keep what you want, drop the rest, add your own (plugin)" is now fully
+    config + plugin driven.
+  - **Release pipeline gates on the `RELEASE_ENABLED` repo variable** (not a
+    `github.repository == 'protoLabsAI/protoAgent'` literal), so forks enable
+    releases without editing `prepare-release.yml` / `release.yml`.
+  - **Fork guide + `TEMPLATE.md` rewritten** to set the name in config + SOUL.md,
+    keep the internal `protoagent` identifier, and use the repo variable.
+
 ## [0.12.0] - 2026-06-04
 
 ### Added
