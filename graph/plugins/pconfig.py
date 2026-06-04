@@ -24,7 +24,9 @@ log = logging.getLogger("protoagent.plugins")
 _RESERVED_SECTIONS = {
     "model", "subagents", "middleware", "knowledge", "memory", "skills",
     "workflows", "compaction", "checkpoint", "routing", "goal", "execute_code",
-    "operator", "tools", "discord", "google", "mcp", "plugins", "identity",
+    # NB: `discord` is NOT reserved — it's a first-party plugin (ADR 0018/0019)
+    # that legitimately claims the `discord` section. (`google` migrates next.)
+    "operator", "tools", "google", "mcp", "plugins", "identity",
     "auth", "runtime", "telemetry", "instance", "prompt_cache", "enforcement",
     "ingest",
 }
