@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin host context — `registry.host` (#509 prereq).** A plugin surface/route
+  can now reach the **agent invoke** + the **event bus** (`host.invoke(prompt,
+  session_id)` / `host.publish` / `host.subscribe`) — host services it can't build
+  itself. The server populates a process singleton before any surface starts. The
+  last foundation a real ingress surface (Discord-style gateway) needs to live in
+  a plugin instead of `server.py`.
 - **`plugins.disabled` denylist + plugin surface `reload` hook (#509 prereqs).**
   `plugins.disabled` turns off a bundled first-party plugin even if its manifest
   says `enabled: true` — so a fork drops a built-in surface without deleting it.

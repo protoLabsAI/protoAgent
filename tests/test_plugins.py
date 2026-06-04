@@ -231,3 +231,15 @@ def test_plugins_disabled_overrides_manifest_enabled(tmp_path, monkeypatch) -> N
     assert [t.name for t in load_plugins(_cfg()).tools] == ["on_tool"]
     # plugins.disabled wins → not loaded
     assert load_plugins(_cfg(plugins_disabled=["onplug"])).tools == []
+
+
+def test_registry_exposes_plugin_host() -> None:
+    """A surface/route reaches host services (agent invoke + bus) via registry.host."""
+    from pathlib import Path
+
+    from graph.plugins.host import HOST
+    from graph.plugins.registry import PluginRegistry
+
+    r = PluginRegistry("p", Path("/tmp"))
+    assert r.host is HOST                      # the process singleton the server fills
+    assert hasattr(r.host, "invoke") and hasattr(r.host, "publish") and hasattr(r.host, "subscribe")

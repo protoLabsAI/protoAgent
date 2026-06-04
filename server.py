@@ -1029,6 +1029,29 @@ def _start_discord_surface() -> None:
     )
 
 
+async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:
+    """Agent invoke exposed to plugin surfaces via the plugin host (ADR 0018) — a
+    chat turn joined to its assistant text (mirrors the Discord surface invoker)."""
+    result = await chat(prompt, session_id)
+    return "\n\n".join(
+        m["content"] for m in result
+        if m.get("role") == "assistant" and m.get("content")
+    )
+
+
+def _populate_plugin_host() -> None:
+    """Wire the plugin host (ADR 0018) — agent invoke + event bus — so a plugin
+    surface/route can reach them. Called once in _main, before startup."""
+    try:
+        from graph.plugins.host import HOST
+
+        HOST.invoke = _plugin_agent_invoke
+        HOST.publish = _event_bus.publish
+        HOST.subscribe = _event_bus.subscribe
+    except Exception:  # noqa: BLE001
+        log.exception("[plugins] failed to populate plugin host")
+
+
 def _reload_plugin_surfaces(new_config) -> None:
     """Notify started plugin surfaces of a config change (ADR 0018/0019).
 
@@ -2618,6 +2641,9 @@ def _main():
         inbox_list=_operator_inbox_list,
         inbox_deliver=_operator_inbox_deliver,
     )
+
+    # Wire the plugin host (agent invoke + event bus) before any surface starts.
+    _populate_plugin_host()
 
     # Plugin-contributed routes (ADR 0018) — mounted after the core routes,
     # under each plugin's namespaced prefix (default /plugins/<id>). Once, here;
