@@ -11,3 +11,16 @@ enabled: false
 capabilities:
   network: []
   filesystem: none
+
+# Plugin config (ADR 0019) — the plugin claims a top-level `hello` config section.
+# These render in System → Settings (group "Hello") and round-trip through the
+# generic settings surface; `api_key` is routed to the gitignored secrets.yaml.
+# A fork gets config + secrets + Settings for its plugin with no core edit.
+config_section: hello
+config:
+  greeting: "Hello"
+  api_key: ""
+secrets: [api_key]
+settings:
+  - { key: greeting, label: "Greeting word", type: string, description: "Prefix used by the hello tool." }
+  - { key: api_key, label: "Example API key", type: secret, description: "Demo secret — stored in secrets.yaml, never the tracked YAML." }

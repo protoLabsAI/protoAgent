@@ -27,3 +27,4 @@ decision, numbered, never deleted (supersede instead).
 | [0016](./0016-discord-ui-config.md) | In-app Discord configuration (token, admin list, live connect) | Accepted |
 | [0017](./0017-google-ui-config.md) | In-app Google (Gmail + Calendar) connect flow | Accepted |
 | [0018](./0018-plugin-surfaces-routes-subagents.md) | Plugins contribute surfaces, routes & subagents | Accepted |
+| [0019](./0019-plugin-config-settings-secrets.md) | Plugins contribute config, settings & secrets | Accepted |

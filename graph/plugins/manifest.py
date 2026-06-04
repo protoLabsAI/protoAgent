@@ -30,6 +30,16 @@ class PluginManifest:
     # Declarative, for transparency in the console — not yet enforced.
     capabilities: dict = field(default_factory=dict)
     entrypoint: str = ""  # optional module filename; defaults to __init__.py / plugin.py
+    # Plugin config (ADR 0019) — declared as data so it's known at config-load /
+    # secret-strip / settings-schema time, before register() ever imports.
+    #   config_section: the top-level YAML section the plugin claims (default: id)
+    #   config:    defaults for that section (key → default value)
+    #   secrets:   keys in the section routed to the secrets.yaml overlay
+    #   settings:  Settings-schema field specs ({key, label, type, ...})
+    config_section: str = ""
+    config: dict = field(default_factory=dict)
+    secrets: list[str] = field(default_factory=list)
+    settings: list[dict] = field(default_factory=list)
 
 
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
@@ -61,6 +71,9 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     requires_env = [str(x) for x in req] if isinstance(req, (list, tuple)) else []
     caps = data.get("capabilities")
 
+    cfg = data.get("config")
+    secrets = data.get("secrets")
+    settings = data.get("settings")
     return PluginManifest(
         id=pid,
         name=name,
@@ -71,4 +84,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         requires_env=requires_env,
         capabilities=caps if isinstance(caps, dict) else {},
         entrypoint=str(data.get("entrypoint", "")).strip(),
+        config_section=str(data.get("config_section", "")).strip() or pid,
+        config=cfg if isinstance(cfg, dict) else {},
+        secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
+        settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
     )

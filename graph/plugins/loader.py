@@ -114,7 +114,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
 
         try:
             register = _import_register(manifest)
-            registry = PluginRegistry(manifest.id, manifest.path)
+            # Resolved config section (ADR 0019) — defaults if not in plugin_config.
+            section = manifest.config_section or manifest.id
+            pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
+            registry = PluginRegistry(manifest.id, manifest.path, config=pconf)
             register(registry)
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             entry["error"] = str(exc)
