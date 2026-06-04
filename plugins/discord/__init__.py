@@ -16,7 +16,19 @@ from __future__ import annotations
 import logging
 import os
 
+from pydantic import BaseModel
+
 log = logging.getLogger("protoagent.plugins.discord")
+
+
+class DiscordProbe(BaseModel):
+    """Body for the Test-connection route. **Must be module-level**: this file
+    uses `from __future__ import annotations` (PEP 563), so a function-local
+    model can't be resolved by FastAPI's `get_type_hints()` (which looks in
+    module globals) — the body would be silently ignored and every token read
+    as empty."""
+
+    bot_token: str = ""
 
 # Holds the running gateway task across start/stop/reload.
 _state: dict = {"task": None}
@@ -64,12 +76,8 @@ def _build_router(registry):
     """`POST /api/config/test-discord` — verify a bot token (the console's Test
     button). Mounted at the existing path (prefix="") so the UI is unchanged."""
     from fastapi import APIRouter
-    from pydantic import BaseModel
 
     router = APIRouter()
-
-    class DiscordProbe(BaseModel):
-        bot_token: str = ""
 
     @router.post("/api/config/test-discord")
     async def _test_discord(req: DiscordProbe | None = None):

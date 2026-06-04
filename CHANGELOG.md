@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Discord "Test connection" ignored the entered token** (always reported "bot
+  token is empty", even for a valid token). The discord plugin route's request
+  model was a *function-local* Pydantic class, but the plugin module uses
+  `from __future__ import annotations` (PEP 563) — so the annotation is a string
+  FastAPI resolves via `get_type_hints()` against *module globals*, where the
+  local class doesn't exist; FastAPI couldn't build the body model and silently
+  dropped the body. Moved `DiscordProbe` to module level. (Lesson for plugin
+  routes: with PEP 563, body models must be module-level.) Regression test added.
+
 ## [0.13.1] - 2026-06-04
 
 ### Fixed
