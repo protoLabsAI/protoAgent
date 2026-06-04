@@ -133,6 +133,28 @@ async def test_params_level_context_id_is_rejected(routed_client):
 
 
 @pytest.mark.asyncio
+async def test_ask_gives_the_blocking_post_the_full_budget(monkeypatch):
+    """Non-streaming SendMessage blocks until terminal, so ask()'s client must
+    be built with the case's ``timeout_s`` — a fixed 30s ReadTimeouts on slow
+    turns (web_search, subagents) regardless of the budget. Pins the timeout
+    that the underlying httpx client is constructed with."""
+    app = _build_app(_hello_stream)
+    seen: list = []
+    orig = ec.httpx.AsyncClient
+
+    def _patched(*a, **kw):
+        seen.append(kw.get("timeout"))
+        kw["transport"] = httpx.ASGITransport(app=app)
+        kw.setdefault("base_url", "http://test")
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(ec.httpx, "AsyncClient", _patched)
+    r = await ec.AgentClient(base_url="http://test").ask("hi", timeout_s=137)
+    assert r.state == "completed"
+    assert 137 in seen  # not the old hardcoded 30
+
+
+@pytest.mark.asyncio
 async def test_legacy_0_3_shape_is_rejected(routed_client):
     """Pins the contract: the old ``message/send`` (no version header) 404s, so
     the migration above is load-bearing, not cosmetic."""

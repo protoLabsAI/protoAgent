@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Eval `ask()` capped every turn at 30s — slow cases ReadTimeout'd.** A2A 1.0's
+  non-streaming `SendMessage` *blocks* until the task is terminal (the 0.3
+  `message/send` returned immediately and the client polled), but `ask()` still
+  built its httpx client with a fixed `timeout=30` — so any turn longer than 30s
+  (`web_search`, subagent delegation) raised `ReadTimeout` even when the case
+  budgeted 90–300s. The POST now uses the call's `timeout_s`, and a client-side
+  timeout returns a clean `state="timeout"` instead of a raw exception. Verified
+  live: `research_delegation` now passes at ~92s (was a 30s timeout). Regression
+  test pins the constructed timeout.
 - **Eval harness spoke the retired A2A 0.3 wire shape — every case failed.** The
   A2A 1.0 migration (ADR 0014) moved the server to `a2a-sdk` (≥1.1), which serves
   proto method names (`SendMessage`/`GetTask`/`SendStreamingMessage`/`CancelTask`),
