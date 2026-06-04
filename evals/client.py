@@ -177,8 +177,19 @@ class AgentClient:
                 duration_ms=int((time.time() - start) * 1000),
             )
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"{self.base_url}/a2a", headers=self.headers, json=payload)
+        # Non-streaming SendMessage *blocks* until the task is terminal (a2a-sdk
+        # 1.1), so the POST itself must hold the whole turn budget — a fixed 30s
+        # would ReadTimeout on any slow turn (web_search, subagents) even though
+        # the case allows longer. (The 0.3 message/send returned immediately and
+        # this client polled; 1.0 collapsed that into one blocking call.)
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            try:
+                r = await client.post(f"{self.base_url}/a2a", headers=self.headers, json=payload)
+            except httpx.TimeoutException:
+                return TaskResult(
+                    task_id="", state="timeout",
+                    duration_ms=int((time.time() - start) * 1000),
+                )
             r.raise_for_status()
             resp = r.json()
             if "error" in resp:
