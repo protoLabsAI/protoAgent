@@ -447,6 +447,29 @@ def test_after_agent_persists_on_terminal_turn(tmp_path):
     mock_persist.assert_called_once_with(state, "trace-after")
 
 
+def test_after_agent_does_not_dump_findings_to_store(tmp_path):
+    """ADR 0021: the per-turn raw knowledge dump is gone. after_agent must NOT
+    write to the knowledge store — conversation knowledge is captured by the
+    summarized harvest on retirement, not a raw per-turn dump."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+
+    store = MagicMock()
+    mw = mod.MemoryMiddleware(knowledge_store=store)
+
+    messages = [
+        HumanMessage(content="What's the release cadence?"),
+        AIMessage(content="x" * 300),  # substantial — the old code would have dumped this
+    ]
+    state = _make_state("after-agent-no-dump", messages=messages)
+
+    with patch.object(mod, "_persist_session"), \
+         patch("tracing.current_trace_id", return_value="t"):
+        mw.after_agent(state, MagicMock())
+
+    store.add_finding.assert_not_called()
+    store.add_chunk.assert_not_called()
+
+
 def test_after_agent_does_not_persist_when_tool_calls_pending(tmp_path):
     """after_agent must NOT persist when the last AIMessage has pending tool_calls."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
