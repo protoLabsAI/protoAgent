@@ -398,6 +398,7 @@ def _main():
     from graph.config_io import is_setup_complete as _operator_setup_complete
     from operator_api.routes import register_operator_routes
     from operator_api.runtime import build_runtime_status as _build_operator_status
+    from operator_api.telemetry_routes import register_telemetry_routes
     from operator_api.subagents import (
         list_subagents as _operator_list_subagents,
         run_manual_subagent as _operator_run_manual_subagent,
@@ -965,58 +966,9 @@ def _main():
         return {"enabled": True, "query": q, "results": results, "stats": stats}
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
-    # Per-turn cost/latency rollups from the local store. Powers the operator
-    # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"
-    # queries. Read-only; returns {enabled:false} when the store is off.
-    @fastapi_app.get("/api/telemetry/summary")
-    async def _api_telemetry_summary(since: str | None = None):
-        if STATE.telemetry_store is None:
-            return {"enabled": False, "summary": None}
-        return {"enabled": True, "summary": STATE.telemetry_store.summary(since_iso=since)}
-
-    @fastapi_app.get("/api/telemetry/recent")
-    async def _api_telemetry_recent(limit: int = 50):
-        if STATE.telemetry_store is None:
-            return {"enabled": False, "turns": []}
-        return {"enabled": True, "turns": STATE.telemetry_store.recent(limit=min(max(1, limit), 500))}
-
-    @fastapi_app.get("/api/telemetry/insights")
-    async def _api_telemetry_insights():
-        # Advise-only flywheel signal (ADR 0006 Slice 4): flag outlier turns +
-        # prove the levers we can measure from the per-turn store. Read-only.
-        if STATE.telemetry_store is None:
-            return {"enabled": False, "insights": None}
-        import pricing
-
-        s = STATE.telemetry_store.summary()
-        flagged = STATE.telemetry_store.outliers()
-        # Cache lever (proven): estimated $ saved by prompt-cache reads, billed at
-        # the dominant model's input rate (the per-turn store keeps no per-call
-        # model breakdown of cache reads).
-        by_model = s.get("by_model") or []
-        dom_model = by_model[0]["model"] if by_model else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
-        cache_saved = pricing.cache_read_savings_usd(dom_model, s.get("cache_read_input_tokens", 0))
-        return {
-            "enabled": True,
-            "insights": {
-                "turns": s.get("turns", 0),
-                "flagged": flagged,
-                "flagged_count": len(flagged),
-                "levers": {
-                    "cache": {
-                        "hit_ratio": s.get("cache_hit_ratio", 0.0),
-                        "read_tokens": s.get("cache_read_input_tokens", 0),
-                        "est_savings_usd": cache_saved,
-                    },
-                    "routing": {"by_model": by_model},
-                    "success_rate": s.get("success_rate", 0.0),
-                },
-                # Every optimization lever is now measured: routing per-turn
-                # (actual models on each row); tool deferral + compaction live via
-                # Prometheus (*_llm_tools_deferred_total, *_compactions_total).
-                "unproven_levers": [],
-            },
-        }
+    # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
+    # operator_api/telemetry_routes.py (ADR 0023 phase 3).
+    register_telemetry_routes(fastapi_app)
 
     # --- Live config / SOUL editing ----------------------------------------
     # GET returns the current config + persona so external clients (the
