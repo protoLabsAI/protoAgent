@@ -15,15 +15,13 @@ async function openSub(page, group: string, tab: string) {
   await page.getByRole("button", { name: tab, exact: true }).click();
 }
 
-test("Studio → Run lists the registered subagent (single/batch)", async ({ page }) => {
-  // Studio now lands on Workflows (Goals moved to the sidebar), whose surface
-  // has its own "Run" button — scope to the sub-nav to pick the tab.
+test("Studio lands directly on Workflows (Run tab removed — run is a chat gesture)", async ({ page }) => {
+  // ADR 0020: execution moved to chat slash commands (/<subagent>, /<workflow>),
+  // so Studio is just Workflows — no sub-nav, no Run tab.
   await page.getByRole("button", { name: "Studio", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Run", exact: true })).toBeVisible();
-  // The kicker reflects the mocked subagent list; the Single/Batch toggle is here.
-  await expect(page.getByText(/1 subagent type/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Batch", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
+  // The old Run sub-tab is gone.
+  await expect(page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true })).toHaveCount(0);
 });
 
 test("schedule moved to Activity → Schedule lists scheduled jobs", async ({ page }) => {
