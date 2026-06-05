@@ -244,12 +244,16 @@ class LangGraphConfig:
     # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
     # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
-    embed_model: str = "nomic-embed-text"
+    # The gateway's embedding model (NOT the chat model). Default is what the
+    # protoLabs gateway serves; forks on a different gateway set this to a model
+    # their gateway has (check GET /v1/models). A wrong/absent model degrades to
+    # keyword search via the store's circuit breaker — never KB-less.
+    embed_model: str = "qwen3-embedding"
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
-    # with RRF). Default off — needs the gateway to serve an embedding model;
-    # the store's circuit breaker falls back to FTS5 on outage. Off = keyword-only.
-    knowledge_embeddings: bool = False
+    # with RRF). On by default — semantic recall finds paraphrases keyword search
+    # misses; the circuit breaker falls back to FTS5 on an embedding outage.
+    knowledge_embeddings: bool = True
     knowledge_top_k: int = 5
 
     # Conversation checkpointer — persists each chat session's history per

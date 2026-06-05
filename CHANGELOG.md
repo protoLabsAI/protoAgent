@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Semantic recall is on by default.** `knowledge.embeddings` now defaults to
+  `true` and `embed_model` to `qwen3-embedding` (what the protoLabs gateway
+  serves). The store fuses FTS5 + vector search so it finds paraphrases keyword
+  search misses; the circuit breaker degrades to keyword-only if the gateway
+  can't embed, so it's safe for forks (set `embed_model` to your gateway's, or
+  `knowledge.embeddings: false`).
+
 ## [0.14.0] - 2026-06-05
 
 ### Fixed

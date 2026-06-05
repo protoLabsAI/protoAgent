@@ -58,7 +58,16 @@ def test_create_embed_fn_sends_raw_strings(monkeypatch):
     assert captured.get("check_embedding_ctx_length") is False
 
 
-def test_store_is_keyword_only_by_default(tmp_path):
+def test_store_is_hybrid_by_default(tmp_path):
+    # knowledge.embeddings defaults on (ADR 0021); the config helper here mirrors it.
+    cfg = LangGraphConfig()
+    cfg.knowledge_db_path = str(tmp_path / "kb.db")
+    cfg.api_base, cfg.api_key = "http://gateway.test/v1", "k"
+    assert cfg.knowledge_embeddings is True
+    assert type(server._build_knowledge_store(cfg)).__name__ == "HybridKnowledgeStore"
+
+
+def test_store_is_keyword_when_embeddings_off(tmp_path):
     store = server._build_knowledge_store(_cfg(tmp_path, embeddings=False))
     assert type(store).__name__ == "KnowledgeStore"
 
