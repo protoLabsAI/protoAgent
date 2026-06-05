@@ -102,7 +102,7 @@ async def test_chat_langgraph_stream_logs_traceback_on_exception(caplog):
     fake_graph.astream_events = _exploding_events
 
     events = []
-    with patch("server._graph", fake_graph):
+    with patch("server.STATE.graph", fake_graph):
         async for kind, payload in _chat_langgraph_stream("hi", "s-err"):
             events.append((kind, payload))
 
@@ -135,7 +135,7 @@ async def test_chat_langgraph_non_stream_logs_traceback_on_exception(caplog):
             "expected str, bytes or os.PathLike object, not NoneType"
         )
     )
-    with patch("server._graph", fake_graph):
+    with patch("server.STATE.graph", fake_graph):
         result = await _chat_langgraph("hi", "s-err")
 
     # Caller (Gradio) still gets a readable assistant message
