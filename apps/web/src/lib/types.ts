@@ -82,7 +82,7 @@ export type SettingsField = {
   maximum?: number;
 };
 
-export type SettingsGroup = { section: string; fields: SettingsField[] };
+export type SettingsGroup = { section: string; category?: string; fields: SettingsField[] };
 
 export type WorkflowSummary = {
   name: string;
