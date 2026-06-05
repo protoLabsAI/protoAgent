@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import tempfile
-import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -318,11 +317,20 @@ class MemoryMiddleware(AgentMiddleware):
     # --- Knowledge extraction (existing) ---
 
     def after_agent(self, state, runtime) -> dict | None:
-        """Queue conversation for async knowledge extraction. Persists session on terminal turn."""
+        """Persist a session summary on the terminal turn.
+
+        Knowledge capture is **not** done here. The per-turn ``add_finding``
+        dump that used to live here stored raw assistant turns — scratch_pad and
+        all, truncated mid-content — which the retrieval layer then recycled into
+        future prompts. ADR 0021 removed it: conversation knowledge is captured
+        by ``conversation_harvest`` (summarized, scratch_pad-stripped) when a
+        thread retires, and semantic facts by the extractor — extract, don't
+        dump; background, not hot-path.
+        """
         messages = state.get("messages", [])
 
-        # --- Session persistence: detect terminal turn ---
-        # Terminal = last message is AIMessage with content and no pending tool calls
+        # Session persistence: terminal = last message is an AIMessage with
+        # content and no pending tool calls.
         if messages:
             last_msg = messages[-1]
             if (
@@ -333,44 +341,6 @@ class MemoryMiddleware(AgentMiddleware):
                 import tracing
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
-
-        # --- Knowledge extraction (only when a store is configured) ---
-        if self._store is None:
-            return None
-        if len(messages) < 2:
-            return None
-
-        # Extract the last exchange (human + AI)
-        last_human = None
-        last_ai = None
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage) and last_ai is None:
-                last_ai = msg.content if isinstance(msg.content, str) else str(msg.content)
-            elif isinstance(msg, HumanMessage) and last_human is None:
-                last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
-            if last_human and last_ai:
-                break
-
-        if not last_human or not last_ai:
-            return None
-
-        # Only store if the response contains substantial content
-        if len(last_ai) < 100:
-            return None
-
-        # Async storage — don't block the response
-        def _store():
-            try:
-                self._store.add_finding(
-                    content=last_ai[:2000],
-                    source="conversation",
-                    source_type="chat",
-                    finding_type="insight",
-                )
-            except Exception:
-                pass
-
-        threading.Thread(target=_store, daemon=True).start()
         return None
 
     async def aafter_agent(self, state, runtime) -> dict | None:
