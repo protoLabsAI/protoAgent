@@ -12,16 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Internal: `_main()`'s inline route handlers are moving into `operator_api/*`
-  registrars** (ADR 0023, phase 3 — shrinking the composition root toward app
-  assembly). Each group becomes a `register_*_routes(app)` function matching the
-  existing `register_operator_routes`, so the handler bodies (which only touch
-  `STATE` now) become testable without booting the server. Extracted so far:
+- **Internal: `_main()`'s inline route handlers moved into `operator_api/*`**
+  (ADR 0023, phase 3 — composition root down to app assembly). Each route group
+  is now a `register_*_routes(app)` function matching the existing
+  `register_operator_routes`, so the handler bodies (which only touch `STATE`)
+  are testable without booting the server:
   `operator_api/telemetry_routes.py` (`/api/telemetry/*`),
-  `operator_api/knowledge_routes.py` (`/api/knowledge/search` + `/api/playbooks`),
-  `operator_api/config_routes.py` (`/api/config*` + `/api/settings*`), and
-  `operator_api/chat_routes.py` (`/api/chat`, `/api/goal/*`, `/healthz`, and the
-  OpenAI-compat `/v1/chat/completions` + `/v1/models`).
+  `knowledge_routes.py` (`/api/knowledge/search` + `/api/playbooks`),
+  `config_routes.py` (`/api/config*` + `/api/settings*`), and
+  `chat_routes.py` (`/api/chat`, `/api/goal/*`, `/healthz`, OpenAI-compat
+  `/v1/*`). The 21 React-console handler closures also moved out — into
+  `operator_api/console_handlers.py` — finishing the half-done `operator_api/`
+  extraction. Net: **`server.py` went from 3,353 lines to a ~700-line `server/`
+  package composition root** (`_main` is ~430 lines of pure app assembly).
+  Phase 3 is complete; ADR 0023 is fully shipped.
 - **Internal: agent init / builders / reload / settings moved to
   `server/agent_init.py`** (ADR 0023, phase 2 — final backend extraction).
   `_init_langgraph_agent`, the ten `_build_*` component builders
