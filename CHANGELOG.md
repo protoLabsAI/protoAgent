@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Knowledge surface = searchable Store + Playbooks** (ADR 0020). The Knowledge
+  rail was mislabeled — it showed only Playbooks while the actual knowledge base
+  (the `knowledge/store.py` FTS5 chunks: findings, daily-log, harvested sessions,
+  operator notes that feed `<learned_skills>`) was unbrowsable. Knowledge now has
+  two sub-tabs: **Store** (a searchable view, default) and **Playbooks**. New
+  read-only `GET /api/knowledge/search?q=…` endpoint (empty `q` → most-recent
+  chunks; non-empty → FTS5 search) backs the Store view. Also a debugging window
+  into "why did it recall that?".
 - **Subagents are runnable as chat slash commands** (ADR 0020). A message like
   `/researcher find the latest on X` runs the named subagent and returns its
   output — the composer analogue of the `task` tool, so "run a worker" is a

@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   BookMarked,
+  Database,
   BookOpen,
   Boxes,
   CalendarClock,
@@ -30,6 +31,7 @@ import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
+import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
@@ -55,6 +57,9 @@ type SystemTab = "runtime" | "telemetry" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox" | "schedule";
+// Knowledge = what the agent knows (ADR 0020): the searchable knowledge Store
+// (factual memory) + Playbooks (procedural memory). Store leads.
+type KnowledgeTab = "store" | "playbooks";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
 type RightPanel = "notes" | "beads" | "goals";
@@ -100,6 +105,7 @@ export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
+  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   // Collapsible/resizable right panel (persisted). Flag is "1"/"" string; width
   // is a px string clamped on read.
@@ -570,6 +576,17 @@ export function App() {
               </button>
             </div>
           ) : null}
+          {surface === "knowledge" ? (
+            // Store (factual memory) + Playbooks (procedural memory) — ADR 0020.
+            <div className="stage-subnav">
+              <button className={knowledgeTab === "store" ? "active" : ""} onClick={() => setKnowledgeTab("store")}>
+                <Database size={15} /> Store
+              </button>
+              <button className={knowledgeTab === "playbooks" ? "active" : ""} onClick={() => setKnowledgeTab("playbooks")}>
+                <BookMarked size={15} /> Playbooks
+              </button>
+            </div>
+          ) : null}
           {surface === "system" ? (
             <div className="stage-subnav">
               <button className={systemTab === "runtime" ? "active" : ""} onClick={() => setSystemTab("runtime")}>
@@ -598,7 +615,8 @@ export function App() {
           {surface === "system" && systemTab === "runtime" ? <RuntimePanel /> : null}
 
           {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
-          {surface === "knowledge" ? <PlaybooksSurface onError={setError} /> : null}
+          {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
+          {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "system" && systemTab === "settings" ? <SettingsSurface /> : null}
         </main>
 

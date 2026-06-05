@@ -407,3 +407,19 @@ export const PLAYBOOKS = [
     last_used: "2026-05-31T12:00:00+00:00", created_at: "2026-05-30T00:00:00+00:00",
   },
 ];
+
+// Knowledge → Store (ADR 0020): chunks from the knowledge base (findings, notes).
+export const KNOWLEDGE_CHUNKS = [
+  {
+    id: 11, heading: "Release cadence", content: "Releases are cut manually via workflow_dispatch.",
+    preview: "Release cadence: Releases are cut manually via workflow_dispatch.",
+    domain: "process", source: "daily-log", source_type: "log", finding_type: "fact",
+    created_at: "2026-06-03T12:00:00+00:00",
+  },
+  {
+    id: 12, heading: "", content: "The gateway alias for the live model is protolabs/reasoning.",
+    preview: "The gateway alias for the live model is protolabs/reasoning.",
+    domain: "general", source: null, source_type: null, finding_type: null,
+    created_at: "2026-06-02T09:00:00+00:00",
+  },
+];

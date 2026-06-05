@@ -6,6 +6,8 @@ import { expect, test } from "@playwright/test";
 test("Knowledge → Playbooks lists pinned + learned skills and supports search", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Knowledge" }).click();
+  // Knowledge lands on Store now (ADR 0020) — switch to the Playbooks sub-tab.
+  await page.locator(".stage-subnav").getByRole("button", { name: "Playbooks", exact: true }).click();
 
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -25,6 +27,7 @@ test("Knowledge → Playbooks lists pinned + learned skills and supports search"
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Knowledge" }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Playbooks", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
 
