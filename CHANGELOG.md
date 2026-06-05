@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapsing Studio to Workflows-only (the Run tab becomes redundant).
 
 ### Changed
+- **Studio is now Workflows-only; the Run tab is gone** (ADR 0020). The Studio →
+  Run panel was a forms-based way to launch a subagent manually — redundant now
+  that subagents (and workflows) run as chat slash commands. Studio's rail lands
+  directly on Workflows (authoring/inspection); to *run* a worker, type
+  `/<subagent>` in chat. Removes `RunPanel` + the Studio sub-nav.
 - **Console loading screen: better-styled logo (matches ORBIS).** The launch
   brand splash (`IntroSplash`) and cold-start `BootGate` rendered the bot mark
   as a static `<img>` in the brand-default violet `#7c3aed` — muddy on the dark

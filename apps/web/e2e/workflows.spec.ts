@@ -6,8 +6,8 @@ import { expect, test } from "@playwright/test";
 
 async function openWorkflows(page) {
   await page.goto("/app/", { waitUntil: "load" });
+  // Studio is Workflows-only now (ADR 0020) — clicking the rail lands here.
   await page.getByRole("button", { name: "Studio", exact: true }).click();
-  await page.getByRole("button", { name: "Workflows", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
 }
 
