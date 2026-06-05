@@ -2859,6 +2859,47 @@ def _main():
             log.exception("[playbooks] delete failed")
             return {"enabled": True, "deleted": False, "error": str(exc)}
 
+    # --- Knowledge store (ADR 0020) ----------------------------------------
+    # Searchable view of the agent's knowledge base (knowledge/store.py, FTS5):
+    # findings, daily-log entries, harvested sessions, operator notes — the same
+    # store KnowledgeMiddleware queries before each turn. An empty ``q`` returns
+    # the most-recent chunks (a browsable default); a non-empty ``q`` runs FTS5
+    # search. Read-only; never 500s the console.
+    def _knowledge_row(d: dict) -> dict:
+        """Normalize a search()/list_chunks() row to the console's shape."""
+        heading = d.get("heading") or ""
+        content = d.get("content") or ""
+        preview = d.get("preview") or ((heading + ": " if heading else "") + content)[:240]
+        return {
+            "id": d.get("id"),
+            "heading": heading,
+            "content": content,
+            "preview": preview,
+            "domain": d.get("domain") or "general",
+            "source": d.get("source"),
+            "source_type": d.get("source_type"),
+            "finding_type": d.get("finding_type"),
+            "created_at": d.get("created_at"),
+        }
+
+    @fastapi_app.get("/api/knowledge/search")
+    async def _api_knowledge_search(q: str = "", k: int = 30, domain: str | None = None):
+        if _knowledge_store is None:
+            return {"enabled": False, "query": q, "results": [], "stats": {}}
+        results: list[dict] = []
+        try:
+            if q and q.strip():
+                results = [_knowledge_row(r) for r in _knowledge_store.search(q, k=k, domain=domain or None)]
+            else:
+                results = [_knowledge_row(c.as_dict()) for c in _knowledge_store.list_chunks(domain=domain or None, limit=k)]
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[knowledge] search failed")
+        try:
+            stats = _knowledge_store.stats()
+        except Exception:  # noqa: BLE001
+            stats = {}
+        return {"enabled": True, "query": q, "results": results, "stats": stats}
+
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency rollups from the local store. Powers the operator
     # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"

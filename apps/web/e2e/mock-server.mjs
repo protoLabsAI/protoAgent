@@ -25,6 +25,7 @@ import {
   settingsRestartRequired,
   SLASH_COMMANDS,
   PLAYBOOKS,
+  KNOWLEDGE_CHUNKS,
   SUBAGENTS,
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
@@ -113,6 +114,11 @@ function handleApiGet(pathname) {
       return { enabled: true, insights: TELEMETRY_INSIGHTS };
     case "/api/playbooks":
       return { enabled: true, playbooks: PLAYBOOKS };
+    case "/api/knowledge/search":
+      return {
+        enabled: true, query: "", results: KNOWLEDGE_CHUNKS,
+        stats: { total: KNOWLEDGE_CHUNKS.length },
+      };
     default:
       return null;
   }
