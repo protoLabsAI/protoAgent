@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from events import ACTIVITY_CONTEXT, EventBus
 from paths import scope_leaf
+from runtime.state import STATE, get_state
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
     extract_confidence,
@@ -69,42 +70,15 @@ log = logging.getLogger("protoagent.server")
 # Agent setup
 # ---------------------------------------------------------------------------
 
-_graph = None          # LangGraph compiled graph
-_graph_config = None   # LangGraphConfig
-_checkpointer = None   # checkpointer for session persistence (sqlite or memory)
-_checkpoint_path = None  # resolved sqlite path when persistent (for the pruner)
-_checkpoint_prune_task = None  # background prune loop handle
-_knowledge_store = None  # KnowledgeStore bound into the active graph, or None.
-_skills_index = None     # SkillsIndex (human-authored SKILL.md store), or None.
-_workflow_registry = None  # WorkflowRegistry (declarative workflow recipes), or None.
-_telemetry_store = None  # TelemetryStore (per-turn cost/latency rollups, ADR 0006), or None.
-_inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
-_beads_store = None    # BeadsStore — in-process issue tracker (Sprint B), or None.
-_storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
-_activity_log = None   # ActivityLog — provenance feed (ADR 0022), or None.
-_mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
-_mcp_tools = []          # MCP-server tools appended to the active graph.
-_mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
-_plugin_tools = []       # Tools contributed by enabled plugins.
-_plugin_skill_dirs = []  # SKILL.md dirs bundled by enabled plugins.
-_plugin_routers = []     # FastAPI routers contributed by plugins (ADR 0018) —
                          # mounted ONCE at init; not hot-reloaded.
-_plugin_surfaces = []    # Lifecycle surfaces (start/stop) from plugins (ADR 0018)
                          # — started in the startup hook, stopped on shutdown.
-_plugin_surface_handles = []  # Started surfaces ({name, stop, handle}) for shutdown.
-_plugin_meta = []        # Per-plugin {id, name, enabled, loaded, tools, skills, ...} for status.
-_active_port = 7870    # populated by _main() — the port this process is actually bound to.
                        # Read by the autostart installer so the LaunchAgent reboots
                        # on the same port the operator launched with, not the default.
-_scheduler = None      # SchedulerBackend (LocalScheduler or WorkstaceanScheduler).
                        # Constructed at init, started on FastAPI startup, stopped
                        # on shutdown. Lifecycle is hooked in _main() so the
                        # polling coroutine doesn't leak on server reload.
-_cache_warmer = None   # Optional CacheWarmer (off by default). Same start/stop
-                       # lifecycle as _scheduler; keeps the prompt cache warm.
-_goal_controller = None  # Optional GoalController (goal mode). Parses /goal
+                       # lifecycle as STATE.scheduler; keeps the prompt cache warm.
                          # control messages and runs the goal-completion loop.
-_main_loop = None        # The server's event loop, captured at startup (#497).
                          # A config reload's heavy graph compile is offloaded to a
                          # worker thread so it no longer freezes the loop; the
                          # scheduler/Discord restart that follows still has to run
@@ -187,11 +161,6 @@ def _init_langgraph_agent(headless_setup: bool = False):
     clone with no model credentials — the wizard drives the user to
     provide them, then triggers a reload.
     """
-    global _graph, _graph_config, _checkpointer, _knowledge_store, _skills_index
-    global _workflow_registry
-    global _mcp_clients, _mcp_tools, _mcp_meta
-    global _plugin_tools, _plugin_skill_dirs, _plugin_meta
-    global _plugin_routers, _plugin_surfaces
 
     from graph.config import LangGraphConfig
     from graph.config_io import (
@@ -206,37 +175,37 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
     # it at per-user app-data), so load through it rather than a fixed path.
     ensure_live_config()
-    _graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    STATE.graph_config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
     # Fork tool denylist (config ``tools.disabled``) — applied before any
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
-    set_disabled_tools(_graph_config.tools_disabled)
+    set_disabled_tools(STATE.graph_config.tools_disabled)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     import egress
-    egress.set_allowed_hosts(_graph_config.egress_allowed_hosts)
+    egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts)
     # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
     # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
     # under the same id. Opt-in — empty config.instance_id leaves paths unchanged.
     # Set before any store is built or the memory middleware is imported.
-    _seed_instance_env(_graph_config)
+    _seed_instance_env(STATE.graph_config)
     # Conversation checkpointer: durable SQLite when a path is configured (chat
     # history survives restarts), else in-memory. Bound into the graph at
     # compile time below — a checkpointer in the invoke config is ignored.
-    _checkpointer = _build_checkpointer(_graph_config)
+    STATE.checkpointer = _build_checkpointer(STATE.graph_config)
 
     if not is_setup_complete():
         if headless_setup:
             # No wizard in this tier — auto-complete from a validated config,
             # else fail fast (ADR 0010) rather than serve a dead graph.
-            ok, reason = validate_for_headless(_graph_config)
+            ok, reason = validate_for_headless(STATE.graph_config)
             if not ok:
                 log.error("Headless setup cannot complete: %s", reason)
                 raise SystemExit(2)
             mark_setup_complete()
             log.info("Headless setup auto-completed from a validated config.")
         else:
-            _graph = None
-            _knowledge_store = None
+            STATE.graph = None
+            STATE.knowledge_store = None
             # Load plugins for their ROUTES + SURFACES even without a compiled
             # graph. The Connect Discord / Connect Google / Test-connection routes
             # are how the setup wizard *configures* the agent, so they must be
@@ -244,8 +213,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
             # this the first-run wizard's Connect/Test buttons 404 until the app is
             # relaunched.) register() needs no graph; the tools/subagents that feed
             # the graph are (re)loaded when setup completes and the graph builds.
-            _pre = _build_plugins(_graph_config)
-            _plugin_routers, _plugin_surfaces, _plugin_meta = (
+            _pre = _build_plugins(STATE.graph_config)
+            STATE.plugin_routers, STATE.plugin_surfaces, STATE.plugin_meta = (
                 _pre.routers, _pre.surfaces, _pre.meta,
             )
             _register_plugin_subagents(_pre.subagents)
@@ -264,14 +233,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # bind to. Forks that don't want a store can set
     # ``middleware.knowledge: false`` and remove the memory tools from
     # the worker subagent — the store is still cheap to construct.
-    _knowledge_store = _build_knowledge_store(_graph_config)
+    STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
 
     # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
     # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
     # vars are set. Both backends share the same agent-tool surface
     # (schedule_task / list_schedules / cancel_schedule).
-    global _scheduler
-    _scheduler = _build_scheduler(_graph_config)
+    STATE.scheduler = _build_scheduler(STATE.graph_config)
 
     # Plugins — drop-in packages (tools + bundled skills + surfaces/routes +
     # managed MCP servers). Loaded BEFORE MCP so a plugin's managed MCP server
@@ -279,72 +247,69 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # below. Collision check uses core tools only — MCP tools are namespaced
     # (<server>__<tool>) so they can't be shadowed by a plugin tool anyway.
     _plugins = _build_plugins(
-        _graph_config,
-        existing_tools=get_all_tools(_knowledge_store, scheduler=_scheduler),
+        STATE.graph_config,
+        existing_tools=get_all_tools(STATE.knowledge_store, scheduler=STATE.scheduler),
     )
-    _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
+    STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         _plugins.tools, _plugins.skill_dirs, _plugins.meta,
     )
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph
     # build below so the first compile (and every reload) can delegate to them.
-    # (`global _plugin_routers, _plugin_surfaces` is declared at the top of the fn.)
-    _plugin_routers, _plugin_surfaces = _plugins.routers, _plugins.surfaces
+    # (`global STATE.plugin_routers, STATE.plugin_surfaces` is declared at the top of the fn.)
+    STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
     _register_plugin_subagents(_plugins.subagents)
 
     # MCP — external Model Context Protocol servers; their tools become agent
     # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
     # contributes a managed server (ADR 0019).
-    _mcp_clients, _mcp_tools, _mcp_meta = _build_mcp(
-        _graph_config, plugin_servers=[s["factory"] for s in _plugins.mcp_servers]
+    STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = _build_mcp(
+        STATE.graph_config, plugin_servers=[s["factory"] for s in _plugins.mcp_servers]
     )
 
     # Skills — human-authored SKILL.md folders (bundle + live + plugin-bundled)
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
-    _skills_index = _build_skills_index(_graph_config, extra_skill_dirs=_plugin_skill_dirs)
+    STATE.skills_index = _build_skills_index(STATE.graph_config, extra_skill_dirs=STATE.plugin_skill_dirs)
 
-    _workflow_registry = _build_workflow_registry(_graph_config)
+    STATE.workflow_registry = _build_workflow_registry(STATE.graph_config)
 
-    global _inbox_store, _storm_guard, _beads_store, _activity_log
-    _inbox_store = _build_inbox_store(_graph_config)
-    if _activity_log is None:
-        _activity_log = _build_activity_log(_graph_config)
+    STATE.inbox_store = _build_inbox_store(STATE.graph_config)
+    if STATE.activity_log is None:
+        STATE.activity_log = _build_activity_log(STATE.graph_config)
     from beads import BeadsStore
-    if _beads_store is None:  # may have been created early (pre-setup) for the routes
-        _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
-    if _storm_guard is None:
+    if STATE.beads_store is None:  # may have been created early (pre-setup) for the routes
+        STATE.beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
+    if STATE.storm_guard is None:
         from inbox import StormGuard
-        _storm_guard = StormGuard()
+        STATE.storm_guard = StormGuard()
 
-    _graph = create_agent_graph(
-        _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
-        skills_index=_skills_index, extra_tools=_mcp_tools + _plugin_tools,
-        checkpointer=_checkpointer, workflow_registry=_workflow_registry,
-        inbox_store=_inbox_store, beads_store=_beads_store,
+    STATE.graph = create_agent_graph(
+        STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
+        skills_index=STATE.skills_index, extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+        checkpointer=STATE.checkpointer, workflow_registry=STATE.workflow_registry,
+        inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
     # for an Anthropic-family model (see graph/cache_warmer.py).
-    global _cache_warmer
     from graph.cache_warmer import CacheWarmer
-    _cache_warmer = CacheWarmer(
-        _graph_config, knowledge_store=_knowledge_store, scheduler=_scheduler,
+    STATE.cache_warmer = CacheWarmer(
+        STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
     )
 
     # Goal mode — parses /goal control messages and runs the goal-completion
     # loop around graph invocations. Machinery only; no goal is active until set.
-    global _goal_controller
-    if _graph_config.goal_enabled:
+    if STATE.graph_config.goal_enabled:
         from graph.goals import GoalController, GoalStore
-        _goal_controller = GoalController(_graph_config, GoalStore())
+        STATE.goal_controller = GoalController(STATE.graph_config, GoalStore())
     else:
-        _goal_controller = None
+        STATE.goal_controller = None
     log.info(
         "LangGraph agent initialized (model: %s, knowledge_db: %s, scheduler: %s)",
-        _graph_config.model_name,
-        getattr(_knowledge_store, "path", "(disabled)"),
-        getattr(_scheduler, "name", "disabled"),
+        STATE.graph_config.model_name,
+        getattr(STATE.knowledge_store, "path", "(disabled)"),
+        getattr(STATE.scheduler, "name", "disabled"),
     )
 
 
@@ -537,10 +502,9 @@ def _build_checkpointer(config):
         return MemorySaver()
     try:
         from graph.checkpointer import build_sqlite_checkpointer
-        global _checkpoint_path
         path = _resolve_checkpoint_db(config.checkpoint_db_path)
         saver = build_sqlite_checkpointer(path)
-        _checkpoint_path = path
+        STATE.checkpoint_path = path
         log.info("[checkpointer] persistent chat history at %s", path)
         return saver
     except Exception:
@@ -561,8 +525,8 @@ async def _checkpoint_prune_loop() -> None:
 
     await asyncio.sleep(60)  # let boot settle before the first sweep
     while True:
-        cfg = _graph_config
-        path = _checkpoint_path
+        cfg = STATE.graph_config
+        path = STATE.checkpoint_path
         interval_h = getattr(cfg, "checkpoint_prune_interval_hours", 0) if cfg else 0
         if path and cfg and interval_h > 0:
             try:
@@ -572,8 +536,8 @@ async def _checkpoint_prune_loop() -> None:
                 harvest = bool(
                     max_age
                     and cfg.checkpoint_harvest_enabled
-                    and _knowledge_store is not None
-                    and _checkpointer is not None
+                    and STATE.knowledge_store is not None
+                    and STATE.checkpointer is not None
                 )
                 if harvest:
                     # Summarize each aged thread into knowledge, then drop it —
@@ -607,19 +571,19 @@ async def _retire_thread(thread_id: str) -> str | None:
     from graph.checkpoint_prune import delete_thread
 
     chunk_id = None
-    if _graph_config is not None and getattr(_graph_config, "checkpoint_harvest_enabled", False):
+    if STATE.graph_config is not None and getattr(STATE.graph_config, "checkpoint_harvest_enabled", False):
         from graph.conversation_harvest import harvest_thread
         chunk_id = await harvest_thread(
             thread_id,
-            checkpointer=_checkpointer,
-            knowledge_store=_knowledge_store,
-            config=_graph_config,
+            checkpointer=STATE.checkpointer,
+            knowledge_store=STATE.knowledge_store,
+            config=STATE.graph_config,
         )
-    if _checkpoint_path:
-        await asyncio.to_thread(delete_thread, _checkpoint_path, thread_id)
-    elif _checkpointer is not None and hasattr(_checkpointer, "delete_thread"):
+    if STATE.checkpoint_path:
+        await asyncio.to_thread(delete_thread, STATE.checkpoint_path, thread_id)
+    elif STATE.checkpointer is not None and hasattr(STATE.checkpointer, "delete_thread"):
         try:
-            _checkpointer.delete_thread(thread_id)
+            STATE.checkpointer.delete_thread(thread_id)
         except Exception:
             log.exception("[retire] in-memory delete_thread failed for %s", thread_id)
     return chunk_id
@@ -757,7 +721,7 @@ def _run_on_server_loop(make_coro, what: str) -> None:
     **from a worker thread** (the reload offloaded off the loop, #497). In the
     thread case ``get_running_loop()`` raises, and the old code logged + dropped
     the coroutine — silently killing the scheduler/briefing on every offloaded
-    reload (the trap). We instead schedule it on the captured ``_main_loop`` via
+    reload (the trap). We instead schedule it on the captured ``STATE.main_loop`` via
     ``run_coroutine_threadsafe``. ``make_coro`` is a zero-arg factory so the
     coroutine is only created once we have a loop to run it on (no
     "coroutine was never awaited" leak when none is available).
@@ -776,9 +740,9 @@ def _run_on_server_loop(make_coro, what: str) -> None:
             log.exception("[reload] %s failed", what)
         return
 
-    if _main_loop is not None and _main_loop.is_running():
+    if STATE.main_loop is not None and STATE.main_loop.is_running():
         try:
-            asyncio.run_coroutine_threadsafe(make_coro(), _main_loop)
+            asyncio.run_coroutine_threadsafe(make_coro(), STATE.main_loop)
         except Exception:
             log.exception("[reload] %s failed (threadsafe)", what)
         return
@@ -858,7 +822,7 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         from scheduler import LocalScheduler
         invoke_url = os.environ.get(
             "SCHEDULER_INVOKE_URL",
-            f"http://127.0.0.1:{_active_port}",
+            f"http://127.0.0.1:{STATE.active_port}",
         )
         bearer = (config.auth_token or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
         # The A2A handler reads X-API-Key from ``<AGENT_NAME_ENV>_API_KEY``
@@ -886,10 +850,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     Called by the drawer's Save & Reload action and the
     ``/api/config/reload`` endpoint. Preserves the existing
-    ``_checkpointer`` so active session threads stay addressable
+    ``STATE.checkpointer`` so active session threads stay addressable
     — a fresh MemorySaver would orphan every in-flight thread.
 
-    Rebinding ``_graph`` is atomic in CPython; in-flight
+    Rebinding ``STATE.graph`` is atomic in CPython; in-flight
     ``astream_events`` iterators hold their own reference to the
     prior graph and finish cleanly on the old instance.
 
@@ -897,10 +861,6 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     compiling — the wizard is still in front of the user, so there
     is nothing to hot-swap yet.
     """
-    global _graph, _graph_config, _knowledge_store, _skills_index, _workflow_registry
-    global _mcp_clients, _mcp_tools, _mcp_meta
-    global _plugin_tools, _plugin_skill_dirs, _plugin_meta
-    global _inbox_store
 
     from graph.agent import create_agent_graph
     from graph.config import LangGraphConfig
@@ -921,8 +881,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     # Build the graph FIRST (when setup is complete) — only commit
     # runtime state after the rebuild succeeds. Doing the swap first
-    # would leave the process serving the prior compiled _graph under
-    # fresh _graph_config + rotated bearer auth on failure — the
+    # would leave the process serving the prior compiled STATE.graph under
+    # fresh STATE.graph_config + rotated bearer auth on failure — the
     # metrics / card / auth all de-sync from what's actually running.
     # Plan the scheduler swap *before* attempting the graph rebuild so
     # the polling loop isn't torn down (or a fresh one started) until
@@ -938,19 +898,18 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # Env-driven config (WORKSTACEAN_API_BASE) only takes effect on
     # full process restart; the YAML toggle is the canonical
     # reload-time switch.
-    global _scheduler
     scheduler_wanted = getattr(new_config, "scheduler_enabled", True)
     next_scheduler: "SchedulerBackend | None"
     pending_start: "SchedulerBackend | None" = None
     pending_stop: "SchedulerBackend | None" = None
     if not scheduler_wanted:
         next_scheduler = None
-        pending_stop = _scheduler  # may be None — stopper is no-op then
-    elif _scheduler is None:
+        pending_stop = STATE.scheduler  # may be None — stopper is no-op then
+    elif STATE.scheduler is None:
         next_scheduler = _build_scheduler(new_config)
         pending_start = next_scheduler
     else:
-        next_scheduler = _scheduler
+        next_scheduler = STATE.scheduler
 
     new_store = None
     new_skills = None
@@ -977,7 +936,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
-                checkpointer=_checkpointer, workflow_registry=new_workflow_registry,
+                checkpointer=STATE.checkpointer, workflow_registry=new_workflow_registry,
                 inbox_store=new_inbox_store,
             )
         except Exception as e:
@@ -992,14 +951,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
 
     # Capture the outgoing config before the swap so we can tell whether the
     # Discord surface needs a live reconnect (token/admin/enabled changed).
-    old_config = _graph_config
+    old_config = STATE.graph_config
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
-    _graph_config = new_config
-    _knowledge_store = new_store
-    _skills_index = new_skills
-    _mcp_clients, _mcp_tools, _mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
-    _plugin_tools, _plugin_skill_dirs, _plugin_meta = (
+    STATE.graph_config = new_config
+    STATE.knowledge_store = new_store
+    STATE.skills_index = new_skills
+    STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
+    STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta,
     )
     try:
@@ -1016,14 +975,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # a2a_auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.
         pass
-    _graph = new_graph
-    _workflow_registry = new_workflow_registry
-    _inbox_store = new_inbox_store
+    STATE.graph = new_graph
+    STATE.workflow_registry = new_workflow_registry
+    STATE.inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget
     # onto the active loop so reload stays sync. We've already verified
     # the graph rebuild succeeded; if start/stop fails we log but
     # don't roll back (the agent is already serving the new graph).
-    _scheduler = next_scheduler
+    STATE.scheduler = next_scheduler
     if pending_stop is not None:
         _stop_scheduler_async(pending_stop)
     if pending_start is not None:
@@ -1038,8 +997,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
         return True, "config reloaded • setup not complete"
 
-    log.info("LangGraph agent reloaded (model: %s)", _graph_config.model_name)
-    return True, f"reloaded • model={_graph_config.model_name}"
+    log.info("LangGraph agent reloaded (model: %s)", STATE.graph_config.model_name)
+    return True, f"reloaded • model={STATE.graph_config.model_name}"
 
 
 async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:
@@ -1061,7 +1020,7 @@ def _populate_plugin_host() -> None:
         HOST.invoke = _plugin_agent_invoke
         HOST.publish = _event_bus.publish
         HOST.subscribe = _event_bus.subscribe
-        HOST.config = lambda: _graph_config
+        HOST.config = lambda: STATE.graph_config
         HOST.apply_settings = lambda patch: _apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001
         log.exception("[plugins] failed to populate plugin host")
@@ -1074,7 +1033,7 @@ def _reload_plugin_surfaces(new_config) -> None:
     ``LangGraphConfig`` on the server loop, so a migrated Discord/Google-style
     surface can reconnect on a Settings save without a restart. Best-effort.
     """
-    for h in _plugin_surface_handles:
+    for h in STATE.plugin_surface_handles:
         reload_cb = h.get("reload")
         if not callable(reload_cb):
             continue
@@ -1110,11 +1069,11 @@ def _sync_autostart_with_config(config: dict | None) -> str | None:
 
         as_name = (
             config.get("identity", {}).get("name")
-            or (_graph_config.identity_name if _graph_config else "")
+            or (STATE.graph_config.identity_name if STATE.graph_config else "")
             or "protoagent"
         )
         if want:
-            ok, msg = install_autostart(agent_name=as_name, port=_active_port)
+            ok, msg = install_autostart(agent_name=as_name, port=STATE.active_port)
         else:
             ok, msg = uninstall_autostart(agent_name=as_name)
     except Exception as e:
@@ -1200,7 +1159,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
     )
 
     def get_config() -> dict[str, Any]:
-        return config_to_dict(_graph_config)
+        return config_to_dict(STATE.graph_config)
 
     def list_models(api_base: str = "", api_key: str = "") -> tuple[list[str], str]:
         """UI-friendly model lookup.
@@ -1210,8 +1169,8 @@ def _build_settings_callbacks() -> dict[str, Any]:
         loaded graph config so the initial render works without
         arguments.
         """
-        base = api_base or (_graph_config.api_base if _graph_config else "")
-        key = api_key or (_graph_config.api_key if _graph_config else "")
+        base = api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
+        key = api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
         return list_gateway_models(base, key)
 
     def save_all(config: dict | None, soul: str | None) -> tuple[bool, str]:
@@ -1227,7 +1186,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         2. ``mark_setup_complete()`` — flip the marker BEFORE the
            reload so ``_reload_langgraph_agent`` actually compiles
            the graph. Doing it after means the reload sees
-           setup-incomplete and stays ``_graph = None``.
+           setup-incomplete and stays ``STATE.graph = None``.
         3. Sync autostart (LaunchAgent plist is independent of the
            graph, so it can happen any time after the config is
            written).
@@ -1258,9 +1217,9 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # operator fixes it in the UI and retries — no file editing required.
         if config is not None and isinstance(config.get("model"), dict):
             m = config["model"]
-            test_base = m.get("api_base") or (_graph_config.api_base if _graph_config else "")
-            test_key = m.get("api_key") or (_graph_config.api_key if _graph_config else "")
-            test_model = m.get("name") or (_graph_config.model_name if _graph_config else "")
+            test_base = m.get("api_base") or (STATE.graph_config.api_base if STATE.graph_config else "")
+            test_key = m.get("api_key") or (STATE.graph_config.api_key if STATE.graph_config else "")
+            test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
             ok, verr = validate_model_connection(test_base, test_key, test_model)
             if not ok:
                 return False, f"model connection failed — {verr}"
@@ -1325,7 +1284,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         try:
             from autostart import autostart_status
 
-            name = (_graph_config.identity_name if _graph_config else "") or "protoagent"
+            name = (STATE.graph_config.identity_name if STATE.graph_config else "") or "protoagent"
             return autostart_status(name)
         except Exception as e:
             return {"supported": False, "installed": False, "reason": str(e)}
@@ -1337,9 +1296,9 @@ def _build_settings_callbacks() -> dict[str, Any]:
         try:
             from autostart import install_autostart, uninstall_autostart
 
-            name = (_graph_config.identity_name if _graph_config else "") or "protoagent"
+            name = (STATE.graph_config.identity_name if STATE.graph_config else "") or "protoagent"
             if enabled:
-                return install_autostart(agent_name=name, port=_active_port)
+                return install_autostart(agent_name=name, port=STATE.active_port)
             return uninstall_autostart(agent_name=name)
         except Exception as e:
             return False, str(e)
@@ -1366,7 +1325,7 @@ def _setup_required_message() -> list[dict[str, Any]]:
     The Gradio UI hides the chat pane until setup completes, but the
     HTTP /api/chat, OpenAI-compat, and A2A endpoints don't know the
     UI state — so they emit a plain-text "finish setup first"
-    message instead of 500ing on ``_graph is None``.
+    message instead of 500ing on ``STATE.graph is None``.
     """
     return [{
         "role": "assistant",
@@ -1391,7 +1350,7 @@ async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
     capture tool events and emit the cost-v1 DataPart on the terminal
     artifact.
     """
-    if _graph is None:
+    if STATE.graph is None:
         return _setup_required_message()
     return await _chat_langgraph(message, session_id)
 
@@ -1471,7 +1430,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
-    async for event in _graph.astream_events(
+    async for event in STATE.graph.astream_events(
         graph_input,
         config=config,
         version="v2",
@@ -1563,7 +1522,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     # The graph is checkpointed at the interrupt; surface the question so the A2A
     # layer parks the task as input-required. Resume later with resume_value.
     try:
-        snapshot = await _graph.aget_state(config)
+        snapshot = await STATE.graph.aget_state(config)
         pending = list(getattr(snapshot, "interrupts", None) or [])
         if not pending:
             for t in getattr(snapshot, "tasks", ()) or ():
@@ -1628,9 +1587,9 @@ def _parse_workflow_inputs(recipe: dict, rest: str) -> dict:
 def _parse_workflow_command(message: str):
     """Return (name, inputs) if ``message`` is ``/<known-workflow> …``, else None."""
     name, rest = _parse_slash_command(message)
-    if not name or _workflow_registry is None:
+    if not name or STATE.workflow_registry is None:
         return None
-    recipe = _workflow_registry.get(name)
+    recipe = STATE.workflow_registry.get(name)
     if recipe is None:
         return None
     return name, _parse_workflow_inputs(recipe, rest)
@@ -1645,8 +1604,8 @@ async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
 
     try:
         result = await run_manual_workflow(
-            _graph_config, _workflow_registry,
-            knowledge_store=_knowledge_store, scheduler=_scheduler,
+            STATE.graph_config, STATE.workflow_registry,
+            knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
             name=name, inputs=inputs, on_step=on_step,
         )
     except ValueError as exc:
@@ -1676,7 +1635,7 @@ def _parse_subagent_command(message: str):
     if not name:
         return None
     # Workflow wins on a name collision (dispatch checks workflows first).
-    if _workflow_registry is not None and _workflow_registry.get(name) is not None:
+    if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:
         return None
     try:
         from graph.subagents.config import SUBAGENT_REGISTRY
@@ -1693,9 +1652,9 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
 
     try:
         raw = await run_manual_subagent(
-            _graph_config,
-            knowledge_store=_knowledge_store,
-            scheduler=_scheduler,
+            STATE.graph_config,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
             description=f"/{subagent_type} chat command",
             prompt=prompt,
             subagent_type=subagent_type,
@@ -1741,7 +1700,7 @@ async def _chat_langgraph_stream(
         if caller_trace.get("spanId"):
             trace_meta["caller_span_id"] = caller_trace["spanId"]
 
-    if _graph is None:
+    if STATE.graph is None:
         yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
@@ -1753,8 +1712,8 @@ async def _chat_langgraph_stream(
         try:
             # Goal control messages (/goal ...) short-circuit the turn: set /
             # status / clear a goal and return the reply without running the graph.
-            if _goal_controller is not None:
-                reply = await _goal_controller.parse_control(message, session_id)
+            if STATE.goal_controller is not None:
+                reply = await STATE.goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     yield ("done", reply)
                     return
@@ -1828,8 +1787,8 @@ async def _chat_langgraph_stream(
             # suppress cross-session prior_sessions on the initial turn (and the
             # kicker retry below), matching the continuation turns.
             goal_active = (
-                _goal_controller is not None
-                and _goal_controller.active_goal(session_id) is not None
+                STATE.goal_controller is not None
+                and STATE.goal_controller.active_goal(session_id) is not None
             )
 
             # One graph turn (model tokens accumulated silently; A2A consumers
@@ -1892,12 +1851,12 @@ async def _chat_langgraph_stream(
             # outcome after the agent stops; if not met, re-invoke on the same
             # thread with a continuation prompt until the verifier passes, the
             # iteration budget is spent, or it's flagged unachievable.
-            if _goal_controller is not None and _goal_controller.active_goal(session_id):
-                guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+            if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
+                guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
                 note = ""
                 while guard < hard_cap:
                     guard += 1
-                    decision = await _goal_controller.evaluate(session_id, last_text=final_text)
+                    decision = await STATE.goal_controller.evaluate(session_id, last_text=final_text)
                     if decision is None:
                         break
                     note = decision.note
@@ -1961,8 +1920,8 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
     ):
         try:
             # Goal control messages short-circuit (set / status / clear).
-            if _goal_controller is not None:
-                reply = await _goal_controller.parse_control(message, session_id)
+            if STATE.goal_controller is not None:
+                reply = await STATE.goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
 
@@ -1982,11 +1941,11 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn too.
             goal_active = (
-                _goal_controller is not None
-                and _goal_controller.active_goal(session_id) is not None
+                STATE.goal_controller is not None
+                and STATE.goal_controller.active_goal(session_id) is not None
             )
             with goal_turn(goal_active):
-                result = await _graph.ainvoke(
+                result = await STATE.graph.ainvoke(
                     {"messages": [HumanMessage(content=message)], "session_id": session_id},
                     config=config,
                 )
@@ -1994,19 +1953,19 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
 
             # Goal mode: verify after the agent stops; re-invoke with a
             # continuation prompt until met / exhausted / unachievable.
-            if _goal_controller is not None and _goal_controller.active_goal(session_id):
-                guard, hard_cap = 0, _graph_config.goal_max_iterations + 2
+            if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
+                guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
                 note = ""
                 while guard < hard_cap:
                     guard += 1
-                    decision = await _goal_controller.evaluate(session_id, last_text=response)
+                    decision = await STATE.goal_controller.evaluate(session_id, last_text=response)
                     if decision is None:
                         break
                     note = decision.note
                     if decision.action == "done":
                         break
                     with goal_turn():
-                        result = await _graph.ainvoke(
+                        result = await STATE.graph.ainvoke(
                             {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
                             config=config,
                         )
@@ -2044,13 +2003,13 @@ def agent_name() -> str:
     Prometheus metric prefix and ``<AGENT>_API_KEY`` env name are
     set at boot and still require a restart (see docs).
     """
-    if _graph_config and _graph_config.identity_name and _graph_config.identity_name != "protoagent":
-        return _graph_config.identity_name
+    if STATE.graph_config and STATE.graph_config.identity_name and STATE.graph_config.identity_name != "protoagent":
+        return STATE.graph_config.identity_name
     return AGENT_NAME_ENV
 
 
 def _bearer_configured() -> bool:
-    return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (_graph_config and _graph_config.auth_token))
+    return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (STATE.graph_config and STATE.graph_config.auth_token))
 
 
 # Skill declarations (ADR-0006 addendum / #476). A skill MAY declare an
@@ -2148,13 +2107,13 @@ def _a2a_card_url() -> str:
     be the agent's externally-reachable address — not the bind host. Prefer an
     explicit ``A2A_PUBLIC_URL`` (set this for any deployed agent: behind a proxy
     / in a container the public address isn't the bound port). Fall back to the
-    actually-bound loopback port (``_active_port``) for local + desktop runs —
+    actually-bound loopback port (``STATE.active_port``) for local + desktop runs —
     correct there because the client is on the same host (and the desktop's port
     is dynamic). The ``/a2a`` suffix is the JSON-RPC route.
     """
     base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
     if not base:
-        base = f"http://127.0.0.1:{_active_port}"
+        base = f"http://127.0.0.1:{STATE.active_port}"
     return f"{base}/a2a"
 
 
@@ -2192,13 +2151,13 @@ def _record_a2a_telemetry(outcome) -> None:
     """Write one per-turn telemetry row from an executor ``TurnOutcome``
     (ADR 0006 Slice 2). No-op when the telemetry store is off; best-effort so a
     failure never affects the turn."""
-    store = _telemetry_store
+    store = STATE.telemetry_store
     if store is None:
         return
     try:
         u = outcome.usage or {}
         primary_model = outcome.models[0] if outcome.models else (
-            (_graph_config.model_name if _graph_config else "") or ""
+            (STATE.graph_config.model_name if STATE.graph_config else "") or ""
         )
         input_tokens = int(u.get("input_tokens", 0) or 0)
         output_tokens = int(u.get("output_tokens", 0) or 0)
@@ -2243,8 +2202,8 @@ def _a2a_terminal(outcome) -> None:
     trigger = getattr(outcome, "trigger", "") or ""
     priority = getattr(outcome, "priority", "") or ""
     # Provenance feed (ADR 0022): durably log the turn + what triggered it.
-    if _activity_log is not None:
-        _activity_log.add(
+    if STATE.activity_log is not None:
+        STATE.activity_log.add(
             context_id=ACTIVITY_CONTEXT,
             origin=origin,
             trigger=trigger,
@@ -2267,7 +2226,6 @@ def _a2a_terminal(outcome) -> None:
 # ---------------------------------------------------------------------------
 
 def _main():
-    global _active_port
 
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
@@ -2307,7 +2265,7 @@ def _main():
              "complete, then exit. No wizard/UI needed.",
     )
     args = parser.parse_args()
-    _active_port = args.port
+    STATE.active_port = args.port
 
     # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
     # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'full'.
@@ -2405,40 +2363,40 @@ def _main():
         # config adds any extra project roots. Read live so a settings
         # reload takes effect without restarting the server.
         roots = [_operator_repo_root]
-        if _graph_config is not None:
-            roots.extend(getattr(_graph_config, "operator_allowed_dirs", []) or [])
+        if STATE.graph_config is not None:
+            roots.extend(getattr(STATE.graph_config, "operator_allowed_dirs", []) or [])
         return roots
 
     def _operator_runtime_status():
         return _build_operator_status(
-            config=_graph_config,
+            config=STATE.graph_config,
             setup_complete=_operator_setup_complete(),
-            graph_loaded=_graph is not None,
+            graph_loaded=STATE.graph is not None,
             project_path=_operator_repo_root,
             allowed_dirs=_operator_allowed_dirs(),
-            knowledge_store=_knowledge_store,
-            scheduler=_scheduler,
-            cache_warmer=_cache_warmer,
-            goal_controller=_goal_controller,
-            skills_index=_skills_index,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            cache_warmer=STATE.cache_warmer,
+            goal_controller=STATE.goal_controller,
+            skills_index=STATE.skills_index,
             mcp={
-                "enabled": bool(getattr(_graph_config, "mcp_enabled", False)) if _graph_config else False,
-                "servers": _mcp_meta,
-                "tool_count": len(_mcp_tools),
+                "enabled": bool(getattr(STATE.graph_config, "mcp_enabled", False)) if STATE.graph_config else False,
+                "servers": STATE.mcp_meta,
+                "tool_count": len(STATE.mcp_tools),
             },
-            plugins=_plugin_meta,
+            plugins=STATE.plugin_meta,
         )
 
     def _operator_subagent_list():
-        return _operator_list_subagents(_graph_config)
+        return _operator_list_subagents(STATE.graph_config)
 
     async def _operator_subagent_run(req: dict):
-        if _graph is None:
+        if STATE.graph is None:
             raise RuntimeError("agent graph is not loaded; finish setup first")
         return await _operator_run_manual_subagent(
-            config=_graph_config,
-            knowledge_store=_knowledge_store,
-            scheduler=_scheduler,
+            config=STATE.graph_config,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
             description=req.get("description", ""),
             prompt=req.get("prompt", ""),
             subagent_type=req.get("type") or req.get("subagent_type", "researcher"),
@@ -2446,28 +2404,28 @@ def _main():
         )
 
     async def _operator_subagent_batch(req: dict):
-        if _graph is None:
+        if STATE.graph is None:
             raise RuntimeError("agent graph is not loaded; finish setup first")
         return await _operator_run_manual_subagent_batch(
-            config=_graph_config,
-            knowledge_store=_knowledge_store,
-            scheduler=_scheduler,
+            config=STATE.graph_config,
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
             tasks=req.get("tasks", []),
         )
 
     async def _operator_scheduler_list() -> dict:
         import asyncio
-        if _scheduler is None:
+        if STATE.scheduler is None:
             return {"jobs": [], "backend": "disabled"}
-        jobs = await asyncio.to_thread(_scheduler.list_jobs)
+        jobs = await asyncio.to_thread(STATE.scheduler.list_jobs)
         return {
             "jobs": [j.as_dict() for j in jobs],
-            "backend": getattr(_scheduler, "name", "local"),
+            "backend": getattr(STATE.scheduler, "name", "local"),
         }
 
     async def _operator_scheduler_add(req: dict) -> dict:
         import asyncio
-        if _scheduler is None:
+        if STATE.scheduler is None:
             raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
         prompt = (req.get("prompt") or "").strip()
         schedule = (req.get("schedule") or "").strip()
@@ -2476,75 +2434,75 @@ def _main():
         if not schedule:
             raise ValueError("schedule is required")
         job = await asyncio.to_thread(
-            _scheduler.add_job, prompt, schedule, job_id=req.get("job_id") or None
+            STATE.scheduler.add_job, prompt, schedule, job_id=req.get("job_id") or None
         )
         return job.as_dict()
 
     async def _operator_scheduler_cancel(job_id: str) -> dict:
         import asyncio
-        if _scheduler is None:
+        if STATE.scheduler is None:
             raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
-        canceled = await asyncio.to_thread(_scheduler.cancel_job, job_id)
+        canceled = await asyncio.to_thread(STATE.scheduler.cancel_job, job_id)
         return {"canceled": bool(canceled)}
 
     async def _operator_goals_list() -> dict:
         import asyncio
-        if _goal_controller is None:
+        if STATE.goal_controller is None:
             return {"goals": [], "enabled": False}
-        states = await asyncio.to_thread(_goal_controller.store.all)
+        states = await asyncio.to_thread(STATE.goal_controller.store.all)
         return {"goals": [s.to_dict() for s in states], "enabled": True}
 
     async def _operator_goals_clear(session_id: str) -> dict:
         import asyncio
-        if _goal_controller is None:
+        if STATE.goal_controller is None:
             return {"cleared": False, "enabled": False}
-        cleared = await asyncio.to_thread(_goal_controller.store.clear, session_id)
+        cleared = await asyncio.to_thread(STATE.goal_controller.store.clear, session_id)
         return {"cleared": bool(cleared)}
 
     def _operator_workflows_list() -> dict:
-        if _workflow_registry is None:
+        if STATE.workflow_registry is None:
             return {"workflows": []}
-        return {"workflows": _workflow_registry.list()}
+        return {"workflows": STATE.workflow_registry.list()}
 
     async def _operator_workflow_run(name: str, inputs: dict) -> dict:
-        if _graph is None:
+        if STATE.graph is None:
             raise RuntimeError("agent graph is not loaded; finish setup first")
         from graph.agent import run_manual_workflow
         return await run_manual_workflow(
-            _graph_config, _workflow_registry,
-            knowledge_store=_knowledge_store, scheduler=_scheduler,
+            STATE.graph_config, STATE.workflow_registry,
+            knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
             name=name, inputs=inputs or {},
         )
 
     def _operator_workflow_save(recipe: dict) -> dict:
         # Validate against the live subagent registry before writing, so a
         # UI-authored recipe can't reference an unknown subagent / bad DAG.
-        if _workflow_registry is None:
+        if STATE.workflow_registry is None:
             raise RuntimeError("workflows are not available")
         from graph.subagents.config import SUBAGENT_REGISTRY
         from graph.workflows.engine import validate_recipe
         errors = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
         if errors:
             raise ValueError("invalid recipe: " + "; ".join(errors))
-        path = _workflow_registry.save(recipe)
+        path = STATE.workflow_registry.save(recipe)
         return {"saved": True, "name": recipe.get("name"), "path": path}
 
     def _operator_workflow_delete(name: str) -> dict:
-        if _workflow_registry is None:
+        if STATE.workflow_registry is None:
             raise RuntimeError("workflows are not available")
-        return {"deleted": _workflow_registry.delete(name)}
+        return {"deleted": STATE.workflow_registry.delete(name)}
 
     async def _operator_activity_list() -> dict:
         """Return the Activity provenance feed (ADR 0022) — newest-first entries
         with origin/trigger/priority — plus the thread's message history from the
         checkpointer (for the continue view). The console renders the feed and
         opens the thread on demand."""
-        entries = _activity_log.recent(limit=100) if _activity_log is not None else []
+        entries = STATE.activity_log.recent(limit=100) if STATE.activity_log is not None else []
         messages: list[dict] = []
-        if _checkpointer is not None:
+        if STATE.checkpointer is not None:
             thread_id = f"a2a:{ACTIVITY_CONTEXT}"
             try:
-                tup = await _checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+                tup = await STATE.checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
                 raw = (tup.checkpoint or {}).get("channel_values", {}).get("messages", []) if tup else []
             except Exception:
                 log.exception("[activity] failed to read thread %s", thread_id)
@@ -2566,7 +2524,7 @@ def _main():
     def _inbox_authorized(token: str | None) -> bool:
         """Validate the inbound bearer token (ADR 0003). Mirrors the A2A posture:
         when no token is configured the endpoint is open (dev), else it must match."""
-        active = ((_graph_config.auth_token if _graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
+        active = ((STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
         if not active:
             return True
         return (token or "") == active
@@ -2578,14 +2536,14 @@ def _main():
         from uuid import uuid4
         import httpx
 
-        if _storm_guard is not None and not _storm_guard.allow(time.monotonic()):
+        if STATE.storm_guard is not None and not STATE.storm_guard.allow(time.monotonic()):
             log.warning("[inbox] storm guard suppressed now-fire for item %s", item.get("id"))
             return False
         # A2A 1.0 (a2a-sdk ≥1.1): the version header + proto method name are
         # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
         # scheduler's fire (scheduler/local.py).
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        bearer = ((_graph_config.auth_token if _graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
+        bearer = ((STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
         api_key = os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", "").strip()
@@ -2607,7 +2565,7 @@ def _main():
         }
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.post(f"http://127.0.0.1:{_active_port}/a2a", headers=headers, json=body)
+                r = await client.post(f"http://127.0.0.1:{STATE.active_port}/a2a", headers=headers, json=body)
             # A JSON-RPC error rides a 200, so status alone isn't enough.
             if r.status_code >= 400:
                 return False
@@ -2623,9 +2581,9 @@ def _main():
     async def _operator_inbox_add(payload: dict) -> dict:
         """Ingest an inbound item (ADR 0003). now-priority fires an Activity turn;
         others queue for check_inbox. Dedup is handled by the store."""
-        if _inbox_store is None:
+        if STATE.inbox_store is None:
             raise RuntimeError("inbox not loaded; finish setup first")
-        item = _inbox_store.add(
+        item = STATE.inbox_store.add(
             payload.get("text", ""),
             priority=payload.get("priority", "next") or "next",
             source=payload.get("source", "") or "",
@@ -2641,17 +2599,17 @@ def _main():
         return {"ok": True, "item": item, "fired": fired}
 
     async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
-        if _inbox_store is None:
+        if STATE.inbox_store is None:
             return {"items": []}
-        items = _inbox_store.list(
+        items = STATE.inbox_store.list(
             priority_floor=floor or "later", include_delivered=include_delivered, limit=200,
         )
         return {"items": items}
 
     async def _operator_inbox_deliver(item_id: int) -> dict:
-        if _inbox_store is None:
+        if STATE.inbox_store is None:
             raise RuntimeError("inbox not loaded; finish setup first")
-        return {"ok": True, "delivered": _inbox_store.mark_delivered([item_id])}
+        return {"ok": True, "delivered": STATE.inbox_store.mark_delivered([item_id])}
 
     def _operator_chat_commands() -> dict:
         """Slash commands the chat understands — drives the composer autocomplete.
@@ -2660,7 +2618,7 @@ def _main():
         server-handled control command here and the console picks it up.
         """
         commands = []
-        if _goal_controller is not None:
+        if STATE.goal_controller is not None:
             commands.append({
                 "name": "goal",
                 "description": "Set, check, or clear a self-driving goal for this chat session.",
@@ -2668,8 +2626,8 @@ def _main():
             })
         # Each registered workflow is runnable as /<name> (ADR 0002).
         wf_names: set[str] = set()
-        if _workflow_registry is not None:
-            for wf in _workflow_registry.list():
+        if STATE.workflow_registry is not None:
+            for wf in STATE.workflow_registry.list():
                 wf_names.add(wf["name"])
                 declared = wf.get("inputs", []) or []
                 req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
@@ -2701,10 +2659,9 @@ def _main():
     # ensure it exists now — otherwise the beads routes bind the CLI fallback
     # service that raises "project_path is required" (the agent-global adapter
     # ignores project_path). Reused by _init_langgraph_agent later.
-    global _beads_store
-    if _beads_store is None:
+    if STATE.beads_store is None:
         from beads import BeadsStore
-        _beads_store = BeadsStore()
+        STATE.beads_store = BeadsStore()
 
     register_operator_routes(
         fastapi_app,
@@ -2712,7 +2669,7 @@ def _main():
         subagent_list=_operator_subagent_list,
         subagent_run=_operator_subagent_run,
         subagent_batch=_operator_subagent_batch,
-        beads_store=_beads_store,
+        beads_store=STATE.beads_store,
         allowed_dirs=_operator_allowed_dirs,
         scheduler_list=_operator_scheduler_list,
         scheduler_add=_operator_scheduler_add,
@@ -2738,7 +2695,7 @@ def _main():
     # Plugin-contributed routes (ADR 0018) — mounted after the core routes,
     # under each plugin's namespaced prefix (default /plugins/<id>). Once, here;
     # routes don't hot-reload. Best-effort so one bad router can't break boot.
-    for r in _plugin_routers:
+    for r in STATE.plugin_routers:
         try:
             fastapi_app.include_router(r["router"], prefix=r["prefix"])
             log.info("[plugins] mounted router from %s at %s", r["plugin_id"], r["prefix"] or "/")
@@ -2757,29 +2714,27 @@ def _main():
         # Capture the server's event loop so an offloaded reload (#497) can
         # schedule the scheduler/Discord restart back onto it from a worker
         # thread (see _run_on_server_loop).
-        global _main_loop
         import asyncio
 
-        _main_loop = asyncio.get_running_loop()
-        if _scheduler is not None:
+        STATE.main_loop = asyncio.get_running_loop()
+        if STATE.scheduler is not None:
             try:
-                await _scheduler.start()
+                await STATE.scheduler.start()
             except Exception:
                 log.exception("[scheduler] startup failed")
-        if _cache_warmer is not None:
+        if STATE.cache_warmer is not None:
             try:
-                await _cache_warmer.start()
+                await STATE.cache_warmer.start()
             except Exception:
                 log.exception("[cache-warmer] startup failed")
         # Checkpoint pruner — periodic sweep to keep the SQLite history DB bounded.
-        global _checkpoint_prune_task
         if (
-            _checkpoint_path
-            and _graph_config is not None
-            and _graph_config.checkpoint_prune_interval_hours > 0
+            STATE.checkpoint_path
+            and STATE.graph_config is not None
+            and STATE.graph_config.checkpoint_prune_interval_hours > 0
         ):
             import asyncio
-            _checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
+            STATE.checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
         # (The inbound Discord gateway now starts as the discord plugin's surface,
         # below — ADR 0018/0019.)
@@ -2787,13 +2742,12 @@ def _main():
         # Plugin-contributed surfaces (ADR 0018) — start each on the loop. `start`
         # may be sync or async and may return a handle (kept for shutdown).
         # Best-effort: a failing surface logs, never breaks boot.
-        global _plugin_surface_handles
-        for s in _plugin_surfaces:
+        for s in STATE.plugin_surfaces:
             try:
                 res = s["start"]()
                 if asyncio.iscoroutine(res):
                     res = await res
-                _plugin_surface_handles.append(
+                STATE.plugin_surface_handles.append(
                     {"name": s["name"], "stop": s.get("stop"), "reload": s.get("reload"), "handle": res}
                 )
                 log.info("[plugins] started surface: %s", s["name"])
@@ -2803,7 +2757,7 @@ def _main():
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
         # Stop plugin surfaces first (ADR 0018) — best-effort.
-        for h in _plugin_surface_handles:
+        for h in STATE.plugin_surface_handles:
             stop = h.get("stop")
             if not callable(stop):
                 continue
@@ -2813,14 +2767,14 @@ def _main():
                     await res
             except Exception:
                 log.exception("[plugins] surface %s failed to stop", h.get("name"))
-        if _scheduler is not None:
+        if STATE.scheduler is not None:
             try:
-                await _scheduler.stop()
+                await STATE.scheduler.stop()
             except Exception:
                 log.exception("[scheduler] shutdown failed")
-        if _cache_warmer is not None:
+        if STATE.cache_warmer is not None:
             try:
-                await _cache_warmer.stop()
+                await STATE.cache_warmer.stop()
             except Exception:
                 log.exception("[cache-warmer] shutdown failed")
         try:
@@ -2828,8 +2782,8 @@ def _main():
             await _stop_discord()
         except Exception:
             log.exception("[discord] shutdown failed")
-        if _checkpoint_prune_task is not None:
-            _checkpoint_prune_task.cancel()
+        if STATE.checkpoint_prune_task is not None:
+            STATE.checkpoint_prune_task.cancel()
 
     # --- Chat API -----------------------------------------------------------
     class ChatRequest(PydanticBaseModel):
@@ -2857,16 +2811,16 @@ def _main():
     # as plain JSON to keep the surface dependency-free.
     @fastapi_app.get("/api/goal/{session_id}")
     async def _api_goal_status(session_id: str):
-        if _goal_controller is None:
+        if STATE.goal_controller is None:
             return {"enabled": False, "goal": None}
-        state = _goal_controller.store.get(session_id)
+        state = STATE.goal_controller.store.get(session_id)
         return {"enabled": True, "goal": state.to_dict() if state else None}
 
     @fastapi_app.delete("/api/goal/{session_id}")
     async def _api_goal_clear(session_id: str):
-        if _goal_controller is None:
+        if STATE.goal_controller is None:
             return {"enabled": False, "cleared": False}
-        return {"enabled": True, "cleared": _goal_controller.store.clear(session_id)}
+        return {"enabled": True, "cleared": STATE.goal_controller.store.clear(session_id)}
 
     # --- Health / readiness (ADR 0010) -------------------------------------
     # Reflects whether the graph actually compiled — the only readiness signal
@@ -2874,7 +2828,7 @@ def _main():
     @fastapi_app.get("/healthz", include_in_schema=False)
     async def _healthz():
         from graph.config_io import is_setup_complete
-        ready = _graph is not None
+        ready = STATE.graph is not None
         return JSONResponse(
             {
                 "ok": ready,
@@ -2883,7 +2837,7 @@ def _main():
                 "ui": ui,
                 # Surface the active model so eval reports can be tagged with the
                 # model under test without guessing (evals.runner auto-detects).
-                "model": _graph_config.model_name if _graph_config else None,
+                "model": STATE.graph_config.model_name if STATE.graph_config else None,
             },
             status_code=200 if ready else 503,
         )
@@ -2894,10 +2848,10 @@ def _main():
     # skill-v1 artifacts (disk = pinned SKILL.md, emitted = agent-learned).
     @fastapi_app.get("/api/playbooks")
     async def _api_playbooks():
-        if _skills_index is None:
+        if STATE.skills_index is None:
             return {"enabled": False, "playbooks": []}
         try:
-            skills = _skills_index.all_skills()
+            skills = STATE.skills_index.all_skills()
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[playbooks] all_skills failed")
             return {"enabled": True, "playbooks": []}
@@ -2912,10 +2866,10 @@ def _main():
 
     @fastapi_app.delete("/api/playbooks/{skill_id}")
     async def _api_playbook_delete(skill_id: int):
-        if _skills_index is None:
+        if STATE.skills_index is None:
             return {"enabled": False, "deleted": False}
         try:
-            _skills_index.delete_skill(skill_id)
+            STATE.skills_index.delete_skill(skill_id)
             return {"enabled": True, "deleted": True}
         except Exception as exc:  # noqa: BLE001
             log.exception("[playbooks] delete failed")
@@ -2946,18 +2900,18 @@ def _main():
 
     @fastapi_app.get("/api/knowledge/search")
     async def _api_knowledge_search(q: str = "", k: int = 30, domain: str | None = None):
-        if _knowledge_store is None:
+        if STATE.knowledge_store is None:
             return {"enabled": False, "query": q, "results": [], "stats": {}}
         results: list[dict] = []
         try:
             if q and q.strip():
-                results = [_knowledge_row(r) for r in _knowledge_store.search(q, k=k, domain=domain or None)]
+                results = [_knowledge_row(r) for r in STATE.knowledge_store.search(q, k=k, domain=domain or None)]
             else:
-                results = [_knowledge_row(c.as_dict()) for c in _knowledge_store.list_chunks(domain=domain or None, limit=k)]
+                results = [_knowledge_row(c.as_dict()) for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)]
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] search failed")
         try:
-            stats = _knowledge_store.stats()
+            stats = STATE.knowledge_store.stats()
         except Exception:  # noqa: BLE001
             stats = {}
         return {"enabled": True, "query": q, "results": results, "stats": stats}
@@ -2968,31 +2922,31 @@ def _main():
     # queries. Read-only; returns {enabled:false} when the store is off.
     @fastapi_app.get("/api/telemetry/summary")
     async def _api_telemetry_summary(since: str | None = None):
-        if _telemetry_store is None:
+        if STATE.telemetry_store is None:
             return {"enabled": False, "summary": None}
-        return {"enabled": True, "summary": _telemetry_store.summary(since_iso=since)}
+        return {"enabled": True, "summary": STATE.telemetry_store.summary(since_iso=since)}
 
     @fastapi_app.get("/api/telemetry/recent")
     async def _api_telemetry_recent(limit: int = 50):
-        if _telemetry_store is None:
+        if STATE.telemetry_store is None:
             return {"enabled": False, "turns": []}
-        return {"enabled": True, "turns": _telemetry_store.recent(limit=min(max(1, limit), 500))}
+        return {"enabled": True, "turns": STATE.telemetry_store.recent(limit=min(max(1, limit), 500))}
 
     @fastapi_app.get("/api/telemetry/insights")
     async def _api_telemetry_insights():
         # Advise-only flywheel signal (ADR 0006 Slice 4): flag outlier turns +
         # prove the levers we can measure from the per-turn store. Read-only.
-        if _telemetry_store is None:
+        if STATE.telemetry_store is None:
             return {"enabled": False, "insights": None}
         import pricing
 
-        s = _telemetry_store.summary()
-        flagged = _telemetry_store.outliers()
+        s = STATE.telemetry_store.summary()
+        flagged = STATE.telemetry_store.outliers()
         # Cache lever (proven): estimated $ saved by prompt-cache reads, billed at
         # the dominant model's input rate (the per-turn store keeps no per-call
         # model breakdown of cache reads).
         by_model = s.get("by_model") or []
-        dom_model = by_model[0]["model"] if by_model else ((_graph_config.model_name if _graph_config else "") or "")
+        dom_model = by_model[0]["model"] if by_model else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
         cache_saved = pricing.cache_read_savings_usd(dom_model, s.get("cache_read_input_tokens", 0))
         return {
             "enabled": True,
@@ -3029,7 +2983,7 @@ def _main():
     async def _api_get_config():
         from graph.config_io import config_to_dict, read_soul
         return {
-            "config": config_to_dict(_graph_config),
+            "config": config_to_dict(STATE.graph_config),
             "soul": read_soul(),
         }
 
@@ -3062,8 +3016,8 @@ def _main():
         from graph.config_io import list_gateway_models
 
         body = req or ModelsProbeRequest()
-        base = body.api_base or (_graph_config.api_base if _graph_config else "")
-        key = body.api_key or (_graph_config.api_key if _graph_config else "")
+        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
+        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
         models, error = list_gateway_models(base, key)
         return {"models": models, "error": error}
 
@@ -3080,9 +3034,9 @@ def _main():
         from graph.config_io import validate_model_connection
 
         body = req or ModelsProbeRequest()
-        base = body.api_base or (_graph_config.api_base if _graph_config else "")
-        key = body.api_key or (_graph_config.api_key if _graph_config else "")
-        model = body.model or (_graph_config.model_name if _graph_config else "")
+        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
+        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
+        model = body.model or (STATE.graph_config.model_name if STATE.graph_config else "")
         ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
         return {"ok": ok, "error": error}
 
@@ -3133,9 +3087,9 @@ def _main():
         from graph.settings_schema import build_schema
 
         models: list[str] = []
-        if _graph_config is not None:
-            models, _ = list_gateway_models(_graph_config.api_base, _graph_config.api_key)
-        return {"groups": build_schema(_graph_config, model_options=models)}
+        if STATE.graph_config is not None:
+            models, _ = list_gateway_models(STATE.graph_config.api_base, STATE.graph_config.api_key)
+        return {"groups": build_schema(STATE.graph_config, model_options=models)}
 
     class SettingsUpdateRequest(PydanticBaseModel):
         updates: dict[str, Any] = {}
@@ -3229,8 +3183,7 @@ def _main():
         initialize_a2a_stores,
     )
 
-    global _telemetry_store
-    _telemetry_store = _build_telemetry_store(_graph_config)
+    STATE.telemetry_store = _build_telemetry_store(STATE.graph_config)
 
     # ADR 0003 / 0006: record telemetry + surface Activity output on terminal.
     set_terminal_hook(_a2a_terminal)
@@ -3245,7 +3198,7 @@ def _main():
     # protoAgent has no separate apiKey-only flag, so unset ⇒ env, not off.)
     a2a_auth.install(
         fastapi_app,
-        bearer_token=((_graph_config.auth_token if _graph_config else "") or None),
+        bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),
         api_key=os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", ""),
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
     )
@@ -3268,7 +3221,7 @@ def _main():
             return None
         from graph.structured_skill import finalize_structured
         return await finalize_structured(
-            skill_id, spec["schema"], spec["mime"], final_text, _graph_config
+            skill_id, spec["schema"], spec["mime"], final_text, STATE.graph_config
         )
 
     _a2a_push_client = httpx.AsyncClient(timeout=30)

@@ -30,7 +30,7 @@ def test_log_empty_origin_becomes_operator(tmp_path):
 
 def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
     log = ActivityLog(str(tmp_path / "a.db"))
-    monkeypatch.setattr(server, "_activity_log", log)
+    monkeypatch.setattr(server.STATE, "activity_log", log)
     published: list = []
     monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
 
@@ -51,6 +51,6 @@ def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
 
 def test_terminal_hook_ignores_non_activity_context(tmp_path, monkeypatch):
     log = ActivityLog(str(tmp_path / "a.db"))
-    monkeypatch.setattr(server, "_activity_log", log)
+    monkeypatch.setattr(server.STATE, "activity_log", log)
     server._a2a_terminal(TurnOutcome(task_id="t", context_id="a-chat", state="completed", text="hi"))
     assert log.recent() == []

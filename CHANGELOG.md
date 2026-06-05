@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: `server.py`'s 26 ambient module-globals → an `AppState` container**
+  (ADR 0023, phase 1). Runtime state (graph, stores, registries, scheduler,
+  MCP/plugin state) now lives in `runtime/state.py` as a named, injectable
+  singleton (`STATE`) instead of bare module globals — the foundation for
+  splitting the 3,353-line monolith into focused modules. Zero functional change
+  (1000 tests + a full live smoke green); fork-relevant if you patched
+  `server._<global>` (now `server.STATE.<field>`).
+
+### Changed
 - **Semantic recall is on by default.** `knowledge.embeddings` now defaults to
   `true` and `embed_model` to `qwen3-embedding` (what the protoLabs gateway
   serves). The store fuses FTS5 + vector search so it finds paraphrases keyword
