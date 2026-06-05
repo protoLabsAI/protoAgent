@@ -28,3 +28,4 @@ decision, numbered, never deleted (supersede instead).
 | [0017](./0017-google-ui-config.md) | In-app Google (Gmail + Calendar) connect flow | Accepted |
 | [0018](./0018-plugin-surfaces-routes-subagents.md) | Plugins contribute surfaces, routes & subagents | Accepted |
 | [0019](./0019-plugin-config-settings-secrets.md) | Plugins contribute config, settings & secrets | Accepted |
+| [0020](./0020-console-ia-run-from-chat.md) | Console IA: run from Chat, manage from surfaces | Accepted |

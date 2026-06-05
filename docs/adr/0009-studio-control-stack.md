@@ -1,10 +1,10 @@
 # ADR 0009 — The Studio control stack (goals · workflows · subagents · skills)
 
-- **Status:** Accepted (2026-06-01) — model locked; console IA reshape + the surfaced gaps are follow-up PRs
+- **Status:** Accepted (2026-06-01) — model locked; console reshape shipped, then its IA refined by ADR 0020
 - **Date:** 2026-06-01
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, console, ux, information-architecture, goals, workflows, skills, subagents
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** The control-stack **model** stands; the **console IA** of §3–§4 is refined by [ADR 0020](./0020-console-ia-run-from-chat.md) (run from Chat, manage from surfaces).
 
 > Accepted. The operator console's "Studio" surface grew four sibling tabs —
 > **Goals, Workflows, Skills, Batch subagents** — that read as a pile of separate
