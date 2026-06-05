@@ -358,3 +358,17 @@ export type Playbook = {
   last_used: string | null;
   created_at: string | null;
 };
+
+// One row from the knowledge store (knowledge/store.py chunks table), as the
+// searchable Knowledge → Store view consumes it (ADR 0020).
+export type KnowledgeChunk = {
+  id: number;
+  heading: string;
+  content: string;
+  preview: string;
+  domain: string;
+  source: string | null;
+  source_type: string | null;
+  finding_type: string | null;
+  created_at: string | null;
+};

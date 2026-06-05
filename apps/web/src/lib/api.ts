@@ -7,6 +7,7 @@ import type {
   GoalState,
   HitlPayload,
   InboxItem,
+  KnowledgeChunk,
   NotesWorkspace,
   RuntimeStatus,
   ScheduledJob,
@@ -314,6 +315,15 @@ export const api = {
 
   playbooks() {
     return request<{ enabled: boolean; playbooks: Playbook[] }>("/api/playbooks");
+  },
+
+  knowledgeSearch(q: string) {
+    return request<{
+      enabled: boolean;
+      query: string;
+      results: KnowledgeChunk[];
+      stats: Record<string, number>;
+    }>(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
   },
 
   deletePlaybook(id: number) {
