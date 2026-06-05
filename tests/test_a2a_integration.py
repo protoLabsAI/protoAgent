@@ -136,10 +136,13 @@ def test_structured_skill_advertises_mime_and_exposes_schema(monkeypatch) -> Non
     card's output_modes, and structured_skill_schema() hands the executor the
     schema to enforce. Free-text skills stay None (default)."""
     import server
+    import server.a2a
 
     mime = "application/vnd.protolabs.market-review-v1+json"
     schema = {"type": "object", "properties": {"verdict": {"type": "string"}}, "required": ["verdict"]}
-    monkeypatch.setattr(server, "_SKILL_SPECS", [{
+    # _SKILL_SPECS lives in server.a2a (ADR 0023 phase 2); _agent_skills /
+    # structured_skill_schema read it from there, so patch it at its home.
+    monkeypatch.setattr(server.a2a, "_SKILL_SPECS", [{
         "id": "market_review", "name": "Market Review", "description": "d",
         "tags": [], "examples": [], "output_schema": schema, "result_mime": mime,
     }])
@@ -150,7 +153,7 @@ def test_structured_skill_advertises_mime_and_exposes_schema(monkeypatch) -> Non
     assert got == {"schema": schema, "mime": mime}
 
     # A skill with no schema → free text (no output_modes, no lookup).
-    monkeypatch.setattr(server, "_SKILL_SPECS", [{
+    monkeypatch.setattr(server.a2a, "_SKILL_SPECS", [{
         "id": "chat", "name": "Chat", "description": "d", "tags": [], "examples": [],
     }])
     assert "outputModes" not in MessageToDict(server._agent_skills()[0])
