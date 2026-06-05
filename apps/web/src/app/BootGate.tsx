@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ProtoLabsIcon } from "./ProtoLabsIcon";
 
 /**
  * Cold-start boot gate (adapted from ORBIS's BootStatus). The desktop build
@@ -49,11 +50,7 @@ export function BootGate({ ready, failed, name, onRetry, onContinue }: BootGateP
   return (
     <div className="boot-gate" role="status" aria-live="polite">
       <div className="boot-gate-inner">
-        <img
-          src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`}
-          alt=""
-          className="boot-gate-mark"
-        />
+        <ProtoLabsIcon variant="outline" size={56} className="boot-gate-mark" decorative />
         {failed ? (
           <>
             <div className="boot-gate-title">{name} isn’t responding</div>

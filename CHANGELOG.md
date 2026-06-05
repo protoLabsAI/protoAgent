@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Console loading screen: better-styled logo (matches ORBIS).** The launch
+  brand splash (`IntroSplash`) and cold-start `BootGate` rendered the bot mark
+  as a static `<img>` in the brand-default violet `#7c3aed` — muddy on the dark
+  background. Ported ORBIS's inline `ProtoLabsIcon` component (variants
+  `flat`/`outline`/`white`, plus a `decorative` a11y prop) and switched both
+  screens to the `outline` variant in the lavender chrome accent `#9b87f2`, so
+  the mark is a crisp inline SVG that pops against the chrome. Wordmark + glow
+  unchanged. (Topbar `brand-mark` + favicon still use the static asset — a
+  follow-up if we want full consistency.)
+
 ## [0.13.2] - 2026-06-04
 
 ### Fixed
