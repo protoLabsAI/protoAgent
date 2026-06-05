@@ -191,9 +191,28 @@ function dataByMime(parts: RawPart[] | undefined, mime: string): unknown {
   return part.data ?? null;
 }
 
-/** Pull a structured tool event ({id, name, phase, input|output}) off a frame's parts. */
+/** Pull a structured tool event off a frame's parts and map the A2A 1.0 wire
+ * payload (`{toolCallId, name, phase: "started"|"completed", args, result}`)
+ * onto the frontend `ToolEvent` (`{id, name, phase: "start"|"end", input,
+ * output}`).
+ *
+ * The field rename is load-bearing: casting the raw payload straight to
+ * `ToolEvent` left `id`/`input`/`output` undefined and `phase` never `"start"`.
+ * With `id` undefined, `onToolCall`'s `findIndex(c => c.id === evt.id)` matched
+ * the FIRST card on every event, so all of a turn's tool calls collapsed into a
+ * single ever-overwriting card — the "only one tool at a time" symptom. */
 function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
-  return (dataByMime(parts, TOOL_CALL_MIME) as ToolEvent) || null;
+  const d = dataByMime(parts, TOOL_CALL_MIME) as
+    | { toolCallId?: string; name?: string; phase?: string; args?: string; result?: string }
+    | null;
+  if (!d) return null;
+  return {
+    id: d.toolCallId || "",
+    name: d.name || "",
+    phase: d.phase === "started" ? "start" : "end",
+    input: d.args,
+    output: d.result,
+  };
 }
 
 /** Pull the HITL form/question payload off an input-required frame's parts. */

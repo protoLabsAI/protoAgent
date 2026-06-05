@@ -280,6 +280,19 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
 
   // A status-update frame carrying optional text + a tool-call DataPart.
+  // Emit the REAL a2a-sdk tool-call-v1 wire payload, not the frontend ToolEvent
+  // shape. The backend sends `{toolCallId, name, phase: "started"|"completed",
+  // args, result}`; the fixtures author events in the readable frontend shape
+  // (`{id, phase: "start"|"end", input, output}`), so map here. (An LF-style gap
+  // — fixtures in the frontend shape — is exactly what hid the client's field-
+  // mapping bug from CI; the mock must mirror the wire shape so the e2e guards it.)
+  const toWire = (ev) => ({
+    toolCallId: ev.id,
+    name: ev.name,
+    phase: ev.phase === "start" ? "started" : "completed",
+    args: ev.input,
+    result: ev.output,
+  });
   const statusFrame = (text, toolEvent) =>
     wrap({
       kind: "status-update",
@@ -291,7 +304,7 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
           role: "agent",
           parts: [
             { kind: "text", text },
-            ...(toolEvent ? [{ kind: "data", data: toolEvent, metadata: { mimeType: TOOL_CALL_MIME } }] : []),
+            ...(toolEvent ? [{ kind: "data", data: toWire(toolEvent), metadata: { mimeType: TOOL_CALL_MIME } }] : []),
           ],
         },
       },
