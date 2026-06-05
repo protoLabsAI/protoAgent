@@ -1,6 +1,6 @@
 # ADR 0023 — Decompose server.py: an AppState container + a composition root
 
-- **Status:** Accepted (2026-06-05) — phased; each phase is its own live-smoked PR
+- **Status:** Accepted (2026-06-05) — phased; each phase is its own live-smoked PR. **Phases 1 & 2 shipped (#547, #549–#552); phase 3 (route groups) is next.**
 - **Date:** 2026-06-05
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, refactor, server, maintainability
@@ -94,12 +94,20 @@ the risk is regression, not design. Therefore:
 
 ## 4. Implementation (phased)
 
-1. **AppState** — `runtime/state.py` + replace the 26 globals. Biggest, most
-   mechanical; the foundation everything else stands on.
-2. **Backends** — extract `server/chat.py`, `server/a2a.py`,
-   `server/agent_init.py` (one PR each, or grouped if small).
-3. **Route groups** — move inline route bodies into `operator_api/*`; `_main()`
-   shrinks to app assembly.
+1. **AppState** ✅ *shipped (#547)* — `runtime/state.py` + replace the 26
+   globals. Biggest, most mechanical; the foundation everything else stands on.
+2. **Backends** ✅ *shipped (#549–#552)* — extracted as a `server/` package
+   (`server.py` could not coexist with a `server/` dir, so it was promoted to
+   `server/__init__.py` + `server/__main__.py`; launch is now `python -m
+   server`). Then one PR each: `server/a2a.py` (#550), `server/chat.py` (#551),
+   `server/agent_init.py` (#552). The composition root dropped **3,353 → ~1,354
+   lines**; each PR was live-smoked (boot, chat turn, A2A round-trip, hot
+   reload). The cross-module shared surface stayed tiny — `STATE` plus
+   `agent_name` / `AGENT_NAME_ENV` / `_event_bus` / `_bundle_root`, re-exported
+   from `__init__` so `server.<symbol>` is unchanged.
+3. **Route groups** — *next* — move the inline `_main()` route bodies into
+   `operator_api/*`; `_main()` shrinks toward app assembly. The ~1,354 remaining
+   root lines are mostly these handlers.
 
 ## 5. Alternatives considered
 
