@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assembly). Each group becomes a `register_*_routes(app)` function matching the
   existing `register_operator_routes`, so the handler bodies (which only touch
   `STATE` now) become testable without booting the server. Extracted so far:
-  `operator_api/telemetry_routes.py` (`/api/telemetry/*`) and
-  `operator_api/knowledge_routes.py` (`/api/knowledge/search` + `/api/playbooks`).
+  `operator_api/telemetry_routes.py` (`/api/telemetry/*`),
+  `operator_api/knowledge_routes.py` (`/api/knowledge/search` + `/api/playbooks`),
+  and `operator_api/config_routes.py` (`/api/config*` + `/api/settings*`).
 - **Internal: agent init / builders / reload / settings moved to
   `server/agent_init.py`** (ADR 0023, phase 2 — final backend extraction).
   `_init_langgraph_agent`, the ten `_build_*` component builders
