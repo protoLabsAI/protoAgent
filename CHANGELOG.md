@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: the A2A surface moved to `server/a2a.py`** (ADR 0023, phase 2).
+  Agent-card building, skill declarations (`_SKILL_SPECS` + `_agent_skills` +
+  `structured_skill_schema`), the per-turn telemetry writer, and the executor
+  terminal hook now live in their own module; `server/__init__.py` re-exports
+  every name so `server.<symbol>` is unchanged. Pure move (1000 tests + a live
+  A2A 1.0 round-trip green). Fork-relevant only if you *monkeypatch*
+  `server._SKILL_SPECS` at runtime — patch `server.a2a._SKILL_SPECS` instead
+  (editing the source list works as before).
 - **`server.py` is now a `server/` package** (ADR 0023, phase 2 prep). The
   monolith moved to `server/__init__.py` (the composition root) with a
   `server/__main__.py` entry, so the backends can be extracted into
