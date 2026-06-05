@@ -37,6 +37,7 @@ import { SettingsSurface } from "../settings/SettingsSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
+import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { NotesWorkspace } from "../lib/types";
 import { StatusPill } from "./StatusPill";
@@ -135,9 +136,9 @@ export function App() {
   const runtime = runtimeQ.data ?? null;
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
+  // brandName() display-cases a bare lower-case slug (e.g. `gina` → `Gina`).
   useEffect(() => {
-    const name = runtime?.identity?.name;
-    if (name) document.title = name;
+    document.title = brandName(runtime?.identity?.name);
   }, [runtime]);
   // BootGate gating: show the app once the engine is ready (graph compiled) OR
   // the setup wizard is due (no graph expected pre-setup). `bootOverride` is the
@@ -472,7 +473,7 @@ export function App() {
       <BootGate
         ready={bootReady}
         failed={!runtime && runtimeQ.isError}
-        name={runtime?.identity?.name || "protoAgent"}
+        name={brandName(runtime?.identity?.name)}
         onRetry={() => void runtimeQ.refetch()}
         onContinue={() => setBootOverride(true)}
       />
@@ -488,7 +489,7 @@ export function App() {
             {/* White-label: the brand name follows the configured identity
                 (Settings → Identity), defaulting to protoAgent for the template.
                 A fork sets its name once and the whole UI follows. */}
-            <div className="brand-name">{runtime?.identity?.name || "protoAgent"}</div>
+            <div className="brand-name">{brandName(runtime?.identity?.name)}</div>
             <div className="brand-subline">protoLabs.studio</div>
           </div>
         </div>
