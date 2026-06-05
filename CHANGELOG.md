@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Subagents are runnable as chat slash commands** (ADR 0020). A message like
+  `/researcher find the latest on X` runs the named subagent and returns its
+  output — the composer analogue of the `task` tool, so "run a worker" is a
+  gesture, not a separate surface. Every registered subagent (built-in + plugin)
+  is offered in the `/` autocomplete alongside `/goal` and the workflow
+  commands. A workflow of the same name wins; a bare `/<subagent>` shows a usage
+  hint; an unknown `/name` falls through to a normal turn. First step toward
+  collapsing Studio to Workflows-only (the Run tab becomes redundant).
+
 ### Changed
 - **Console loading screen: better-styled logo (matches ORBIS).** The launch
   brand splash (`IntroSplash`) and cold-start `BootGate` rendered the bot mark
