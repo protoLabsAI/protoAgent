@@ -396,6 +396,7 @@ def _main():
 
     # --- React operator-console API ----------------------------------------
     from graph.config_io import is_setup_complete as _operator_setup_complete
+    from operator_api.knowledge_routes import register_knowledge_routes
     from operator_api.routes import register_operator_routes
     from operator_api.runtime import build_runtime_status as _build_operator_status
     from operator_api.telemetry_routes import register_telemetry_routes
@@ -891,79 +892,9 @@ def _main():
             status_code=200 if ready else 503,
         )
 
-    # --- Playbooks (skills surface, ADR 0009) ------------------------------
-    # Browse + manage the procedural-memory skill index (skills.db) the operator
-    # was otherwise blind to. "Playbooks" is the operator-facing name for the
-    # skill-v1 artifacts (disk = pinned SKILL.md, emitted = agent-learned).
-    @fastapi_app.get("/api/playbooks")
-    async def _api_playbooks():
-        if STATE.skills_index is None:
-            return {"enabled": False, "playbooks": []}
-        try:
-            skills = STATE.skills_index.all_skills()
-        except Exception:  # noqa: BLE001 — never 500 the console
-            log.exception("[playbooks] all_skills failed")
-            return {"enabled": True, "playbooks": []}
-        # Drop the (potentially large) prompt_template from the list payload;
-        # the table only needs metadata. Sort pinned-first, then by confidence.
-        out = [
-            {k: v for k, v in s.items() if k != "prompt_template"}
-            for s in skills
-        ]
-        out.sort(key=lambda s: (s.get("source") != "disk", -(s.get("confidence") or 0)))
-        return {"enabled": True, "playbooks": out}
-
-    @fastapi_app.delete("/api/playbooks/{skill_id}")
-    async def _api_playbook_delete(skill_id: int):
-        if STATE.skills_index is None:
-            return {"enabled": False, "deleted": False}
-        try:
-            STATE.skills_index.delete_skill(skill_id)
-            return {"enabled": True, "deleted": True}
-        except Exception as exc:  # noqa: BLE001
-            log.exception("[playbooks] delete failed")
-            return {"enabled": True, "deleted": False, "error": str(exc)}
-
-    # --- Knowledge store (ADR 0020) ----------------------------------------
-    # Searchable view of the agent's knowledge base (knowledge/store.py, FTS5):
-    # findings, daily-log entries, harvested sessions, operator notes — the same
-    # store KnowledgeMiddleware queries before each turn. An empty ``q`` returns
-    # the most-recent chunks (a browsable default); a non-empty ``q`` runs FTS5
-    # search. Read-only; never 500s the console.
-    def _knowledge_row(d: dict) -> dict:
-        """Normalize a search()/list_chunks() row to the console's shape."""
-        heading = d.get("heading") or ""
-        content = d.get("content") or ""
-        preview = d.get("preview") or ((heading + ": " if heading else "") + content)[:240]
-        return {
-            "id": d.get("id"),
-            "heading": heading,
-            "content": content,
-            "preview": preview,
-            "domain": d.get("domain") or "general",
-            "source": d.get("source"),
-            "source_type": d.get("source_type"),
-            "finding_type": d.get("finding_type"),
-            "created_at": d.get("created_at"),
-        }
-
-    @fastapi_app.get("/api/knowledge/search")
-    async def _api_knowledge_search(q: str = "", k: int = 30, domain: str | None = None):
-        if STATE.knowledge_store is None:
-            return {"enabled": False, "query": q, "results": [], "stats": {}}
-        results: list[dict] = []
-        try:
-            if q and q.strip():
-                results = [_knowledge_row(r) for r in STATE.knowledge_store.search(q, k=k, domain=domain or None)]
-            else:
-                results = [_knowledge_row(c.as_dict()) for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)]
-        except Exception:  # noqa: BLE001 — never 500 the console
-            log.exception("[knowledge] search failed")
-        try:
-            stats = STATE.knowledge_store.stats()
-        except Exception:  # noqa: BLE001
-            stats = {}
-        return {"enabled": True, "query": q, "results": results, "stats": stats}
+    # Knowledge store + Playbooks (ADR 0020). Extracted to
+    # operator_api/knowledge_routes.py (ADR 0023 phase 3).
+    register_knowledge_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
