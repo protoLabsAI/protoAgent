@@ -109,8 +109,21 @@ export type InboxItem = {
 
 export type ActivityMessage = { role: "user" | "assistant"; content: string };
 
+// One provenance feed entry (ADR 0022): an agent-initiated turn + what triggered it.
+export type ActivityEntry = {
+  id: number;
+  created_at: string;
+  origin: string;        // scheduler | inbox | webhook | a2a | operator
+  trigger: string;       // job id / inbox source (human label), may be ""
+  priority: string;      // inbox tier when applicable, else ""
+  state: string;
+  text: string;
+  task_id: string;
+};
+
 export type ActivityHistory = {
   context_id: string;
+  entries: ActivityEntry[];
   messages: ActivityMessage[];
 };
 

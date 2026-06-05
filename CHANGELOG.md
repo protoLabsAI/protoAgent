@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Activity is a provenance feed, not a second chat** (ADR 0022). Every
+  reactive turn is tagged with *what triggered it* (scheduled job / webhook /
+  inbox source / sister-agent / your reply) — the backend tracked this `origin`
+  on the A2A metadata but dropped it before the UI, so Activity just showed
+  `agent: <text>`. Now `origin`/`trigger`/`priority` ride `TurnOutcome`, land in
+  a small `activity` log, and the console renders a timeline where each entry
+  shows its trigger badge + time + priority, openable to continue. Answers "why
+  did the agent just do that?" at a glance.
+
+### Fixed
+- **Inbox `now`-fire was silently broken since the A2A 1.0 migration.** The
+  inbox→Activity fire self-POSTed with the retired 0.3 wire shape (`message/send`,
+  `role: "user"`, params-level `contextId`, no `A2A-Version` header), which
+  a2a-sdk 1.1 rejects with `-32601`/`-32602` — and the fire reported success
+  because a JSON-RPC error rides an HTTP 200. So `now`-priority inbox items never
+  reached the agent. Migrated to the 1.0 shape (matching the scheduler's fire)
+  and the success check now inspects the JSON-RPC error. Found by the Activity
+  audit; verified live (a `now` item now fires and lands in the feed).
+
+### Added
 - **`fact_recall` eval** — locks the new semantic-fact bucket: a `domain="fact"`
   chunk (what the harvest extractor produces) is passively recalled by the
   KnowledgeMiddleware and surfaced in the answer. Tracked alongside the existing

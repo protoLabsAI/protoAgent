@@ -53,6 +53,10 @@ export const SUBAGENTS = [
 
 export const ACTIVITY_HISTORY = {
   context_id: "system:activity",
+  entries: [
+    { id: 1, created_at: "2026-06-05T09:00:00+00:00", origin: "scheduler", trigger: "daily-brief", priority: "", state: "completed", text: "3 PRs merged overnight, CI green.", task_id: "t1" },
+    { id: 2, created_at: "2026-06-05T09:05:00+00:00", origin: "inbox", trigger: "ci", priority: "now", state: "completed", text: "Build failed on main — investigating.", task_id: "t2" },
+  ],
   messages: [
     { role: "user", content: "morning standup" },
     { role: "assistant", content: "3 PRs merged overnight, CI green." },
