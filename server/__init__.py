@@ -2026,217 +2026,23 @@ def agent_name() -> str:
     return AGENT_NAME_ENV
 
 
-def _bearer_configured() -> bool:
-    return bool(os.environ.get("A2A_AUTH_TOKEN", "") or (STATE.graph_config and STATE.graph_config.auth_token))
-
-
-# Skill declarations (ADR-0006 addendum / #476). A skill MAY declare an
-# ``output_schema`` (JSON Schema) + ``result_mime`` — when present, the agent
-# enforces the schema via a forced-tool-call finalizer in the executor and emits
-# the result as a typed DataPart (``protolabs_a2a.emit_skill_result``), and the
-# card advertises the MIME in that skill's ``output_modes``. No schema ⇒ free
-# text (today's default). The schema lives HERE (skill config), not on the card
-# — ``AgentSkill`` only carries ``output_modes`` (the MIME), per the A2A spec.
-#
-# REPLACE when forking. The template ships one free-text placeholder so a fresh
-# clone is callable; the commented fields below show a structured skill.
-_SKILL_SPECS: list[dict] = [
-    {
-        "id": "chat",
-        "name": "Chat",
-        "description": "General-purpose chat interface. Replace with your agent's real skills.",
-        "tags": ["template"],
-        "examples": ["hello", "what can you do?"],
-        # To make a skill return schema-enforced structured output, add:
-        #   "output_schema": {"type": "object", "properties": {...}, "required": [...]},
-        #   "result_mime": "application/vnd.protolabs.<your-skill>-v1+json",
-    },
-]
-
-
-def _agent_skills():
-    """Build the card's ``AgentSkill`` list from ``_SKILL_SPECS``. A spec with a
-    ``result_mime`` advertises it in ``output_modes`` (the A2A-native way to tell
-    consumers the skill emits that structured type)."""
-    from a2a.types import AgentSkill
-
-    skills = []
-    for s in _SKILL_SPECS:
-        kwargs = dict(
-            id=s["id"],
-            name=s["name"],
-            description=s["description"],
-            tags=s.get("tags", []),
-            examples=s.get("examples", []),
-        )
-        if s.get("result_mime"):
-            kwargs["output_modes"] = [s["result_mime"]]
-        skills.append(AgentSkill(**kwargs))
-    return skills
-
-
-def structured_skill_schema(skill_id: str) -> dict | None:
-    """For a skill that declares structured output, return
-    ``{"schema": <JSON Schema>, "mime": <result_mime>}``; else ``None`` (free
-    text). The executor's structured finalizer (#476) reads this to run the
-    forced-tool-call against the schema and emit the validated object as a
-    ``result_mime`` DataPart. The schema isn't on the card (``AgentSkill`` has no
-    schema field) — it lives in ``_SKILL_SPECS``."""
-    for s in _SKILL_SPECS:
-        if s["id"] == skill_id and s.get("output_schema") and s.get("result_mime"):
-            return {"schema": s["output_schema"], "mime": s["result_mime"]}
-    return None
-
-
-def _package_version() -> str:
-    """Single-source the agent-card version from the package metadata.
-
-    ``pyproject.toml`` ``[project].version`` is the one source of truth (the
-    release pipeline bumps it). Prefer installed-package metadata; fall back
-    to reading pyproject.toml (it's shipped in the image via ``COPY .``);
-    final fallback keeps the card valid if neither is available.
-    """
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-
-        try:
-            return version("protoagent")
-        except PackageNotFoundError:
-            pass
-    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
-        pass
-
-    pyproject = _bundle_root() / "pyproject.toml"
-    try:
-        m = re.search(
-            r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE
-        )
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
-    return "0.0.0"
-
-
-def _a2a_card_url() -> str:
-    """The reachable JSON-RPC endpoint to advertise in the A2A card's interface.
-
-    The card tells other agents *where to send* ``message/send``, so this must
-    be the agent's externally-reachable address — not the bind host. Prefer an
-    explicit ``A2A_PUBLIC_URL`` (set this for any deployed agent: behind a proxy
-    / in a container the public address isn't the bound port). Fall back to the
-    actually-bound loopback port (``STATE.active_port``) for local + desktop runs —
-    correct there because the client is on the same host (and the desktop's port
-    is dynamic). The ``/a2a`` suffix is the JSON-RPC route.
-    """
-    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
-    if not base:
-        base = f"http://127.0.0.1:{STATE.active_port}"
-    return f"{base}/a2a"
-
-
-def _build_agent_card_proto():
-    """Build the A2A 1.0 ``AgentCard`` (proto) served at
-    ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
-    via ``protolabs_a2a.build_agent_card``.
-
-    **Fork this.** Replace ``name``, ``description``, and ``_agent_skills()``
-    with your agent's actual surface. The four custom extensions
-    (cost / confidence / worldstate-delta / tool-call) are declared by default
-    — this template emits cost-v1 + confidence-v1 from ``_chat_langgraph_stream``
-    and worldstate-delta / tool-call when a tool reports them.
-
-    The interface ``url`` (``_a2a_card_url``) targets the JSON-RPC endpoint
-    (``/a2a``) at the agent's reachable address — set ``A2A_PUBLIC_URL`` when
-    deployed; otherwise it's the bound loopback port.
-    """
-    import protolabs_a2a as pa
-
-    return pa.build_agent_card(
-        name=agent_name(),
-        description=(
-            "protoAgent template — A2A 1.0 LangGraph agent. "
-            "Replace this description with your agent's actual purpose."
-        ),
-        url=_a2a_card_url(),
-        version=_package_version(),
-        skills=_agent_skills(),
-        bearer=_bearer_configured(),
-    )
-
-
-def _record_a2a_telemetry(outcome) -> None:
-    """Write one per-turn telemetry row from an executor ``TurnOutcome``
-    (ADR 0006 Slice 2). No-op when the telemetry store is off; best-effort so a
-    failure never affects the turn."""
-    store = STATE.telemetry_store
-    if store is None:
-        return
-    try:
-        u = outcome.usage or {}
-        primary_model = outcome.models[0] if outcome.models else (
-            (STATE.graph_config.model_name if STATE.graph_config else "") or ""
-        )
-        input_tokens = int(u.get("input_tokens", 0) or 0)
-        output_tokens = int(u.get("output_tokens", 0) or 0)
-        from datetime import datetime, timedelta, timezone
-        ended = datetime.now(timezone.utc)
-        created = ended - timedelta(milliseconds=int(outcome.duration_ms or 0))
-        store.record({
-            "task_id": outcome.task_id,
-            "session_id": outcome.context_id,
-            "state": outcome.state,
-            "success": 1 if outcome.state == "completed" else 0,
-            "model": primary_model,
-            "models": ",".join(outcome.models),
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-            "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
-            "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
-            "cost_usd": float(outcome.cost_usd or 0.0),
-            "duration_ms": int(outcome.duration_ms or 0),
-            "llm_calls": int(outcome.llm_calls),
-            "tool_calls": int(outcome.tool_calls),
-            "created_at": created.isoformat(),
-            "ended_at": ended.isoformat(),
-        })
-    except Exception:  # noqa: BLE001 — telemetry is best-effort
-        log.exception("[telemetry] failed to record turn %s", outcome.task_id)
-
-
-def _a2a_terminal(outcome) -> None:
-    """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
-    a ``TurnOutcome`` when a turn reaches a terminal state. Records the per-turn
-    telemetry row and surfaces the Activity thread's answer on the event bus.
-    Best-effort — never raises into the executor."""
-    _record_a2a_telemetry(outcome)
-    if outcome.context_id != ACTIVITY_CONTEXT:
-        return
-    text = extract_output(outcome.text) or outcome.text
-    if not text.strip():
-        return
-    origin = getattr(outcome, "origin", "") or "operator"
-    trigger = getattr(outcome, "trigger", "") or ""
-    priority = getattr(outcome, "priority", "") or ""
-    # Provenance feed (ADR 0022): durably log the turn + what triggered it.
-    if STATE.activity_log is not None:
-        STATE.activity_log.add(
-            context_id=ACTIVITY_CONTEXT,
-            origin=origin,
-            trigger=trigger,
-            priority=priority,
-            state=getattr(outcome, "state", "completed"),
-            text=text,
-            task_id=getattr(outcome, "task_id", "") or "",
-        )
-    _event_bus.publish(
-        "activity.message",
-        {
-            "role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT,
-            "origin": origin, "trigger": trigger, "priority": priority,
-        },
-    )
+# A2A surface (ADR 0023 phase 2) — card building, skill declarations, per-turn
+# telemetry, and the executor terminal hook live in ``server/a2a.py``. They're
+# re-exported here so ``server.<symbol>`` keeps resolving for ``_main``'s a2a-sdk
+# wiring below and for the test suite. ``a2a.py`` imports ``agent_name`` /
+# ``_event_bus`` / ``_bundle_root`` from this module — all defined above, so this
+# import is not a cycle.
+from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A surface
+    _SKILL_SPECS,
+    _a2a_card_url,
+    _a2a_terminal,
+    _agent_skills,
+    _bearer_configured,
+    _build_agent_card_proto,
+    _package_version,
+    _record_a2a_telemetry,
+    structured_skill_schema,
+)
 
 
 # ---------------------------------------------------------------------------
