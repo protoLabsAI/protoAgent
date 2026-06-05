@@ -16,8 +16,8 @@ async def test_run_on_server_loop_from_worker_thread_runs_on_main_loop():
     """Scheduled from a worker thread (no running loop) → runs on _main_loop."""
     import server
 
-    saved = server._main_loop
-    server._main_loop = asyncio.get_running_loop()
+    saved = server.STATE.main_loop
+    server.STATE.main_loop = asyncio.get_running_loop()
     try:
         ran = asyncio.Event()
         ran_on = {}
@@ -32,9 +32,9 @@ async def test_run_on_server_loop_from_worker_thread_runs_on_main_loop():
 
         await asyncio.to_thread(_from_worker_thread)
         await asyncio.wait_for(ran.wait(), timeout=3)
-        assert ran_on["loop"] is server._main_loop
+        assert ran_on["loop"] is server.STATE.main_loop
     finally:
-        server._main_loop = saved
+        server.STATE.main_loop = saved
 
 
 @pytest.mark.asyncio

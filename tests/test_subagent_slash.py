@@ -13,7 +13,7 @@ import server
 def test_known_subagent_parses_to_type_and_prompt():
     # SUBAGENT_REGISTRY always carries the builtin `researcher`; _workflow_registry
     # is None in a bare import, so there's no name collision to defer to.
-    assert server._workflow_registry is None
+    assert server.STATE.workflow_registry is None
     assert server._parse_subagent_command("/researcher find the latest on X") == (
         "researcher",
         "find the latest on X",
@@ -40,7 +40,7 @@ def test_workflow_of_same_name_takes_precedence(monkeypatch):
         def get(self, name):
             return {"name": name} if name == "researcher" else None
 
-    monkeypatch.setattr(server, "_workflow_registry", _Reg())
+    monkeypatch.setattr(server.STATE, "workflow_registry", _Reg())
     assert server._parse_subagent_command("/researcher hi") is None
     # A subagent name the workflow registry doesn't claim still parses.
     assert server._parse_subagent_command("/antagonist poke holes in Y") == (

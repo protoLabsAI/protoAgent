@@ -149,12 +149,12 @@ def telemetry_server(store):
     we leave it unset so the primary model comes from the turn's actual models."""
     import server
 
-    prev = server._telemetry_store
-    server._telemetry_store = store
+    prev = server.STATE.telemetry_store
+    server.STATE.telemetry_store = store
     try:
         yield server
     finally:
-        server._telemetry_store = prev
+        server.STATE.telemetry_store = prev
 
 
 def _outcome(**kw):
@@ -251,15 +251,15 @@ def test_record_tools_deferred_noop_when_disabled():
 def test_record_telemetry_noop_when_store_unset():
     import server
 
-    prev = server._telemetry_store
-    server._telemetry_store = None
+    prev = server.STATE.telemetry_store
+    server.STATE.telemetry_store = None
     try:
         server._record_a2a_telemetry(_outcome(
             task_id="t", context_id="c", state="completed", text="x",
             usage={"input_tokens": 1, "output_tokens": 1}, duration_ms=1000,
         ))  # must not raise
     finally:
-        server._telemetry_store = prev
+        server.STATE.telemetry_store = prev
 
 
 def test_config_parses_telemetry(tmp_path):

@@ -42,6 +42,6 @@ def test_no_inputs_recipe_ignores_free_text():
 
 def test_parse_workflow_command_returns_none_without_registry():
     # _workflow_registry is None in a bare import (no graph built) → not a wf command
-    assert server._workflow_registry is None
+    assert server.STATE.workflow_registry is None
     assert server._parse_workflow_command("/research-and-brief topic=x") is None
     assert server._parse_workflow_command("hello") is None

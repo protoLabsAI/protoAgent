@@ -75,7 +75,7 @@ def test_agent_card_no_bearer_when_token_unset(monkeypatch) -> None:
     import server
 
     # No configured graph → _bearer_configured() falls back to env (unset).
-    monkeypatch.setattr(server, "_graph_config", None, raising=False)
+    monkeypatch.setattr(server.STATE, "graph_config", None, raising=False)
     schemes = _card_json().get("securitySchemes", {})
     assert "apiKey" in schemes, "apiKey scheme must always be present"
     assert "bearer" not in schemes, "bearer must not appear when no token is configured"
@@ -85,7 +85,7 @@ def test_agent_card_bearer_when_token_set(monkeypatch) -> None:
     monkeypatch.setenv("A2A_AUTH_TOKEN", "secret-test-token")
     import server
 
-    monkeypatch.setattr(server, "_graph_config", None, raising=False)
+    monkeypatch.setattr(server.STATE, "graph_config", None, raising=False)
     card = _card_json()
     schemes = card.get("securitySchemes", {})
     assert "apiKey" in schemes, "apiKey scheme must always be present"
@@ -101,7 +101,7 @@ def test_agent_card_security_requirement_apikey_only_when_token_unset(monkeypatc
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     import server
 
-    monkeypatch.setattr(server, "_graph_config", None, raising=False)
+    monkeypatch.setattr(server.STATE, "graph_config", None, raising=False)
     reqs = _card_json().get("securityRequirements", [])
     scheme_keys = [set(r.get("schemes", {}).keys()) for r in reqs]
     assert scheme_keys == [{"apiKey"}]
