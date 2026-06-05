@@ -144,7 +144,10 @@ async function handleA2AStream(req, res, body) {
     connection: "keep-alive",
   });
   for (const frame of frames) {
-    res.write(`data: ${JSON.stringify(frame)}\n\n`);
+    // CRLF frame separator — the a2a-sdk emits SSE with `\r\n\r\n`, not `\n\n`.
+    // The mock must mirror that so this e2e exercises the real wire shape: an
+    // LF-only mock hid a browser-blanking CRLF parse bug in the client.
+    res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
     // Small gap so the "working/tool" frames are observably distinct from the
     // terminal artifact (mirrors real tool latency; lets running→done show).
     await new Promise((r) => setTimeout(r, 40));

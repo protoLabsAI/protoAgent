@@ -209,18 +209,27 @@ function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
     .join("");
 }
 
-// Parse complete SSE events (`\n\n`-delimited) out of a buffer, dispatching each
-// frame. Returns the unconsumed remainder. Shared by the streaming + buffered
-// paths so both decode frames identically.
+// Parse complete SSE events (blank-line-delimited) out of a buffer, dispatching
+// each frame. Returns the unconsumed remainder. Shared by the streaming +
+// buffered paths so both decode frames identically.
+//
+// The event boundary is a blank line whose line ending VARIES: the a2a-sdk
+// emits CRLF (`\r\n\r\n`); the SSE spec also allows LF (`\n\n`) or CR (`\r\r`).
+// Scanning for `\n\n` only — which we used to do — never matched the CRLF
+// stream, so the browser parsed zero frames and chat rendered a blank bubble
+// (the agent had replied). Match any blank-line boundary, and split data lines
+// on any line ending. The regex matches on the raw buffer (not a normalized
+// copy), so a boundary split across two fetch chunks still reassembles correctly.
 function drainSseBuffer(buffer: string, onFrame: (frame: A2AFrame) => void): string {
-  let boundary = buffer.indexOf("\n\n");
-  while (boundary !== -1) {
-    const rawEvent = buffer.slice(0, boundary);
-    buffer = buffer.slice(boundary + 2);
-    boundary = buffer.indexOf("\n\n");
+  const BOUNDARY = /\r\n\r\n|\n\n|\r\r/;
+  let match = BOUNDARY.exec(buffer);
+  while (match) {
+    const rawEvent = buffer.slice(0, match.index);
+    buffer = buffer.slice(match.index + match[0].length);
+    match = BOUNDARY.exec(buffer);
 
     const data = rawEvent
-      .split("\n")
+      .split(/\r\n|\r|\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trim())
       .join("\n");
