@@ -53,6 +53,10 @@ middleware:
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db
+  # Semantic recall: hybrid FTS5 + vector search (RRF-fused) via embed_model.
+  # Off by default (keyword-only) — turn on once your gateway serves an
+  # embedding model. Degrades to keyword search on embedding outage.
+  embeddings: false
   embed_model: nomic-embed-text
   top_k: 5
 

@@ -358,6 +358,22 @@ def _build_knowledge_store(config):
         return None
     try:
         from knowledge import KnowledgeStore
+        # Semantic recall (ADR 0021): when knowledge.embeddings is on, use the
+        # HybridKnowledgeStore (FTS5 + vector, fused with RRF) with an embed_fn
+        # wired to the gateway. Any failure degrades to keyword-only FTS5 — never
+        # KB-less — and the store's circuit breaker handles runtime outages.
+        if getattr(config, "knowledge_embeddings", False):
+            try:
+                from graph.llm import create_embed_fn
+                from knowledge.hybrid_store import HybridKnowledgeStore
+
+                embed_fn = create_embed_fn(config)
+                if embed_fn is not None:
+                    log.info("[server] knowledge: hybrid store (FTS5 + embeddings via %s)", config.embed_model)
+                    return HybridKnowledgeStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
+                log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
+            except Exception as exc:  # noqa: BLE001 — degrade to FTS5, never fail
+                log.warning("[server] hybrid store init failed: %s; FTS5 only", exc)
         return KnowledgeStore(db_path=config.knowledge_db_path)
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
