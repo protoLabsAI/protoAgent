@@ -98,5 +98,10 @@ def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | N
         api_key=api_key,
         model=model,
         default_headers={"User-Agent": _GATEWAY_UA},
+        # Send the raw string, not client-side-tokenized int arrays. Langchain's
+        # default tokenizes with tiktoken and posts `input` as arrays of token
+        # ids, which a LiteLLM/vLLM-style gateway rejects with 422 ("input should
+        # be a valid string"). Off = the gateway tokenizes — the portable choice.
+        check_embedding_ctx_length=False,
     )
     return embeddings.embed_query
