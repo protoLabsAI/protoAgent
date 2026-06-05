@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-05
+
 ### Changed
 - **Internal: `_main()`'s inline route handlers moved into `operator_api/*`**
   (ADR 0023, phase 3 — composition root down to app assembly). Each route group
