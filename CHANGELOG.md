@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Knowledge store no longer fills with raw reasoning** (ADR 0021). The memory
+  middleware dumped *every* assistant turn into the knowledge base — raw,
+  truncated at 2000 chars, with the model's internal `<scratch_pad>` reasoning
+  intact — which the retrieval layer then recycled into later prompts. That
+  per-turn dump is removed (conversation knowledge is captured by the summarized,
+  scratch_pad-stripped `conversation_harvest` on thread retirement instead). A
+  guardrail at the store's single write chokepoint (`KnowledgeStore.add_chunk`)
+  now strips `<scratch_pad>`/`<think>` from *every* writer defensively — internal
+  reasoning can never reach the store again. Regression tests added.
 - **Settings is its own rail surface; category sub-nav no longer overlaps the
   fields.** The category sub-nav (added with the Settings regroup) landed in the
   `.stage-panel` grid's `1fr` content row, so it stretched over the fields. Gave

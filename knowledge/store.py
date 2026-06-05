@@ -43,6 +43,29 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "/sandbox/knowledge/agent.db"
 
+# Fallback reasoning-stripper used if graph.output_format isn't importable (the
+# store must never hard-depend on the graph package). Mirrors its scratch_pad /
+# think / orphan-open rules.
+_FALLBACK_REASONING_RE = re.compile(
+    r"<scratch_pad>[\s\S]*?</scratch_pad>|<think>[\s\S]*?</think>"
+    r"|<scratch_pad>[\s\S]*$|<think>[\s\S]*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_stored_reasoning(content: str) -> str:
+    """ADR 0021 storage guardrail: scrub leaked model reasoning before persist.
+
+    Prefers the canonical ``graph.output_format.strip_reasoning`` (lazy import,
+    no knowledge→graph load cycle); falls back to a local regex if unavailable.
+    """
+    try:
+        from graph.output_format import strip_reasoning
+
+        return strip_reasoning(content).strip()
+    except Exception:  # noqa: BLE001 — never let stripping break a write
+        return _FALLBACK_REASONING_RE.sub("", content).strip()
+
 
 @dataclass
 class Chunk:
@@ -255,8 +278,18 @@ class KnowledgeStore:
         source_type: str | None = None,
         finding_type: str | None = None,
     ) -> int | None:
-        """Insert a chunk. Returns the new row id, or None on failure."""
+        """Insert a chunk. Returns the new row id, or None on failure.
+
+        Every write funnels through here, so this is where the ADR 0021
+        guardrail lives: the model's internal reasoning must never reach the
+        store. We strip ``<scratch_pad>``/``<think>`` defensively — covering all
+        writers (memory tools, ingest, harvest, future ones), not just the ones
+        that remember to clean their input.
+        """
         if not content or not content.strip():
+            return None
+        content = _strip_stored_reasoning(content)
+        if not content.strip():
             return None
         db = self._get_db()
         if db is None:

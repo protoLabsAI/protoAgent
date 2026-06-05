@@ -135,6 +135,18 @@ def _strip_reasoning(text: str) -> str:
     return text
 
 
+def strip_reasoning(text: str) -> str:
+    """Public reasoning-stripper for *storage* guardrails (ADR 0021).
+
+    Removes leaked ``<scratch_pad>`` / ``<think>`` / confidence markers but
+    keeps everything else intact — unlike ``extract_output``, it does NOT pull
+    out only the ``<output>`` block, so a stored note that legitimately mentions
+    the protocol isn't reshaped. The contract: the model's internal reasoning
+    must never be persisted to the knowledge base. Idempotent.
+    """
+    return _strip_reasoning(text or "")
+
+
 def _strip_reasoning_balanced(text: str) -> str:
     """Strip only *balanced* reasoning blocks — no orphan eat-to-end variants.
 
