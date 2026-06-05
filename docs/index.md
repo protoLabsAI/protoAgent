@@ -4,6 +4,9 @@ hero:
   name: protoAgent
   text: LangGraph + A2A template for protoLabs agents
   tagline: Clone. Run. Walk the wizard. Chat. Fork when you're ready to ship.
+  image:
+    src: /protoagent-banner.png
+    alt: protoAgent
   actions:
     - theme: brand
       text: Spin up your first agent
