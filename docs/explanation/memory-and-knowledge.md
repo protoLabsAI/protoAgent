@@ -1,0 +1,124 @@
+# Memory & the knowledge store
+
+protoAgent has a single durable **knowledge store** and a set of conventions for
+*what* goes in it and *how* it comes back out. This page explains the whole
+pipeline — the store, the three kinds of memory, the write paths, the retrieval,
+and the configuration — so you can reason about (and tune) what your agent
+remembers.
+
+The design rules behind it are [ADR 0021](../adr/0021-agent-memory-architecture.md)
+("extract, don't dump").
+
+## The store
+
+`knowledge/store.py` is a SQLite database with **FTS5 full-text search** (with a
+`LIKE` fallback when FTS5 isn't compiled in). One `chunks` table holds everything
+the agent knows; rows are distinguished by a few columns:
+
+| Column | Meaning |
+|---|---|
+| `domain` | the bucket — `fact`, `conversation`, `hot`, `finding`, or anything a tool sets (`preferences`, `context`, …) |
+| `finding_type` | sub-type within a domain (e.g. `fact`, `ingest`) |
+| `namespace` | optional per-project / per-owner scope (ADR 0021) — a *filter* for multi-project forks, never required |
+| `source` / `source_type` | provenance (`harvest`, `tool:<name>`, …) |
+| `heading`, `content`, `created_at` | the chunk itself |
+
+## Three kinds of memory
+
+protoAgent follows the standard semantic / episodic / procedural split, mapped
+onto primitives it already has:
+
+- **Semantic** — discrete, durable **facts** (`domain="fact"`). "The user deploys
+  on Tuesdays." Extracted by the harvest pass; queryable like any chunk.
+- **Episodic** — **conversation summaries** (`domain="conversation"`). A retired
+  thread is summarized into one searchable chunk.
+- **Procedural** — **Playbooks / skills** (`skills.db`, a separate FTS5 index).
+  Methodology the agent retrieves but never "runs". See [Skills](../guides/skills.md).
+
+## Write paths
+
+Everything that writes to the store funnels through `KnowledgeStore.add_chunk`:
+
+1. **Memory tools** — the agent calls `memory_write` (and friends) to record a
+   fact the user shared. See [Starter tools](../reference/starter-tools.md).
+2. **Harvest on retirement** — when a chat thread is retired (aged out by the
+   checkpoint pruner, or deleted), `graph/conversation_harvest.py` runs a single
+   **session-end pass** (cheap aux model): it stores an episodic *summary* and,
+   when `knowledge.facts` is on, **extracts durable facts** and consolidates them
+   (near-duplicates are skipped). This is *extract, don't dump* — it never stores
+   raw turns.
+3. **Tool-output ingest** — the opt-in `KnowledgeIngestMiddleware`
+   (`middleware.ingest`) captures tool output as findings.
+
+### The reasoning guardrail
+
+The agent thinks inside `<scratch_pad>` and answers inside `<output>` (the
+[output protocol](output-protocol.md)). `add_chunk` **strips
+`<scratch_pad>`/`<think>` from every write** — so the model's internal reasoning
+can never reach the store (and never gets recycled into a later prompt via
+retrieval). A chunk that is *only* reasoning is dropped, not stored empty.
+
+## Retrieval
+
+The `KnowledgeMiddleware` runs before each LLM turn and injects relevant context:
+
+- **Relevance** — searches the store with the user's message and injects the
+  top-k matches.
+- **Hot memory** — always-on `domain="hot"` facts, injected every turn.
+- **Learned skills** — top-k Playbooks for the turn (a `<learned_skills>` block).
+- **Prior sessions** — recent session summaries for cross-session recency.
+
+The operator can browse and search the whole store in the console under
+**Knowledge → Store**.
+
+## Semantic recall (embeddings)
+
+By default the store is **keyword-only** (FTS5). Keyword search misses
+paraphrases — *"how do I ship a build?"* won't match a stored *"the release
+pipeline is manual via workflow_dispatch"*. Turning on **embeddings** upgrades
+the store to `HybridKnowledgeStore`: it fuses FTS5 with **vector similarity**
+using Reciprocal Rank Fusion, so lexical *and* semantic hits reinforce each
+other. An embedding circuit breaker falls back to FTS5 on an embedding outage —
+quality degrades, availability never does.
+
+```yaml
+knowledge:
+  embeddings: true             # off by default
+  embed_model: qwen3-embedding # MUST be a model your gateway serves (see below)
+```
+
+::: warning The embed model is gateway-specific
+`embed_model` must name a model your [LiteLLM gateway](litellm-gateway.md)
+actually serves — it is **not** the chat model. The template default
+(`nomic-embed-text`) suits a local Ollama gateway; the protoLabs gateway serves
+`qwen3-embedding`. Check `GET /v1/models` for what your key can access. With a
+wrong model every embed call 401/404s, the breaker opens, and you silently get
+keyword-only search.
+:::
+
+Embeddings are routed through the same gateway as the chat model
+(`graph.llm.create_embed_fn`), sending the **raw string** (not client-side
+tokenized arrays) so OpenAI-compatible gateways accept the request.
+
+## Configuration
+
+All under the `knowledge:` block (see [Configuration](../reference/configuration.md)):
+
+| Key | Default | Effect |
+|---|---|---|
+| `db_path` | `/sandbox/knowledge/agent.db` | store location (instance-scoped) |
+| `embeddings` | `false` | hybrid semantic + keyword search (vs keyword-only) |
+| `embed_model` | `nomic-embed-text` | gateway embedding model (set per your gateway) |
+| `facts` | `true` | extract semantic facts during the harvest pass |
+| `top_k` | `5` | how many chunks retrieval injects per turn |
+| `middleware.knowledge` | `true` | turn the whole subsystem on/off |
+
+Tip: enabling embeddings is measurable — add a recall eval and compare keyword vs
+hybrid via `evals.sweep`. See [Eval your fork](../guides/evals.md).
+
+## See also
+
+- [ADR 0021 — Agent memory: extract, don't dump](../adr/0021-agent-memory-architecture.md)
+- [Output protocol](output-protocol.md) — the `<scratch_pad>`/`<output>` contract the guardrail enforces
+- [Skills](../guides/skills.md) — procedural memory (Playbooks)
+- [Starter tools](../reference/starter-tools.md) — the `memory_*` tools

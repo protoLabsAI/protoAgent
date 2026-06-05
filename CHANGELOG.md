@@ -11,7 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Semantic-recall embeddings were non-functional against a real gateway**
+  (found by a full knowledge-store smoke test). `create_embed_fn` built
+  `OpenAIEmbeddings` with its default client-side tiktoken tokenization, which
+  posts `input` as int arrays — a LiteLLM/vLLM gateway rejects that with a 422
+  ("input should be a valid string"). Now passes `check_embedding_ctx_length=
+  False` so the raw string is sent. Also: the default `embed_model`
+  (`nomic-embed-text`) isn't what every gateway serves (the protoLabs gateway
+  serves `qwen3-embedding`) — documented that `embed_model` is gateway-specific.
+  Verified live: hybrid search now returns a fact via a paraphrased query that
+  keyword search misses.
+
 ### Added
+- **Docs: "Memory & the knowledge store"** (`docs/explanation/`) — the store, the
+  three memory types (semantic facts / episodic summaries / procedural
+  playbooks), write paths + the reasoning guardrail, retrieval, and how to turn
+  on semantic recall (with the gateway-model caveat).
 - **Activity is a provenance feed, not a second chat** (ADR 0022). Every
   reactive turn is tagged with *what triggered it* (scheduled job / webhook /
   inbox source / sister-agent / your reply) — the backend tracked this `origin`
