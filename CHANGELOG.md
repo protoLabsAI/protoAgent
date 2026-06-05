@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-05
+
 ### Fixed
 - **Semantic-recall embeddings were non-functional against a real gateway**
   (found by a full knowledge-store smoke test). `create_embed_fn` built
