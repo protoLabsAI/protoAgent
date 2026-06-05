@@ -114,6 +114,25 @@ def test_persist_session_captures_messages(tmp_path):
     assert any("4" in c for c in contents)
 
 
+def test_persist_session_strips_reasoning_from_assistant(tmp_path):
+    """ADR 0021: the persisted session (later injected as <prior_sessions>) must
+    not carry the model's <scratch_pad> — strip it at the write source."""
+    mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
+    messages = [
+        HumanMessage(content="What is 2+2?"),
+        AIMessage(content="<scratch_pad>add 2 and 2, that's 4</scratch_pad><output>It's 4.</output>"),
+    ]
+    state = _make_state("strip-test", messages=messages)
+    mod._persist_session(state, "t")
+
+    data = json.loads((tmp_path / "strip-test.json").read_text())
+    blob = json.dumps(data)
+    assert "scratch_pad" not in blob
+    assert "add 2 and 2" not in blob          # internal reasoning gone
+    assert "It's 4." in blob                   # user-facing answer kept
+    assert "scratch_pad" not in (data["final_output"] or "")
+
+
 def test_persist_session_final_output_is_last_ai_message(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
