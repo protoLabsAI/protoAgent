@@ -42,6 +42,21 @@ function SettingsBody() {
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
 
+  // Category sub-nav (ADR 0020): the server tags each group with a category and
+  // orders them, so we derive the ordered category list by first appearance.
+  const categories = useMemo(() => {
+    const seen: string[] = [];
+    for (const g of groups) {
+      const c = g.category || "Integrations";
+      if (!seen.includes(c)) seen.push(c);
+    }
+    return seen;
+  }, [groups]);
+  const [activeCategory, setActiveCategory] = useState(categories[0] || "");
+  // The active category must stay valid if the schema reshapes under us.
+  const category = categories.includes(activeCategory) ? activeCategory : categories[0] || "";
+  const visibleGroups = groups.filter((g) => (g.category || "Integrations") === category);
+
   const dirtyKeys = Object.keys(dirty);
 
   // Pending changes that won't take effect until a process restart.
@@ -151,6 +166,15 @@ function SettingsBody() {
           </button>
         </div>
       </div>
+      {categories.length > 1 ? (
+        <div className="stage-subnav settings-subnav">
+          {categories.map((c) => (
+            <button key={c} className={c === category ? "active" : ""} onClick={() => setActiveCategory(c)}>
+              {c}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="stage-body">
         {pendingRestart.length ? (
           <div className="settings-banner" role="alert">
@@ -160,7 +184,7 @@ function SettingsBody() {
         ) : null}
         {status ? <p className="settings-status">{status}</p> : null}
 
-        {groups.map((group) => (
+        {visibleGroups.map((group) => (
           <section className="settings-group" key={group.section}>
             <p className="settings-group-title">{group.section}</p>
             {group.fields.map((field) => (

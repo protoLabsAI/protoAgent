@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collapsing Studio to Workflows-only (the Run tab becomes redundant).
 
 ### Changed
+- **Settings regrouped into 5 categories** (ADR 0020). The Settings surface was a
+  flat ~12-section scroll mixing model config, cache TTLs, middleware toggles, and
+  plugin integrations. Sections now fold into a category sub-nav — **Agent**
+  (Identity · Model · Routing), **Behavior** (Compaction · Caching · Goal mode ·
+  Tools), **Memory** (Knowledge), **Integrations** (Discord · Google · plugins),
+  **System** (Middleware · Runtime). The schema (`build_schema`) tags each group
+  with a `category` and orders them; plugin-contributed sections default to
+  Integrations. Pure reorganization — no field added or removed.
 - **Studio is now Workflows-only; the Run tab is gone** (ADR 0020). The Studio →
   Run panel was a forms-based way to launch a subagent manually — redundant now
   that subagents (and workflows) run as chat slash commands. Studio's rail lands

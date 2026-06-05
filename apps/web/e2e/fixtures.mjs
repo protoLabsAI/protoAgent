@@ -145,6 +145,7 @@ export const NOTES_WORKSPACE = {
 export const SETTINGS_SCHEMA = [
   {
     section: "Model",
+    category: "Agent",
     fields: [
       { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/reasoning" },
       { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2 },
@@ -153,6 +154,7 @@ export const SETTINGS_SCHEMA = [
   },
   {
     section: "Routing",
+    category: "Agent",
     fields: [
       { key: "routing.aux_model", label: "Auxiliary (fast) model", type: "string", section: "Routing", restart: false, description: "Cheap alias for aux calls.", options: [], value: "protolabs/fast", default: "" },
       { key: "routing.fallback_models", label: "Fallback models", type: "string_list", section: "Routing", restart: false, description: "", options: [], value: [], default: [] },
@@ -160,12 +162,14 @@ export const SETTINGS_SCHEMA = [
   },
   {
     section: "Compaction",
+    category: "Behavior",
     fields: [
       { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true },
     ],
   },
   {
     section: "Runtime",
+    category: "System",
     fields: [
       { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false },
     ],

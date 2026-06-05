@@ -15,8 +15,9 @@ from graph.settings_schema import (
 def test_schema_groups_and_values():
     cfg = LangGraphConfig()
     groups = build_schema(cfg, model_options=["a", "b"])
-    # Grouped, ordered, every field carries the metadata the UI needs.
-    assert [g["section"] for g in groups][:3] == ["Model", "Routing", "Compaction"]
+    # Grouped + ordered by category (ADR 0020): the Agent category leads, its
+    # sections in FIELDS order (Model, Routing, Identity).
+    assert [g["section"] for g in groups][:3] == ["Model", "Routing", "Identity"]
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present. (build_schema also appends plugin-declared
     # settings — e.g. the discord plugin — so count only the core-keyed fields,
@@ -28,6 +29,27 @@ def test_schema_groups_and_values():
     # The model select is populated from the probed options.
     model = next(f for f in fields if f["key"] == "model.name")
     assert model["type"] == "select" and model["options"] == ["a", "b"]
+
+
+def test_groups_carry_category_in_taxonomy_order():
+    """ADR 0020: every group is tagged with a category, and categories appear
+    contiguously in _CATEGORY_ORDER (so the console sub-nav is stable)."""
+    from graph.settings_schema import _CATEGORY_ORDER
+
+    groups = build_schema(LangGraphConfig())
+    cats = [g["category"] for g in groups]
+    assert all(cats), "every group must carry a category"
+    assert cats[0] == "Agent"
+    # First-appearance order of categories matches _CATEGORY_ORDER (contiguous).
+    seen: list[str] = []
+    for c in cats:
+        if c not in seen:
+            seen.append(c)
+    assert seen == [c for c in _CATEGORY_ORDER if c in seen]
+    # Known mappings hold.
+    by_section = {g["section"]: g["category"] for g in groups}
+    assert by_section["Knowledge"] == "Memory"
+    assert by_section["Middleware"] == "System"
 
 
 def test_secrets_are_redacted_with_is_set():
