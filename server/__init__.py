@@ -396,6 +396,7 @@ def _main():
 
     # --- React operator-console API ----------------------------------------
     from graph.config_io import is_setup_complete as _operator_setup_complete
+    from operator_api.config_routes import register_config_routes
     from operator_api.knowledge_routes import register_knowledge_routes
     from operator_api.routes import register_operator_routes
     from operator_api.runtime import build_runtime_status as _build_operator_status
@@ -901,145 +902,10 @@ def _main():
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
     register_telemetry_routes(fastapi_app)
 
-    # --- Live config / SOUL editing ----------------------------------------
-    # GET returns the current config + persona so external clients (the
-    # Gradio drawer is one; curl is another) can mirror what's running.
-    # POST accepts partial edits — pass only the sections you want to
-    # change. Reload is automatic.
-    class ConfigReloadRequest(PydanticBaseModel):
-        config: dict | None = None
-        soul: str | None = None
-
-    @fastapi_app.get("/api/config")
-    async def _api_get_config():
-        from graph.config_io import config_to_dict, read_soul
-        return {
-            "config": config_to_dict(STATE.graph_config),
-            "soul": read_soul(),
-        }
-
-    @fastapi_app.post("/api/config")
-    async def _api_post_config(req: ConfigReloadRequest):
-        # Offload off the event loop (#497) — the reload's graph compile is heavy
-        # and would otherwise freeze the server for its duration.
-        ok, messages = await asyncio.to_thread(
-            _apply_settings_changes, config=req.config, soul=req.soul
-        )
-        return {"ok": ok, "messages": messages}
-
-    class ModelsProbeRequest(PydanticBaseModel):
-        api_base: str = ""
-        api_key: str = ""
-        # Only used by the connection test (a real completion needs a model);
-        # the model-list probe ignores it. Blank falls back to the saved config.
-        model: str = ""
-
-    @fastapi_app.post("/api/config/models")
-    async def _api_list_models(req: ModelsProbeRequest | None = None):
-        """Fetch the gateway's model list.
-
-        POST (body) not GET (query) so the caller's API key doesn't
-        end up in browser history, reverse-proxy access logs, or the
-        uvicorn request log. A blank body falls back to whatever key
-        and base are stored in the current config — useful for the
-        drawer's initial render where there's nothing to POST yet.
-        """
-        from graph.config_io import list_gateway_models
-
-        body = req or ModelsProbeRequest()
-        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
-        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
-        models, error = list_gateway_models(base, key)
-        return {"models": models, "error": error}
-
-    @fastapi_app.post("/api/config/test-model")
-    async def _api_test_model(req: ModelsProbeRequest | None = None):
-        """Verify the model can actually complete (the true auth check).
-
-        Powers the wizard's + Settings' "Test connection" button. POST (body)
-        so the key never lands in a URL/log. A blank field falls back to the
-        saved config, so Settings can re-test the live agent with one click.
-        Offloaded to a thread — a real completion is a blocking network call,
-        and we never want the connection test to freeze the event loop.
-        """
-        from graph.config_io import validate_model_connection
-
-        body = req or ModelsProbeRequest()
-        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
-        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
-        model = body.model or (STATE.graph_config.model_name if STATE.graph_config else "")
-        ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
-        return {"ok": ok, "error": error}
-
-    # `/api/config/test-discord` (discord plugin) and `/api/config/google/status`
-    # + `/connect` (google plugin) are now mounted by their plugin routers (ADR
-    # 0018/0019), at the same paths — the console Test/Connect buttons are
-    # unchanged.
-
-    # --- Setup wizard state -------------------------------------------------
-    @fastapi_app.get("/api/config/setup-status")
-    async def _api_setup_status():
-        from graph.config_io import is_setup_complete, list_soul_presets
-        return {
-            "setup_complete": is_setup_complete(),
-            "presets": list_soul_presets(),
-        }
-
-    @fastapi_app.post("/api/config/setup")
-    async def _api_finish_setup(req: ConfigReloadRequest):
-        """Terminal wizard action over HTTP. Same semantics as the
-        drawer's ``finish_setup`` callback — writes everything, marks
-        setup complete, optionally installs autostart, then reloads.
-        """
-        callbacks = _build_settings_callbacks()
-        # Offload off the event loop (#497) — finish-setup validates the model +
-        # compiles the graph, both heavy; running inline froze the server ~30s.
-        ok, msg = await asyncio.to_thread(callbacks["finish_setup"], req.config, req.soul)
-        return {"ok": ok, "message": msg}
-
-    @fastapi_app.post("/api/config/reset-setup")
-    async def _api_reset_setup():
-        from graph.config_io import reset_setup
-        reset_setup()
-        return {"ok": True, "message": "setup marker removed"}
-
-    @fastapi_app.get("/api/config/presets/{name}")
-    async def _api_read_preset(name: str):
-        from graph.config_io import read_soul_preset
-        return {"name": name, "content": read_soul_preset(name)}
-
-    # --- Generic settings (schema-driven UI) --------------------------------
-    @fastapi_app.get("/api/settings/schema")
-    async def _api_settings_schema():
-        """All editable settings, grouped, with current values + metadata
-        (type, default, restart-vs-hot-reload, description). Drives the
-        operator console's Settings surface."""
-        from graph.config_io import list_gateway_models
-        from graph.settings_schema import build_schema
-
-        models: list[str] = []
-        if STATE.graph_config is not None:
-            models, _ = list_gateway_models(STATE.graph_config.api_base, STATE.graph_config.api_key)
-        return {"groups": build_schema(STATE.graph_config, model_options=models)}
-
-    class SettingsUpdateRequest(PydanticBaseModel):
-        updates: dict[str, Any] = {}
-
-    @fastapi_app.post("/api/settings")
-    async def _api_save_settings(req: SettingsUpdateRequest):
-        """Validate a flat {key: value} payload, persist it to YAML (secrets
-        split out), and hot-reload the graph. Returns any keys that need a
-        full process restart to take effect."""
-        from graph.settings_schema import nest_updates, restart_keys, validate_flat
-
-        ok, err = validate_flat(req.updates)
-        if not ok:
-            return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
-        # Offload off the event loop (#497) — a model change recompiles the graph.
-        ok, messages = await asyncio.to_thread(
-            _apply_settings_changes, config=nest_updates(req.updates)
-        )
-        return {"ok": ok, "messages": messages, "restart_required": restart_keys(req.updates)}
+    # Live config / SOUL editing, model probe/test, setup wizard, and
+    # schema-driven settings. Extracted to operator_api/config_routes.py
+    # (ADR 0023 phase 3).
+    register_config_routes(fastapi_app)
 
     # --- OpenAI-compatible chat completions --------------------------------
     # Lets this agent be registered as a model in the LiteLLM gateway /
