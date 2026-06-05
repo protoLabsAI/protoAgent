@@ -1619,6 +1619,51 @@ async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
     return out
 
 
+# --- Subagent slash commands (ADR 0020) --------------------------------------
+# A chat message like ``/researcher find me X`` runs the named subagent instead
+# of a normal model turn — the slash-command analogue of the ``task`` tool, so
+# "run a worker" is a composer gesture, not a separate surface. Free text after
+# the name is the subagent's prompt. A workflow of the same name wins (the turn
+# dispatch checks workflows first). Short-circuits the turn like /goal does.
+
+
+def _parse_subagent_command(message: str):
+    """Return ``(subagent_type, prompt)`` if ``message`` is ``/<known-subagent>
+    …`` (and not a workflow of the same name), else ``None``."""
+    name, rest = _parse_slash_command(message)
+    if not name:
+        return None
+    # Workflow wins on a name collision (dispatch checks workflows first).
+    if _workflow_registry is not None and _workflow_registry.get(name) is not None:
+        return None
+    try:
+        from graph.subagents.config import SUBAGENT_REGISTRY
+    except Exception:
+        return None
+    if name not in SUBAGENT_REGISTRY:
+        return None
+    return name, rest.strip()
+
+
+async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
+    """Run one subagent from a chat slash command, formatted as the reply."""
+    from graph.agent import run_manual_subagent
+
+    try:
+        raw = await run_manual_subagent(
+            _graph_config,
+            knowledge_store=_knowledge_store,
+            scheduler=_scheduler,
+            description=f"/{subagent_type} chat command",
+            prompt=prompt,
+            subagent_type=subagent_type,
+        )
+    except ValueError as exc:
+        return f"⚠️ {exc}"
+    # Strip the worker's scratch_pad/output tags so chat shows clean text.
+    return extract_output(raw) or raw or "(subagent produced no output)"
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -1711,6 +1756,22 @@ async def _chat_langgraph_stream(
                 wf_out = await runner
                 yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
                 yield ("done", wf_out)
+                return
+
+            # Subagent slash command (/<subagent> <prompt>) short-circuits the
+            # turn: run the one worker and return its output (ADR 0020 — run from
+            # chat). Renders a single tool card. A workflow of the same name wins.
+            parsed_sub = _parse_subagent_command(message)
+            if parsed_sub is not None:
+                sub_type, sub_prompt = parsed_sub
+                if not sub_prompt:
+                    yield ("done", f"Usage: `/{sub_type} <prompt>` — describe the task for the {sub_type} subagent.")
+                    return
+                sub_tool_id = f"subagent:{sub_type}"
+                yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
+                sub_out = await _run_parsed_subagent(sub_type, sub_prompt)
+                yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
+                yield ("done", sub_out)
                 return
 
             # thread_id keys this session's history in the checkpointer (bound
@@ -2544,8 +2605,10 @@ def _main():
                 "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
             })
         # Each registered workflow is runnable as /<name> (ADR 0002).
+        wf_names: set[str] = set()
         if _workflow_registry is not None:
             for wf in _workflow_registry.list():
+                wf_names.add(wf["name"])
                 declared = wf.get("inputs", []) or []
                 req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
                 opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))
@@ -2554,6 +2617,20 @@ def _main():
                     "description": wf.get("description") or f"Run the {wf['name']} workflow.",
                     "usage": f"/{wf['name']}{req}{opt}",
                 })
+        # Each registered subagent is runnable as /<name> <prompt> (ADR 0020),
+        # unless a workflow already claims the name (workflow wins in dispatch).
+        try:
+            from graph.subagents.config import SUBAGENT_REGISTRY
+        except Exception:
+            SUBAGENT_REGISTRY = {}
+        for name, cfg in SUBAGENT_REGISTRY.items():
+            if name in wf_names:
+                continue
+            commands.append({
+                "name": name,
+                "description": getattr(cfg, "description", "") or f"Run the {name} subagent.",
+                "usage": f"/{name} <prompt>",
+            })
         return {"commands": commands}
 
     # The in-process beads store is agent-global + graph-independent, but it's
