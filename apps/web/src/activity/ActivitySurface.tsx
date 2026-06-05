@@ -1,21 +1,56 @@
-import { Loader2, RefreshCw, Send } from "lucide-react";
+import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
-import type { ActivityMessage } from "../lib/types";
+import type { ActivityEntry } from "../lib/types";
 
-// The durable Activity thread (ADR 0003): where agent-initiated turns
-// (scheduled fires, inbox items) land. Loads history from GET /api/activity,
-// appends live via the `activity.message` push event, and lets the operator
-// reply — a normal turn into the `system:activity` context. We don't render the
-// reply's stream; the assistant's response arrives uniformly via the bus event,
-// the same path a scheduled fire takes, so there's no double-render.
+// The Activity provenance feed (ADR 0022): a timeline of agent-initiated turns,
+// each tagged with what triggered it (scheduled job / webhook / inbox / sister
+// agent / your reply). Loads from GET /api/activity, appends live via the
+// `activity.message` push event, and lets the operator reply into the
+// `system:activity` thread — the reply's answer arrives as a new feed entry.
+
+const ACTIVITY = "system:activity";
+
+// origin → badge (icon + label). "" / unknown falls back to a generic agent turn.
+const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
+  scheduler: { icon: Clock, label: "scheduled" },
+  inbox: { icon: Inbox, label: "inbox" },
+  webhook: { icon: Webhook, label: "webhook" },
+  a2a: { icon: Users, label: "sister-agent" },
+  operator: { icon: MessageSquare, label: "you" },
+};
+
+function ago(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function Badge({ entry }: { entry: ActivityEntry }) {
+  const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
+  const Icon = o.icon;
+  return (
+    <div className="activity-prov">
+      <span className={`activity-origin activity-origin-${entry.origin || "agent"}`}>
+        <Icon size={12} /> {o.label}
+      </span>
+      {entry.trigger ? <span className="activity-trigger">{entry.trigger}</span> : null}
+      {entry.priority ? <span className={`inbox-pri inbox-pri-${entry.priority}`}>{entry.priority}</span> : null}
+      {entry.created_at ? <span className="activity-time">{ago(entry.created_at)}</span> : null}
+    </div>
+  );
+}
 
 export function ActivitySurface({ onError }: { onError: (message: string) => void }) {
-  const [messages, setMessages] = useState<ActivityMessage[]>([]);
-  const [contextId, setContextId] = useState("system:activity");
+  // Held newest-first (as the API returns), rendered oldest-first.
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,8 +60,7 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
     setLoading(true);
     try {
       const r = await api.activity();
-      setContextId(r.context_id);
-      setMessages(r.messages);
+      setEntries(r.entries || []);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -37,31 +71,41 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
     void load();
   }, []);
 
-  // Live append: every completed Activity turn (scheduled fire, inbox item, or
-  // our own reply) pushes an `activity.message` event with the assistant text.
+  // Live append: every completed Activity turn pushes `activity.message` with
+  // the assistant text + provenance. Prepend (newest-first store order).
   useEffect(
     () =>
       onServerEvent("activity.message", (data) => {
         const text = typeof data.text === "string" ? data.text : "";
-        if (text) setMessages((prev) => [...prev, { role: "assistant", content: text }]);
+        if (!text) return;
+        const entry: ActivityEntry = {
+          id: Date.now(),
+          created_at: new Date().toISOString(),
+          origin: typeof data.origin === "string" ? data.origin : "",
+          trigger: typeof data.trigger === "string" ? data.trigger : "",
+          priority: typeof data.priority === "string" ? data.priority : "",
+          state: "completed",
+          text,
+          task_id: "",
+        };
+        setEntries((prev) => [entry, ...prev]);
       }),
     [],
   );
 
-  // Keep the latest message in view.
+  // Keep the newest (bottom, since we render chronological) in view.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages]);
+  }, [entries]);
 
   async function send() {
     const text = draft.trim();
     if (!text || sending) return;
     setSending(true);
     setDraft("");
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
     try {
-      // Fire the turn into the Activity context; the reply arrives via the bus.
-      await api.streamChat(text, contextId, {});
+      // Reply into the Activity thread; the answer returns as a feed entry.
+      await api.streamChat(text, ACTIVITY, {});
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,12 +113,14 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
     }
   }
 
+  const chronological = [...entries].reverse();
+
   return (
-    <section className="panel stage-panel">
+    <section className="panel stage-panel" data-testid="activity-surface">
       <div className="panel-header">
         <div>
           <h1>Activity</h1>
-          <p className="panel-kicker">scheduled fires &amp; agent-initiated messages</p>
+          <p className="panel-kicker">what the agent did on its own — and why</p>
         </div>
         <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
           {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
@@ -82,17 +128,17 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       </div>
 
       <div className="stage-body activity-body">
-        <div className="activity-log" ref={scrollRef}>
-          {messages.length === 0 && !loading ? (
+        <div className="activity-feed" ref={scrollRef}>
+          {chronological.length === 0 && !loading ? (
             <div className="activity-empty">
-              Nothing yet. Scheduled prompts and other agent-initiated messages land here.
+              Nothing yet. Scheduled fires, inbox items, and sister-agent pushes land here — each tagged with what triggered it.
             </div>
           ) : null}
-          {messages.map((m, i) => (
-            <div className={`activity-msg activity-${m.role}`} key={i}>
-              <span className="activity-role">{m.role === "user" ? "you" : "agent"}</span>
+          {chronological.map((e) => (
+            <div className="activity-entry" key={e.id} data-origin={e.origin}>
+              <Badge entry={e} />
               <div className="activity-content">
-                <Markdown>{m.content}</Markdown>
+                <Markdown>{e.text}</Markdown>
               </div>
             </div>
           ))}
@@ -100,19 +146,19 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
 
         <form
           className="activity-composer"
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(ev) => {
+            ev.preventDefault();
             void send();
           }}
         >
           <textarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(ev) => setDraft(ev.target.value)}
             placeholder="Reply in the activity thread…"
             rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey) {
-                e.preventDefault();
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey) {
+                ev.preventDefault();
                 void send();
               }
             }}
