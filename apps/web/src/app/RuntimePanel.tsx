@@ -2,6 +2,7 @@ import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query
 import { Bot, Database, Settings2, Sparkles } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
+import { brandName } from "../lib/brand";
 import { runtimeStatusQuery, subagentsQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
@@ -41,7 +42,7 @@ function RuntimeBody() {
       </div>
       <div className="stage-body">
         <div className="metric-grid">
-          <Metric icon={<Bot size={16} />} label="Agent" value={runtime.identity?.name || "protoagent"} />
+          <Metric icon={<Bot size={16} />} label="Agent" value={brandName(runtime.identity?.name)} />
           <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime.model?.provider || "none"} />
           <Metric icon={<Database size={16} />} label="Knowledge" value={runtime.knowledge.resolved_path || runtime.knowledge.configured_path || "disabled"} />
           <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime.goal.enabled))} />
