@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ProtoLabsIcon } from "./ProtoLabsIcon";
 
 /**
  * protoLabs.studio brand bumper — a brief splash shown over everything on
@@ -40,7 +41,7 @@ export function IntroSplash() {
   return (
     <div className="intro-splash" role="img" aria-label="protoLabs.studio">
       <div className="intro-splash-rise">
-        <img src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" className="intro-splash-mark" />
+        <ProtoLabsIcon variant="outline" size={88} className="intro-splash-mark" decorative />
         <div className="intro-splash-word">protoLabs.studio</div>
       </div>
     </div>
