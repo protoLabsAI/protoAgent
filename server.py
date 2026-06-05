@@ -81,6 +81,7 @@ _telemetry_store = None  # TelemetryStore (per-turn cost/latency rollups, ADR 00
 _inbox_store = None    # InboxStore — durable inbound inbox (ADR 0003), or None.
 _beads_store = None    # BeadsStore — in-process issue tracker (Sprint B), or None.
 _storm_guard = None    # StormGuard for the now→Activity fire path (ADR 0003).
+_activity_log = None   # ActivityLog — provenance feed (ADR 0022), or None.
 _mcp_clients = []        # Live MultiServerMCPClient handles (kept alive for reconnect).
 _mcp_tools = []          # MCP-server tools appended to the active graph.
 _mcp_meta = []           # Per-server {name, transport, tool_count} for runtime status.
@@ -305,8 +306,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     _workflow_registry = _build_workflow_registry(_graph_config)
 
-    global _inbox_store, _storm_guard, _beads_store
+    global _inbox_store, _storm_guard, _beads_store, _activity_log
     _inbox_store = _build_inbox_store(_graph_config)
+    if _activity_log is None:
+        _activity_log = _build_activity_log(_graph_config)
     from beads import BeadsStore
     if _beads_store is None:  # may have been created early (pre-setup) for the routes
         _beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
@@ -642,6 +645,29 @@ def _build_inbox_store(config):
         return InboxStore(path)
     except Exception:
         log.exception("[inbox] failed to build store at %s; inbox disabled", path)
+        return None
+
+
+def _build_activity_log(config):
+    """Provenance feed store (ADR 0022). Path resolves like the inbox store
+    (/sandbox → ~/.protoagent fallback), namespaced by agent name."""
+    from activity import ActivityLog
+
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
+    configured = scope_leaf(Path("/sandbox/activity") / f"{name}.db")
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = scope_leaf(Path.home() / ".protoagent" / "activity" / f"{name}.db")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        return ActivityLog(path)
+    except Exception:
+        log.exception("[activity] failed to build log at %s; feed disabled", path)
         return None
 
 
@@ -2213,9 +2239,26 @@ def _a2a_terminal(outcome) -> None:
     text = extract_output(outcome.text) or outcome.text
     if not text.strip():
         return
+    origin = getattr(outcome, "origin", "") or "operator"
+    trigger = getattr(outcome, "trigger", "") or ""
+    priority = getattr(outcome, "priority", "") or ""
+    # Provenance feed (ADR 0022): durably log the turn + what triggered it.
+    if _activity_log is not None:
+        _activity_log.add(
+            context_id=ACTIVITY_CONTEXT,
+            origin=origin,
+            trigger=trigger,
+            priority=priority,
+            state=getattr(outcome, "state", "completed"),
+            text=text,
+            task_id=getattr(outcome, "task_id", "") or "",
+        )
     _event_bus.publish(
         "activity.message",
-        {"role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT},
+        {
+            "role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT,
+            "origin": origin, "trigger": trigger, "priority": priority,
+        },
     )
 
 
@@ -2491,24 +2534,12 @@ def _main():
             raise RuntimeError("workflows are not available")
         return {"deleted": _workflow_registry.delete(name)}
 
-    def _publish_activity_terminal(record) -> None:
-        """Terminal hook (ADR 0003): when a turn in the Activity thread completes,
-        push the assistant's visible output to the event bus so connected
-        consoles append it live. No-op for every other context."""
-        if getattr(record, "context_id", "") != ACTIVITY_CONTEXT:
-            return
-        raw = getattr(record, "accumulated_text", "") or ""
-        text = extract_output(raw) or raw
-        if not text.strip():
-            return
-        _event_bus.publish(
-            "activity.message",
-            {"role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT},
-        )
-
     async def _operator_activity_list() -> dict:
-        """Return the Activity thread's message history from the checkpointer
-        (ADR 0003). The console loads this when opening the Activity surface."""
+        """Return the Activity provenance feed (ADR 0022) — newest-first entries
+        with origin/trigger/priority — plus the thread's message history from the
+        checkpointer (for the continue view). The console renders the feed and
+        opens the thread on demand."""
+        entries = _activity_log.recent(limit=100) if _activity_log is not None else []
         messages: list[dict] = []
         if _checkpointer is not None:
             thread_id = f"a2a:{ACTIVITY_CONTEXT}"
@@ -2530,7 +2561,7 @@ def _main():
                     if visible.strip():
                         messages.append({"role": "assistant", "content": visible})
                 # tool/system messages are omitted from the surface view
-        return {"context_id": ACTIVITY_CONTEXT, "messages": messages}
+        return {"context_id": ACTIVITY_CONTEXT, "entries": entries, "messages": messages}
 
     def _inbox_authorized(token: str | None) -> bool:
         """Validate the inbound bearer token (ADR 0003). Mirrors the A2A posture:
@@ -2550,7 +2581,10 @@ def _main():
         if _storm_guard is not None and not _storm_guard.allow(time.monotonic()):
             log.warning("[inbox] storm guard suppressed now-fire for item %s", item.get("id"))
             return False
-        headers = {"Content-Type": "application/json"}
+        # A2A 1.0 (a2a-sdk ≥1.1): the version header + proto method name are
+        # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
+        # scheduler's fire (scheduler/local.py).
+        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         bearer = ((_graph_config.auth_token if _graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
@@ -2559,17 +2593,29 @@ def _main():
             headers["X-API-Key"] = api_key
         mid = str(uuid4())
         body = {
-            "jsonrpc": "2.0", "id": mid, "method": "message/send",
+            "jsonrpc": "2.0", "id": mid, "method": "SendMessage",
             "params": {
-                "contextId": ACTIVITY_CONTEXT,
-                "message": {"role": "user", "parts": [{"kind": "text", "text": item["text"]}], "messageId": mid},
-                "metadata": {"origin": "inbox", "inbox_id": item.get("id"), "inbox_source": item.get("source", "")},
+                # contextId is a field of Message in 1.0 (params-level => -32602).
+                "message": {
+                    "role": "ROLE_USER",
+                    "parts": [{"text": item["text"]}],
+                    "messageId": mid,
+                    "contextId": ACTIVITY_CONTEXT,
+                },
+                "metadata": {"origin": "inbox", "inbox_id": item.get("id"), "inbox_source": item.get("source", ""), "priority": item.get("priority", "now")},
             },
         }
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(f"http://127.0.0.1:{_active_port}/a2a", headers=headers, json=body)
-            return r.status_code < 400
+            # A JSON-RPC error rides a 200, so status alone isn't enough.
+            if r.status_code >= 400:
+                return False
+            err = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else None
+            if err:
+                log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
+                return False
+            return True
         except Exception:
             log.exception("[inbox] now-fire failed for item %s", item.get("id"))
             return False

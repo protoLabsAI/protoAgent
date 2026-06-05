@@ -71,6 +71,13 @@ class TurnOutcome:
     llm_calls: int = 0
     tool_calls: int = 0
     models: list[str] = field(default_factory=list)
+    # Provenance (ADR 0022) — what triggered this turn, from the inbound A2A
+    # message metadata. ``origin`` ∈ scheduler|inbox|webhook|a2a|"" (empty = a
+    # live/operator turn); ``trigger`` is a human label (job id / inbox source);
+    # ``priority`` is the inbox tier when applicable.
+    origin: str = ""
+    trigger: str = ""
+    priority: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -194,6 +201,17 @@ class ProtoAgentExecutor(AgentExecutor):
         text = context.get_user_input()
         caller_trace = _extract_caller_trace(context)
 
+        # Provenance for the Activity feed (ADR 0022): what triggered this turn.
+        _md = _request_metadata(context)
+        _origin = str(_md.get("origin", "") or "")
+        _priority = str(_md.get("priority", "") or "")
+        _trigger = str(
+            _md.get("trigger")
+            or _md.get("scheduler_job_id")
+            or _md.get("inbox_source")
+            or ""
+        )
+
         started = time.monotonic()
         accumulated = ""
         deltas: list[dict] = []
@@ -221,6 +239,9 @@ class ProtoAgentExecutor(AgentExecutor):
                 llm_calls=llm_calls,
                 tool_calls=tool_calls,
                 models=list(models),
+                origin=_origin,
+                trigger=_trigger,
+                priority=_priority,
             )
 
         try:
