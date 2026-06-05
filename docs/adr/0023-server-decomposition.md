@@ -1,6 +1,6 @@
 # ADR 0023 — Decompose server.py: an AppState container + a composition root
 
-- **Status:** Accepted (2026-06-05) — phased; each phase is its own live-smoked PR. **Phases 1 & 2 shipped (#547, #549–#552); phase 3 (route groups) is next.**
+- **Status:** Done (2026-06-05) — fully shipped across all three phases, each a live-smoked PR. Phase 1 #547; phase 2 #549–#552; phase 3 #554–#558. `server.py`'s 3,353 lines are now a ~700-line `server/` package composition root.
 - **Date:** 2026-06-05
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, refactor, server, maintainability
@@ -105,9 +105,18 @@ the risk is regression, not design. Therefore:
    reload). The cross-module shared surface stayed tiny — `STATE` plus
    `agent_name` / `AGENT_NAME_ENV` / `_event_bus` / `_bundle_root`, re-exported
    from `__init__` so `server.<symbol>` is unchanged.
-3. **Route groups** — *next* — move the inline `_main()` route bodies into
-   `operator_api/*`; `_main()` shrinks toward app assembly. The ~1,354 remaining
-   root lines are mostly these handlers.
+3. **Route groups** ✅ *shipped (#554–#558)* — moved the inline `_main()` route
+   bodies into `operator_api/*` registrars: `telemetry_routes.py`,
+   `knowledge_routes.py`, `config_routes.py`, `chat_routes.py` (each a
+   `register_*_routes(app)`), plus the 21 React-console handler closures into
+   `console_handlers.py` (finishing the half-done `operator_api/` extraction).
+   `_main()` is now ~430 lines of pure app assembly; the whole `server/__init__.py`
+   is ~700. Each route group ships its own unit tests (testable on a bare
+   `FastAPI()` app, no boot) and was live-smoked end-to-end.
+
+**Outcome:** the ~3.35k-line monolith is a ~700-line composition-root package +
+focused modules (`server/{a2a,chat,agent_init}.py`, `operator_api/*_routes.py`).
+The fork-and-edit core is navigable; state is explicit (`STATE`) and injectable.
 
 ## 5. Alternatives considered
 
