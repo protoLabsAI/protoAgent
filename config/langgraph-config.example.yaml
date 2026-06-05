@@ -57,6 +57,9 @@ knowledge:
   # Off by default (keyword-only) — turn on once your gateway serves an
   # embedding model. Degrades to keyword search on embedding outage.
   embeddings: false
+  # The embedding model your gateway serves (NOT the chat model). Default suits a
+  # local Ollama gateway; the protoLabs gateway serves `qwen3-embedding`. Check
+  # GET /v1/models — a wrong model silently degrades to keyword-only search.
   embed_model: nomic-embed-text
   # Extract durable facts from a conversation on retirement (aux model) and
   # consolidate them into the store. Rides the harvest pass (ADR 0021).

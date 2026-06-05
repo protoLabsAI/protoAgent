@@ -92,6 +92,7 @@ export default defineConfig({
           items: [
             { text: "Overview", link: "/explanation/" },
             { text: "Architecture", link: "/explanation/architecture" },
+            { text: "Memory & knowledge store", link: "/explanation/memory-and-knowledge" },
             { text: "A2A protocol", link: "/explanation/a2a-protocol" },
             { text: "Cost & trace propagation", link: "/explanation/cost-and-trace" },
             { text: "Tuning & cost", link: "/explanation/tuning-and-cost" },
