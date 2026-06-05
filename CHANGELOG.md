@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: agent init / builders / reload / settings moved to
+  `server/agent_init.py`** (ADR 0023, phase 2 — final backend extraction).
+  `_init_langgraph_agent`, the ten `_build_*` component builders
+  (knowledge / skills / MCP / plugins / checkpointer / inbox / activity /
+  telemetry / workflow / scheduler), the checkpoint-prune + thread-retire loops,
+  plugin-host wiring, `_reload_langgraph_agent`, and the operator-console
+  settings callbacks (27 functions) now live in their own module.
+  `server/__init__.py` re-exports every name and drops ~1,135 lines — the
+  composition root is now ~1,355 lines (was 3,353 before phase 1). Pure move
+  (1000 tests + a live smoke green: boot exercising every builder, a chat turn,
+  and a config-driven hot reload).
 - **Internal: the chat backend moved to `server/chat.py`** (ADR 0023, phase 2).
   The LangGraph turn loop — `chat` (Gradio + OpenAI-compat), the streaming
   `_chat_langgraph_stream` (A2A handler), the shared `_run_turn_stream` event
