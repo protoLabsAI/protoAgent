@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: `_main()`'s inline route handlers are moving into `operator_api/*`
+  registrars** (ADR 0023, phase 3 — shrinking the composition root toward app
+  assembly). Each group becomes a `register_*_routes(app)` function matching the
+  existing `register_operator_routes`, so the handler bodies (which only touch
+  `STATE` now) become testable without booting the server. First out:
+  `operator_api/telemetry_routes.py` (`/api/telemetry/summary|recent|insights`).
 - **Internal: agent init / builders / reload / settings moved to
   `server/agent_init.py`** (ADR 0023, phase 2 — final backend extraction).
   `_init_langgraph_agent`, the ten `_build_*` component builders
