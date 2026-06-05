@@ -74,12 +74,19 @@ async def harvest_thread(
     knowledge_store,
     config,
     summarizer=_default_summarizer,
+    namespace: str | None = None,
+    fact_extractor=None,
 ) -> str | None:
-    """Summarize ``thread_id``'s conversation into the knowledge base.
+    """Retire ``thread_id``'s conversation into the knowledge base (ADR 0021).
 
-    Returns the new chunk id, or None when there's nothing to harvest (no
-    knowledge store, no checkpoint, empty transcript, or a summarizer failure).
-    Never raises — harvesting is best-effort and must not block retirement.
+    The single session-end pass: store an **episodic** summary
+    (``domain="conversation"``) and, when ``config.knowledge_facts``, also
+    extract **semantic** facts (``finding_type="fact"``) and consolidate them.
+    Both carry ``namespace`` for later per-project scoping.
+
+    Returns the summary chunk id, or None when there's nothing to harvest (no
+    store, no checkpoint, empty transcript, or a summarizer failure). Never
+    raises — harvesting is best-effort and must not block retirement.
     """
     if knowledge_store is None:
         return None
@@ -98,8 +105,19 @@ async def harvest_thread(
             summary,
             domain="conversation",
             heading=f"Conversation summary ({thread_id})",
+            namespace=namespace,
         )
         log.info("[harvest] summarized thread %s into knowledge (chunk %s)", thread_id, chunk_id)
+
+        # Semantic facts — the second half of the session-end pass (ADR 0021).
+        if getattr(config, "knowledge_facts", False):
+            from graph.memory_facts import extract_and_store_facts
+
+            kwargs = {"knowledge_store": knowledge_store, "config": config, "namespace": namespace}
+            if fact_extractor is not None:
+                kwargs["extractor"] = fact_extractor
+            await extract_and_store_facts(transcript, **kwargs)
+
         return chunk_id
     except Exception:
         log.exception("[harvest] failed for thread %s", thread_id)

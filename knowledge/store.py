@@ -79,6 +79,7 @@ class Chunk:
     finding_type: str | None
     created_at: str
     updated_at: str
+    namespace: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +90,7 @@ class Chunk:
             "source": self.source,
             "source_type": self.source_type,
             "finding_type": self.finding_type,
+            "namespace": self.namespace,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -171,6 +173,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     source        TEXT,
     source_type   TEXT,
     finding_type  TEXT,
+    namespace     TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -235,6 +238,17 @@ class KnowledgeStore:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
+            # Migration: add the namespace column to DBs created before it
+            # existed (ADR 0021). Additive + nullable, so it's a filter dimension
+            # later (per-project scoping, ADR 0007) — never a migration then.
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "namespace" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN namespace TEXT")
+                # Index created after the column exists (new + migrated DBs alike).
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_namespace ON chunks(namespace)")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] namespace migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -277,6 +291,7 @@ class KnowledgeStore:
         source: str | None = None,
         source_type: str | None = None,
         finding_type: str | None = None,
+        namespace: str | None = None,
     ) -> int | None:
         """Insert a chunk. Returns the new row id, or None on failure.
 
@@ -299,8 +314,8 @@ class KnowledgeStore:
             cur = db.execute(
                 "INSERT INTO chunks "
                 "(content, domain, heading, source, source_type, finding_type, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (content, domain, heading, source, source_type, finding_type, now, now),
+                "namespace, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (content, domain, heading, source, source_type, finding_type, namespace, now, now),
             )
             db.commit()
             return int(cur.lastrowid)
@@ -316,18 +331,19 @@ class KnowledgeStore:
         source: str = "conversation",
         source_type: str = "chat",
         finding_type: str = "insight",
+        *,
+        namespace: str | None = None,
     ) -> int | None:
-        """Compatibility shim for ``MemoryMiddleware.after_agent``.
-
-        Stored under ``domain='finding'`` so memory_list / memory_recall
-        can surface them alongside operator-set chunks.
-        """
+        """Add a finding chunk (``domain='finding'``) so memory_list /
+        memory_recall surface it alongside operator-set chunks. ``namespace``
+        carries an optional per-project/owner scope (ADR 0021)."""
         return self.add_chunk(
             content,
             domain="finding",
             source=source,
             source_type=source_type,
             finding_type=finding_type,
+            namespace=namespace,
         )
 
     # ── reads ───────────────────────────────────────────────────────────────
@@ -441,28 +457,51 @@ class KnowledgeStore:
         self,
         domain: str | None = None,
         limit: int = 50,
+        *,
+        namespace: str | None = None,
     ) -> list[Chunk]:
-        """Most-recent-first chunk listing. Used by ``memory_list``."""
+        """Most-recent-first chunk listing. Used by ``memory_list`` and the
+        fact consolidator. ``namespace`` (ADR 0021) optionally scopes to one
+        per-project/owner bucket."""
         db = self._get_db()
         if db is None:
             return []
+        clauses: list[str] = []
+        params: list[Any] = []
+        if domain:
+            clauses.append("domain = ?")
+            params.append(domain)
+        if namespace is not None:
+            clauses.append("namespace = ?")
+            params.append(namespace)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
         try:
-            if domain:
-                rows = db.execute(
-                    "SELECT * FROM chunks WHERE domain = ? ORDER BY id DESC LIMIT ?",
-                    (domain, limit),
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    "SELECT * FROM chunks ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = db.execute(
+                f"SELECT * FROM chunks{where} ORDER BY id DESC LIMIT ?", params
+            ).fetchall()
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] list_chunks failed: %s", exc)
             rows = []
         finally:
             db.close()
         return [Chunk(**dict(r)) for r in rows]
+
+    def delete_by_id(self, chunk_id: int) -> bool:
+        """Delete one chunk by id. Used by the fact consolidator to replace a
+        superseded fact (ADR 0021). Returns True if a row was removed."""
+        db = self._get_db()
+        if db is None:
+            return False
+        try:
+            cur = db.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
+            db.commit()
+            return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] delete_by_id failed")
+            return False
+        finally:
+            db.close()
 
     def get_hot_memory(self, max_chars: int = 6000) -> str:
         """Concatenate every ``domain="hot"`` chunk for always-on injection.

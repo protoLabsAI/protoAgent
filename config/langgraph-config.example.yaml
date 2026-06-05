@@ -58,6 +58,9 @@ knowledge:
   # embedding model. Degrades to keyword search on embedding outage.
   embeddings: false
   embed_model: nomic-embed-text
+  # Extract durable facts from a conversation on retirement (aux model) and
+  # consolidate them into the store. Rides the harvest pass (ADR 0021).
+  facts: true
   top_k: 5
 
 # Session memory loading — prior summaries injected into system prompt
