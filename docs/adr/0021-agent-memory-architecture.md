@@ -90,8 +90,11 @@ One store, one retrieval path (`KnowledgeMiddleware`) over **typed** entries
 - Less storage and fewer embeddings; cheaper retrieval.
 - Phase 2 adds an aux-model extraction pass on session end — a modest background
   cost, the same cheap model `conversation_harvest` already uses.
-- `<prior_sessions>` (raw JSON injection) is redundant with the checkpointer
-  (same-thread) and harvest (cross-thread) — it goes.
+- `<prior_sessions>` keeps a real role implementation surfaced: it gives
+  *immediate* cross-session recency (written every terminal turn), which the
+  checkpointer (same-thread only) and harvest (retirement-delayed) don't cover.
+  So Phase 3 **cleans** it rather than dropping it — strip reasoning at the
+  source + read, and collapse the two copy-pasted loaders into one.
 
 ## 5. Implementation (phased)
 
@@ -100,7 +103,10 @@ One store, one retrieval path (`KnowledgeMiddleware`) over **typed** entries
    regression-test that scratch_pad can't reach the store. Sweep existing junk.
 2. **Semantic extractor** — Mem0-style fact extraction on session end (background,
    aux model) + consolidate/dedupe + importance gating, `finding_type="fact"`.
-3. **Rationalize overlap** — drop/replace the raw `<prior_sessions>` injection.
+3. **Rationalize overlap** — `<prior_sessions>` stays (it's the only *immediate*
+   cross-session recency), but cleaned: strip reasoning at the persist source +
+   at read (defensive for old files), and collapse the two duplicate loaders
+   into one `load_prior_sessions`.
 4. *(this ADR)* — the decision that never existed.
 
 Phase 1 alone removes the junk and loses nothing real (the raw insights were

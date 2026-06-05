@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`<prior_sessions>` can no longer leak reasoning; one loader, not two** (ADR
+  0021). The persisted session files (injected each turn as `<prior_sessions>`
+  for cross-session recency) stored raw assistant content — so the model's
+  `<scratch_pad>` could ride into later prompts. Now stripped at the write
+  source *and* at read (defensive for files written by older builds). The two
+  copy-pasted loaders in `MemoryMiddleware` and `KnowledgeMiddleware` are
+  collapsed into a single `load_prior_sessions` (the duplication the code itself
+  lamented). `<prior_sessions>` is kept — it's the only *immediate* cross-session
+  recency the checkpointer/harvest don't provide.
+
 ### Added
 - **Semantic fact extraction — the memory upgrade** (ADR 0021). The session-end
   pass (`conversation_harvest`) now does both halves: the episodic summary *and*
