@@ -277,7 +277,7 @@ class LangGraphConfig:
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
     # the conversation (aux model) and consolidate them into the store as
     # finding_type="fact". Rides the harvest pass; needs harvest enabled.
-    memory_facts_enabled: bool = True
+    knowledge_facts: bool = True
 
     # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
     # loaded from disk into the FTS5 skill index and retrieved at inference by
@@ -497,7 +497,7 @@ class LangGraphConfig:
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),
             checkpoint_harvest_enabled=data.get("checkpoint", {}).get("harvest_enabled", cls.checkpoint_harvest_enabled),
-            memory_facts_enabled=data.get("knowledge", {}).get("facts", cls.memory_facts_enabled),
+            knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflows_enabled=data.get("workflows", {}).get("enabled", cls.workflows_enabled),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),

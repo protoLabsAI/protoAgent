@@ -80,7 +80,7 @@ async def harvest_thread(
     """Retire ``thread_id``'s conversation into the knowledge base (ADR 0021).
 
     The single session-end pass: store an **episodic** summary
-    (``domain="conversation"``) and, when ``config.memory_facts_enabled``, also
+    (``domain="conversation"``) and, when ``config.knowledge_facts``, also
     extract **semantic** facts (``finding_type="fact"``) and consolidate them.
     Both carry ``namespace`` for later per-project scoping.
 
@@ -110,7 +110,7 @@ async def harvest_thread(
         log.info("[harvest] summarized thread %s into knowledge (chunk %s)", thread_id, chunk_id)
 
         # Semantic facts — the second half of the session-end pass (ADR 0021).
-        if getattr(config, "memory_facts_enabled", False):
+        if getattr(config, "knowledge_facts", False):
             from graph.memory_facts import extract_and_store_facts
 
             kwargs = {"knowledge_store": knowledge_store, "config": config, "namespace": namespace}

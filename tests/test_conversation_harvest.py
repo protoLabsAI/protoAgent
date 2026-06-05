@@ -66,7 +66,7 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
 
 def test_harvest_extracts_facts_when_enabled(tmp_path):
     """ADR 0021: the session-end pass also distils facts (gated on
-    memory_facts_enabled), stamped with the namespace, into a real store."""
+    knowledge_facts), stamped with the namespace, into a real store."""
     from types import SimpleNamespace
 
     from knowledge.store import KnowledgeStore
@@ -75,7 +75,7 @@ def test_harvest_extracts_facts_when_enabled(tmp_path):
     _seed(db)
     saver = build_sqlite_checkpointer(db)
     store = KnowledgeStore(tmp_path / "kb.db")
-    cfg = SimpleNamespace(memory_facts_enabled=True)
+    cfg = SimpleNamespace(knowledge_facts=True)
 
     async def fake_summarizer(transcript, config):
         return "User prefers teal."
@@ -112,7 +112,7 @@ def test_harvest_skips_facts_when_disabled(tmp_path):
 
     asyncio.run(harvest_thread(
         "a2a:chat-1", checkpointer=saver, knowledge_store=store,
-        config=SimpleNamespace(memory_facts_enabled=False),
+        config=SimpleNamespace(knowledge_facts=False),
         summarizer=fake_summarizer, fact_extractor=boom_facts,
     ))
     assert store.list_chunks(domain="fact") == []

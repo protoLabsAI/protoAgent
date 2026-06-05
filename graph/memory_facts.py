@@ -31,7 +31,10 @@ log = logging.getLogger(__name__)
 
 _MAX_FACTS = 12
 _MAX_FACT_CHARS = 300
-_DEDUP_JACCARD = 0.85  # ≥ this token overlap with an existing fact ⇒ duplicate
+# ≥ this token-overlap (Jaccard) with an existing fact ⇒ treat as a duplicate and
+# skip. Intentionally conservative for v1 (only near-identical facts are deduped);
+# LLM-judged supersession of *outdated* facts is the follow-up noted in ADR 0021.
+_DEDUP_JACCARD = 0.85
 
 _FACTS_PROMPT = (
     "Extract durable, reusable FACTS from this conversation — things worth "
