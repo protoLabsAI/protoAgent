@@ -28,8 +28,8 @@ class _FakeKnowledge:
     def __init__(self):
         self.chunks = []
 
-    def add_chunk(self, content, domain=None, heading=None):
-        self.chunks.append({"content": content, "domain": domain, "heading": heading})
+    def add_chunk(self, content, domain=None, heading=None, *, namespace=None, **kw):
+        self.chunks.append({"content": content, "domain": domain, "heading": heading, "namespace": namespace})
         return f"chunk-{len(self.chunks)}"
 
 
@@ -62,6 +62,60 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
     assert cid == "chunk-1"
     assert kb.chunks[0]["domain"] == "conversation"
     assert "teal" in kb.chunks[0]["content"]
+
+
+def test_harvest_extracts_facts_when_enabled(tmp_path):
+    """ADR 0021: the session-end pass also distils facts (gated on
+    memory_facts_enabled), stamped with the namespace, into a real store."""
+    from types import SimpleNamespace
+
+    from knowledge.store import KnowledgeStore
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+    saver = build_sqlite_checkpointer(db)
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cfg = SimpleNamespace(memory_facts_enabled=True)
+
+    async def fake_summarizer(transcript, config):
+        return "User prefers teal."
+
+    async def fake_facts(transcript, config):
+        return ["The user's favorite color is teal"]
+
+    cid = asyncio.run(harvest_thread(
+        "a2a:chat-1", checkpointer=saver, knowledge_store=store, config=cfg,
+        summarizer=fake_summarizer, namespace="proj-x", fact_extractor=fake_facts,
+    ))
+    assert cid is not None
+    # Episodic summary (conversation) + semantic fact (fact), both namespaced.
+    assert len(store.list_chunks(domain="conversation", namespace="proj-x")) == 1
+    facts = store.list_chunks(domain="fact", namespace="proj-x")
+    assert len(facts) == 1 and "teal" in facts[0].content
+
+
+def test_harvest_skips_facts_when_disabled(tmp_path):
+    from types import SimpleNamespace
+
+    from knowledge.store import KnowledgeStore
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+    saver = build_sqlite_checkpointer(db)
+    store = KnowledgeStore(tmp_path / "kb.db")
+
+    async def fake_summarizer(transcript, config):
+        return "summary"
+
+    async def boom_facts(transcript, config):
+        raise AssertionError("fact extractor must not run when disabled")
+
+    asyncio.run(harvest_thread(
+        "a2a:chat-1", checkpointer=saver, knowledge_store=store,
+        config=SimpleNamespace(memory_facts_enabled=False),
+        summarizer=fake_summarizer, fact_extractor=boom_facts,
+    ))
+    assert store.list_chunks(domain="fact") == []
 
 
 def test_harvest_noop_without_knowledge_store(tmp_path):

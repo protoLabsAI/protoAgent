@@ -112,6 +112,9 @@ FIELDS: list[Field] = [
           restart=True),
     Field("checkpoint.harvest_enabled", "checkpoint_harvest_enabled", "History: harvest to knowledge", "bool",
           "Knowledge", "Summarize a session into the searchable knowledge base before pruning/deleting it."),
+    Field("knowledge.facts", "memory_facts_enabled", "Extract semantic facts", "bool", "Knowledge",
+          "On session retirement, also distil durable facts (aux model) and "
+          "consolidate them into the store. Rides the harvest pass."),
 
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),

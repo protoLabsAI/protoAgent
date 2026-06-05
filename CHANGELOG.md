@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Semantic fact extraction — the memory upgrade** (ADR 0021). The session-end
+  pass (`conversation_harvest`) now does both halves: the episodic summary *and*
+  a semantic pass that distils **durable facts** (aux model — user preferences,
+  decisions, stable facts about their projects), consolidates them (skips
+  near-duplicates already in the store), and persists them as `domain="fact"`.
+  Importance-gated in the prompt — a chatty turn with nothing durable yields
+  nothing. Replaces the removed raw per-turn dump with *extract, don't dump;
+  background, not hot-path*. Gated by `knowledge.facts` (default on; rides the
+  harvest). New `graph/memory_facts.py`.
+- **Knowledge chunks carry a `namespace` dimension.** Facts (and any chunk) can
+  be scoped to a per-project/owner namespace, so multi-project scoping (ADR 0007)
+  is a later *filter*, not a schema migration. Additive nullable column with an
+  online migration for existing DBs; `add_chunk`/`add_finding`/`list_chunks` take
+  `namespace`, plus a precise `delete_by_id` (backs fact consolidation).
 - **Semantic recall: the dormant embeddings layer is now wired** (ADR 0021). The
   `HybridKnowledgeStore` (FTS5 + vector search, RRF-fused, with an embedding
   circuit breaker) and the `embed_model` config existed but were connected to
