@@ -4,7 +4,7 @@
 - **Date:** 2026-05-30
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, scheduler, reactive, a2a, streaming, inbox, security
-- **Supersedes / Superseded by:** —
+- **Supersedes / Superseded by:** The reactive **machinery** stands; the **Activity surface** is refined by [ADR 0022](./0022-activity-provenance-feed.md) (a provenance feed, not a second chat).
 
 > Accepted. protoAgent gains a **reactive surface** so the agent can respond to
 > stimuli that aren't a live user chat turn — scheduled prompts, webhooks, and
