@@ -245,6 +245,11 @@ class LangGraphConfig:
     # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
     embed_model: str = "nomic-embed-text"
+    # Semantic recall (ADR 0021): when True, the knowledge store is the
+    # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
+    # with RRF). Default off — needs the gateway to serve an embedding model;
+    # the store's circuit breaker falls back to FTS5 on outage. Off = keyword-only.
+    knowledge_embeddings: bool = False
     knowledge_top_k: int = 5
 
     # Conversation checkpointer — persists each chat session's history per
@@ -491,6 +496,7 @@ class LangGraphConfig:
             workflows_enabled=data.get("workflows", {}).get("enabled", cls.workflows_enabled),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
+            knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),

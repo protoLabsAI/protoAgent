@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Semantic recall: the dormant embeddings layer is now wired** (ADR 0021). The
+  `HybridKnowledgeStore` (FTS5 + vector search, RRF-fused, with an embedding
+  circuit breaker) and the `embed_model` config existed but were connected to
+  nothing — knowledge recall was keyword-only. A new `knowledge.embeddings` flag
+  (default **off**) flips `_build_knowledge_store` to the hybrid store with an
+  `embed_fn` wired to the gateway (`graph.llm.create_embed_fn`, same OpenAI-compat
+  endpoint + WAF-safe UA as the chat model). Off → keyword-only (unchanged); on →
+  hybrid semantic + keyword. Any failure degrades to FTS5, never KB-less, and the
+  breaker handles runtime embedding outages. Exposed in Settings → Memory.
+
 ### Fixed
 - **Knowledge store no longer fills with raw reasoning** (ADR 0021). The memory
   middleware dumped *every* assistant turn into the knowledge base — raw,

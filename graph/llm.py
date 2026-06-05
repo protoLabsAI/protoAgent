@@ -5,10 +5,14 @@ so we use ChatOpenAI for everything.
 """
 
 import os
+from collections.abc import Callable
 
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from graph.config import LangGraphConfig
+
+# Same allowlisted UA the chat client uses (Cloudflare WAF blocks the SDK default).
+_GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
 
 
 def _build_llm_kwargs(config: LangGraphConfig) -> dict:
@@ -74,3 +78,25 @@ def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> Cha
     if model_name:
         kwargs["model"] = model_name
     return ChatOpenAI(**kwargs)
+
+
+def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | None:
+    """Build a sync ``text -> vector`` function against the same gateway, or None.
+
+    Routes ``knowledge.embed_model`` through the OpenAI-compatible LiteLLM
+    gateway (ADR 0021), so semantic search reuses the model infra we already
+    have. Returns ``None`` when no embed model is configured — callers fall back
+    to FTS5. Runtime embedding outages are handled by the
+    ``HybridKnowledgeStore`` circuit breaker, not here.
+    """
+    model = (getattr(config, "embed_model", "") or "").strip()
+    if not model:
+        return None
+    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+    embeddings = OpenAIEmbeddings(
+        base_url=config.api_base,
+        api_key=api_key,
+        model=model,
+        default_headers={"User-Agent": _GATEWAY_UA},
+    )
+    return embeddings.embed_query

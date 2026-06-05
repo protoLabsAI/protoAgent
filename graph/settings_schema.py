@@ -93,7 +93,12 @@ FIELDS: list[Field] = [
     # ── Knowledge / memory ───────────────────────────────────────────────────
     Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge",
           minimum=1),
-    Field("knowledge.embed_model", "embed_model", "Embedding model", "string", "Knowledge"),
+    Field("knowledge.embeddings", "knowledge_embeddings", "Semantic recall (embeddings)", "bool", "Knowledge",
+          "Hybrid FTS5 + vector search via the embedding model (RRF-fused). Off = "
+          "keyword-only. Needs the gateway to serve the embedding model; falls back "
+          "to keyword search on outage.", restart=True),
+    Field("knowledge.embed_model", "embed_model", "Embedding model", "string", "Knowledge",
+          "Gateway alias used when semantic recall is on."),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
