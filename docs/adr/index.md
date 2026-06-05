@@ -30,3 +30,4 @@ decision, numbered, never deleted (supersede instead).
 | [0019](./0019-plugin-config-settings-secrets.md) | Plugins contribute config, settings & secrets | Accepted |
 | [0020](./0020-console-ia-run-from-chat.md) | Console IA: run from Chat, manage from surfaces | Accepted |
 | [0021](./0021-agent-memory-architecture.md) | Agent memory: extract, don't dump | Accepted |
+| [0022](./0022-activity-provenance-feed.md) | Activity is a provenance feed, not a second chat | Accepted |
