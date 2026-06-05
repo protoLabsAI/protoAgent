@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Internal: the chat backend moved to `server/chat.py`** (ADR 0023, phase 2).
+  The LangGraph turn loop — `chat` (Gradio + OpenAI-compat), the streaming
+  `_chat_langgraph_stream` (A2A handler), the shared `_run_turn_stream` event
+  loop, tool-preview/interrupt shaping, and slash-command parsing/execution —
+  now lives in its own module. It imports only neutral modules (no `server`
+  symbols), so there's no import cycle; `server/__init__.py` re-exports every
+  name. Pure move (1000 tests + a live smoke green: non-streaming + streaming
+  turns). `server/__init__.py` drops ~645 lines.
 - **Internal: the A2A surface moved to `server/a2a.py`** (ADR 0023, phase 2).
   Agent-card building, skill declarations (`_SKILL_SPECS` + `_agent_skills` +
   `structured_skill_schema`), the per-turn telemetry writer, and the executor
