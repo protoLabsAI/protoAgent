@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-06-05
+
 ### Fixed
 - **Browser chat rendered blank** (console). The chat turn streams over `/a2a`
   `SendStreamingMessage` and the client hand-parses the SSE body, but
