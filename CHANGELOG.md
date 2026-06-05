@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`fact_recall` eval** — locks the new semantic-fact bucket: a `domain="fact"`
+  chunk (what the harvest extractor produces) is passively recalled by the
+  KnowledgeMiddleware and surfaced in the answer. Tracked alongside the existing
+  recall cases (ADR 0012). The hybrid-vs-keyword recall comparison runs via
+  `evals.sweep` with `knowledge.embeddings` on (once the gateway serves an
+  embedding model).
+
 ### Fixed
 - **`<prior_sessions>` can no longer leak reasoning; one loader, not two** (ADR
   0021). The persisted session files (injected each turn as `<prior_sessions>`

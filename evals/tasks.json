@@ -195,6 +195,26 @@
   },
 
   {
+    "id": "fact_recall",
+    "category": "subsystem",
+    "kind": "ask",
+    "name": "A harvested semantic fact (domain=fact) is recalled passively",
+    "setup": [
+      {"kb_ingest": {
+        "content": "The operator's preferred editor is Neovim with the Catppuccin theme.",
+        "domain": "fact",
+        "heading": "editor-pref"
+      }}
+    ],
+    "prompt": "What editor and color theme do I use?",
+    "expected_tools": [],
+    "expected_patterns": ["neovim", "catppuccin"],
+    "teardown": [
+      {"kb_delete_by_heading": {"domain": "fact", "heading": "editor-pref"}}
+    ]
+  },
+
+  {
     "id": "goal_achieved",
     "category": "goal",
     "kind": "goal",
