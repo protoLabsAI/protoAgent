@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/public/protoagent-banner.png" alt="protoAgent" width="100%">
+</p>
+
 # protoAgent
 
 Template repository for building protoLabs A2A agents on LangGraph.
