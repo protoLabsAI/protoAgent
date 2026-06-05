@@ -91,7 +91,7 @@ monitor has no operator at a browser, so run the **lean, UI-less tier**
 ([ADR 0010](/adr/0010-headless-setup-and-ui-tiers)): `--ui none` (or
 `PROTOAGENT_UI=none`) serves only API + A2A + `/metrics` — no Gradio, no console,
 core deps only. Drop the live config + supply the gateway key via env, and setup
-auto-completes on boot (or run `python server.py --setup` once); `GET /healthz`
+auto-completes on boot (or run `python -m server --setup` once); `GET /healthz`
 reports readiness. The default Docker image already builds this lean tier.
 
 ---

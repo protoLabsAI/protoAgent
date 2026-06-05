@@ -39,7 +39,7 @@ swap the model and compare ([ADR 0012](/adr/0012-eval-strategy-and-model-compari
 can point the same agent at a different model without editing config:
 
 ```bash
-PROTOAGENT_MODEL=vendor/some-model python server.py --ui none
+PROTOAGENT_MODEL=vendor/some-model python -m server --ui none
 ```
 
 **Sweep several models** with one command — `evals/sweep.py` boots a throwaway,

@@ -32,7 +32,7 @@ Every env var the template reads at runtime.
 | `PROTOAGENT_HEADLESS` | (unset) | **Deprecated** alias for `PROTOAGENT_UI=console` (or `--headless`). |
 | `PROTOAGENT_HEADLESS_SETUP` | (unset) | Set `1`/`true` to auto-complete setup from a validated config even outside the `none` tier (no wizard). The `none` tier implies this. |
 
-Setup without the wizard: `python server.py --setup` validates the live config (`model.api_base` set + key resolvable via `secrets.yaml`/`OPENAI_API_KEY`) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
+Setup without the wizard: `python -m server --setup` validates the live config (`model.api_base` set + key resolvable via `secrets.yaml`/`OPENAI_API_KEY`) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
 
 ## Authentication — A2A bearer token
 

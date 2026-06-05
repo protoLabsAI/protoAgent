@@ -131,7 +131,7 @@ def _run_one_model(
     print(f"\n=== {model} :: booting on {base_url} (instance={instance}) ===")
     log_f = open(log_path, "w")
     proc = subprocess.Popen(
-        [sys.executable, "server.py", "--port", str(port), "--ui", "none"],
+        [sys.executable, "-m", "server", "--port", str(port), "--ui", "none"],
         cwd=str(_PROJECT_ROOT),
         env=env,
         stdout=log_f,

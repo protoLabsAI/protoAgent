@@ -19,8 +19,8 @@ or containers that mount the **same** volume — the default paths (and the
 Scope each instance with a distinct id:
 
 ```bash
-PROTOAGENT_INSTANCE=alice  python server.py --port 7871
-PROTOAGENT_INSTANCE=bob    python server.py --port 7872
+PROTOAGENT_INSTANCE=alice  python -m server --port 7871
+PROTOAGENT_INSTANCE=bob    python -m server --port 7872
 ```
 
 or in `config.yaml`:

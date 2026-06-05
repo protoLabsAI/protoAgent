@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`server.py` is now a `server/` package** (ADR 0023, phase 2 prep). The
+  monolith moved to `server/__init__.py` (the composition root) with a
+  `server/__main__.py` entry, so the backends can be extracted into
+  `server/a2a.py`, `server/chat.py`, `server/agent_init.py` next. **Launch it as
+  a module: `python -m server`** (was `python server.py`) — the container
+  entrypoint, eval sweep, and desktop-sidecar build were updated to match.
+  Pure move + the `__file__`→`_bundle_root()` path-anchor fix (the package adds
+  one directory level); `import server` / `from server import X` are unchanged
+  (1000 tests + a full live smoke green: boot, chat turn, A2A 1.0 round-trip).
 - **Internal: `server.py`'s 26 ambient module-globals → an `AppState` container**
   (ADR 0023, phase 1). Runtime state (graph, stores, registries, scheduler,
   MCP/plugin state) now lives in `runtime/state.py` as a named, injectable
