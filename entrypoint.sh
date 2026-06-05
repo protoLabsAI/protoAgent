@@ -20,4 +20,8 @@ if [ -f /opt/protoagent/config/SOUL.md ]; then
     cp /opt/protoagent/config/SOUL.md /sandbox/SOUL.md
 fi
 
-exec python /opt/protoagent/server.py
+# ADR 0023: server.py was promoted to a `server/` package. Launch it as a
+# module with the install dir on PYTHONPATH so the package (and its sibling
+# top-level modules: paths, events, graph, …) resolve, while keeping the
+# agent's workspace (/sandbox) as the working directory.
+exec env PYTHONPATH="/opt/protoagent${PYTHONPATH:+:$PYTHONPATH}" python -m server

@@ -140,7 +140,11 @@ def main() -> None:
         "--workpath", str(work / "build"),
         "--specpath", str(work),
         *exclude, *add_data, *collect,
-        str(REPO / "server.py"),
+        # ADR 0023: server.py is now the `server` package; freeze its module
+        # entry point. PyInstaller bundles the whole `server` package and the
+        # `--add-data` assets land at _MEIPASS top level (server/_bundle_root
+        # resolves there when frozen).
+        str(REPO / "server" / "__main__.py"),
     ]
     print("running:", " ".join(cmd))
     subprocess.run(cmd, check=True, cwd=str(REPO))

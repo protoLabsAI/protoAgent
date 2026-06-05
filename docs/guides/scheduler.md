@@ -53,13 +53,13 @@ on** — opt out via either config path above for a stateless agent.
 
 ```bash
 # Solo / local dev — LocalScheduler (the default).
-python server.py
+python -m server
 
 # Workstacean install — opt in explicitly AND set the creds.
 export SCHEDULER_BACKEND=workstacean
 export WORKSTACEAN_API_BASE=http://your-workstacean-host:3000
 export WORKSTACEAN_API_KEY=<key>
-python server.py
+python -m server
 ```
 
 > **protoLabs operators**: the fleet's Workstacean lives on the

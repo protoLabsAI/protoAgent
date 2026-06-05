@@ -80,7 +80,7 @@ The output maps directly:
 
 ```bash
 # install OpenShell (see its docs), then wrap the agent's container/command:
-openshell sandbox create --policy openshell-policy.yaml -- python server.py
+openshell sandbox create --policy openshell-policy.yaml -- python -m server
 ```
 
 Credentials are injected as env at runtime (never on disk); egress is

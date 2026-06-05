@@ -91,6 +91,24 @@ _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # streams to connected consoles.
 
 
+def _bundle_root() -> Path:
+    """Root that read-only bundled assets (``static``, ``config``, ``plugins``,
+    bundled ``workflows``, ``pyproject.toml``) resolve against.
+
+    Source checkout: the repo root. This file is ``server/__init__.py``, so the
+    repo is its parent's parent. Frozen sidecar (PyInstaller onefile): the
+    ``_MEIPASS`` extraction dir where ``--add-data`` lands assets at the top
+    level. Before ADR 0023 promoted ``server.py`` into this package these
+    lookups were ``Path(__file__).parent``; the package adds one directory
+    level, so they route through here to stay anchored at the repo / bundle
+    root."""
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+    return Path(__file__).resolve().parents[1]
+
+
 def _resolve_operator_project_root() -> str:
     """The operator console's default project root (+ its always-allowed dir).
 
@@ -109,7 +127,7 @@ def _resolve_operator_project_root() -> str:
         cfg = os.environ.get("PROTOAGENT_CONFIG_DIR")
         base = Path(cfg) if cfg else Path.home()
         return str(base.expanduser().resolve())
-    return str(Path(__file__).parent.resolve())
+    return str(_bundle_root())
 
 
 def _install_parent_death_watchdog() -> None:
@@ -674,7 +692,7 @@ def _build_workflow_registry(config):
         from graph.workflows.registry import WorkflowRegistry
 
         dirs: list[str] = []
-        bundled = Path(__file__).resolve().parent / "workflows"
+        bundled = _bundle_root() / "workflows"
         if bundled.is_dir():
             dirs.append(str(bundled))
         # Writable dir for user / agent-emitted recipes (same fallback shape).
@@ -2088,7 +2106,7 @@ def _package_version() -> str:
     except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
         pass
 
-    pyproject = Path(__file__).parent / "pyproject.toml"
+    pyproject = _bundle_root() / "pyproject.toml"
     try:
         m = re.search(
             r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE
@@ -2240,7 +2258,10 @@ def _main():
         run_plugin_mcp_main(plugin_id)
         return
 
-    parser = argparse.ArgumentParser(description=f"{AGENT_NAME_ENV} — protoAgent server")
+    parser = argparse.ArgumentParser(
+        prog="python -m server",
+        description=f"{AGENT_NAME_ENV} — protoAgent server",
+    )
     parser.add_argument("--port", type=int, default=7870)
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
@@ -3252,11 +3273,11 @@ def _main():
             pass
 
     # --- React operator console (tiers full/console; skipped in 'none') ------
-    static_dir = Path(__file__).parent / "static"
+    static_dir = _bundle_root() / "static"
     if ui != "none":
         from operator_api.web import mount_react_app
 
-        web_dist_dir = Path(__file__).parent / "apps" / "web" / "dist"
+        web_dist_dir = _bundle_root() / "apps" / "web" / "dist"
         if mount_react_app(fastapi_app, web_dist_dir):
             log.info("React operator console mounted at /app")
 
