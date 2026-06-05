@@ -396,6 +396,7 @@ def _main():
 
     # --- React operator-console API ----------------------------------------
     from graph.config_io import is_setup_complete as _operator_setup_complete
+    from operator_api.chat_routes import register_chat_routes
     from operator_api.config_routes import register_config_routes
     from operator_api.knowledge_routes import register_knowledge_routes
     from operator_api.routes import register_operator_routes
@@ -836,62 +837,10 @@ def _main():
         if STATE.checkpoint_prune_task is not None:
             STATE.checkpoint_prune_task.cancel()
 
-    # --- Chat API -----------------------------------------------------------
-    class ChatRequest(PydanticBaseModel):
-        message: str
-        session_id: str = "api-default"
-
-    @fastapi_app.post("/api/chat")
-    async def _api_chat(req: ChatRequest):
-        result = await chat(req.message, req.session_id)
-        parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
-        return {"response": "\n\n".join(parts), "messages": result}
-
-    @fastapi_app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: str):
-        """Retire a chat session: harvest its conversation into the knowledge
-        base (if enabled), then purge its checkpoints. Called when the operator
-        deletes a chat tab, so deleted conversations don't linger to the TTL —
-        their substance lives on as searchable memory instead."""
-        chunk_id = await _retire_thread(f"a2a:{session_id}")
-        return {"deleted": True, "harvested": chunk_id is not None}
-
-    # --- Goal mode API ------------------------------------------------------
-    # Programmatic status/clear for a session's goal (setting is done via the
-    # `/goal ...` control message through chat/A2A). Returns 404-style payloads
-    # as plain JSON to keep the surface dependency-free.
-    @fastapi_app.get("/api/goal/{session_id}")
-    async def _api_goal_status(session_id: str):
-        if STATE.goal_controller is None:
-            return {"enabled": False, "goal": None}
-        state = STATE.goal_controller.store.get(session_id)
-        return {"enabled": True, "goal": state.to_dict() if state else None}
-
-    @fastapi_app.delete("/api/goal/{session_id}")
-    async def _api_goal_clear(session_id: str):
-        if STATE.goal_controller is None:
-            return {"enabled": False, "cleared": False}
-        return {"enabled": True, "cleared": STATE.goal_controller.store.clear(session_id)}
-
-    # --- Health / readiness (ADR 0010) -------------------------------------
-    # Reflects whether the graph actually compiled — the only readiness signal
-    # in the 'none' tier (no UI to eyeball). 503 until ready, for k8s probes.
-    @fastapi_app.get("/healthz", include_in_schema=False)
-    async def _healthz():
-        from graph.config_io import is_setup_complete
-        ready = STATE.graph is not None
-        return JSONResponse(
-            {
-                "ok": ready,
-                "graph_compiled": ready,
-                "setup_complete": is_setup_complete(),
-                "ui": ui,
-                # Surface the active model so eval reports can be tagged with the
-                # model under test without guessing (evals.runner auto-detects).
-                "model": STATE.graph_config.model_name if STATE.graph_config else None,
-            },
-            status_code=200 if ready else 503,
-        )
+    # Chat / goal / health / OpenAI-compat HTTP surface. Extracted to
+    # operator_api/chat_routes.py (ADR 0023 phase 3); ``ui`` is passed in
+    # because /healthz echoes the active tier.
+    register_chat_routes(fastapi_app, ui)
 
     # Knowledge store + Playbooks (ADR 0020). Extracted to
     # operator_api/knowledge_routes.py (ADR 0023 phase 3).
@@ -907,59 +856,8 @@ def _main():
     # (ADR 0023 phase 3).
     register_config_routes(fastapi_app)
 
-    # --- OpenAI-compatible chat completions --------------------------------
-    # Lets this agent be registered as a model in the LiteLLM gateway /
-    # OpenWebUI without any protocol adapter.
-    @fastapi_app.post("/v1/chat/completions")
-    async def _openai_chat_completions(req: dict):
-        messages = req.get("messages", [])
-        user_msgs = [m for m in messages if m.get("role") == "user"]
-        if not user_msgs:
-            return {"error": "No user message provided"}, 400
-        prompt = user_msgs[-1].get("content", "")
-        session_id = f"openai-compat-{int(time.time())}"
-        stream = req.get("stream", False)
-
-        result = await chat(prompt, session_id)
-        parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
-        content = "\n\n".join(parts)
-        created = int(time.time())
-        completion_id = f"{agent_name()}-{session_id}"
-
-        if stream:
-            async def _stream():
-                chunk = {
-                    "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": agent_name(),
-                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(chunk)}\n\n"
-                done_chunk = {
-                    "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": agent_name(),
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                }
-                yield f"data: {json.dumps(done_chunk)}\n\n"
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(_stream(), media_type="text/event-stream")
-
-        return {
-            "id": completion_id, "object": "chat.completion",
-            "created": created, "model": agent_name(),
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
-
-    @fastapi_app.get("/v1/models")
-    async def _openai_models():
-        return {
-            "object": "list",
-            "data": [{"id": agent_name(), "object": "model", "created": 1774600000, "owned_by": "protolabs"}],
-        }
+    # OpenAI-compatible /v1/chat/completions + /v1/models are registered above
+    # by register_chat_routes (operator_api/chat_routes.py, ADR 0023 phase 3).
 
     # --- A2A protocol (a2a-sdk 1.0) -----------------------------------------
     # a2a-sdk owns all protocol mechanics: JSON-RPC dispatch, SSE streaming,

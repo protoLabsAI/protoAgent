@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `STATE` now) become testable without booting the server. Extracted so far:
   `operator_api/telemetry_routes.py` (`/api/telemetry/*`),
   `operator_api/knowledge_routes.py` (`/api/knowledge/search` + `/api/playbooks`),
-  and `operator_api/config_routes.py` (`/api/config*` + `/api/settings*`).
+  `operator_api/config_routes.py` (`/api/config*` + `/api/settings*`), and
+  `operator_api/chat_routes.py` (`/api/chat`, `/api/goal/*`, `/healthz`, and the
+  OpenAI-compat `/v1/chat/completions` + `/v1/models`).
 - **Internal: agent init / builders / reload / settings moved to
   `server/agent_init.py`** (ADR 0023, phase 2 — final backend extraction).
   `_init_langgraph_agent`, the ten `_build_*` component builders
