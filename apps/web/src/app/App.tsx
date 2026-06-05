@@ -13,14 +13,12 @@ import {
   Loader2,
   MessageSquare,
   PanelRight,
-  Play,
   Plus,
   Save,
   Settings2,
   Target,
   Undo2,
   Trash2,
-  Workflow,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -43,7 +41,6 @@ import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { RunPanel } from "./RunPanel";
 import { RuntimePanel } from "./RuntimePanel";
 import { SetupWizard } from "../setup/SetupWizard";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -51,9 +48,9 @@ import { runtimeStatusQuery } from "../lib/queries";
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
 type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
-// Studio = the "make the agent do work" surface, ordered by altitude
-// (ADR 0009): goals (autonomy) → workflows (orchestration) → run (execution).
-type StudioTab = "workflows" | "run";
+// Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
+// a chat gesture (run subagents/workflows via /<name>), not a surface — so the
+// old "Run" tab is gone and Studio is just Workflows.
 type SystemTab = "runtime" | "telemetry" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
@@ -101,7 +98,6 @@ function useLocalStorageState(key: string, fallback: string) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
-  const [studioTab, setStudioTab] = useState<StudioTab>("workflows");
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -574,18 +570,6 @@ export function App() {
               </button>
             </div>
           ) : null}
-          {surface === "studio" ? (
-            // Orchestration → execution (ADR 0009). Goals (the autonomy layer)
-            // moved to the right sidebar alongside the agent's notes + beads.
-            <div className="stage-subnav">
-              <button className={studioTab === "workflows" ? "active" : ""} onClick={() => setStudioTab("workflows")}>
-                <Workflow size={15} /> Workflows
-              </button>
-              <button className={studioTab === "run" ? "active" : ""} onClick={() => setStudioTab("run")}>
-                <Play size={15} /> Run
-              </button>
-            </div>
-          ) : null}
           {surface === "system" ? (
             <div className="stage-subnav">
               <button className={systemTab === "runtime" ? "active" : ""} onClick={() => setSystemTab("runtime")}>
@@ -604,9 +588,7 @@ export function App() {
             <ChatSurface onError={setError} />
           ) : null}
 
-          {surface === "studio" && studioTab === "run" ? <RunPanel /> : null}
-
-          {surface === "studio" && studioTab === "workflows" ? <WorkflowsSurface /> : null}
+          {surface === "studio" ? <WorkflowsSurface /> : null}
 
           {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
