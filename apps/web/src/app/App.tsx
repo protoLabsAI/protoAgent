@@ -49,11 +49,11 @@ import { runtimeStatusQuery } from "../lib/queries";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
-type Surface = "chat" | "activity" | "studio" | "knowledge" | "system";
+type Surface = "chat" | "activity" | "studio" | "knowledge" | "system" | "settings";
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
 // old "Run" tab is gone and Studio is just Workflows.
-type SystemTab = "runtime" | "telemetry" | "settings";
+type SystemTab = "runtime" | "telemetry";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox" | "schedule";
@@ -551,6 +551,12 @@ export function App() {
             icon={<Gauge size={18} />}
             onClick={() => setSurface("system")}
           />
+          <RailButton
+            active={surface === "settings"}
+            label="Settings"
+            icon={<Settings2 size={18} />}
+            onClick={() => setSurface("settings")}
+          />
         </aside>
 
         <main className="stage">
@@ -595,9 +601,6 @@ export function App() {
               <button className={systemTab === "telemetry" ? "active" : ""} onClick={() => setSystemTab("telemetry")}>
                 <BarChart3 size={15} /> Telemetry
               </button>
-              <button className={systemTab === "settings" ? "active" : ""} onClick={() => setSystemTab("settings")}>
-                <Settings2 size={15} /> Settings
-              </button>
             </div>
           ) : null}
 
@@ -617,7 +620,7 @@ export function App() {
           {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
           {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
           {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
-          {surface === "system" && systemTab === "settings" ? <SettingsSurface /> : null}
+          {surface === "settings" ? <SettingsSurface /> : null}
         </main>
 
         <aside className="right-panel">

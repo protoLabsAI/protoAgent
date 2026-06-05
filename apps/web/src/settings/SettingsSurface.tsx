@@ -21,7 +21,7 @@ import type { SettingsField } from "../lib/types";
 
 export function SettingsSurface() {
   return (
-    <section className="panel stage-panel">
+    <section className="panel stage-panel settings-panel">
       <QueryErrorResetBoundary>
         {({ reset }) => (
           <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="settings" />}>
