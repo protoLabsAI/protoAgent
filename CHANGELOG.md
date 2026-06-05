@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Browser chat rendered blank** (console). The chat turn streams over `/a2a`
+  `SendStreamingMessage` and the client hand-parses the SSE body, but
+  `drainSseBuffer` scanned for an LF blank line (`\n\n`) while the a2a-sdk
+  separates events with **CRLF** (`\r\n\r\n`) — so no frame boundary was found,
+  zero frames parsed, and the assistant bubble stayed empty even though the
+  agent replied. Now matches any blank-line boundary (`\r\n\r\n` / `\n\n` /
+  `\r\r`). Browser-only (the desktop path uses the non-streaming `/api/chat`
+  fallback, which masked it); the e2e mock now emits CRLF so CI guards it.
+- **Agent name shown as a lowercase slug** in the console (tab title, topbar,
+  boot gate, runtime panel). A fork configures a lowercase identity (`gina`,
+  `roxy`) because the name doubles as a metrics/API-key/path slug; the UI now
+  display-cases it (`gina` → `Gina`) via a `brandName()` helper while keeping the
+  `protoAgent` brand and any intentional casing.
+
 ## [0.15.0] - 2026-06-05
 
 ### Changed
