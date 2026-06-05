@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 
 async function openSettings(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "System", exact: true }).click();
+  // Settings is its own rail surface now (ADR 0020 follow-up).
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 }

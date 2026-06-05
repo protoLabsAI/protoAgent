@@ -457,6 +457,13 @@ h2 {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+/* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The
+   sub-nav is its own auto row so it doesn't land in the 1fr content row and
+   overlap the fields. */
+.stage-panel.settings-panel {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 /* Scrollable body for panels whose content is a top-down stack (Schedule,
    Runtime) rather than a single fill-the-space element. Occupies the panel's
    1fr row and scrolls; block layout so children keep their natural height

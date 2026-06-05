@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Settings is its own rail surface; category sub-nav no longer overlaps the
+  fields.** The category sub-nav (added with the Settings regroup) landed in the
+  `.stage-panel` grid's `1fr` content row, so it stretched over the fields. Gave
+  the Settings panel its own `auto auto 1fr` grid (header · sub-nav · scrolling
+  body) and promoted **Settings out of System into a top-level rail item** (its
+  own view), so it no longer competes with System's sub-nav. System is now
+  Runtime · Telemetry.
+
 ### Added
 - **Knowledge surface = searchable Store + Playbooks** (ADR 0020). The Knowledge
   rail was mislabeled — it showed only Playbooks while the actual knowledge base
