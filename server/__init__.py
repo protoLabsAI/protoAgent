@@ -417,6 +417,7 @@ def _main():
     from operator_api.chat_routes import register_chat_routes
     from operator_api.config_routes import register_config_routes
     from operator_api.knowledge_routes import register_knowledge_routes
+    from operator_api.plugin_routes import register_plugin_routes
     from operator_api.routes import register_operator_routes
     from operator_api.telemetry_routes import register_telemetry_routes
 
@@ -570,6 +571,7 @@ def _main():
     # Knowledge store + Playbooks (ADR 0020). Extracted to
     # operator_api/knowledge_routes.py (ADR 0023 phase 3).
     register_knowledge_routes(fastapi_app)
+    register_plugin_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to

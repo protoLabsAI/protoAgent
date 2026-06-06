@@ -17,6 +17,7 @@ export const queryKeys = {
   runtime: ["runtime"] as const,
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
+  installedPlugins: ["plugins", "installed"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -112,6 +113,13 @@ export const delegatesQuery = () =>
   queryOptions({
     queryKey: queryKeys.delegates,
     queryFn: () => api.delegates(),
+    retry: false,
+  });
+
+export const installedPluginsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.installedPlugins,
+    queryFn: () => api.installedPlugins(),
     retry: false,
   });
 

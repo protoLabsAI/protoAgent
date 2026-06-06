@@ -10,6 +10,8 @@ import type {
   GoalState,
   HitlPayload,
   InboxItem,
+  InstalledPlugin,
+  PluginInstallSummary,
   KnowledgeChunk,
   NotesWorkspace,
   RuntimeStatus,
@@ -810,6 +812,19 @@ export const api = {
   },
   delegates() {
     return request<{ delegates: DelegateView[] }>("/api/delegates");
+  },
+  // Git-installed plugins (ADR 0027). install fetches code only (does NOT enable).
+  installedPlugins() {
+    return request<{ plugins: InstalledPlugin[] }>("/api/plugins/installed");
+  },
+  installPlugin(url: string, ref?: string, force?: boolean) {
+    return request<{ installed: PluginInstallSummary; restart_required: boolean }>(
+      "/api/plugins/install",
+      { method: "POST", body: { url, ref: ref || undefined, force: force || undefined } },
+    );
+  },
+  uninstallPlugin(id: string) {
+    return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
