@@ -12,9 +12,10 @@ stable across every agent in the fleet, so forking an agent is
 close to a rewrite of `SOUL.md`, `graph/prompts.py`, and
 `tools/lg_tools.py` and not much else.
 
-**Canonical reference implementation**: [protoLabsAI/quinn](https://github.com/protoLabsAI/quinn).
-Quinn was the first agent built on this template — it's a good
-example of what a filled-in fork looks like end-to-end.
+**Canonical reference implementation**: [protoLabsAI/roxy](https://github.com/protoLabsAI/roxy).
+Roxy is a filled-in fork — an autonomous ProtoMaker portfolio manager with its
+own persona, A2A skills, and project registry — a good example of what a fork
+looks like end-to-end.
 
 **Try it in 5 minutes:** clone, `pip install -r requirements.txt`,
 `python -m server`, open <http://localhost:7870>, and walk the

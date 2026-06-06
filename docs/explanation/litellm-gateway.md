@@ -23,7 +23,7 @@ Option 3 wins because:
 The template points at `model.name: protolabs/reasoning`. Two things to know:
 
 1. **`protolabs/<name>` is a gateway alias**, not a real model. The gateway config maps `protolabs/reasoning` → whichever real model (e.g. `claude-opus-4-6`, `gpt-4o`) you want.
-2. **Each agent gets its own alias**. Quinn uses `protolabs/quinn`, a researcher agent might use `protolabs/researcher`. Same gateway, different underlying models, different rate limits, different cost tracking.
+2. **Each agent gets its own alias**. Roxy uses `protolabs/roxy`, a researcher agent might use `protolabs/researcher`. Same gateway, different underlying models, different rate limits, different cost tracking.
 
 To swap a model for an agent:
 
@@ -77,4 +77,4 @@ The gateway solves all of these centrally. For a fleet, it's worth the hop.
 
 - [Configuration reference](/reference/configuration) — the `model.*` keys
 - [Environment variables](/reference/environment-variables) — `OPENAI_API_KEY` points at the gateway
-- [Quinn's README](https://github.com/protoLabsAI/quinn#llm-gateway-setup) — example of a real gateway alias config
+- [Roxy's config](https://github.com/protoLabsAI/roxy/blob/main/config/langgraph-config.example.yaml) — a real fork's `model.*` gateway-alias config

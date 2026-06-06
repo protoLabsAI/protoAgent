@@ -30,7 +30,7 @@ Edit the `_SKILL_SPECS` list in `server.py` (the card builder `_build_agent_card
         "description": "Fetch a GitHub PR and return a three-bullet summary of what it changes and why.",
         "tags": ["github", "summarization"],
         "examples": [
-            "summarize https://github.com/protoLabsAI/quinn/pull/64",
+            "summarize https://github.com/protoLabsAI/protoAgent/pull/64",
         ],
     },
 ],
@@ -105,7 +105,7 @@ curl -X POST http://localhost:7870/a2a \
       "params": {
         "message": {
           "role": "user",
-          "parts": [{"text": "summarize https://github.com/protoLabsAI/quinn/pull/64"}]
+          "parts": [{"text": "summarize https://github.com/protoLabsAI/protoAgent/pull/64"}]
         },
         "metadata": {"skill": "summarize_pr"}
       }
