@@ -444,3 +444,43 @@ export const KNOWLEDGE_CHUNKS = [
     created_at: "2026-06-02T09:00:00+00:00",
   },
 ];
+
+// Delegate registry (ADR 0025) — types schema + a sample roster for the panel.
+export const DELEGATE_TYPES = {
+  types: [
+    {
+      type: "a2a", label: "A2A agent", blurb: "A fleet peer over the A2A protocol.",
+      fields: [
+        { key: "url", label: "URL", kind: "text", required: true, help: "", placeholder: "https://peer/a2a", options: [], default: null },
+        { key: "auth.scheme", label: "Auth scheme", kind: "select", required: false, help: "", placeholder: "", options: ["", "bearer", "apiKey"], default: null },
+        { key: "auth.token", label: "Auth token", kind: "secret", required: false, help: "Stored in secrets.yaml.", placeholder: "", options: [], default: null },
+      ],
+    },
+    {
+      type: "openai", label: "Model endpoint", blurb: "Ask another OpenAI-compatible model.",
+      fields: [
+        { key: "url", label: "Base URL", kind: "text", required: true, help: "", placeholder: "https://api/v1", options: [], default: null },
+        { key: "model", label: "Model", kind: "text", required: true, help: "", placeholder: "protolabs/reasoning", options: [], default: null },
+        { key: "api_key", label: "API key", kind: "secret", required: false, help: "", placeholder: "", options: [], default: null },
+      ],
+    },
+    {
+      type: "acp", label: "Coding agent (ACP)", blurb: "A CLI coding agent over ACP.",
+      fields: [
+        { key: "command", label: "Command", kind: "text", required: true, help: "", placeholder: "proto", options: [], default: null },
+        { key: "args", label: "Args", kind: "args", required: false, help: "", placeholder: "--acp", options: [], default: null },
+        { key: "workdir", label: "Workdir", kind: "path", required: true, help: "", placeholder: "~/dev/repo", options: [], default: null },
+      ],
+    },
+  ],
+};
+
+export const DELEGATES = {
+  delegates: [
+    {
+      name: "opus", type: "openai", description: "Heavy reasoning model.",
+      configured: true, error: null, has_secret: true,
+      url: "https://api.proto-labs.ai/v1", model: "protolabs/reasoning",
+    },
+  ],
+};

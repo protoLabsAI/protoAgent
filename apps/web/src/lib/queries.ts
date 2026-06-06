@@ -15,6 +15,8 @@ export const queryKeys = {
   inbox: ["inbox"] as const,
   schedules: ["schedules"] as const,
   runtime: ["runtime"] as const,
+  delegates: ["delegates"] as const,
+  delegateTypes: ["delegates", "types"] as const,
 };
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
@@ -101,4 +103,21 @@ export const runtimeStatusQuery = () =>
   queryOptions({
     queryKey: queryKeys.runtime,
     queryFn: () => api.runtimeStatus(),
+  });
+
+// Delegate registry (ADR 0025) — read non-suspense in the Settings → Integrations
+// panel so a 404 (delegates plugin disabled) degrades gracefully instead of
+// blanking Settings. Invalidated after create/update/delete.
+export const delegatesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.delegates,
+    queryFn: () => api.delegates(),
+    retry: false,
+  });
+
+export const delegateTypesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.delegateTypes,
+    queryFn: () => api.delegateTypes(),
+    retry: false,
   });
