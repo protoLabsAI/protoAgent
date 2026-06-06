@@ -253,6 +253,24 @@ class ProtoAgentExecutor(AgentExecutor):
             _answer_started = True
             _text_buf = ""
 
+        async def _finalize(final_text: str) -> None:
+            """Close the answer artifact + emit the cost/confidence DataParts. If
+            the text was streamed (delta frames), append ONLY the meta parts so
+            concat-based consumers don't double the answer; otherwise emit the full
+            text once (the non-streaming path: workflow/subagent short-circuits)."""
+            # text="" yields a dataparts-only list (the text part is conditional).
+            body = "" if _answer_started else final_text
+            parts = _terminal_parts(
+                body, deltas, usage if had_usage else None,
+                cost_usd, confidence, confidence_expl, success=True,
+            )
+            parts = await self._append_structured(parts, context, final_text)
+            if parts:
+                await updater.add_artifact(
+                    parts, artifact_id=answer_aid,
+                    append=_answer_started, last_chunk=True,
+                )
+
         def _outcome(state: str, final_text: str) -> TurnOutcome:
             return TurnOutcome(
                 task_id=context.task_id,
@@ -330,15 +348,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 elif event_type == "done":
                     await _flush_text()
                     final_text = payload or accumulated
-                    parts = _terminal_parts(
-                        final_text, deltas, usage if had_usage else None,
-                        cost_usd, confidence, confidence_expl, success=True,
-                    )
-                    parts = await self._append_structured(parts, context, final_text)
-                    if parts:
-                        await updater.add_artifact(
-                            parts, artifact_id=answer_aid, append=False, last_chunk=True,
-                        )
+                    await _finalize(final_text)
                     await updater.complete()
                     _notify_terminal(_outcome("completed", final_text))
                     return
@@ -353,15 +363,7 @@ class ProtoAgentExecutor(AgentExecutor):
             # Stream ended without an explicit terminal event — treat the
             # accumulated text as the answer.
             await _flush_text()
-            parts = _terminal_parts(
-                accumulated, deltas, usage if had_usage else None,
-                cost_usd, confidence, confidence_expl, success=True,
-            )
-            parts = await self._append_structured(parts, context, accumulated)
-            if parts:
-                await updater.add_artifact(
-                    parts, artifact_id=answer_aid, append=False, last_chunk=True,
-                )
+            await _finalize(accumulated)
             await updater.complete()
             _notify_terminal(_outcome("completed", accumulated))
 
