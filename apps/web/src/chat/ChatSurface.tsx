@@ -46,7 +46,18 @@ function useSession(sessionId: string) {
   return state.sessions.find((session) => session.id === sessionId) || null;
 }
 
-export function ChatSurface({ onError }: { onError: (message: string) => void }) {
+export function ChatSurface({
+  onError,
+  active = true,
+}: {
+  onError: (message: string) => void;
+  // When false, the surface stays MOUNTED but hidden (display:none) — so an
+  // in-flight turn keeps streaming into the store while the user is on another
+  // tab, and returning shows the chat as if they never left. App renders this
+  // unconditionally; only `active` toggles. (Matches protoMaker's always-mounted
+  // chat overlay.)
+  active?: boolean;
+}) {
   const chat = useChatState();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -67,7 +78,7 @@ export function ChatSurface({ onError }: { onError: (message: string) => void })
   }
 
   return (
-    <section className="panel stage-panel chat-stage">
+    <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active}>
       {/* One row: a tab per session (status dot · title · close), then "+".
           Double-click a title to rename. Replaces the old header + tab strip +
           per-session title row. */}

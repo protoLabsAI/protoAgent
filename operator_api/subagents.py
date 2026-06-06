@@ -35,8 +35,14 @@ async def run_manual_subagent(
     prompt: str,
     subagent_type: str = "researcher",
     emit_skill: bool = False,
+    extra_tools: Any = None,
 ) -> str:
-    """Run one manually launched subagent task."""
+    """Run one manually launched subagent task.
+
+    ``extra_tools`` (plugin + MCP tools) are forwarded so an out-of-graph
+    subagent sees the same tool surface as the lead graph — without them a
+    plugin-tool allowlist silently degrades to "not a valid tool".
+    """
     if config is None:
         raise RuntimeError("agent config is not loaded")
     if not prompt or not prompt.strip():
@@ -54,6 +60,7 @@ async def run_manual_subagent(
         prompt=prompt,
         subagent_type=subagent_type,
         emit_skill=emit_skill,
+        extra_tools=extra_tools,
     )
 
 
@@ -63,6 +70,7 @@ async def run_manual_subagent_batch(
     knowledge_store: Any,
     scheduler: Any,
     tasks: list[dict[str, Any]],
+    extra_tools: Any = None,
 ) -> str:
     """Run a manually launched batch of independent subagent tasks."""
     if config is None:
@@ -77,4 +85,5 @@ async def run_manual_subagent_batch(
         knowledge_store=knowledge_store,
         scheduler=scheduler,
         tasks=tasks,
+        extra_tools=extra_tools,
     )

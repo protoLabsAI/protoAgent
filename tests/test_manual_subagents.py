@@ -46,6 +46,42 @@ async def test_run_manual_subagent_reuses_private_runner(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_manual_subagent_merges_extra_tools(monkeypatch) -> None:
+    """Plugin/MCP tools passed as ``extra_tools`` must reach the subagent's
+    tool_map — without this the out-of-graph runner silently degrades a
+    plugin-tool allowlist to "not a valid tool" (the lead graph exposes them via
+    its own ``extra_tools``; this path has to mirror that surface)."""
+    calls = []
+
+    monkeypatch.setattr(agent_mod, "create_llm", lambda _config: object())
+    monkeypatch.setattr(
+        agent_mod,
+        "get_all_tools",
+        lambda _store, scheduler=None: [SimpleNamespace(name="current_time")],
+    )
+
+    async def fake_run(**kwargs):
+        calls.append(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
+
+    out = await agent_mod.run_manual_subagent(
+        LangGraphConfig(),
+        knowledge_store=object(),
+        scheduler=object(),
+        description="Backtest it",
+        prompt="Test the idea",
+        subagent_type="researcher",
+        extra_tools=[SimpleNamespace(name="backtest_strategy")],
+    )
+
+    assert out == "ok"
+    # The core set AND the plugin tool are both visible to the subagent.
+    assert calls[0]["tool_map"].keys() == {"current_time", "backtest_strategy"}
+
+
+@pytest.mark.asyncio
 async def test_run_manual_subagent_batch_orders_and_normalizes_type(monkeypatch) -> None:
     calls = []
 

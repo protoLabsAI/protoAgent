@@ -265,14 +265,23 @@ async def run_manual_subagent(
     subagent_type: str = "researcher",
     emit_skill: bool = False,
     truncate: int | None = None,
+    extra_tools=None,
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
 
     The React operator console uses this to let a human explicitly fan out
     work. It intentionally uses the same private runner as ``task`` so audit,
     prompt, max-turn, and one-level delegation behavior stay aligned.
+
+    ``extra_tools`` are tools beyond the core ``get_all_tools`` set — plugin and
+    MCP tools — that the lead graph exposes via ``extra_tools`` but which this
+    out-of-graph runner would otherwise miss. Without them a subagent whose
+    allowlist names a plugin tool (e.g. a finance ``backtest_strategy``) sees
+    "not a valid tool" and silently degrades. Mirrors the lead graph's tool set.
     """
     all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+    if extra_tools:
+        all_tools = all_tools + list(extra_tools)
     tool_map = {t.name: t for t in all_tools}
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
@@ -297,6 +306,7 @@ async def run_manual_workflow(
     name: str,
     inputs: dict | None = None,
     on_step=None,
+    extra_tools=None,
 ) -> dict:
     """Run a saved workflow recipe outside the lead agent's tool (operator UI).
 
@@ -339,6 +349,7 @@ async def run_manual_workflow(
             description=f"workflow {name}:{step_id}",
             prompt=prompt,
             subagent_type=subagent_type,
+            extra_tools=extra_tools,
         )
         await _emit({"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
         return out
@@ -354,6 +365,7 @@ async def run_manual_subagent_batch(
     scheduler=None,
     *,
     tasks: list[dict],
+    extra_tools=None,
 ) -> str:
     """Run independent manual subagent jobs concurrently.
 
@@ -386,6 +398,7 @@ async def run_manual_subagent_batch(
                 subagent_type=spec.get("subagent_type") or spec.get("type", "researcher"),
                 emit_skill=bool(spec.get("emit_skill", False)),
                 truncate=truncate,
+                extra_tools=extra_tools,
             )
 
     results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
