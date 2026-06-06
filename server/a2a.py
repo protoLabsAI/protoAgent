@@ -39,8 +39,11 @@ def _bearer_configured() -> bool:
 # text (today's default). The schema lives HERE (skill config), not on the card
 # — ``AgentSkill`` only carries ``output_modes`` (the MIME), per the A2A spec.
 #
-# REPLACE when forking. The template ships one free-text placeholder so a fresh
-# clone is callable; the commented fields below show a structured skill.
+# This is the TEMPLATE DEFAULT — one free-text placeholder so a fresh clone is
+# callable. Forks declare their real skills WITHOUT editing this file (#570):
+# either in ``langgraph-config.yaml`` (``a2a.skills: [...]``) or via a plugin
+# (``registry.register_a2a_skill(spec)``). ``_resolved_skill_specs()`` merges
+# both and falls back here when neither is set.
 _SKILL_SPECS: list[dict] = [
     {
         "id": "chat",
@@ -55,14 +58,29 @@ _SKILL_SPECS: list[dict] = [
 ]
 
 
+def _resolved_skill_specs() -> list[dict]:
+    """The agent's advertised A2A skills, resolved at runtime (#570) so a fork
+    never edits this file. Sources, in order: ``a2a.skills`` from
+    ``langgraph-config.yaml`` (``STATE.graph_config.a2a_skills``), then
+    plugin-contributed skills (``register_a2a_skill`` → ``STATE.plugin_a2a_skills``).
+    Falls back to the template placeholder ``_SKILL_SPECS`` when neither is set,
+    so a fresh clone stays callable."""
+    cfg = STATE.graph_config
+    resolved: list[dict] = []
+    if cfg is not None:
+        resolved.extend(getattr(cfg, "a2a_skills", None) or [])
+    resolved.extend(getattr(STATE, "plugin_a2a_skills", None) or [])
+    return resolved or _SKILL_SPECS
+
+
 def _agent_skills():
-    """Build the card's ``AgentSkill`` list from ``_SKILL_SPECS``. A spec with a
-    ``result_mime`` advertises it in ``output_modes`` (the A2A-native way to tell
-    consumers the skill emits that structured type)."""
+    """Build the card's ``AgentSkill`` list from the resolved skill specs. A spec
+    with a ``result_mime`` advertises it in ``output_modes`` (the A2A-native way
+    to tell consumers the skill emits that structured type)."""
     from a2a.types import AgentSkill
 
     skills = []
-    for s in _SKILL_SPECS:
+    for s in _resolved_skill_specs():
         kwargs = dict(
             id=s["id"],
             name=s["name"],
@@ -82,8 +100,8 @@ def structured_skill_schema(skill_id: str) -> dict | None:
     text). The executor's structured finalizer (#476) reads this to run the
     forced-tool-call against the schema and emit the validated object as a
     ``result_mime`` DataPart. The schema isn't on the card (``AgentSkill`` has no
-    schema field) — it lives in ``_SKILL_SPECS``."""
-    for s in _SKILL_SPECS:
+    schema field) — it lives in the resolved skill specs."""
+    for s in _resolved_skill_specs():
         if s["id"] == skill_id and s.get("output_schema") and s.get("result_mime"):
             return {"schema": s["output_schema"], "mime": s["result_mime"]}
     return None
@@ -136,16 +154,27 @@ def _a2a_card_url() -> str:
     return f"{base}/a2a"
 
 
+# Template default card description — used when a fork sets no ``a2a.description``
+# in config (#570). Forks override via config, not by editing this file.
+_DEFAULT_CARD_DESCRIPTION = (
+    "protoAgent template — A2A 1.0 LangGraph agent. "
+    "Replace this description with your agent's actual purpose."
+)
+
+
 def _build_agent_card_proto():
     """Build the A2A 1.0 ``AgentCard`` (proto) served at
     ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
     via ``protolabs_a2a.build_agent_card``.
 
-    **Fork this.** Replace ``name``, ``description``, and ``_agent_skills()``
-    with your agent's actual surface. The four custom extensions
-    (cost / confidence / worldstate-delta / tool-call) are declared by default
-    — this template emits cost-v1 + confidence-v1 from ``_chat_langgraph_stream``
-    and worldstate-delta / tool-call when a tool reports them.
+    Identity is config/plugin-driven (#570), so a fork shouldn't edit this file:
+    ``name`` resolves from identity (``agent_name()``), ``description`` from
+    ``a2a.description`` in ``langgraph-config.yaml`` (falling back to the template
+    default below), and ``skills`` from config/plugins (``_resolved_skill_specs``).
+    The four custom extensions (cost / confidence / worldstate-delta / tool-call)
+    are declared by default — the template emits cost-v1 + confidence-v1 from
+    ``_chat_langgraph_stream`` and worldstate-delta / tool-call when a tool reports
+    them.
 
     The interface ``url`` (``_a2a_card_url``) targets the JSON-RPC endpoint
     (``/a2a``) at the agent's reachable address — set ``A2A_PUBLIC_URL`` when
@@ -153,12 +182,11 @@ def _build_agent_card_proto():
     """
     import protolabs_a2a as pa
 
+    cfg = STATE.graph_config
+    description = (getattr(cfg, "a2a_description", "") or "").strip() or _DEFAULT_CARD_DESCRIPTION
     return pa.build_agent_card(
         name=agent_name(),
-        description=(
-            "protoAgent template — A2A 1.0 LangGraph agent. "
-            "Replace this description with your agent's actual purpose."
-        ),
+        description=description,
         url=_a2a_card_url(),
         version=_package_version(),
         skills=_agent_skills(),

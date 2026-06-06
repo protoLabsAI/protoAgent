@@ -37,6 +37,7 @@ class AppState:
     mcp_meta: list = field(default_factory=list)
     plugin_tools: list = field(default_factory=list)
     plugin_skill_dirs: list = field(default_factory=list)
+    plugin_a2a_skills: list = field(default_factory=list)  # A2A card skills from plugins (#570)
     plugin_routers: list = field(default_factory=list)
     plugin_surfaces: list = field(default_factory=list)
     plugin_surface_handles: list = field(default_factory=list)

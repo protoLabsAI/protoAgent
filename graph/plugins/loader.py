@@ -28,6 +28,7 @@ log = logging.getLogger("protoagent.plugins")
 class PluginLoadResult:
     tools: list = field(default_factory=list)
     skill_dirs: list = field(default_factory=list)
+    a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
     routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
     surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
     subagents: list = field(default_factory=list)   # SubagentConfig
@@ -190,6 +191,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
 
         result.tools.extend(kept)
         result.skill_dirs.extend(registry.skill_dirs)
+        result.a2a_skills.extend(registry.a2a_skills)
         # Surfaces / routes / subagents (ADR 0018) — tagged with the plugin id so
         # the server can namespace + report them.
         for r in registry.routers:

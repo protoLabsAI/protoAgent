@@ -140,6 +140,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         _plugins.tools, _plugins.skill_dirs, _plugins.meta,
     )
+    STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph

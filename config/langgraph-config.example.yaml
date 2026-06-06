@@ -83,6 +83,24 @@ skills:
   top_k: 5
   max_tokens: 2000
 
+# A2A card identity (#570) — declare your fork's advertised skills + card
+# description HERE (or contribute skills from a plugin via register_a2a_skill)
+# rather than editing server/a2a.py. Omit both and the template ships one
+# free-text "chat" placeholder so a fresh clone stays callable. The card `name`
+# already follows identity.name / AGENT_NAME.
+a2a:
+  # description: "Acme Bot — turns support tickets into triaged, drafted replies."
+  # skills:
+  #   - id: triage_ticket
+  #     name: Triage Ticket
+  #     description: Classify a support ticket and draft a reply.
+  #     tags: [support]
+  #     examples: ["triage ticket #1234"]
+  #     # Structured output (optional): the executor enforces the schema (#476)
+  #     # and emits a typed DataPart advertised in the card's output_modes.
+  #     # result_mime: application/vnd.protolabs.triage-v1+json
+  #     # output_schema: { type: object, properties: { ... }, required: [ ... ] }
+
 # Workflows — reusable declarative multi-step subagent recipes (ADR 0002),
 # run via the run_workflow tool. Bundled examples ship in the repo workflows/
 # dir; `dir` is the writable root for user/agent-emitted recipes (same
