@@ -108,6 +108,14 @@ class Adapter:
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         raise NotImplementedError
 
+    async def probe(self, d: Delegate) -> dict:
+        """Reachability check for the panel's Test button: {ok, latency_ms, error}."""
+        return {"ok": None, "error": "probe not implemented for this type"}
+
+    # secret field this type stores (for the CRUD secret overlay), as a dotted
+    # path into the raw entry. None ⇒ no secret.
+    secret_field: str | None = None
+
     # Shared helpers ---------------------------------------------------------
     @staticmethod
     def _base(raw: dict) -> dict:
@@ -118,10 +126,19 @@ class Adapter:
                 "description": str(raw.get("description", "")).strip()}
 
 
+async def _timed(coro) -> tuple[object, int]:
+    """Await ``coro``, returning (result, elapsed_ms)."""
+    import time
+    t0 = time.monotonic()
+    res = await coro
+    return res, int((time.monotonic() - t0) * 1000)
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
     blurb = "A fleet peer over the A2A JSON-RPC protocol."
+    secret_field = "auth.token"
 
     def config_schema(self) -> list[FieldSpec]:
         return [
@@ -193,11 +210,31 @@ class A2aAdapter(Adapter):
                 return text
             raise DelegateError(f"no text returned (state={state})")
 
+    async def probe(self, d: Delegate) -> dict:
+        import httpx
+
+        import security
+        origin = d.url.split("/a2a")[0].rstrip("/") if "/a2a" in d.url else d.url.rstrip("/")
+        card = f"{origin}/.well-known/agent-card.json"
+        blocked = security.check_url(card)
+        if blocked:
+            return {"ok": False, "error": blocked}
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r, ms = await _timed(client.get(card))
+            if r.status_code >= 400:
+                return {"ok": False, "latency_ms": ms, "error": f"HTTP {r.status_code}"}
+            name = (r.json() or {}).get("name", "")
+            return {"ok": True, "latency_ms": ms, "detail": f"agent-card OK ({name})"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)[:200]}
+
 
 class OpenAiAdapter(Adapter):
     type = "openai"
     label = "Model endpoint"
     blurb = "An OpenAI-compatible chat endpoint — ask another model."
+    secret_field = "api_key"
 
     def config_schema(self) -> list[FieldSpec]:
         return [
@@ -254,6 +291,19 @@ class OpenAiAdapter(Adapter):
             return (data["choices"][0]["message"]["content"] or "").strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise DelegateError(f"unexpected response shape: {exc}")
+
+    async def probe(self, d: Delegate) -> dict:
+        import httpx
+        headers = {"Authorization": f"Bearer {d.api_key}"} if d.api_key else {}
+        url = d.url.rstrip("/") + "/models"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r, ms = await _timed(client.get(url, headers=headers))
+            if r.status_code >= 400:
+                return {"ok": False, "latency_ms": ms, "error": f"HTTP {r.status_code}: {r.text[:120]}"}
+            return {"ok": True, "latency_ms": ms, "detail": "endpoint reachable"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)[:200]}
 
 
 class AcpAdapter(Adapter):
@@ -313,6 +363,16 @@ class AcpAdapter(Adapter):
             return await client.prompt(query, timeout=timeout or d.timeout_s)
         except AcpError as exc:
             raise DelegateError(str(exc))
+
+    async def probe(self, d: Delegate) -> dict:
+        import os
+        import shutil
+        if not shutil.which(d.command):
+            return {"ok": False, "error": f"binary not on PATH: {d.command!r}"}
+        wd = os.path.expanduser(d.workdir)
+        if not os.path.isdir(wd):
+            return {"ok": False, "error": f"workdir does not exist: {wd}"}
+        return {"ok": True, "detail": f"{d.command} on PATH; workdir OK"}
 
 
 ADAPTERS: dict[str, Adapter] = {a.type: a for a in (A2aAdapter(), OpenAiAdapter(), AcpAdapter())}

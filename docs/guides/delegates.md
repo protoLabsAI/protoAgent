@@ -14,10 +14,9 @@ This unifies what used to be three separate things — `peer_consult` (a2a),
 `code_with` (acp), and "no way to ask another model" — into one hot-swappable
 roster.
 
-> **Where this is going:** PR1 (current) is **config-driven** — you declare
-> delegates in YAML and they hot-reload on Save & Reload. A REST CRUD API (PR2)
-> and a **console panel** to add/edit/test/remove delegates live (PR3) build on
-> this. See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
+> **Where this is going:** delegates are managed by **config** (below) and a
+> **REST API** (below). A **console panel** to add/edit/test/remove them from the
+> UI (PR3) builds on the API. See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
 
 ## Enable it
 
@@ -74,6 +73,34 @@ Google tokens. For PR1 you can either:
 - set the value in `secrets.yaml` (merged into the delegate at load), or
 - reference an env var: `auth: { scheme: bearer, credentialsEnv: HELM_TOKEN }`
   (a2a) / `api_key_env: GATEWAY_KEY` (openai).
+
+## Manage via the REST API
+
+The plugin mounts a CRUD surface (operator-console posture — localhost-default,
+bearer-when-exposed, like `/api/config`). The console panel (PR3) is built on it;
+you can also drive it directly:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/delegate-types` | type list + field schema (drives the form) |
+| GET | `/api/delegates` | list delegates (secret-free; `configured` + `has_secret` flags) |
+| POST | `/api/delegates` | create (409 if the name exists) |
+| PUT | `/api/delegates/{name}` | update |
+| DELETE | `/api/delegates/{name}` | remove |
+| POST | `/api/delegates/test` | reachability probe of an entry (the **Test** button) |
+
+Create/update/delete **write the config + route the secret to `secrets.yaml`**,
+then hot-reload — so the roster is live on the next turn, no restart. A secret you
+send in `auth.token` / `api_key` is stored under the `delegate_secrets` overlay
+and **never returned** by `GET /api/delegates`; `has_secret` tells the panel one
+is stored.
+
+```bash
+curl -s localhost:7788/api/delegate-types | jq '.types[].type'
+curl -s -X POST localhost:7788/api/delegates -d '{"name":"opus","type":"openai",
+  "url":"https://api.proto-labs.ai/v1","model":"protolabs/reasoning","api_key":"…"}'
+curl -s -X POST localhost:7788/api/delegates/test -d '{"type":"a2a","url":"https://peer/a2a"}'
+```
 
 ## Relationship to `code_with` / `peer_consult`
 

@@ -64,12 +64,9 @@ def _load_delegates_config() -> list:
     if a fork nests it under the plugin section.
     """
     try:
-        from graph.config_io import load_yaml_doc
+        from .store import merged_delegates
 
-        doc = load_yaml_doc() or {}
-        val = doc.get("delegates")
-        if isinstance(val, list):
-            return val
+        return merged_delegates()   # delegates + secrets overlaid from secrets.yaml
     except Exception:  # noqa: BLE001 — config read is best-effort
         log.exception("[delegates] reading delegates config failed")
     return []
@@ -77,6 +74,15 @@ def _load_delegates_config() -> list:
 
 def register(registry) -> None:
     """Entry point — called once per graph build with the live config."""
+    # CRUD API for the console panel (PR2). Mounted once at process init; the
+    # roster it edits is config, which hot-reloads — so the static routes are fine.
+    try:
+        from .api import build_router
+
+        registry.register_router(build_router(), prefix="")
+    except Exception:  # noqa: BLE001 — API is best-effort; the tool still works
+        log.exception("[delegates] mounting CRUD API failed")
+
     delegates = _load_delegates_config()
     if not delegates:
         cfg = registry.config or {}
@@ -87,7 +93,8 @@ def register(registry) -> None:
     if not reg.names():
         log.warning(
             "[delegates] enabled but no delegates configured — add entries under "
-            "`delegates` (see docs/guides/delegates.md). No tool registered."
+            "`delegates` (see docs/guides/delegates.md), or use the Delegates panel. "
+            "No delegate_to tool registered yet."
         )
         return
     registry.register_tool(_build_delegate_to(reg))
