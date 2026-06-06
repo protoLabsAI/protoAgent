@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -58,6 +59,19 @@ class CaseResult:
     duration_ms: int = 0
     tokens: int = 0
     raw: dict = field(default_factory=dict)
+    skipped: bool = False
+
+
+def _requirements_unmet(case: dict) -> str | None:
+    """A reason to skip the case, or None to run it. A case declares
+    ``requires_env: [VAR, …]`` for prerequisites that aren't always present —
+    e.g. an optional integration the operator opts into. Skipped (not failed)
+    when any is unset, so a case needing a live coding agent doesn't break the
+    default board."""
+    for var in case.get("requires_env") or []:
+        if not os.environ.get(var):
+            return f"requires_env {var}"
+    return None
 
 
 # ── case runners ────────────────────────────────────────────────────────────
@@ -473,8 +487,8 @@ def _print_board(results: list[CaseResult]) -> None:
     print("-" * 90)
     pass_count = 0
     for r in results:
-        mark = "PASS" if r.passed else "FAIL"
-        if r.passed:
+        mark = "SKIP" if r.skipped else ("PASS" if r.passed else "FAIL")
+        if r.passed and not r.skipped:
             pass_count += 1
         time_s = f"{r.duration_ms}ms".rjust(6)
         tokens = str(r.tokens).rjust(6) if r.tokens else "  -   "
@@ -483,7 +497,9 @@ def _print_board(results: list[CaseResult]) -> None:
             f"{mark}    {time_s}  {tokens}  {r.detail[:80]}"
         )
     print("-" * 90)
-    print(f"\n{pass_count}/{len(results)} passed")
+    skip_count = sum(1 for r in results if r.skipped)
+    ran = len(results) - skip_count
+    print(f"\n{pass_count}/{ran} passed" + (f" ({skip_count} skipped)" if skip_count else ""))
 
 
 def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base_url: str = "") -> None:
@@ -496,7 +512,8 @@ def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base
         "model": model,
         "base_url": base_url,
         "total": len(results),
-        "passed": sum(1 for r in results if r.passed),
+        "passed": sum(1 for r in results if r.passed and not r.skipped),
+        "skipped": sum(1 for r in results if r.skipped),
         "results": [asdict(r) for r in results],
     }
     path.write_text(json.dumps(payload, indent=2))
@@ -544,8 +561,16 @@ async def main():
     for case in cases:
         sys.stdout.write(f"  {case['id']}... ")
         sys.stdout.flush()
-        result = await run_one(client, case)
-        sys.stdout.write(f"{'PASS' if result.passed else 'FAIL'}  {result.detail[:60]}\n")
+        skip = _requirements_unmet(case)
+        if skip:
+            result = CaseResult(
+                case["id"], case.get("category", "?"), case.get("name", "?"),
+                passed=True, detail=f"skipped: {skip}", skipped=True,
+            )
+        else:
+            result = await run_one(client, case)
+        mark = "SKIP" if result.skipped else ("PASS" if result.passed else "FAIL")
+        sys.stdout.write(f"{mark}  {result.detail[:60]}\n")
         results.append(result)
 
     _print_board(results)

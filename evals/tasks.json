@@ -57,6 +57,16 @@
     "expected_patterns": ["UTC"]
   },
   {
+    "id": "code_with_delegation",
+    "category": "tool",
+    "kind": "ask",
+    "name": "Delegates a coding task via code_with (ACP)",
+    "requires_env": ["EVAL_CODING_AGENT"],
+    "timeout_s": 240,
+    "prompt": "Use your code_with tool to have a coding agent run `pwd` and report back the absolute working directory it printed.",
+    "expected_tools": ["code_with"]
+  },
+  {
     "id": "calculator_intent",
     "category": "tool",
     "kind": "ask",

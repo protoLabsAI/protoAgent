@@ -154,6 +154,29 @@ The case `kind`s that ship:
   and assert on its synthesized output (patterns + rubric). Used to track the
   subagent workflows (research-and-brief, deep-research).
 
+### Gating a case on prerequisites — `requires_env`
+
+A case can declare `requires_env: [VAR, …]`. If any of those env vars is unset
+the case is **skipped** (shown `SKIP`, not counted as pass or fail) instead of
+run — so a case that needs an optional integration doesn't break the default
+board. For example the `code_with_delegation` case needs a live CLI coding agent
+([Spawn CLI coding agents](/guides/coding-agents)) configured on the instance, so
+it's gated:
+
+```json
+{
+  "id": "code_with_delegation",
+  "category": "tool",
+  "kind": "ask",
+  "requires_env": ["EVAL_CODING_AGENT"],
+  "prompt": "Use your code_with tool to have a coding agent run `pwd` …",
+  "expected_tools": ["code_with"]
+}
+```
+
+Configure the plugin + an agent, export `EVAL_CODING_AGENT=1`, and run
+`python -m evals.runner --tasks code_with_delegation`.
+
 ## Asserting the agent layer (subagents & workflows)
 
 Beyond single-tool selection, the suite tracks the layers recent work has been

@@ -167,5 +167,19 @@ One `AcpClient` (subprocess + session) is **cached per agent** so follow-up call
 continue the thread; a per-agent lock serializes turns (a session is a single
 conversation — `task_batch` won't interleave two prompts on one).
 
+## Eval it
+
+A gated eval case (`code_with_delegation`) verifies end-to-end delegation against
+a live agent. It's skipped unless you opt in — configure an agent, then:
+
+```bash
+export EVAL_CODING_AGENT=1
+python -m evals.runner --tasks code_with_delegation
+```
+
+It drives a real A2A turn that asks the agent to use `code_with`, and asserts
+(via the audit channel) that the tool fired. Without `EVAL_CODING_AGENT` set it
+`SKIP`s, so it never breaks the default board. See [Eval your fork](/guides/evals).
+
 See [Plugins](/guides/plugins) for the plugin model in general, and
 [ADR 0024](/adr/0024-spawn-cli-coding-agents-acp) for the design rationale.
