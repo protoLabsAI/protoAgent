@@ -4,6 +4,9 @@ import type {
   BeadsIssue,
   ChatMessage,
   ConfigPayload,
+  DelegateProbe,
+  DelegateTypeSpec,
+  DelegateView,
   GoalState,
   HitlPayload,
   InboxItem,
@@ -780,5 +783,34 @@ export const api = {
       `/api/beads/issues/${encodeURIComponent(issueId)}`,
       { method: "DELETE" },
     );
+  },
+
+  // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
+  delegateTypes() {
+    return request<{ types: DelegateTypeSpec[] }>("/api/delegate-types");
+  },
+  delegates() {
+    return request<{ delegates: DelegateView[] }>("/api/delegates");
+  },
+  createDelegate(entry: Record<string, unknown>) {
+    return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
+      method: "POST",
+      body: entry,
+    });
+  },
+  updateDelegate(name: string, entry: Record<string, unknown>) {
+    return request<{ ok: boolean; message: string; delegates: DelegateView[] }>(
+      `/api/delegates/${encodeURIComponent(name)}`,
+      { method: "PUT", body: entry },
+    );
+  },
+  deleteDelegate(name: string) {
+    return request<{ ok: boolean; message: string; delegates: DelegateView[] }>(
+      `/api/delegates/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+  },
+  testDelegate(entry: Record<string, unknown>) {
+    return request<DelegateProbe>("/api/delegates/test", { method: "POST", body: entry });
   },
 };
