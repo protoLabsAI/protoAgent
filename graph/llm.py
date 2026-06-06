@@ -29,6 +29,14 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         # turn fails cleanly instead of hanging the A2A task / SSE stream forever.
         "timeout": config.request_timeout,
         "max_retries": config.llm_max_retries,
+        # Stream tokens. The graph runs model nodes via ``ainvoke``; without
+        # this, ``astream_events(v2)`` only emits ``on_chat_model_end`` (the whole
+        # message at once), so the A2A/console answer lands in one frame at turn
+        # end. With streaming on, ``ainvoke`` uses the streaming API under the
+        # hood and ``on_chat_model_stream`` fires per token — which the chat
+        # driver turns into ``("text", delta)`` events and the executor forwards
+        # as incremental artifact-update frames (live token-by-token answers).
+        "streaming": True,
         # Forces token-usage info onto the final streaming chunk so
         # `astream_events(v2)` populates `output.usage_metadata` on
         # `on_chat_model_end`. Without this, streaming chunks arrive as

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Token-by-token answer streaming** (console + A2A). The agent's answer now
+  streams into the chat bubble as the model writes it, instead of landing all at
+  once at turn end. Two parts: the LLM client runs with `streaming: True` so the
+  graph's `ainvoke` streams under `astream_events` (the chat driver already turns
+  `on_chat_model_stream` into `("text", delta)` events, scoped to the `<output>`
+  region); and the A2A executor now **forwards each text delta as an incremental
+  `artifact-update` (append) frame** (lightly batched), then replaces with the
+  canonical final text + the cost-v1/confidence DataParts on completion. The
+  console already appends artifact deltas, so it fills live with no client change.
+  Backward-compatible: a non-streaming model still delivers the answer once at the
+  end. (`graph/llm.py`, `a2a_executor.py`; tests in `test_a2a_handler.py`.)
+
 ### Fixed
 - **Chat self-heals an interrupted stream** (console). A chat turn whose stream
   was cut off — page reload, network blip, or a stale tab — left the assistant

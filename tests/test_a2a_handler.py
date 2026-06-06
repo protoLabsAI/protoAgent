@@ -354,6 +354,47 @@ async def test_tool_events_surface_as_tool_call_dataparts():
 
 
 @pytest.mark.asyncio
+async def test_text_deltas_stream_as_incremental_artifact_frames():
+    """Token-by-token: each `text` delta is forwarded as its own artifact-update
+    (append) frame, so the console fills the bubble live instead of the whole
+    answer landing at turn end. The terminal replaces with the canonical text."""
+    import json
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        # each chunk is over the executor's flush threshold so it emits a frame
+        yield ("text", "First sentence of the streamed answer here. ")
+        yield ("text", "Second sentence that continues the answer. ")
+        yield ("text", "Third and final sentence to wrap it up.")
+        yield ("done", "First sentence of the streamed answer here. "
+                       "Second sentence that continues the answer. "
+                       "Third and final sentence to wrap it up.")
+
+    app = _build_app(stream)
+    artifact_texts: list[str] = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream("POST", "/a2a", headers=A2A_HEADERS, json={
+            "jsonrpc": "2.0", "id": "s", "method": "SendStreamingMessage",
+            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+        }) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                au = json.loads(line[5:].strip()).get("result", {}).get("artifactUpdate")
+                if not au:
+                    continue
+                for part in au.get("artifact", {}).get("parts", []):
+                    if part.get("text"):
+                        artifact_texts.append(part["text"])
+
+    # Streamed incrementally — more than one text-bearing artifact frame (a single
+    # terminal frame would mean no streaming), and the first delta arrives early.
+    assert len(artifact_texts) >= 2, artifact_texts
+    assert any("First sentence" in t for t in artifact_texts)
+    assert "Third and final sentence" in "".join(artifact_texts)
+
+
+@pytest.mark.asyncio
 async def test_input_required_form_carries_hitl_datapart():
     """A request_user_input form (or run_command approval) parks the task with a
     protoAgent-local hitl-v1 DataPart carrying the full payload, plus a text
