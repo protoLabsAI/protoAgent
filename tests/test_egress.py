@@ -20,9 +20,23 @@ def _reset():
 # ── egress allowlist ───────────────────────────────────────────────────────────
 
 
-def test_permissive_when_unset():
+def test_unset_allows_public_blocks_private():
+    # No allowlist → public IPs pass, but the default-on SSRF denylist blocks
+    # private/loopback/link-local/metadata even without an allowlist. (IP
+    # literals so the test doesn't depend on DNS.)
     assert egress.is_enabled() is False
-    assert egress.check_url("http://anything.example/x") is None
+    assert egress.check_url("http://8.8.8.8/x") is None           # public
+    for bad in ("http://127.0.0.1/", "http://10.0.0.1/", "http://192.168.1.1/",
+                "http://169.254.169.254/latest/meta-data/", "http://[::1]/"):
+        assert egress.check_url(bad) is not None, bad
+
+
+def test_allowlisted_host_bypasses_ip_denylist():
+    # An operator can intentionally allowlist an internal host — the allowlist is
+    # the explicit-trust path and bypasses the private-IP denylist.
+    egress.set_allowed_hosts(["internal.svc"])
+    assert egress.check_url("http://internal.svc/x") is None
+    egress.set_allowed_hosts([])
 
 
 def test_exact_host_allow_and_deny():
