@@ -29,7 +29,7 @@ spec:
           image: ghcr.io/protolabsai/protoagent:latest
           # server.py is now the server/ package (ADR 0023) — launch as a module.
           # PYTHONPATH=/opt/protoagent is baked as an image ENV so it survives this override.
-          command: ["python", "-m", "server", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010)
+          command: ["python", "-m", "server", "--host", "0.0.0.0", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010); --host 0.0.0.0 because this override bypasses entrypoint.sh (the server now defaults to loopback)
           ports:
             - containerPort: 7870
           env:
