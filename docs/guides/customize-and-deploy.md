@@ -6,6 +6,22 @@ Use this guide when you've run through the wizard, decided the template fits you
 
 The [setup wizard](/tutorials/first-agent) handles runtime customization — model, tools, persona, auth — without editing code. Everything below is structural: renaming the template throughout the codebase, bending the release pipeline to your repo, baking your fork's identity into the Docker image. Do it once per fork, not every time you tweak a setting.
 
+## The operator-fork contract
+
+**Fork identity and behavior are config/plugin-driven. If you're editing a core `.py` to customize, that's a missing seam — [file it](https://github.com/protoLabsAI/protoAgent/issues).** A fork that *adds* (new files: `config/`, `plugins/`, new modules) syncs upstream with near-zero conflicts; one that *edits* upstream-owned core files fights every sync. The template exposes a seam for each common customization so you stay on the add-only side:
+
+| You want to customize… | Seam (declare/add — don't edit core) |
+|---|---|
+| Advertised skills + card description | `a2a.skills` / `a2a.description` in config, or `register_a2a_skill` (#570) |
+| Add / drop tools | `register_tools` plugin / `tools.disabled` (no core edit) |
+| Where a turn's memory lives (`thread_id`) | `register_thread_id_resolver` plugin (#571) |
+| Lock outbound callbacks / peer consults | `security.callback_allowlist` CIDRs in config (#572) |
+| Outbound host allowlist for `fetch_url` | `egress.allowed_hosts` in config |
+| Subagents | `register_subagent` plugin / `subagents.*` config |
+| Release pipeline | `RELEASE_ENABLED` repo variable (no workflow edit) |
+
+The only file a clean fork still edits is the `pyproject` version line.
+
 ## 1. Fork the template on GitHub
 
 ```bash
@@ -73,17 +89,25 @@ The release-notes step in `release.yml` also delegates to the shared
 `DISCORD_RELEASE_WEBHOOK` from CI secrets) rather than a per-fork script —
 nothing to copy or maintain.
 
-## 4. Rewrite the agent card
+## 4. Declare the agent card
 
-`server.py::_build_agent_card_proto` ships with placeholder skills:
+Your card's advertised **skills** and **description** are your agent's identity — declare them in `langgraph-config.yaml`, **don't edit `server/a2a.py`** (#570):
 
-```python
-"skills": [
-    {"id": "chat", "name": "Chat", "description": "General-purpose...", ...},
-],
+```yaml
+a2a:
+  description: "Acme Bot — turns support tickets into triaged, drafted replies."
+  skills:
+    - id: triage_ticket
+      name: Triage Ticket
+      description: Classify a support ticket and draft a reply.
+      tags: [support]
+      examples: ["triage ticket #1234"]
+      # Optional structured output — enforced + emitted as a typed DataPart (#476):
+      # result_mime: application/vnd.protolabs.triage-v1+json
+      # output_schema: { type: object, properties: { ... }, required: [ ... ] }
 ```
 
-Replace with the skills your agent actually advertises over A2A. The `name` and `url` fields already pick up `identity.name` from YAML, so the wizard-set name lands on the card without code changes.
+A plugin can contribute card skills too, via `register_a2a_skill(spec)`. The `name` and `url` already pick up `identity.name`, so the wizard-set name lands on the card. Omit the `a2a:` block and the template ships one free-text `chat` placeholder so a fresh clone stays callable.
 
 ## 5. (Optional) Add domain tools
 
