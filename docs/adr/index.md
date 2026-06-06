@@ -34,3 +34,4 @@ decision, numbered, never deleted (supersede instead).
 | [0023](./0023-server-decomposition.md) | Decompose server.py: AppState + composition root | Accepted |
 | [0024](./0024-spawn-cli-coding-agents-acp.md) | Spawn CLI coding agents over ACP (`code_with`) | Accepted (PR1 + PR3) |
 | [0025](./0025-unified-delegate-registry-and-panel.md) | Unified delegate registry + hot-swappable panel (`delegate_to`) | Accepted (complete; PR1–PR4) |
+| [0026](./0026-plugin-contributed-console-surfaces.md) | Plugin-contributed console surfaces (rail views + tabs) | Accepted (sliced; PR1) |
