@@ -249,6 +249,20 @@ const server = createServer(async (req, res) => {
     }
     return sendJson(res, { ok: true });
   }
+  // Plugin-served pages (ADR 0026) — a tiny listener page so the e2e can assert
+  // the console's post-load init handshake (token + theme via postMessage).
+  if (pathname.startsWith("/plugins/") && req.method === "GET") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      `<!doctype html><html><body data-bridge="pending">` +
+      `<p id="p">${pathname}</p><script>` +
+      `window.addEventListener("message",function(e){var m=e.data||{};` +
+      `if(m.type!=="protoagent:init")return;` +
+      `document.body.setAttribute("data-bridge",m.token?"authed":"anon");});` +
+      `</script></body></html>`,
+    );
+    return;
+  }
   if (req.method !== "GET") {
     return sendJson(res, { detail: "method not allowed" }, 405);
   }
