@@ -38,6 +38,7 @@ class AppState:
     plugin_tools: list = field(default_factory=list)
     plugin_skill_dirs: list = field(default_factory=list)
     plugin_a2a_skills: list = field(default_factory=list)  # A2A card skills from plugins (#570)
+    thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571)
     plugin_routers: list = field(default_factory=list)
     plugin_surfaces: list = field(default_factory=list)
     plugin_surface_handles: list = field(default_factory=list)
