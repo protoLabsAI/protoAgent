@@ -10,7 +10,9 @@ explicitly — only enable plugins you trust.
 
 > The first-party **Discord** and **Google** integrations ship as plugins
 > (`plugins/discord/`, `plugins/google/`) — disable either with
-> `plugins: { disabled: [discord] }` / `[google]`, no core edit.
+> `plugins: { disabled: [discord] }` / `[google]`, no core edit. The opt-in
+> **coding_agent** plugin (`plugins/coding_agent/`) adds `code_with` to spawn a
+> CLI coding agent over ACP — see [Spawn CLI coding agents](/guides/coding-agents).
 
 > **Trust model.** This is the in-process / trusted model (matching Hermes): an
 > enabled plugin's `register()` runs as the agent. Don't enable code you
