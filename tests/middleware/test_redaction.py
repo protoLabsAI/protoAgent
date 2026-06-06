@@ -296,3 +296,26 @@ def test_langfuse_redaction():
     assert result["input"]["query"] == "get config"
     assert "mytoken1234567890" not in result["output"]
     assert "[REDACTED]" in result["output"]
+
+
+def test_provider_token_shapes_redacted():
+    """Discord / Google / GitHub / Slack / AWS / client_secret tokens that a tool
+    error could echo must not survive into the audit log (prod-readiness)."""
+    from graph.middleware.redaction import redact
+
+    # Obviously-fake values that still match the regex SHAPES (so they exercise
+    # the patterns) but aren't real tokens — avoids tripping secret scanning.
+    samples = [
+        "M" + "A" * 23 + ".AAAAAA." + "A" * 30,        # discord shape
+        "ghp_" + "A" * 36,                              # github shape (fails real checksum)
+        "ya29." + "A" * 30,                             # google oauth shape
+        "AIza" + "A" * 30,                              # google api-key shape
+        "AKIA" + "A" * 16,                              # aws shape
+        "xoxb-0000000000-" + "a" * 12,                  # slack shape
+    ]
+    for s in samples:
+        assert "[REDACTED]" in redact(s), s
+    # captured-value shape
+    assert "[REDACTED]" in redact("client_secret: " + "A" * 16)
+    # benign text is left intact (no over-redaction)
+    assert redact("the quick brown fox AKIA jumps") == "the quick brown fox AKIA jumps"
