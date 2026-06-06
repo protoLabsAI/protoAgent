@@ -17,6 +17,20 @@ from .adapters import ADAPTERS, DelegateError, delegate_types
 log = logging.getLogger("protoagent.plugins.delegates")
 
 
+# Substrings that mark a config key (or an env-var name) as secret-bearing — its
+# value is never returned by the read API.
+_SECRETISH = ("key", "token", "secret", "password", "passwd", "credential", "auth")
+
+
+def _is_secretish(k) -> bool:
+    return any(s in str(k).lower() for s in _SECRETISH)
+
+
+def _redact_env(env: dict) -> dict:
+    """Redact env values whose name looks secret-bearing (e.g. OPENAI_API_KEY)."""
+    return {k: ("***" if _is_secretish(k) else v) for k, v in env.items()}
+
+
 def _public_view(raw: dict) -> dict:
     """A delegate as the panel sees it: config fields minus any secret, plus a
     ``configured`` flag (does it parse?) and ``has_secret`` (is one stored?)."""
@@ -34,11 +48,14 @@ def _public_view(raw: dict) -> dict:
         adapter and adapter.secret_field
         and store.secret_overlay().get(f"{name}.{adapter.secret_field}")
     )
-    view = {k: v for k, v in raw.items()
-            if not (k in ("auth", "api_key") or "token" in str(k) or "key" in str(k).lower())}
+    # Drop any secret-bearing top-level field (api_key, *_token, auth, …).
+    view = {k: v for k, v in raw.items() if not _is_secretish(k)}
     # keep auth.scheme (not the token) for a2a so the form can prefill it
     if isinstance(raw.get("auth"), dict) and raw["auth"].get("scheme"):
         view["auth"] = {"scheme": raw["auth"]["scheme"]}
+    # the acp env dict is free-form — redact secret-named values inside it too.
+    if isinstance(view.get("env"), dict):
+        view["env"] = _redact_env(view["env"])
     view.update({"name": name, "type": raw.get("type"),
                  "description": raw.get("description", ""),
                  "configured": configured, "error": error, "has_secret": has_secret})
