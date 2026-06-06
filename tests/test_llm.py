@@ -16,6 +16,16 @@ def test_defaults_omit_optional_sampling_params():
     assert "extra_body" not in kwargs
 
 
+def test_request_timeout_and_max_retries_bound_the_gateway():
+    # Prod-readiness: the client must carry a per-call timeout + retry cap so a
+    # hung/slow gateway can't block a turn (and the A2A task) indefinitely.
+    kwargs = _build_llm_kwargs(LangGraphConfig())
+    assert kwargs["timeout"] == 120.0
+    assert kwargs["max_retries"] == 2
+    custom = _build_llm_kwargs(LangGraphConfig(request_timeout=45.0, llm_max_retries=0))
+    assert custom["timeout"] == 45.0 and custom["max_retries"] == 0
+
+
 def test_standard_openai_params_passed_directly():
     cfg = LangGraphConfig(top_p=0.95, presence_penalty=0.5)
     kwargs = _build_llm_kwargs(cfg)

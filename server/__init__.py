@@ -544,6 +544,14 @@ def _main():
             log.exception("[discord] shutdown failed")
         if STATE.checkpoint_prune_task is not None:
             STATE.checkpoint_prune_task.cancel()
+        # Close the long-lived A2A push-notification client (created below in
+        # _main) so its connection pool doesn't leak on shutdown/reload — matters
+        # in the desktop-sidecar restart loop. Best-effort; NameError if boot
+        # never reached its construction is swallowed.
+        try:
+            await _a2a_push_client.aclose()
+        except Exception:
+            log.exception("[a2a] push client close failed")
 
     # Chat / goal / health / OpenAI-compat HTTP surface. Extracted to
     # operator_api/chat_routes.py (ADR 0023 phase 3); ``ui`` is passed in

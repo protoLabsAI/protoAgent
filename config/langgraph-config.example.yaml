@@ -18,6 +18,8 @@ model:
   temperature: 0.2
   max_tokens: 32768  # 32k — required headroom for the Qwen models we run
   max_iterations: 50
+  request_timeout: 120   # per-call timeout (s) on the model client — bounds a hung/slow gateway
+  max_retries: 2         # transient-error retries inside the client
   # Advanced sampling — all optional; omit to use the gateway / model-card
   # defaults. top_p + presence_penalty are standard OpenAI params; top_k +
   # repetition_penalty + chat_template_kwargs ride extra_body for vLLM-style

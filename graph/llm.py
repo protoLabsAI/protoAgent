@@ -25,6 +25,10 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         "model": config.model_name,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
+        # Bound a hung/slow gateway: a per-call timeout + transient-retry cap so a
+        # turn fails cleanly instead of hanging the A2A task / SSE stream forever.
+        "timeout": config.request_timeout,
+        "max_retries": config.llm_max_retries,
         # Forces token-usage info onto the final streaming chunk so
         # `astream_events(v2)` populates `output.usage_metadata` on
         # `on_chat_model_end`. Without this, streaming chunks arrive as

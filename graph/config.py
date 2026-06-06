@@ -87,6 +87,12 @@ class LangGraphConfig:
     max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
     max_iterations: int = 50
 
+    # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
+    # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
+    # A2A task / SSE stream indefinitely (prod-readiness). 0/None ⇒ SDK default.
+    request_timeout: float = 120.0
+    llm_max_retries: int = 2
+
     # Advanced sampling — all opt-in. ``None`` (or a negative top_k) means
     # "let the gateway / model card decide". top_p and presence_penalty are
     # standard OpenAI params; top_k and repetition_penalty aren't, so they
@@ -472,6 +478,8 @@ class LangGraphConfig:
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
             max_iterations=model.get("max_iterations", cls.max_iterations),
+            request_timeout=model.get("request_timeout", cls.request_timeout),
+            llm_max_retries=model.get("max_retries", cls.llm_max_retries),
             top_p=model.get("top_p", cls.top_p),
             top_k=model.get("top_k", cls.top_k),
             presence_penalty=model.get("presence_penalty", cls.presence_penalty),
