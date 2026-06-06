@@ -26,8 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Plugins panel** (Settings → Integrations, PR2) installs from a URL, lists
   installed plugins with their manifest + declared capabilities for review, shows
   enabled state + the "enable in config + restart" hint, and uninstalls — backed by
-  `/api/plugins/installed|install` + `DELETE /api/plugins/{id}`. Capability
-  audit-logging + dep install + allowlist enforcement land in PR3. See
+  `/api/plugins/installed|install` + `DELETE /api/plugins/{id}`. PR3 adds the safety
+  rails: **`plugin install-deps <id>`** (the explicit, separate pip step) with a
+  clear "declared deps not installed — run install-deps" diagnostic when an enabled
+  plugin's deps are missing; **audit logging** of install/uninstall/install-deps;
+  and a **`plugins.sources.allow`** allowlist (host/org globs) enforced on CLI +
+  console installs. See
   [ADR 0027](docs/adr/0027-install-plugins-from-git-url.md).
 
 ## [0.19.0] - 2026-06-06

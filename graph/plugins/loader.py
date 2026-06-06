@@ -179,8 +179,16 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             registry = PluginRegistry(manifest.id, manifest.path, config=pconf)
             register(registry)
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
-            entry["error"] = str(exc)
-            log.warning("[plugins] %s failed to load: %s — skipping", manifest.id, exc)
+            # Clear diagnostic when an enabled plugin's declared deps aren't
+            # installed (ADR 0027 D4: install fetches code; deps are explicit).
+            if isinstance(exc, ModuleNotFoundError) and manifest.requires_pip:
+                entry["error"] = (
+                    f"declared deps not installed ({', '.join(manifest.requires_pip)}) — "
+                    f"run: python -m server plugin install-deps {manifest.id}"
+                )
+            else:
+                entry["error"] = str(exc)
+            log.warning("[plugins] %s failed to load: %s — skipping", manifest.id, entry["error"])
             result.meta.append(entry)
             continue
 

@@ -334,6 +334,9 @@ class LangGraphConfig:
     # without deleting its directory or editing core.
     plugins_disabled: list[str] = field(default_factory=list)
     plugins_dir: str = ""
+    # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
+    # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
+    plugins_sources_allow: list[str] = field(default_factory=list)
     # Plugin-declared config sections (ADR 0019), keyed by the claimed top-level
     # section. Each value is the section's resolved config (manifest defaults ⊕
     # YAML ⊕ secrets overlay). A plugin reads its own via plugin_config["<section>"].
@@ -554,6 +557,7 @@ class LangGraphConfig:
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
+            plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
             a2a_skills=list(a2a.get("skills", []) or []),

@@ -117,3 +117,45 @@ def test_source_allowlist_blocks_offlist(env):
     repo = _make_plugin_repo(env)
     with pytest.raises(installer.InstallError, match="not on plugins.sources.allow"):
         installer.install(str(repo), allow=["github.com/protoLabsAI/*"])
+
+
+def test_install_deps_noop_without_deps(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    assert installer.install_deps("demo_ext") == []
+
+
+def test_install_deps_missing_plugin(env):
+    with pytest.raises(installer.InstallError, match="not installed"):
+        installer.install_deps("nope")
+
+
+def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, rich]\n")
+    installer.install(str(repo))
+    calls = []
+
+    class _OK:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def _fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _OK()
+
+    monkeypatch.setattr(installer.subprocess, "run", _fake_run)  # don't hit the network
+    deps = installer.install_deps("demo_ext")
+    assert deps == ["requests>=2", "rich"]
+    assert calls and calls[0][1:4] == ["-m", "pip", "install"]
+    assert calls[0][4:] == ["requests>=2", "rich"]
+
+
+def test_configured_allowlist_reads_config(tmp_path, monkeypatch):
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "langgraph-config.yaml").write_text(
+        "plugins:\n  sources:\n    allow: [github.com/protoLabsAI/*]\n"
+    )
+    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg_dir))
+    assert installer.configured_allowlist() == ["github.com/protoLabsAI/*"]
