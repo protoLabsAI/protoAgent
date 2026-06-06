@@ -74,7 +74,6 @@ import math
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -333,7 +332,6 @@ class SkillCurator:
             texts = [_skill_text(s) for s in skills]
             embeddings = model.encode(texts, normalize_embeddings=True)
             # Cosine similarity via dot product (embeddings are normalised)
-            import numpy as np  # type: ignore
 
             matrix = (embeddings @ embeddings.T).tolist()
             log.debug("[curator] similarity matrix built with sentence-transformers")

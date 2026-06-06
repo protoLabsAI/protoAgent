@@ -1,6 +1,5 @@
 """Tests for hot-memory (always-on domain='hot' facts)."""
 
-from unittest.mock import MagicMock
 
 from langchain_core.messages import HumanMessage
 

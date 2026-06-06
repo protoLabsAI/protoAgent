@@ -13,12 +13,9 @@ Covers:
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import sys
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -160,7 +157,6 @@ def test_atomic_write_no_partial_file_on_error(tmp_path):
     state = _make_state("atomic-test")
     dest = tmp_path / "atomic-test.json"
 
-    original_json_dump = json.dump
 
     def bad_dump(*args, **kwargs):
         raise OSError("simulated write error")

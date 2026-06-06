@@ -17,7 +17,6 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from langgraph.prebuilt.chat_agent_executor import AgentState
 
 
 log = logging.getLogger(__name__)

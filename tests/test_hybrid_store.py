@@ -2,7 +2,6 @@
 
 import sqlite3
 
-import pytest
 
 from knowledge.hybrid_store import HybridKnowledgeStore
 

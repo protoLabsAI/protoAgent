@@ -476,7 +476,7 @@ def create_chat_app(
                                 label="Launch this agent automatically on login",
                                 interactive=True,
                             )
-                            autostart_drawer_status = gr.Markdown("")
+                            gr.Markdown("")
 
                         with gr.Accordion("Persona (SOUL.md)", open=False):
                             soul_in = gr.Textbox(

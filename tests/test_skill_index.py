@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest

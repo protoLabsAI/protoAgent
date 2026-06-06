@@ -7,7 +7,6 @@ error is shown to the operator and echoing a token/hash is a leak + useless.
 
 from __future__ import annotations
 
-import contextlib
 
 from graph import config_io
 

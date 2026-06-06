@@ -1,9 +1,7 @@
 """Integration tests: verify redaction is applied in AuditMiddleware flow."""
 
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -107,7 +105,7 @@ class TestAuditMiddlewareSyncRedaction:
             captured_trace_args.update(args)
 
         with (
-            patch("audit.audit_logger") as fake_audit,
+            patch("audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
             patch("tracing.current_session_id", return_value="sess-3"),
             patch("tracing.trace_tool_call", side_effect=fake_trace),
             patch("metrics.record_tool_call"),
@@ -200,7 +198,7 @@ class TestAuditMiddlewareAsyncRedaction:
             raise ValueError("tool failure")
 
         with (
-            patch("audit.audit_logger") as fake_audit,
+            patch("audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
             patch("tracing.current_session_id", return_value="sess-exc"),
             patch("tracing.trace_tool_call"),
             patch("metrics.record_tool_call"),

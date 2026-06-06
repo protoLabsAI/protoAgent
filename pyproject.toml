@@ -8,3 +8,29 @@ requires-python = ">=3.11"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "apps", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+# pyflakes (F) catches the real bugs — unused/undefined names; pycodestyle (E/W)
+# + isort (I) for hygiene. The stylistic rules the codebase intentionally and
+# pervasively uses are ignored rather than churned: lazy/late imports (E402),
+# semicolon/lambda style (E702/E731), and the bare-except guard form (E722 is
+# kept; bare `except:` is genuinely banned here).
+select = ["E", "F", "W"]
+ignore = [
+  "E402",  # module-level import not at top — late/lazy imports are idiomatic here
+  "E501",  # line-too-long — long, readable comment lines are intentional
+  "E702",  # multiple statements on one line (semicolon) — used deliberately
+  "E731",  # lambda assignment — used deliberately in a few places
+  "E741",  # ambiguous var name (l/O/I) — occasional, harmless
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ files re-export submodule symbols (esp. server/__init__.py,
+# which re-exports the whole public surface for the test suite) — F401 there is
+# intentional, not dead code.
+"**/__init__.py" = ["F401"]

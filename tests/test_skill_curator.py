@@ -11,22 +11,17 @@ Covers:
 from __future__ import annotations
 
 import json
-import math
 import os
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from graph.skills.curator import (
-    HALF_LIFE_DAYS,
     PRUNE_THRESHOLD,
     SIMILARITY_THRESHOLD,
     SkillCurator,
     _clamp,
     _jaccard,
-    _parse_iso,
 )
 
 

@@ -8,9 +8,7 @@ without booting an agent — the live boot path is covered manually via
 from __future__ import annotations
 
 import json
-import os
 
-import pytest
 
 from evals.report import build_report
 from evals.runner import CaseResult, _save_report

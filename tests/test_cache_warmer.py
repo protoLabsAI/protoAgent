@@ -9,7 +9,6 @@ import asyncio
 
 import pytest
 
-import graph.cache_warmer as cw
 from graph.cache_warmer import CacheWarmer
 from graph.config import LangGraphConfig
 

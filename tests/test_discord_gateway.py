@@ -9,7 +9,6 @@ and auto-threading are all exercised without network or LLM.
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 

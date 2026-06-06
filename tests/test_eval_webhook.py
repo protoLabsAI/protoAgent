@@ -1,6 +1,5 @@
 """Tests for the eval webhook listener."""
 
-import json
 
 import httpx
 import pytest

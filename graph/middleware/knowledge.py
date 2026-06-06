@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 
-from langgraph.prebuilt.chat_agent_executor import AgentState
 
 if TYPE_CHECKING:
     from graph.skills.index import SkillRecord, SkillsIndex

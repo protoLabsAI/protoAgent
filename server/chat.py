@@ -428,7 +428,6 @@ async def _chat_langgraph_stream(
     it (e.g. per-project working memory) without editing this file.
     """
     import tracing
-    from langchain_core.messages import HumanMessage
 
     from graph.goals.goal_turn import goal_turn
 

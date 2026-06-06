@@ -1,6 +1,5 @@
 """Unit tests for graph.middleware.redaction module."""
 
-import pytest
 
 from graph.middleware.redaction import redact, PATTERNS
 

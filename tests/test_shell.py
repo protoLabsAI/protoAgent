@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.shell import ShellResult, run_command
+from tools.shell import run_command
 
 
 @pytest.mark.asyncio

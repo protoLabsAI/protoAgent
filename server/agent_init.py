@@ -841,9 +841,6 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         new_workflow_registry = None
         new_inbox_store = None
 
-    # Capture the outgoing config before the swap so we can tell whether the
-    # Discord surface needs a live reconnect (token/admin/enabled changed).
-    old_config = STATE.graph_config
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
     STATE.graph_config = new_config

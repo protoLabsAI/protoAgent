@@ -27,7 +27,6 @@ import asyncio
 
 import httpx
 import pytest
-from a2a.server.context import ServerCallContext
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi

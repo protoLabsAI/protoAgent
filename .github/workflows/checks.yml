@@ -48,6 +48,22 @@ jobs:
           fi
           echo "ok: no stale single-file launches in deploy artifacts"
 
+  lint:
+    name: Lint (ruff)
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ruff check
+        # Pinned so a new ruff release can't add a rule that fails the gate
+        # out from under a PR. Config + ignores live in pyproject.toml.
+        run: |
+          pip install ruff==0.15.10
+          ruff check .
+
   tests:
     name: Python tests
     runs-on: namespace-profile-protolabs-linux
