@@ -471,6 +471,8 @@ h2 {
 .stage-body {
   min-height: 0;
   overflow-y: auto;
+  /* Breathing room so the last row never sits flush against the utility bar. */
+  padding-bottom: 12px;
 }
 
 /* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
@@ -1648,6 +1650,7 @@ textarea {
   gap: 6px;
   flex-wrap: wrap;
   padding: 12px 16px 0;
+  margin-bottom: 10px;
 }
 
 .stage-subnav button {
