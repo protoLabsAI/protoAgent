@@ -210,3 +210,13 @@ export const chatStore = {
 export function useChatState() {
   return useSyncExternalStore(chatStore.subscribe, chatStore.getSnapshot, chatStore.getSnapshot);
 }
+
+// Narrow selector: is ANY session mid-stream? Returns a primitive so subscribers
+// (e.g. the nav rail's background-streaming dot) re-render only when the boolean
+// flips — not on every streamed token. Drives the "chat is progressing while
+// you're on another tab" indicator.
+const _anyStreaming = () =>
+  Object.values(chatStore.getSnapshot().sessionStatusMap).some((s) => s === "streaming");
+export function useAnyChatStreaming(): boolean {
+  return useSyncExternalStore(chatStore.subscribe, _anyStreaming, () => false);
+}

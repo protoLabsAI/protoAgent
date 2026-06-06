@@ -11,7 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.17.1] - 2026-06-06
+### Fixed
+- **Chat continuity across navigation** (console). Switching from the Chat tab to
+  another surface (Activity/Studio/Settings/…) **unmounted** `ChatSurface` — which
+  tore down the still-mounted session pool, and its unmount cleanup aborted the
+  in-flight stream — so an in-progress turn was lost and the chat appeared to
+  reset on return. `ChatSurface` is now rendered **unconditionally** and hidden
+  via CSS when off-tab (an `active` prop), so the turn keeps streaming into the
+  module-level chat store in the background and the conversation is exactly as you
+  left it when you navigate back — the protoMaker always-mounted pattern. Multiple
+  chat sessions in the pool all keep progressing. Added a pulsing **background-
+  streaming dot** on the Chat rail button (a narrow store selector, so it only
+  re-renders on the streaming on/off transition, not per token). e2e:
+  `chat-continuity.spec.ts`.
 
 ### Fixed
 - **Brand favicon** — every surface now shows the canonical protoLabs icon (the

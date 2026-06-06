@@ -31,6 +31,7 @@ import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
+import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
@@ -104,6 +105,9 @@ function useLocalStorageState(key: string, fallback: string) {
 
 export function App() {
   const [surface, setSurface] = useState<Surface>("chat");
+  // Background-streaming indicator for the Chat rail (narrow selector → only
+  // re-renders when the boolean flips, not per token).
+  const chatStreaming = useAnyChatStreaming();
   const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
@@ -526,6 +530,7 @@ export function App() {
             label="Chat"
             icon={<MessageSquare size={18} />}
             onClick={() => setSurface("chat")}
+            dot={chatStreaming && surface !== "chat"}
           />
           <RailButton
             active={surface === "activity"}
@@ -605,9 +610,10 @@ export function App() {
             </div>
           ) : null}
 
-          {surface === "chat" ? (
-            <ChatSurface onError={setError} />
-          ) : null}
+          {/* ChatSurface is rendered UNCONDITIONALLY and hidden via `active` when
+              off-tab — so an in-flight turn keeps streaming in the background and
+              the chat is progressing when you navigate back (not torn down). */}
+          <ChatSurface onError={setError} active={surface === "chat"} />
 
           {surface === "studio" ? <WorkflowsSurface /> : null}
 
@@ -794,12 +800,16 @@ function RailButton({
   icon,
   onClick,
   badge,
+  dot,
 }: {
   active: boolean;
   label: string;
   icon: ReactNode;
   onClick: () => void;
   badge?: number;
+  // A small pulsing indicator (no count) — e.g. a chat turn streaming in the
+  // background while you're on another tab.
+  dot?: boolean;
 }) {
   return (
     <button className={active ? "active" : ""} type="button" onClick={onClick} title={label} aria-label={label}>
@@ -809,6 +819,8 @@ function RailButton({
         <span className="rail-badge" data-testid="activity-badge">
           {badge > 9 ? "9+" : badge}
         </span>
+      ) : dot ? (
+        <span className="rail-dot" data-testid="chat-streaming-dot" aria-label="streaming" />
       ) : null}
     </button>
   );

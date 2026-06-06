@@ -1540,6 +1540,23 @@ textarea {
   font-weight: 600;
 }
 
+/* Background chat-streaming indicator on the Chat rail button — a small pulsing
+   dot (no count), shown while a turn streams on another tab. */
+.rail-dot {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #46c46a;
+  animation: rail-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rail-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.7); }
+}
+
 .rail button {
   position: relative;
 }
