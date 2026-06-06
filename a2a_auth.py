@@ -35,8 +35,18 @@ _API_KEY: list[str] = [""]
 # Allowed origins: None = verification disabled; list = allowlist.
 _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 
-# Path prefix the guard applies to. The agent card + health are public.
-_GUARDED_PREFIX = "/a2a"
+# Path prefixes the guard applies to: the A2A JSON-RPC surface plus the operator
+# console + OpenAI-compat APIs (which drive subagents, rewrite config/SOUL,
+# schedule jobs, and run turns). The agent card, /healthz, /metrics, and the
+# static console assets live OUTSIDE these prefixes and stay public.
+_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/")
+
+# Exempt from the guard: the read-only Server-Sent-Events stream. Browsers'
+# EventSource cannot set an Authorization header, so a bearer can't be presented
+# here — and it only exposes activity/inbox events, not any action. The
+# agent-driving endpoints (/api/subagents/run, /api/config, /api/chat, /a2a, …)
+# stay guarded.
+_GUARD_EXEMPT = ("/api/events",)
 
 
 def set_bearer_token(token: str | None) -> None:
@@ -84,7 +94,10 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
     """Enforces bearer / X-API-Key / origin on the guarded A2A path."""
 
     async def dispatch(self, request: Request, call_next):
-        if not request.url.path.startswith(_GUARDED_PREFIX):
+        path = request.url.path
+        if not any(path.startswith(p) for p in _GUARDED_PREFIXES):
+            return await call_next(request)
+        if any(path.startswith(p) for p in _GUARD_EXEMPT):
             return await call_next(request)
 
         # X-API-Key (legacy) — enforced only when configured.
