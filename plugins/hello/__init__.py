@@ -47,21 +47,38 @@ def _build_router(greeting: str):
     async def _view():
         from fastapi.responses import HTMLResponse
 
+        # The page listens for the console's `protoagent:init` postMessage (ADR
+        # 0026 bridge) — the operator bearer (use it for your own API calls) + the
+        # console theme tokens (apply them to match the look). Reference receiver.
         html = f"""<!doctype html><html><head><meta charset="utf-8">
 <style>
   html,body{{margin:0;height:100%;background:#0a0f14;color:#e6e6e6;
     font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;
     display:flex;align-items:center;justify-content:center;text-align:center}}
   .card{{padding:32px}} h1{{color:#9b87f2;margin:0 0 8px;font-size:22px}}
-  p{{color:#9aa0aa;font-size:14px;max-width:36ch;line-height:1.6}}
+  p{{color:#9aa0aa;font-size:14px;max-width:38ch;line-height:1.6}}
   code{{background:#161b22;padding:2px 6px;border-radius:5px;color:#9b87f2}}
+  #bridge{{margin-top:14px;font-size:12px;color:#46c46a}}
 </style></head><body><div class="card">
   <h1>{greeting} from a plugin view</h1>
-  <p>This page is served by <code>plugins/hello</code> at
-  <code>/plugins/hello/view</code> and embedded in the console rail via the
-  <code>views:</code> manifest block (ADR 0026). A fork drops a directory like
-  this and gets its own rail icon + dashboard — no console rebuild.</p>
-</div></body></html>"""
+  <p>Served by <code>plugins/hello</code> at <code>/plugins/hello/view</code> and
+  embedded in the console rail via the <code>views:</code> manifest block
+  (ADR 0026). A fork drops a directory like this and gets its own rail icon +
+  dashboard — no console rebuild.</p>
+  <p id="bridge">awaiting console handshake…</p>
+</div>
+<script>
+  window.addEventListener("message", function (e) {{
+    var m = e.data || {{}};
+    if (m.type !== "protoagent:init") return;
+    document.getElementById("bridge").textContent =
+      (m.token ? "✓ authed by the console" : "no token (open API)") +
+      (m.theme ? " · theme received" : "");
+    if (m.theme && m.theme.bg) document.body.style.background = m.theme.bg;
+    if (m.theme && m.theme.fg) document.body.style.color = m.theme.fg;
+  }});
+</script>
+</body></html>"""
         return HTMLResponse(html)
 
     return router

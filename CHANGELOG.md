@@ -20,9 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuild. Surfaces are keyed `plugin:<id>:<viewId>`; chat stays mounted (its
   continuity holds) while a plugin view is open. The `hello` example plugin now
   ships a demo view. The view is hosted by a dedicated `PluginView` component with
-  load/error states, and a stale-surface fallback returns to chat if a plugin
-  view's plugin is disabled while it's open. View-tabs + the auth/theming bridge
-  land in a follow-up slice. See
+  load/error states + a stale-surface fallback (returns to chat if a plugin view's
+  plugin is disabled while it's open). A view may declare **`tabs:`** (rendered as
+  a sub-nav that swaps the iframe page), and the console hands the hosted page the
+  operator **bearer + theme tokens via a post-load `postMessage`** (no token in the
+  URL) so it can call its own API and match the console look. The iframe is
+  sandboxed (`allow-scripts allow-forms allow-same-origin`). See
+  [the guide](docs/guides/plugin-views.md) and
   [ADR 0026](docs/adr/0026-plugin-contributed-console-surfaces.md).
 
 ## [0.18.0] - 2026-06-06

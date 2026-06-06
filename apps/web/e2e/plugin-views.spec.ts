@@ -38,3 +38,23 @@ test("switches between two plugin views, each loading its own page", async ({ pa
   // exactly one plugin view is shown at a time
   await expect(frame).toHaveCount(1);
 });
+
+test("view-tabs switch the hosted page", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".rail").getByRole("button", { name: "Board", exact: true }).click();
+  const subnav = page.locator(".plugin-view .stage-subnav");
+  await expect(subnav.getByRole("button", { name: "Open", exact: true })).toBeVisible();
+  await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /tab=open/);
+  await subnav.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /tab=done/);
+});
+
+test("console hands the plugin view a bearer + theme via postMessage", async ({ page }) => {
+  // Seed an operator token so the console forwards it post-load.
+  await page.addInitScript(() => window.localStorage.setItem("protoagent.authToken", "e2e-token"));
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".rail").getByRole("button", { name: "Stats", exact: true }).click();
+  // The plugin page flips data-bridge on receiving protoagent:init with a token.
+  const body = page.frameLocator(".plugin-view-frame").locator("body");
+  await expect(body).toHaveAttribute("data-bridge", "authed");
+});

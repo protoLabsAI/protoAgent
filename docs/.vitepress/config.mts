@@ -55,6 +55,7 @@ export default defineConfig({
             { text: "Skills (SKILL.md)", link: "/guides/skills" },
             { text: "MCP servers", link: "/guides/mcp" },
             { text: "Plugins", link: "/guides/plugins" },
+            { text: "Plugin console views", link: "/guides/plugin-views" },
             { text: "Goal mode", link: "/guides/goal-mode" },
             { text: "Scheduler", link: "/guides/scheduler" },
             { text: "Discord surface", link: "/guides/discord" },

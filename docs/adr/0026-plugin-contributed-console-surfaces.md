@@ -110,12 +110,13 @@ for the plugin page; core views are unaffected.
   the console renders **one** dynamic rail icon + iframe end-to-end. Proves the
   whole loop. (Hardcoded-to-registry refactor minimal: append plugin views after
   core surfaces.)
-- **PR2: rail registry + PluginView host.** Full data-driven rail
-  (`plugin:<id>:<viewId>` surfaces), the generic iframe `PluginView`, graceful
-  handling when a plugin is disabled/missing. e2e.
-- **PR3: view-tabs + auth/theming bridge + sandbox + docs.** Declared `tabs` →
-  `stage-subnav`; the `postMessage` token + theme handshake; sandbox attrs; a
-  `docs/guides/plugin-views.md` + a `reference/extensions` update.
+- **PR2 (shipped): rail registry + PluginView host.** Data-driven plugin rail
+  (`plugin:<id>:<viewId>`), the generic `PluginView` iframe host (load/error
+  states), stale-surface fallback (disabled/missing → chat). e2e (#620).
+- **PR3 (shipped): view-tabs + auth/theming bridge + sandbox + docs.** Declared
+  `tabs` → `stage-subnav`; the post-load `postMessage` token + theme handshake
+  (`protoagent:init`); sandbox attrs; the `hello` view is the reference receiver;
+  `docs/guides/plugin-views.md`.
 - **Later (optional): schema-driven views** (D1) for forks that want a native-look
   dashboard without serving their own page — a separate ADR if pursued.
 
