@@ -74,14 +74,21 @@ def _load_delegates_config() -> list:
 
 def register(registry) -> None:
     """Entry point — called once per graph build with the live config."""
-    # CRUD API for the console panel (PR2). Mounted once at process init; the
-    # roster it edits is config, which hot-reloads — so the static routes are fine.
+    # CRUD API for the console panel (PR2) + the background health prober (PR4).
+    # Mounted/started once at process init; the roster they serve is config, which
+    # hot-reloads — so the static routes + the loop's per-tick re-read are fine.
     try:
         from .api import build_router
 
         registry.register_router(build_router(), prefix="")
     except Exception:  # noqa: BLE001 — API is best-effort; the tool still works
         log.exception("[delegates] mounting CRUD API failed")
+    try:
+        from .health import start as _health_start, stop as _health_stop
+
+        registry.register_surface(_health_start, stop=_health_stop, name="delegate-health")
+    except Exception:  # noqa: BLE001 — health is best-effort
+        log.exception("[delegates] registering health prober failed")
 
     delegates = _load_delegates_config()
     if not delegates:

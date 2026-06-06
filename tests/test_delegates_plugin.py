@@ -186,3 +186,43 @@ async def test_acp_dispatch_reuses_client(monkeypatch):
     monkeypatch.setattr(CA, "_client_for", lambda spec: _StubClient())
     d = ADAPTERS["acp"].parse({"name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp"})
     assert await ADAPTERS["acp"].dispatch(d, "fix the bug") == "coding done"
+
+
+# ── health prober (PR4) ───────────────────────────────────────────────────────
+
+import plugins.delegates.health as H  # noqa: E402
+
+
+async def test_health_probe_all_populates_and_prunes(monkeypatch):
+    H._HEALTH.clear()
+    import plugins.delegates.store as store
+
+    monkeypatch.setattr(store, "merged_delegates",
+                        lambda: [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}])
+
+    async def fake_probe(d):
+        return {"ok": True, "latency_ms": 5, "detail": "ok"}
+
+    monkeypatch.setattr(ADAPTERS["openai"], "probe", fake_probe)
+    await H._probe_all()
+    assert H._HEALTH["opus"]["ok"] is True
+    assert "checked_at" in H._HEALTH["opus"]
+
+    # delegate removed → pruned on the next sweep
+    monkeypatch.setattr(store, "merged_delegates", lambda: [])
+    await H._probe_all()
+    assert "opus" not in H._HEALTH
+
+
+async def test_health_probe_records_failure(monkeypatch):
+    H._HEALTH.clear()
+    import plugins.delegates.store as store
+    monkeypatch.setattr(store, "merged_delegates",
+                        lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}])
+
+    async def boom(d):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", boom)
+    await H._probe_all()
+    assert H._HEALTH["p"]["ok"] is False and "nope" in H._HEALTH["p"]["error"]

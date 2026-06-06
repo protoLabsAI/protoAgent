@@ -398,6 +398,7 @@ export type DelegateFieldSpec = {
   default?: unknown;
 };
 export type DelegateTypeSpec = { type: string; label: string; blurb: string; fields: DelegateFieldSpec[] };
+export type DelegateProbe = { ok: boolean | null; latency_ms?: number; error?: string; detail?: string; checked_at?: number };
 export type DelegateView = {
   name: string;
   type: string;
@@ -405,6 +406,6 @@ export type DelegateView = {
   configured: boolean;
   error: string | null;
   has_secret: boolean;
+  health?: DelegateProbe;
   [key: string]: unknown;
 };
-export type DelegateProbe = { ok: boolean | null; latency_ms?: number; error?: string; detail?: string };

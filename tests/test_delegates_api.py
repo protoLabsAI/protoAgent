@@ -127,6 +127,14 @@ def test_test_endpoint_unknown_type_400(client):
     assert client.post("/api/delegates/test", json={"type": "nope"}).status_code == 400
 
 
+def test_list_includes_health_snapshot(client, monkeypatch):
+    import plugins.delegates.health as H
+    client.post("/api/delegates", json={"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"})
+    monkeypatch.setattr(H, "health_snapshot", lambda: {"opus": {"ok": True, "latency_ms": 12, "detail": "ok"}})
+    body = client.get("/api/delegates").json()["delegates"][0]
+    assert body["health"]["ok"] is True and body["health"]["latency_ms"] == 12
+
+
 def test_test_endpoint_probes_saved_delegate_by_name(client):
     # The per-row Test button sends only {name, type}; the endpoint must probe the
     # STORED config (command/workdir), not fail on the missing fields.

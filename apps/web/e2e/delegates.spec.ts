@@ -18,6 +18,8 @@ test("lists configured delegates with type + secret badges", async ({ page }) =>
   await expect(row).toBeVisible();
   await expect(row.locator(".delegate-type-badge")).toHaveText("openai");
   await expect(row.getByText("secret set")).toBeVisible();
+  // Health prober (PR4): the cached status surfaces as a dot.
+  await expect(row.locator(".delegate-health.ok")).toBeVisible();
 });
 
 test("Add opens a type picker and a schema-driven form", async ({ page }) => {

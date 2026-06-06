@@ -137,8 +137,11 @@ Mounted by the plugin router:
   Settings → Integrations (list + type picker + schema-driven form + Test button +
   secret handling). Surfaces the Integrations tab whenever the plugin is reachable
   even with no schema-driven integration enabled. e2e: `delegates.spec.ts`.
-- **PR4: health prober** — background reachability loop + health badges; then
-  deprecate `code_with`/`peer_consult` in favor of `delegate_to`.
+- **PR4 (shipped): health prober** — a background surface probes every delegate
+  periodically (fixed interval + initial delay) into a cache that `GET /api/delegates`
+  merges in; the panel shows a live health dot. `code_with`/`peer_consult`
+  deprecated (docstrings) in favor of `delegate_to` — still functional, removed in
+  a future release.
 
 ## Consequences
 

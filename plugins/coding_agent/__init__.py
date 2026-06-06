@@ -169,6 +169,11 @@ def _build_code_with(agents: dict[str, dict], default_timeout_s: float):
     async def code_with(agent: str, task: str) -> str:
         """Delegate a coding task to a CLI coding agent and return its result.
 
+        Deprecated: prefer `delegate_to(target, query)` with an `acp` delegate
+        (the unified delegate registry, ADR 0025) — it does the same over one tool
+        alongside a2a/openai delegates, with a console panel. This tool stays for
+        back-compat and will be removed in a future release.
+
         Use this to hand a real, repo-scoped coding job — read/edit/run code,
         fix a failing test, add an endpoint — to a purpose-built coding agent
         that has its own file access, shell, and edit/verify loop. Prefer this

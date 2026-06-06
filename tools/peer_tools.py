@@ -88,6 +88,11 @@ def get_peer_tools() -> list:
     async def peer_consult(name: str, message: str) -> str:
         """Ask another agent (by peer handle) a question and return its reply.
 
+        Deprecated: prefer ``delegate_to(target, query)`` with an ``a2a`` delegate
+        (the unified delegate registry, ADR 0025) — same A2A consult over one tool
+        alongside openai/acp delegates, with a console panel. This tool stays for
+        back-compat and will be removed in a future release.
+
         Args:
             name: Peer handle (must match a configured ``PEER_<HANDLE>_URL``).
             message: The question — be specific; the peer answers from its own context.

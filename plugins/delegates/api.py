@@ -63,7 +63,19 @@ def _public_view(raw: dict) -> dict:
 
 
 def _list_payload() -> dict:
-    return {"delegates": [_public_view(r) for r in store.read_delegates_raw() if isinstance(r, dict)]}
+    from .health import health_snapshot
+
+    health = health_snapshot()
+    out = []
+    for r in store.read_delegates_raw():
+        if not isinstance(r, dict):
+            continue
+        view = _public_view(r)
+        h = health.get(view.get("name"))
+        if h:
+            view["health"] = h
+        out.append(view)
+    return {"delegates": out}
 
 
 def _validate(entry: dict):

@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are never echoed back. Saving hot-reloads, so the roster is live next turn. The
   Integrations tab appears whenever the `delegates` plugin is reachable, even with
   no other integration enabled. (`apps/web`; e2e `delegates.spec.ts`.)
+- **Delegate health prober** (ADR 0025, PR4) — a background surface probes every
+  delegate periodically (initial delay + fixed interval) into a cache that
+  `GET /api/delegates` merges in, so the panel shows a **live health dot** (green
+  reachable / red down / grey unchecked) per delegate, not just on-demand Test.
+  Completes ADR 0025. `code_with` and `peer_consult` are now **deprecated** in
+  favor of `delegate_to` (still functional; removed in a future release).
 
 ## [0.16.0] - 2026-06-06
 
