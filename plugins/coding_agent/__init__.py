@@ -6,30 +6,48 @@ and returns its result. The agent is driven over the Agent Client Protocol
 (JSON-RPC 2.0 over the child's stdio) by ``acp_client.AcpClient``.
 
 The plugin ships disabled with an empty agent list — each configured agent gets
-file + shell access in its workdir (auto-allowed, confined to that dir), so it's
-a deliberate opt-in. Enable with ``plugins: { enabled: [coding_agent] }`` and add
-agents under the ``coding_agent`` config section. See docs/guides/coding-agents.md.
+file + shell access in its workdir, so it's a deliberate opt-in. Enable with
+``plugins: { enabled: [coding_agent] }`` and add agents under the ``coding_agent``
+config section. See docs/guides/coding-agents.md.
+
+Per-agent safety controls (ADR 0024):
+- ``permissions`` — by-kind permission policy the client applies to the coding
+  agent's ``session/request_permission`` requests: ``auto`` (allow all, default),
+  ``allowlist`` (allow all but deny ``execute``/``delete``), or ``readonly``
+  (allow only read-like kinds). Overridable with ``allow_kinds`` / ``deny_kinds``.
+- ``confirm`` — when true, ``code_with`` asks the operator (``ask_human``) to
+  approve *before* each call to that agent (a per-call consent gate). Per-action
+  live HITL is deferred — it would need to pause a blocking subprocess session,
+  which LangGraph's resume model can't do mid-tool.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Callable
 
 from langchain_core.tools import tool
-
-from tools.fallbacks import with_fallback
 
 from .acp_client import AcpClient, AcpError
 
 log = logging.getLogger("protoagent.plugins.coding_agent")
 
-# One client (subprocess + session) per agent, keyed by its launch signature so a
-# config change spins up a fresh client. Module-global so the session persists
-# across graph builds / turns; a per-agent lock serializes turns (a session is a
-# single conversation — ``task_batch`` must not interleave two prompts on one).
+# One client (subprocess + session) per agent, keyed by its launch + policy
+# signature so a config change spins up a fresh client. Module-global so the
+# session persists across graph builds / turns; a per-agent lock serializes turns
+# (a session is a single conversation — ``task_batch`` must not interleave two
+# prompts on one).
 _CLIENTS: dict[tuple, AcpClient] = {}
 _LOCKS: dict[str, asyncio.Lock] = {}
+
+_VALID_POLICIES = {"auto", "allowlist", "readonly"}
+# ACP tool-call kinds treated as read-only (safe under ``readonly``).
+_READONLY_KINDS = {"read", "search", "fetch", "think", "glob", "grep", "list"}
+# Risky kinds denied by ``allowlist`` unless explicitly allowed.
+_DEFAULT_DENY = {"execute", "delete"}
+# Resume values that count as approval for the ``confirm`` gate.
+_APPROVALS = {"y", "yes", "approve", "approved", "ok", "okay", "allow", "proceed", "go"}
 
 
 def _normalize_agents(raw) -> dict[str, dict]:
@@ -54,6 +72,10 @@ def _normalize_agents(raw) -> dict[str, dict]:
             log.warning("[coding_agent] %s: args must be a list — ignoring", name)
             args = []
         env = entry.get("env") if isinstance(entry.get("env"), dict) else None
+        policy = str(entry.get("permissions", "auto")).strip().lower() or "auto"
+        if policy not in _VALID_POLICIES:
+            log.warning("[coding_agent] %s: unknown permissions %r — using 'auto'", name, policy)
+            policy = "auto"
         agents[name] = {
             "name": name,
             "command": command,
@@ -61,13 +83,59 @@ def _normalize_agents(raw) -> dict[str, dict]:
             "workdir": workdir,
             "env": {str(k): str(v) for k, v in env.items()} if env else None,
             "timeout_s": entry.get("timeout_s"),
+            "permissions": policy,
+            "allow_kinds": [str(k).lower() for k in (entry.get("allow_kinds") or [])],
+            "deny_kinds": [str(k).lower() for k in (entry.get("deny_kinds") or [])],
+            "confirm": bool(entry.get("confirm", False)),
         }
     return agents
 
 
+def _make_permission(spec: dict) -> Callable[[dict], str | None]:
+    """Build the ACP permission resolver for an agent: given a request's params,
+    return the optionId to select (or None to cancel/deny). Decides per the
+    agent's ``permissions`` policy, using the request's ``toolCall.kind``."""
+    policy = spec["permissions"]
+    allow_set = set(spec["allow_kinds"])
+    deny_set = set(spec["deny_kinds"])
+
+    def _allowed(kind: str) -> bool:
+        if policy == "readonly":
+            return kind in (allow_set or _READONLY_KINDS)
+        if policy == "allowlist":
+            if kind in (deny_set or _DEFAULT_DENY):
+                return False
+            return kind in allow_set if allow_set else True
+        return True  # auto
+
+    def resolver(params: dict) -> str | None:
+        options = params.get("options") or []
+        kind = str(((params.get("toolCall") or {}).get("kind") or "")).lower()
+        allow = _allowed(kind)
+        prefix = "allow" if allow else "reject"
+        for opt in options:
+            if str(opt.get("kind", "")).startswith(prefix):
+                return opt.get("optionId")
+        # No option of the desired kind: allow ⇒ fall back to the first option;
+        # deny ⇒ cancel (None).
+        if allow:
+            return options[0].get("optionId") if options else None
+        log.info("[coding_agent/%s] denied %r action (policy=%s)", spec["name"], kind or "?", policy)
+        return None
+
+    return resolver
+
+
+def _cache_key(spec: dict) -> tuple:
+    return (
+        spec["name"], spec["command"], tuple(spec["args"]), spec["workdir"],
+        spec["permissions"], tuple(sorted(spec["allow_kinds"])), tuple(sorted(spec["deny_kinds"])),
+    )
+
+
 def _client_for(spec: dict) -> AcpClient:
     """Get-or-create the cached client for an agent spec."""
-    key = (spec["name"], spec["command"], tuple(spec["args"]), spec["workdir"])
+    key = _cache_key(spec)
     client = _CLIENTS.get(key)
     if client is None:
         client = AcpClient(
@@ -76,19 +144,28 @@ def _client_for(spec: dict) -> AcpClient:
             cwd=spec["workdir"],
             env=spec["env"],
             name=spec["name"],
+            permission=_make_permission(spec),
         )
         _CLIENTS[key] = client
     return client
 
 
+def _approved(decision) -> bool:
+    return str(decision).strip().lower() in _APPROVALS
+
+
 def _build_code_with(agents: dict[str, dict], default_timeout_s: float):
-    """Build the ``code_with`` tool, closing over the configured agents."""
+    """Build the ``code_with`` tool, closing over the configured agents.
+
+    Not wrapped in ``with_fallback``: the ``confirm`` gate calls ``interrupt()``,
+    whose control-flow exception that wrapper would swallow. Expected failures
+    return error strings; the I/O is guarded locally as the equivalent net.
+    """
     listing = ", ".join(
         f"`{name}` (in `{spec['workdir']}`)" for name, spec in agents.items()
     )
 
     @tool
-    @with_fallback("The coding agent did not return a result.")
     async def code_with(agent: str, task: str) -> str:
         """Delegate a coding task to a CLI coding agent and return its result.
 
@@ -118,23 +195,37 @@ def _build_code_with(agents: dict[str, dict], default_timeout_s: float):
         if not str(task).strip():
             return "Error: `task` is empty — give the coding agent a concrete instruction."
 
+        # Per-call consent gate (before any side effect, so re-execution on resume
+        # is idempotent). interrupt() parks the turn as input-required.
+        if spec["confirm"]:
+            from langgraph.types import interrupt
+
+            decision = interrupt({
+                "question": (
+                    f"Allow coding agent '{agent}' to work in {spec['workdir']}?\n\n"
+                    f"Task: {task}\n\nReply 'yes' to proceed, anything else to decline."
+                )
+            })
+            if not _approved(decision):
+                return f"Declined: the operator did not approve running '{agent}' on this task."
+
         lock = _LOCKS.setdefault(agent, asyncio.Lock())
         timeout = float(spec.get("timeout_s") or default_timeout_s)
         client = _client_for(spec)
 
         async def _narrate(title: str) -> None:
-            # PR1: log narration. A later PR streams these onto A2A working frames.
+            # Log narration. A later PR streams these onto A2A working frames.
             log.info("[coding_agent/%s] %s", agent, title)
 
-        async with lock:
-            try:
-                answer = await client.prompt(
-                    task, progress_callback=_narrate, timeout=timeout
-                )
-            except AcpError as exc:
-                # Drop the cached client so the next call relaunches cleanly.
-                _CLIENTS.pop((spec["name"], spec["command"], tuple(spec["args"]), spec["workdir"]), None)
-                return f"Error: {agent} (coding agent) failed: {exc}"
+        try:
+            async with lock:
+                answer = await client.prompt(task, progress_callback=_narrate, timeout=timeout)
+        except AcpError as exc:
+            _CLIENTS.pop(_cache_key(spec), None)  # drop so the next call relaunches
+            return f"Error: {agent} (coding agent) failed: {exc}"
+        except Exception as exc:  # noqa: BLE001 — local safety net (with_fallback is dropped)
+            log.warning("[coding_agent/%s] unexpected failure: %s", agent, exc)
+            return f"Error (partial result): {agent} could not complete: {type(exc).__name__}: {exc}"
         return answer or f"{agent} finished but returned no text."
 
     # The configured agent names belong in the LLM-facing description so the model

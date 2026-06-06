@@ -25,9 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deliberate opt-in; enable with `plugins: { enabled: [coding_agent] }` and
   declare agents under the `coding_agent` config section. One client (subprocess +
   session) is cached per agent so follow-up calls continue the same thread.
-  PR1 is synchronous (final answer returned; `tool_call` titles logged); live
-  narration onto A2A working frames + HITL permission policy land next.
+  Synchronous (final answer returned; `tool_call` titles logged).
   See [the guide](docs/guides/coding-agents.md).
+- **Coding-agent permission controls** (ADR 0024) — each configured agent takes a
+  by-kind permission policy applied to the coding agent's `session/request_permission`
+  requests: `auto` (allow all, default), `allowlist` (allow all but
+  `execute`/`delete`), or `readonly` (read-like kinds only) — overridable with
+  `allow_kinds` / `deny_kinds`. Plus a per-call consent gate (`confirm: true`)
+  that asks the operator via `ask_human` before each `code_with` call. Ships
+  agent recipes for protoCLI, Claude Code, Codex, and Gemini CLI. (Per-action
+  live HITL is deferred — pausing a blocking subprocess session mid-turn is
+  incompatible with LangGraph's resume model; use `readonly`/`allowlist` for
+  deterministic per-action control.)
 
 ## [0.15.1] - 2026-06-05
 
