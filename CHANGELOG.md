@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deps (`requires_pip` is declared, installed explicitly); it refuses to shadow a
   built-in, rejects a repo with no manifest, drops git metadata, skips submodules,
   and supports an optional `plugins.sources.allow` allowlist. Manifest gains
-  `requires_pip` / `repository` / `homepage` / `min_protoagent_version`. Console
-  panel + capability-review/audit land in follow-up slices. See
+  `requires_pip` / `repository` / `homepage` / `min_protoagent_version`. A console
+  **Plugins panel** (Settings → Integrations, PR2) installs from a URL, lists
+  installed plugins with their manifest + declared capabilities for review, shows
+  enabled state + the "enable in config + restart" hint, and uninstalls — backed by
+  `/api/plugins/installed|install` + `DELETE /api/plugins/{id}`. Capability
+  audit-logging + dep install + allowlist enforcement land in PR3. See
   [ADR 0027](docs/adr/0027-install-plugins-from-git-url.md).
 
 ## [0.19.0] - 2026-06-06
