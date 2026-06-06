@@ -11,7 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.17.0] - 2026-06-06
+### Fixed
+- **Brand favicon** — every surface now shows the canonical protoLabs icon (the
+  violet `#9b87f2` bot outline) instead of a leftover Qwen-template placeholder
+  (a teal `#14b8a6` "Q" in `static/favicon.svg` + the PWA icons, and an off-brand
+  `#7c3aed` outline in the console). Replaced the favicon across `static/`,
+  `docs/public/`, and `apps/web/public/` with the brand mark from
+  [protoContent](https://github.com/protoLabsAI/protoContent)'s design system;
+  fixed the PWA `manifest.json` theme color (`#14b8a6` → `#9b87f2`) and dropped
+  `maskable` from the transparent icons. Added a root `/favicon.svg` + `/favicon.ico`
+  route so a deployed agent's base URL shows the mark, not a 404. Forks inherit the
+  fix on sync.
 
 ### Added
 - **Unified delegate registry** (ADR 0025, PR1) — a new opt-in `delegates` plugin
