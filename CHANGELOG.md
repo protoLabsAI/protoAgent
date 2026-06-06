@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-06
+
 ### Added
 - **Unified delegate registry** (ADR 0025, PR1) — a new opt-in `delegates` plugin
   gives the agent one tool, `delegate_to(target, query)`, over a hot-swappable
