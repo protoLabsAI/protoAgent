@@ -24,4 +24,9 @@ fi
 # module with the install dir on PYTHONPATH so the package (and its sibling
 # top-level modules: paths, events, graph, …) resolve, while keeping the
 # agent's workspace (/sandbox) as the working directory.
-exec env PYTHONPATH="/opt/protoagent${PYTHONPATH:+:$PYTHONPATH}" python -m server
+#
+# Bind all interfaces inside the container — the boundary is the published port
+# + network policy, not the in-container bind. (The server defaults to loopback
+# for local/desktop runs; PROTOAGENT_HOST overrides either way.)
+exec env PYTHONPATH="/opt/protoagent${PYTHONPATH:+:$PYTHONPATH}" \
+    python -m server --host "${PROTOAGENT_HOST:-0.0.0.0}"

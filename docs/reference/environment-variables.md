@@ -29,6 +29,7 @@ Every env var the template reads at runtime.
 | Variable | Default | What |
 |---|---|---|
 | `PROTOAGENT_UI` | `full` | UI deployment tier (or `--ui`): `full` (Gradio + React console + API/A2A), `console` (console + API/A2A, no Gradio), `none` (API + A2A + `/metrics` only — the lean headless stack). The Docker image defaults to `none`. |
+| `PROTOAGENT_HOST` | `127.0.0.1` | Bind address (or `--host`). **Defaults to loopback** so a local/desktop run isn't exposed on all interfaces — the operator/console API (`/api/*`, `/api/chat`, `/v1/*`) is otherwise reachable by anything that can hit the port. The container entrypoint + deploy manifests set `0.0.0.0` because their boundary is the published port + network policy, not the in-container bind. Binding non-loopback **without** an A2A auth token logs a security warning at startup. |
 | `PROTOAGENT_HEADLESS` | (unset) | **Deprecated** alias for `PROTOAGENT_UI=console` (or `--headless`). |
 | `PROTOAGENT_HEADLESS_SETUP` | (unset) | Set `1`/`true` to auto-complete setup from a validated config even outside the `none` tier (no wizard). The `none` tier implies this. |
 
