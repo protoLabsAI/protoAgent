@@ -713,6 +713,25 @@ export const api = {
     });
   },
 
+  // Reconcile a turn against the server's durable task (A2A tasks/get). Used to
+  // self-heal a chat message stuck in `streaming` after the stream was
+  // interrupted (reload, network blip, a stale tab) — the server task is the
+  // source of truth. Returns the normalized state + the final answer text (empty
+  // until terminal).
+  async getTask(taskId: string): Promise<{ state: string; text: string }> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "tasks/get", params: { id: taskId } },
+    });
+    const result = res.result;
+    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
+      | NonNullable<A2AFrame["result"]>
+      | undefined;
+    if (!task) return { state: "", text: "" };
+    const state = (task.status?.state || "").toString();
+    return { state, text: textFromTerminalTask(task) };
+  },
+
   // Notes + Beads are agent-global (one persistent store each) — no project
   // scope. The project / allowed-dirs list is purely the filesystem fence.
   getNotes() {

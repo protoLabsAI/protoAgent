@@ -191,6 +191,9 @@ export type ChatMessage = {
   toolCalls?: ToolCall[];
   createdAt?: number;
   status?: "streaming" | "done" | "error";
+  /** A2A task id for this turn — persisted so a stuck `streaming` message can be
+   *  reconciled against the server's task state on reload (self-heal). */
+  taskId?: string;
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required
