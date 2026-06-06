@@ -60,6 +60,7 @@ export default defineConfig({
             { text: "Discord surface", link: "/guides/discord" },
             { text: "Google (Gmail + Calendar)", link: "/guides/google" },
             { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
+            { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
