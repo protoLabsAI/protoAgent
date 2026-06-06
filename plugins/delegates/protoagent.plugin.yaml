@@ -1,0 +1,39 @@
+id: delegates
+name: Delegate Registry
+version: 0.1.0
+description: >-
+  A unified, hot-swappable registry of the agents and endpoints your agent can
+  talk to — fleet A2A agents, OpenAI-compatible model endpoints, and ACP coding
+  agents — behind one `delegate_to(target, query)` tool. Manage them in config
+  (and, from PR2/PR3, a console panel) without a restart. See ADR 0025 and
+  docs/guides/delegates.md.
+
+  Declare delegates in a top-level `delegates:` list (a list, ORBIS-style — not a
+  plugin config section). Ships DISABLED; enable with
+  `plugins: { enabled: [delegates] }`.
+
+  Example (langgraph-config.yaml):
+    delegates:
+      - name: helm
+        type: a2a
+        description: Chief of staff — planning, fleet coordination.
+        url: https://helm.example/a2a
+        auth: { scheme: bearer }        # token in secrets.yaml / *_env
+      - name: opus
+        type: openai
+        description: Heavy reasoning model.
+        url: https://api.proto-labs.ai/v1
+        model: protolabs/reasoning
+      - name: proto
+        type: acp
+        description: Terminal coding agent for this repo.
+        command: proto
+        args: ["--acp"]
+        workdir: ~/dev/my-repo
+        permissions: allowlist
+enabled: false
+
+# Declarative only (not yet enforced) — surfaced in the console for transparency.
+capabilities:
+  network: ["*"]            # reaches the configured agents/endpoints
+  filesystem: workdir       # acp delegates do local I/O in their workdir

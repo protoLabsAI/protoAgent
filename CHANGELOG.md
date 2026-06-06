@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Unified delegate registry** (ADR 0025, PR1) — a new opt-in `delegates` plugin
+  gives the agent one tool, `delegate_to(target, query)`, over a hot-swappable
+  roster of the agents and endpoints it can talk to: fleet **A2A agents**,
+  OpenAI-compatible **model endpoints** (ask another model), and **ACP coding
+  agents**. One adapter per type (the acp adapter reuses the ADR 0024 `AcpClient`;
+  the a2a adapter reuses the `peer_tools` JSON-RPC path), each exposing a field
+  schema. Declare delegates in a top-level `delegates:` list; editing it +
+  Save & Reload swaps the roster live (no restart). Unifies what `code_with`
+  (acp) and `peer_consult` (a2a) did and adds model-endpoint delegation. Ships
+  disabled; enable with `plugins: { enabled: [delegates] }`. A REST CRUD API and a
+  console panel to manage delegates from the UI land in follow-up slices.
+  See [the guide](docs/guides/delegates.md).
+
 ## [0.16.0] - 2026-06-06
 
 ### Added

@@ -33,3 +33,4 @@ decision, numbered, never deleted (supersede instead).
 | [0022](./0022-activity-provenance-feed.md) | Activity is a provenance feed, not a second chat | Accepted |
 | [0023](./0023-server-decomposition.md) | Decompose server.py: AppState + composition root | Accepted |
 | [0024](./0024-spawn-cli-coding-agents-acp.md) | Spawn CLI coding agents over ACP (`code_with`) | Accepted (PR1 + PR3) |
+| [0025](./0025-unified-delegate-registry-and-panel.md) | Unified delegate registry + hot-swappable panel (`delegate_to`) | Accepted (sliced; PR1) |
