@@ -39,7 +39,13 @@ export const RUNTIME_STATUS = {
     {
       id: "boardy", name: "Boardy", version: "0.1.0", enabled: true, loaded: true, tools: [], skills: 0,
       views: [
-        { id: "board", label: "Board", icon: "LayoutDashboard", path: "/plugins/boardy/board" },
+        {
+          id: "board", label: "Board", icon: "LayoutDashboard", path: "/plugins/boardy/board",
+          tabs: [
+            { id: "open", label: "Open", path: "/plugins/boardy/board?tab=open" },
+            { id: "done", label: "Done", path: "/plugins/boardy/board?tab=done" },
+          ],
+        },
         { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
       ],
     },
