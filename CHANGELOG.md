@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Chat self-heals an interrupted stream** (console). A chat turn whose stream
+  was cut off — page reload, network blip, or a stale tab — left the assistant
+  message stuck "streaming" (spinner) **forever**, even after the agent's turn
+  completed server-side. The turn's A2A task id is now persisted on the message,
+  and on load a stuck `streaming` message **reconciles against the durable server
+  task** (`tasks/get`): it finalizes with the completed answer (flipping any
+  running tool cards to done), surfaces a failure, or briefly polls if the turn is
+  genuinely still running — instead of spinning indefinitely. e2e:
+  `chat-reconcile.spec.ts`.
 - **Chat continuity across navigation** (console). Switching from the Chat tab to
   another surface (Activity/Studio/Settings/…) **unmounted** `ChatSurface` — which
   tore down the still-mounted session pool, and its unmount cleanup aborted the
