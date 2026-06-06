@@ -130,7 +130,7 @@ question. Handle short factual queries yourself.
 
 ## 5. Turn subagents off entirely
 
-If your agent is simple enough that subagents are pure overhead, flip `include_subagents=False` when the graph is built. In `server.py::_init_langgraph_agent`:
+If your agent is simple enough that subagents are pure overhead, flip `include_subagents=False` when the graph is built. In `server/agent_init.py::_init_langgraph_agent`:
 
 ```python
 _graph = create_agent_graph(

@@ -72,7 +72,7 @@ A webhook URL is an outbound HTTP call this agent makes with a shared secret att
 
 ...the agent would happily POST task payloads (potentially with `Authorization: Bearer <secret>`) to any of them.
 
-`_is_safe_webhook_url` in `a2a_handler.py` resolves the URL's hostname once and rejects anything that lands in a private range. It's not a full DNS-rebinding defence, but it closes the "just use an RFC1918 literal" vector. Operator allowlists (`PUSH_NOTIFICATION_ALLOWED_HOSTS`) bypass the check for trusted docker-network targets that would otherwise fail.
+`is_safe_webhook_url` in `a2a_stores.py` resolves the URL's hostname once and rejects anything that lands in a private range. It's not a full DNS-rebinding defence, but it closes the "just use an RFC1918 literal" vector. Operator allowlists (`PUSH_NOTIFICATION_ALLOWED_HOSTS`) bypass the check for trusted docker-network targets that would otherwise fail.
 
 ## Task lifecycle
 

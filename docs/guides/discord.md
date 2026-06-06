@@ -85,7 +85,7 @@ GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | MESSAGE_CONTENT`.
 Discord ships as a **first-party plugin** (`plugins/discord/`, ADR 0018/0019) —
 the gateway, the `test-discord` route, the outbound tools, and this `discord`
 config section are all declared by `plugins/discord/protoagent.plugin.yaml`, not
-wired in `server.py`. Disable it entirely with `plugins: { disabled: [discord] }`,
+wired into the core `server/` package. Disable it entirely with `plugins: { disabled: [discord] }`,
 or replace it with your own ingress plugin — no core edit. See [Plugins](./plugins.md).
 
 The token, admin list, and on/off toggle are set **in the app** (Settings →
