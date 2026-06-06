@@ -129,8 +129,10 @@ Mounted by the plugin router:
   0024 `AcpClient`), the `delegate_to` tool, config-driven hot-reload, tests. No
   API/panel yet; configured via YAML. `code_with`/`peer_consult` untouched this
   slice.
-- **PR2: CRUD REST API** — the endpoints above + atomic config/secrets writes +
-  reload trigger + `probe()` for Test + `/delegate-types` schema.
+- **PR2 (shipped): CRUD REST API** — the endpoints above + config/secrets writes
+  (inline secrets → `secrets.yaml` `delegate_secrets` overlay) + reload trigger +
+  `probe()` for Test + `/delegate-types` schema. Mounted by the plugin router at
+  `/api/delegates*` (operator-console posture).
 - **PR3: React panel** — Delegates settings view in `apps/web` (type picker,
   generic form from the schema, Test button, list with status).
 - **PR4: health prober** — background reachability loop + health badges; then
