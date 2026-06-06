@@ -29,3 +29,22 @@ test("conversation survives navigating away and back (surface stays mounted)", a
   await expect(page.locator(".chat-stage")).toBeVisible();
   await expect(page.locator(".message-user")).toHaveText(/remember this message/);
 });
+
+test("tool-call cards survive navigating away and back", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+
+  // This prompt makes the mock stream a web_search tool-call card.
+  await composer.fill("search for AI coding agents");
+  await composer.press("Enter");
+  const card = page.locator(".tool-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".tool-card-name")).toHaveText("web_search");
+
+  // Leave and return — the tool card must still be there (not torn down).
+  await rail(page, "Activity");
+  await expect(page.locator(".tool-card")).toHaveCount(1); // still in the DOM while away
+  await rail(page, "Chat");
+  await expect(page.locator(".tool-card").first().locator(".tool-card-name")).toHaveText("web_search");
+});
