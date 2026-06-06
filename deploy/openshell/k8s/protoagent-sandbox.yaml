@@ -27,7 +27,9 @@ spec:
       containers:
         - name: protoagent
           image: ghcr.io/protolabsai/protoagent:latest
-          command: ["python", "server.py", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010)
+          # server.py is now the server/ package (ADR 0023) — launch as a module.
+          # PYTHONPATH=/opt/protoagent is baked as an image ENV so it survives this override.
+          command: ["python", "-m", "server", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010)
           ports:
             - containerPort: 7870
           env:
