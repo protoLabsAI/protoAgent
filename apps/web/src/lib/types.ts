@@ -58,7 +58,19 @@ export type RuntimeStatus = {
     tools: string[];
     skills: number;
     error?: string;
+    // Console surfaces (ADR 0026): rail views the plugin contributes.
+    views?: PluginView[];
   }[];
+};
+
+// A plugin-contributed console surface (ADR 0026): a rail icon opening an iframe
+// of `path` (served by the plugin), with optional sub-tabs.
+export type PluginView = {
+  id: string;
+  label: string;
+  icon?: string; // a lucide-react icon name
+  path: string;
+  tabs?: { id: string; label: string; path: string }[];
 };
 
 export type SlashCommand = {
