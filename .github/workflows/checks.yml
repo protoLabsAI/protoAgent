@@ -71,6 +71,33 @@ jobs:
           . .venv/bin/activate
           python -m pytest tests/ -q
 
+  live-smoke:
+    name: A2A live smoke (lean tier)
+    runs-on: namespace-profile-protolabs-linux
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install lean (core) deps
+        # requirements-core.txt is the PRODUCTION image's dependency set (the
+        # `--ui none` tier). Installing it here — not the full requirements.txt —
+        # also guards the lean-image import gap class (e.g. the FastAPI-missing
+        # bug that only push-to-main caught, #426).
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements-core.txt
+      - name: Boot the real server vs a fake model + drive a real A2A turn
+        # Catches the green-but-wire-broken class unit/mock tests miss — CRLF SSE
+        # framing, A2A routing + version negotiation, agent-card build, lean boot.
+        run: |
+          . .venv/bin/activate
+          python scripts/live_smoke.py
+
   web-e2e:
     name: Web E2E smoke
     runs-on: namespace-profile-protolabs-linux
