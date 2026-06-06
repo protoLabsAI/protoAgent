@@ -443,7 +443,10 @@ class LangGraphConfig:
         mcp = data.get("mcp", {})
         plugins = data.get("plugins", {})
         identity = data.get("identity", {})
-        a2a = data.get("a2a", {})
+        # `or {}` (not a default arg): a section present but empty/commented in
+        # YAML parses to None, and `.get(...)` on the default arg wouldn't catch
+        # that — the example ships an all-commented `a2a:` block.
+        a2a = data.get("a2a") or {}
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
