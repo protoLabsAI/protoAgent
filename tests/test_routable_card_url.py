@@ -8,8 +8,6 @@ local/desktop runs still advertise loopback correctly.
 
 from __future__ import annotations
 
-import types
-
 import pytest
 
 import server.a2a as a2a
