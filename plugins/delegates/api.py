@@ -117,6 +117,17 @@ def build_router():
 
     @router.post("/api/delegates/test")
     async def _test(entry: dict = Body(...)):
+        # Testing a SAVED delegate (the per-row button sends just {name, type}) →
+        # probe its stored config. Testing a draft from the form → use the draft
+        # (its fields override the stored base). Either way, fill in the secret.
+        name = str(entry.get("name", "")).strip()
+        if name:
+            stored = next(
+                (e for e in store.read_delegates_raw() if isinstance(e, dict) and e.get("name") == name),
+                None,
+            )
+            if stored:
+                entry = {**stored, **entry}
         adapter = ADAPTERS.get(str(entry.get("type", "")))
         if adapter is None:
             raise HTTPException(400, f"unknown type {entry.get('type')!r}")

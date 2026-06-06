@@ -127,6 +127,16 @@ def test_test_endpoint_unknown_type_400(client):
     assert client.post("/api/delegates/test", json={"type": "nope"}).status_code == 400
 
 
+def test_test_endpoint_probes_saved_delegate_by_name(client):
+    # The per-row Test button sends only {name, type}; the endpoint must probe the
+    # STORED config (command/workdir), not fail on the missing fields.
+    import sys
+    client.post("/api/delegates", json={"name": "proto", "type": "acp",
+                                        "command": sys.executable, "workdir": "/tmp"})
+    r = client.post("/api/delegates/test", json={"name": "proto", "type": "acp"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
 def test_public_view_redacts_secrets_including_nested_env():
     raw = {
         "name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp",
