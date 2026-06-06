@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-06
+
 ### Added
 - **Token-by-token answer streaming** (console + A2A). The agent's answer now
   streams into the chat bubble as the model writes it, instead of landing all at
