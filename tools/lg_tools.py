@@ -278,12 +278,25 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
         return "Error: httpx not installed — cannot fetch URLs."
 
     try:
+        # Disable auto-redirects and follow manually so each hop's host is
+        # re-checked against egress — otherwise a public URL that 30x-redirects
+        # to http://169.254.169.254/ would bypass the SSRF guard above.
         async with httpx.AsyncClient(
-            follow_redirects=True, timeout=15, headers={
+            follow_redirects=False, timeout=15, headers={
                 "User-Agent": "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)",
             },
         ) as client:
             resp = await client.get(url)
+            hops = 0
+            while resp.is_redirect and hops < 5:
+                nxt = str(resp.url.join(resp.headers.get("location") or ""))
+                if not (nxt.startswith("http://") or nxt.startswith("https://")):
+                    return f"Error: refusing non-http(s) redirect to {nxt!r}"
+                blocked = egress.check_url(nxt)
+                if blocked:
+                    return blocked
+                resp = await client.get(nxt)
+                hops += 1
     except httpx.HTTPError as e:
         return f"Error: fetch failed: {e}"
 
