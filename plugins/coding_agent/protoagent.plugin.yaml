@@ -1,0 +1,45 @@
+id: coding_agent
+name: CLI Coding Agent (ACP)
+version: 0.1.0
+description: >-
+  Let the lead agent spawn a CLI coding agent — protoCLI (`proto`), Claude Code,
+  Codex, Gemini CLI — and hand it a real coding job (read/edit/run code in a
+  repo), then get the result back. Adds one tool, `code_with(agent, task)`, that
+  drives the coding agent over ACP (Agent Client Protocol: JSON-RPC 2.0 over the
+  child's stdio). See ADR 0024 and docs/guides/coding-agents.md.
+
+  Ships DISABLED with an EMPTY agent list — enable it AND configure agents
+  explicitly, because each agent gets file + shell access in its workdir
+  (auto-allowed, confined to that dir). Enable with
+  `plugins: { enabled: [coding_agent] }`.
+enabled: false
+
+# Declarative only (not yet enforced) — surfaced in the console for transparency.
+# A spawned coding agent does real local I/O within its configured workdir.
+capabilities:
+  network: ["*"]            # the coding agent may fetch/install as it works
+  filesystem: workdir       # confined to each agent's configured workdir
+
+# Plugin config (ADR 0019) — claims the top-level `coding_agent` section.
+# `agents` is a list (round-trips through YAML); it is intentionally NOT a
+# Settings field — coding agents are declared in config, not the Settings UI,
+# because each one grants local file/shell authority and deserves a deliberate
+# edit. Only `default_timeout_s` is exposed as a scalar Setting.
+config_section: coding_agent
+config:
+  # Default per-turn timeout (seconds). Coding is slow; override per agent.
+  default_timeout_s: 600
+  # No agents by default — you MUST add your own (see the guide). Example:
+  #   agents:
+  #     - name: proto             # the name the LLM passes to code_with(agent=…)
+  #       command: proto          # binary on PATH
+  #       args: ["--acp"]         # ACP server mode
+  #       workdir: ~/dev/my-repo  # session cwd — the confinement boundary
+  #       # env: { SOME_KEY: value }   # optional extra env, merged over process env
+  #       # timeout_s: 900             # optional per-agent override
+  agents: []
+settings:
+  - key: default_timeout_s
+    label: "Default coding turn timeout (s)"
+    type: number
+    description: "Per-turn timeout for a coding agent. Coding is slow — 600s+ is typical."

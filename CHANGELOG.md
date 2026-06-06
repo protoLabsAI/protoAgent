@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Spawn CLI coding agents over ACP** — a new opt-in `coding_agent` plugin
+  (ADR 0024) adds a `code_with(agent, task)` tool that hands a real, repo-scoped
+  coding job to a purpose-built CLI coding agent (protoCLI `proto`, Claude Code,
+  Codex, Gemini CLI) and returns its result. protoAgent is the
+  [ACP](https://agentclientprotocol.com) *client* — it launches the agent as a
+  subprocess and drives one session over JSON-RPC 2.0 on its stdio
+  (`initialize` → `session/new` → `session/prompt`), accumulating the agent's
+  message as the answer. The ACP client is a port of ORBIS's canonical
+  implementation. Ships **disabled with no agents configured** — each agent gets
+  file + shell access in its (config-pinned, auto-allowed) workdir, so it's a
+  deliberate opt-in; enable with `plugins: { enabled: [coding_agent] }` and
+  declare agents under the `coding_agent` config section. One client (subprocess +
+  session) is cached per agent so follow-up calls continue the same thread.
+  PR1 is synchronous (final answer returned; `tool_call` titles logged); live
+  narration onto A2A working frames + HITL permission policy land next.
+  See [the guide](docs/guides/coding-agents.md).
+
 ## [0.15.1] - 2026-06-05
 
 ### Fixed
