@@ -101,6 +101,12 @@ def get_peer_tools() -> list:
         import httpx
 
         url = f"{base.rstrip('/')}/a2a"
+        # Opt-in SSRF/CIDR allowlist (#572): when configured, the peer must
+        # resolve into the allowlist. Unset ⇒ unrestricted (today's behavior).
+        import security
+        _blocked = security.check_url(url)
+        if _blocked:
+            return _blocked.replace("destination", f"peer {name!r}", 1)
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"

@@ -107,7 +107,17 @@ def is_safe_webhook_url(url: str) -> bool:
 
     The allowlist is re-read on each call so an operator can widen trust via
     env without a restart (and so tests can flip it with monkeypatch).
+
+    When the opt-in ``security.callback_allowlist`` (#572) is configured, it
+    becomes the policy: allow iff the destination resolves entirely into the
+    allowlist. This intentionally overrides the default private-IP denylist (so
+    an operator can permit a specific internal/tailnet range) and rejects
+    everything outside it. Unset ⇒ the default denylist below.
     """
+    import security
+    if security.is_enabled():
+        return security.is_allowed(url)
+
     allowed_hosts, allowed_cidrs = _parse_allowlist()
 
     try:

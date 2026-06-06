@@ -401,6 +401,13 @@ class LangGraphConfig:
     # for the generated OpenShell network policy (scripts/gen_openshell_policy).
     egress_allowed_hosts: list[str] = field(default_factory=list)
 
+    # Opt-in CIDR allowlist for outbound A2A destinations — push callbacks +
+    # peer_consult (#572). Empty/unset = today's behavior (callbacks keep their
+    # default private-IP denylist; peer_consult unrestricted). When set, an
+    # outbound destination is allowed iff every resolved IP is inside a listed
+    # CIDR. Enforced via ``security.set_callback_allowlist``.
+    security_callback_allowlist: list[str] = field(default_factory=list)
+
     def __post_init__(self):
         # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
         # boot the same agent against different models without editing config
@@ -548,6 +555,7 @@ class LangGraphConfig:
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
+            security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
             plugin_config=_resolve_plugin_config(data, secrets, p.parent),
         )
 

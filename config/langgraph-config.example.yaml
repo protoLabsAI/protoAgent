@@ -101,6 +101,17 @@ a2a:
   #     # result_mime: application/vnd.protolabs.triage-v1+json
   #     # output_schema: { type: object, properties: { ... }, required: [ ... ] }
 
+# Outbound A2A SSRF guard (#572) — opt-in CIDR allowlist for the destinations
+# the agent POSTs to: push-notification callbacks (caller-supplied) + peer_consult
+# (PEER_<HANDLE>_URL). Empty/unset = today's behavior (callbacks keep their
+# default private-IP denylist; peer_consult is unrestricted). When set, a
+# destination is allowed only if every resolved IP falls inside a listed CIDR —
+# e.g. lock outbound to your tailnet / private fleet network.
+security:
+  # callback_allowlist:
+  #   - 100.64.0.0/10   # tailnet
+  #   - 10.0.0.0/8      # private fleet
+
 # Workflows — reusable declarative multi-step subagent recipes (ADR 0002),
 # run via the run_workflow tool. Bundled examples ship in the repo workflows/
 # dir; `dir` is the writable root for user/agent-emitted recipes (same
