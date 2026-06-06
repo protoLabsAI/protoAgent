@@ -225,7 +225,7 @@ def _clear_terminal_hook():
 
 @pytest.mark.asyncio
 async def test_send_message_runs_to_completed_with_text_artifact():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "hello ")
         yield ("text", "world")
         yield ("done", "hello world")
@@ -245,7 +245,7 @@ async def test_send_message_runs_to_completed_with_text_artifact():
 async def test_terminal_artifact_carries_all_extensions_in_order():
     """text → worldstate-delta → cost-v1 → confidence-v1, matching the order
     the hand-rolled handler emitted (consumers read parts in order)."""
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "done text")
         yield ("usage", {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001})
         yield ("delta", {"domain": "board", "path": "data.backlog", "op": "inc", "value": 1})
@@ -271,7 +271,7 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
 @pytest.mark.asyncio
 async def test_no_extension_parts_when_nothing_to_report():
     """A bare text completion yields only the text part — no empty DataParts."""
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "just text")
 
     app = _build_app(stream)
@@ -284,7 +284,7 @@ async def test_no_extension_parts_when_nothing_to_report():
 
 @pytest.mark.asyncio
 async def test_error_event_lands_task_failed():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "partial")
         yield ("error", "boom")
 
@@ -299,7 +299,7 @@ async def test_error_event_lands_task_failed():
 
 @pytest.mark.asyncio
 async def test_input_required_parks_task_with_question():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "thinking… ")
         yield ("input_required", {"question": "Approve the merge?"})
         yield ("done", "should not reach")  # runner must stop at input_required
@@ -320,7 +320,7 @@ async def test_tool_events_surface_as_tool_call_dataparts():
     GetTask poll only sees the collapsed terminal state)."""
     import json
 
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("tool_start", {"id": "t1", "name": "file_bug", "input": {"x": 1}})
         yield ("tool_end", {"id": "t1", "name": "file_bug", "output": "BUG-9"})
         yield ("done", "filed")
@@ -369,7 +369,7 @@ async def test_input_required_form_carries_hitl_datapart():
         "steps": [{"id": "env", "label": "Environment", "type": "string"}],
     }
 
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("input_required", form)
         yield ("done", "must not reach")
 
@@ -398,7 +398,7 @@ async def test_terminal_hook_fires_turn_outcome_on_completion():
     outcomes: list[TurnOutcome] = []
     set_terminal_hook(outcomes.append)
 
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("usage", {"input_tokens": 30, "output_tokens": 12, "cost_usd": 0.002, "model": "claude-x"})
         yield ("tool_start", {"id": "t", "name": "n"})
         yield ("done", "answer")
@@ -423,7 +423,7 @@ async def test_terminal_hook_fires_failed_outcome_on_error():
     outcomes: list[TurnOutcome] = []
     set_terminal_hook(outcomes.append)
 
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("error", "kaboom")
 
     app = _build_app(stream)
@@ -438,7 +438,7 @@ async def test_terminal_hook_fires_failed_outcome_on_error():
 
 @pytest.mark.asyncio
 async def test_missing_bearer_token_returns_401():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "x")
 
     app = _build_app(stream, bearer="secret-token")
@@ -449,7 +449,7 @@ async def test_missing_bearer_token_returns_401():
 
 @pytest.mark.asyncio
 async def test_invalid_bearer_token_returns_401():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "x")
 
     app = _build_app(stream, bearer="secret-token")
@@ -462,7 +462,7 @@ async def test_invalid_bearer_token_returns_401():
 
 @pytest.mark.asyncio
 async def test_valid_bearer_token_passes():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "x")
 
     app = _build_app(stream, bearer="secret-token")
@@ -476,7 +476,7 @@ async def test_valid_bearer_token_passes():
 
 @pytest.mark.asyncio
 async def test_rejected_origin_returns_403():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "x")
 
     app = _build_app(stream, allowed_origins="https://example.com")
@@ -489,7 +489,7 @@ async def test_rejected_origin_returns_403():
 
 @pytest.mark.asyncio
 async def test_allowed_origin_passes():
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "x")
 
     app = _build_app(stream, allowed_origins="https://example.com,https://other.com")
