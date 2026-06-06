@@ -385,3 +385,26 @@ export type KnowledgeChunk = {
   finding_type: string | null;
   created_at: string | null;
 };
+
+// Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
+export type DelegateFieldSpec = {
+  key: string;
+  label: string;
+  kind: string; // text | secret | args | path | number | textarea | select
+  required: boolean;
+  help: string;
+  placeholder: string;
+  options: string[];
+  default?: unknown;
+};
+export type DelegateTypeSpec = { type: string; label: string; blurb: string; fields: DelegateFieldSpec[] };
+export type DelegateView = {
+  name: string;
+  type: string;
+  description: string;
+  configured: boolean;
+  error: string | null;
+  has_secret: boolean;
+  [key: string]: unknown;
+};
+export type DelegateProbe = { ok: boolean | null; latency_ms?: number; error?: string; detail?: string };

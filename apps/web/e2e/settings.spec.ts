@@ -17,11 +17,13 @@ async function category(page, name) {
 
 test("groups are organized into a category sub-nav; Agent leads", async ({ page }) => {
   await openSettings(page);
-  // Category sub-nav from the mock schema: Agent · Behavior · System.
+  // Category sub-nav from the mock schema: Agent · Behavior · System, plus
+  // Integrations (surfaced because the delegates plugin is reachable — ADR 0025).
   expect(await page.locator(".settings-subnav button").allTextContents()).toEqual([
     "Agent",
     "Behavior",
     "System",
+    "Integrations",
   ]);
   // Agent is the default — only its sections show (Model + Routing), not System's.
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);

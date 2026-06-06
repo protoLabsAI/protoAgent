@@ -14,9 +14,23 @@ This unifies what used to be three separate things — `peer_consult` (a2a),
 `code_with` (acp), and "no way to ask another model" — into one hot-swappable
 roster.
 
-> **Where this is going:** delegates are managed by **config** (below) and a
-> **REST API** (below). A **console panel** to add/edit/test/remove them from the
-> UI (PR3) builds on the API. See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
+Manage delegates three ways: the **console panel** (Settings → Integrations →
+Delegates), a **REST API**, or **config** — all hot-swappable (changes apply on
+the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
+
+## Manage in the console (panel)
+
+With the plugin enabled, open **Settings → Integrations → Delegates**. The panel:
+
+- **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
+  marker, and a per-row **Test** button (reachability probe);
+- **adds** one via a **type picker** (A2A agent / Model endpoint / Coding agent)
+  and a form generated from each type's field schema;
+- **edits / deletes** existing ones; secrets you enter are routed to
+  `secrets.yaml` and never shown back (the form says *"set — leave blank to keep"*).
+
+Saving writes the config + secret and hot-reloads, so the new roster is live on
+the next turn.
 
 ## Enable it
 

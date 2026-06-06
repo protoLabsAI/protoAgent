@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 import {
   ACTIVITY_HISTORY,
   buildFrames,
+  DELEGATES,
+  DELEGATE_TYPES,
   GOALS,
   INBOX_ITEMS,
   NOTES_WORKSPACE,
@@ -100,6 +102,10 @@ function handleApiGet(pathname) {
       };
     case "/api/settings/schema":
       return { groups: SETTINGS_SCHEMA };
+    case "/api/delegate-types":
+      return DELEGATE_TYPES;
+    case "/api/delegates":
+      return DELEGATES;
     case "/api/workflows":
       return { workflows: WORKFLOWS };
     case "/api/activity":

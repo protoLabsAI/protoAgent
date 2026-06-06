@@ -133,8 +133,10 @@ Mounted by the plugin router:
   (inline secrets → `secrets.yaml` `delegate_secrets` overlay) + reload trigger +
   `probe()` for Test + `/delegate-types` schema. Mounted by the plugin router at
   `/api/delegates*` (operator-console posture).
-- **PR3: React panel** — Delegates settings view in `apps/web` (type picker,
-  generic form from the schema, Test button, list with status).
+- **PR3 (shipped): React panel** — `DelegatesSection` in `apps/web` under
+  Settings → Integrations (list + type picker + schema-driven form + Test button +
+  secret handling). Surfaces the Integrations tab whenever the plugin is reachable
+  even with no schema-driven integration enabled. e2e: `delegates.spec.ts`.
 - **PR4: health prober** — background reachability loop + health badges; then
   deprecate `code_with`/`peer_consult` in favor of `delegate_to`.
 

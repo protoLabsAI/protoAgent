@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a `delegate_secrets` overlay keyed `<name>.<field>` — never echoed back or kept
   in tracked config), then hot-reload so the new roster is live next turn. Same
   operator-console posture as `/api/config`.
+- **Delegate management panel** (ADR 0025, PR3) — a **Delegates** view in the
+  console under **Settings → Integrations**: lists delegates with type/secret/
+  status badges + a per-row **Test** probe; adds one via a type picker
+  (A2A agent / Model endpoint / Coding agent) and a form generated from each
+  type's field schema; edits/deletes; secrets entered route to `secrets.yaml` and
+  are never echoed back. Saving hot-reloads, so the roster is live next turn. The
+  Integrations tab appears whenever the `delegates` plugin is reachable, even with
+  no other integration enabled. (`apps/web`; e2e `delegates.spec.ts`.)
 
 ## [0.16.0] - 2026-06-06
 
