@@ -11,16 +11,20 @@ import {
   Gauge,
   Github,
   Inbox,
+  LayoutDashboard,
   Loader2,
   MessageSquare,
   PanelRight,
   Plus,
+  Puzzle,
   Save,
   Settings2,
+  Sparkles,
   Target,
   Undo2,
   Trash2,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -37,7 +41,7 @@ import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
-import { api } from "../lib/api";
+import { api, apiUrl } from "../lib/api";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { NotesWorkspace } from "../lib/types";
@@ -51,7 +55,20 @@ import { runtimeStatusQuery } from "../lib/queries";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
-type Surface = "chat" | "activity" | "studio" | "knowledge" | "system" | "settings";
+// Core surfaces are the fixed literals; plugin views (ADR 0026) add dynamic
+// surfaces keyed `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal
+// autocomplete while allowing those runtime keys.
+type Surface = "chat" | "activity" | "studio" | "knowledge" | "system" | "settings" | (string & {});
+
+// Lucide icon names a plugin view may use for its rail glyph (ADR 0026, PR1 set;
+// PR2 widens the allowlist). Unknown/missing → a generic plugin glyph.
+const PLUGIN_VIEW_ICONS: Record<string, LucideIcon> = {
+  Sparkles, LayoutDashboard, Puzzle, Boxes, BarChart3, Database, Gauge, BookOpen, Target,
+};
+function pluginViewIcon(name?: string): ReactNode {
+  const Icon = (name && PLUGIN_VIEW_ICONS[name]) || Puzzle;
+  return <Icon size={18} />;
+}
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
 // old "Run" tab is gone and Studio is just Workflows.
@@ -138,6 +155,15 @@ export function App() {
     refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
   });
   const runtime = runtimeQ.data ?? null;
+
+  // Plugin-contributed rail surfaces (ADR 0026): each enabled plugin's declared
+  // views become a dynamic rail icon (keyed plugin:<id>:<viewId>) whose panel is
+  // an iframe of the page the plugin serves. PR1 thin vertical — PR2 generalizes
+  // the rail into a full registry.
+  const pluginRail = (runtime?.plugins ?? [])
+    .filter((p) => p.enabled && p.views?.length)
+    .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
+  const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
   // brandName() display-cases a bare lower-case slug (e.g. `gina` → `Gina`).
@@ -563,6 +589,16 @@ export function App() {
             icon={<Settings2 size={18} />}
             onClick={() => setSurface("settings")}
           />
+          {/* Plugin-contributed rail surfaces (ADR 0026) — dynamic, from runtime-status. */}
+          {pluginRail.map((v) => (
+            <RailButton
+              key={v.key}
+              active={surface === v.key}
+              label={v.label}
+              icon={pluginViewIcon(v.icon)}
+              onClick={() => setSurface(v.key)}
+            />
+          ))}
         </aside>
 
         <main className="stage">
@@ -628,6 +664,20 @@ export function App() {
           {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
           {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "settings" ? <SettingsSurface /> : null}
+
+          {/* Plugin view (ADR 0026) — the plugin serves the page; the console
+              hosts it in a same-origin iframe. ChatSurface stays mounted above
+              (hidden) so chat continuity holds while a plugin view is open. */}
+          {activePluginView ? (
+            <section className="panel stage-panel plugin-view">
+              <iframe
+                className="plugin-view-frame"
+                src={apiUrl(activePluginView.path)}
+                title={activePluginView.label}
+                sandbox="allow-scripts allow-forms allow-same-origin"
+              />
+            </section>
+          ) : null}
         </main>
 
         <aside className="right-panel">

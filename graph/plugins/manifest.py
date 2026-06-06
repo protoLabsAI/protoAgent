@@ -40,6 +40,11 @@ class PluginManifest:
     config: dict = field(default_factory=dict)
     secrets: list[str] = field(default_factory=list)
     settings: list[dict] = field(default_factory=list)
+    # Console surfaces (ADR 0026) — each entry adds a left-rail icon opening a
+    # full view (an iframe of a page the plugin serves at `path`). Declared as
+    # data so it's known without importing the plugin, and surfaced to the
+    # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?}.
+    views: list[dict] = field(default_factory=list)
 
 
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
@@ -74,6 +79,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     cfg = data.get("config")
     secrets = data.get("secrets")
     settings = data.get("settings")
+    views = data.get("views")
     return PluginManifest(
         id=pid,
         name=name,
@@ -88,4 +94,6 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         config=cfg if isinstance(cfg, dict) else {},
         secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
         settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
+        views=[v for v in views if isinstance(v, dict) and v.get("id") and v.get("path")]
+        if isinstance(views, (list, tuple)) else [],
     )

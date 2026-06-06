@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugin-contributed console surfaces** (ADR 0026, PR1) — a plugin can declare
+  a `views:` block in its manifest (`{id, label, icon, path}`); the console reads
+  it from `/api/runtime/status` and renders a **dynamic left-rail icon** whose
+  panel is a same-origin **iframe** of the page the plugin serves (e.g.
+  `/plugins/<id>/view`) — so a fork gets its own rail dashboard with no console
+  rebuild. Surfaces are keyed `plugin:<id>:<viewId>`; chat stays mounted (its
+  continuity holds) while a plugin view is open. The `hello` example plugin now
+  ships a demo view. Thin vertical — the full data-driven rail registry +
+  view-tabs + auth/theming bridge land in follow-up slices. See
+  [ADR 0026](docs/adr/0026-plugin-contributed-console-surfaces.md).
+
 ## [0.18.0] - 2026-06-06
 
 ### Added
