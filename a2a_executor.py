@@ -153,9 +153,11 @@ class ProtoAgentExecutor(AgentExecutor):
         stream_fn_factory: Callable[..., AsyncGenerator[tuple[str, Any], None]],
         structured_finalizer: Callable[[str, str], Any] | None = None,
     ) -> None:
-        # ``stream_fn_factory(text, context_id, *, resume, caller_trace)`` →
-        # async generator of (event_type, payload). This is protoAgent's
-        # ``_chat_langgraph_stream``.
+        # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
+        # request_metadata)`` → async generator of (event_type, payload). This is
+        # protoAgent's ``_chat_langgraph_stream``; ``request_metadata`` is the
+        # merged A2A request metadata, passed through so the backend's thread_id
+        # resolver (#571) can scope memory off it.
         self._stream_factory = stream_fn_factory
         # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict
         # or None (#476). Injected by server.py so the executor stays decoupled
@@ -247,6 +249,7 @@ class ProtoAgentExecutor(AgentExecutor):
         try:
             async for event_type, payload in self._stream_factory(
                 text, context.context_id, resume=resume, caller_trace=caller_trace,
+                request_metadata=_md,
             ):
                 if event_type == "text":
                     accumulated += payload
