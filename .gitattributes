@@ -2,4 +2,8 @@
 # both sides add entries at the top. `merge=union` keeps BOTH sides instead of
 # raising a conflict — a fork's entries and upstream's coexist (re-order/dedupe
 # by hand at release time if needed). Confirmed pain across every downstream port.
+#
+# FORKS: switch this to `CHANGELOG.md merge=ours` (+ `git config merge.ours.driver
+# true` per clone) so an upstream sync keeps YOUR curated changelog instead of
+# splicing upstream's whole changelog back in. See docs/guides/upstream-sync.md.
 CHANGELOG.md merge=union

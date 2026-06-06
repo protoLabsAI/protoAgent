@@ -1,5 +1,10 @@
 # Note: syncing roxy from upstream protoAgent
 
+> **Superseded by the fork-agnostic guide:
+> [docs/guides/upstream-sync.md](../../guides/upstream-sync.md)** — it adds the two
+> lessons this note predates: **merge (never squash)** upstream syncs, and switch
+> the fork's `CHANGELOG.md` to `merge=ours`. Kept for the roxy-specific context below.
+
 **Topic:** operational playbook for porting protoAgent work into the roxy fork.
 **Status:** current as of 2026-06-02 (roxy caught up through #476 via roxy#27).
 
