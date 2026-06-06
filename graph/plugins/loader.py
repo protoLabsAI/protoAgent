@@ -155,6 +155,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             "loaded": False,
             "tools": [],
             "skills": 0,
+            # Console surfaces (ADR 0026) — the rail reads these from
+            # /api/runtime/status to render a dynamic icon + iframe per view.
+            "views": list(manifest.views) if enabled else [],
         }
 
         if not enabled:
