@@ -12,6 +12,7 @@ import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField } from "../lib/types";
 import { DelegatesSection } from "./DelegatesSection";
+import { PluginsSection } from "./PluginsSection";
 
 // Generic settings surface — renders whatever GET /api/settings/schema returns,
 // so it stays in sync as config grows. Saving POSTs the changed fields and the
@@ -43,12 +44,6 @@ function SettingsBody() {
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
 
-  // The delegates plugin (ADR 0025) contributes no settings-schema group — it's a
-  // CRUD panel — so probe it to know whether to surface the Integrations tab even
-  // when no schema-driven integration (Discord/Google) is enabled. Shares the
-  // delegates query key, so it's deduped with DelegatesSection's list.
-  const delegatesProbe = useQuery({ queryKey: queryKeys.delegates, queryFn: () => api.delegates(), retry: false });
-
   // Category sub-nav (ADR 0020): the server tags each group with a category and
   // orders them, so we derive the ordered category list by first appearance.
   const categories = useMemo(() => {
@@ -57,9 +52,11 @@ function SettingsBody() {
       const c = g.category || "Integrations";
       if (!seen.includes(c)) seen.push(c);
     }
-    if (delegatesProbe.isSuccess && !seen.includes("Integrations")) seen.push("Integrations");
+    // Integrations always shows — the Plugins panel (ADR 0027) is core, and the
+    // delegates panel appears there when its plugin is enabled.
+    if (!seen.includes("Integrations")) seen.push("Integrations");
     return seen;
-  }, [groups, delegatesProbe.isSuccess]);
+  }, [groups]);
   const [activeCategory, setActiveCategory] = useState(categories[0] || "");
   // The active category must stay valid if the schema reshapes under us.
   const category = categories.includes(activeCategory) ? activeCategory : categories[0] || "";
@@ -252,6 +249,8 @@ function SettingsBody() {
         {/* The delegate registry (ADR 0025) isn't part of the settings schema —
             it's a CRUD surface, rendered as a custom panel under Integrations. */}
         {category === "Integrations" ? <DelegatesSection /> : null}
+        {/* Git-installed plugins (ADR 0027) — install/manage from a URL, under Integrations. */}
+        {category === "Integrations" ? <PluginsSection /> : null}
       </div>
     </>
   );
