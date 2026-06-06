@@ -63,7 +63,7 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 | `subsystem` | KnowledgeMiddleware retrieval, hot-memory injection |
 | `goal` | Goal mode: set a goal, trigger the loop, assert the resulting goal state + footer |
 | `subagent` | Lead delegates open-ended work (`expected_any_tools`: `task` / `run_workflow`) |
-| `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output |
+| `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output **and** (optionally) on tool-firing — `expected_tools` / `expected_any_tools` check the audit log, so a case can require a step to have actually called a tool (e.g. a quant step that backtests, not one that only describes a backtest) |
 
 ## File layout
 
