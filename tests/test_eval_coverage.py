@@ -158,6 +158,48 @@ def test_workflow_case_fails_on_empty_output():
     assert not res.passed and "empty" in res.detail
 
 
+def test_workflow_case_asserts_expected_tool_fired(monkeypatch):
+    monkeypatch.setattr(verify, "audit_now", lambda: "T0")
+    monkeypatch.setattr(verify, "audit_entries_since", lambda since: _audit("backtest_strategy"))
+    client = _FakeClient("# Desk call\nGO — Sharpe 1.2, beat buy-and-hold.")
+    case = {
+        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
+        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "expected_tools": ["backtest_strategy"],
+    }
+    res = asyncio.run(runner._run_workflow_case(client, case))
+    assert res.passed, res.detail
+
+
+def test_workflow_case_fails_when_expected_tool_missing(monkeypatch):
+    # A step that writes/describes code instead of calling the tool: the output
+    # reads fine, but the tool never fired in the audit log — must fail.
+    monkeypatch.setattr(verify, "audit_now", lambda: "T0")
+    monkeypatch.setattr(verify, "audit_entries_since", lambda since: _audit("web_search"))
+    monkeypatch.setattr(runner, "_AUDIT_POLL_DEADLINE_S", 0.0)
+    client = _FakeClient("# Desk call\nNO-GO — here's the backtest code I'd run: ...")
+    case = {
+        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
+        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "expected_tools": ["backtest_strategy"],
+    }
+    res = asyncio.run(runner._run_workflow_case(client, case))
+    assert not res.passed and "backtest_strategy" in res.detail
+
+
+def test_workflow_case_asserts_any_tool_fired(monkeypatch):
+    monkeypatch.setattr(verify, "audit_now", lambda: "T0")
+    monkeypatch.setattr(verify, "audit_entries_since", lambda since: _audit("factor_zoo"))
+    client = _FakeClient("# Factors\nmomentum alive, IR 1.1.")
+    case = {
+        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
+        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "expected_any_tools": ["factor_eval", "factor_zoo"],
+    }
+    res = asyncio.run(runner._run_workflow_case(client, case))
+    assert res.passed, res.detail
+
+
 def test_workflow_kind_is_dispatchable():
     assert "workflow" in runner._RUNNERS
 
