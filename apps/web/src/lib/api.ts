@@ -132,8 +132,27 @@ export function isDesktopWebview(): boolean {
   }
 }
 
+/** Operator bearer token, set in localStorage (`protoagent.authToken`). Sent on
+ * every fetch-based API + A2A call so a token-configured deployment's console
+ * authenticates against the server guard. Blank ⇒ no header — the default
+ * local/desktop case (no token) stays open. (The `/api/events` EventSource is
+ * exempt server-side since EventSource can't set headers.) */
+export function authToken(): string {
+  try {
+    return window.localStorage.getItem("protoagent.authToken") || "";
+  } catch {
+    return "";
+  }
+}
+
+function applyAuth(headers: Headers): Headers {
+  const t = authToken();
+  if (t) headers.set("Authorization", `Bearer ${t}`);
+  return headers;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers = new Headers(options.headers);
+  const headers = applyAuth(new Headers(options.headers));
   let body: BodyInit | undefined;
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -578,7 +597,7 @@ export const api = {
       try {
         const res = await fetch(apiUrl("/api/chat"), {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
           signal: handlers.signal,
           body: JSON.stringify({ message, session_id: sessionId }),
         });
@@ -608,7 +627,7 @@ export const api = {
     const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const response = await fetch(apiUrl("/a2a"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", "A2A-Version": "1.0" },
+      headers: applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" })),
       signal: handlers.signal,
       // A2A 1.0 (a2a-sdk): the streaming RPC is `SendStreamingMessage` (0.3's
       // `message/stream` is gone → -32601 Method not found, the cause of a
