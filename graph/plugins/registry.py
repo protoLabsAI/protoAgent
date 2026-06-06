@@ -52,6 +52,7 @@ class PluginRegistry:
         self.surfaces: list[dict] = []    # {"name", "start", "stop"}
         self.subagents: list = []         # SubagentConfig instances
         self.mcp_servers: list = []       # factories: config -> entry dict | None
+        self.thread_id_resolver = None    # (request_metadata, session_id) -> str (#571)
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -88,6 +89,19 @@ class PluginRegistry:
                         self.plugin_id, spec)
             return
         self.a2a_skills.append(spec)
+
+    def register_thread_id_resolver(self, fn) -> None:
+        """Override how the checkpointer ``thread_id`` is derived for each turn
+        (#571): ``fn(request_metadata: dict, session_id: str) -> str``. Lets a
+        fork scope memory off request metadata (e.g. per-project working memory)
+        without editing ``server/chat.py``. One resolver wins — last registration
+        across enabled plugins (a warning fires if more than one is contributed).
+        Unset ⇒ the template default (``a2a:<session_id>``)."""
+        if not callable(fn):
+            log.warning("[plugins] %s: register_thread_id_resolver needs a callable: %r",
+                        self.plugin_id, fn)
+            return
+        self.thread_id_resolver = fn
 
     def register_router(self, router, prefix: str | None = None) -> None:
         """Mount a FastAPI ``APIRouter`` on the server (ADR 0018).

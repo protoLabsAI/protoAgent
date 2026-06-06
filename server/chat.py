@@ -31,6 +31,28 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 
 
+def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
+    """Resolve the checkpointer ``thread_id`` for this turn (#571).
+
+    Template default keys A2A sessions by conversation id (``a2a:<session_id>``),
+    prefixed to isolate them from Gradio chat in the shared checkpointer. A fork
+    can register a resolver ``(request_metadata, session_id) -> str`` via a plugin
+    (``register_thread_id_resolver``) to scope memory off request metadata — e.g.
+    per-project working memory — with ZERO edits to this file. Falls back to the
+    default when no resolver is registered or a custom one errors / returns falsy.
+    """
+    resolver = getattr(STATE, "thread_id_resolver", None)
+    if resolver is not None:
+        try:
+            tid = resolver(request_metadata or {}, session_id)
+            if tid:
+                return str(tid)
+            log.warning("[thread_id] resolver returned falsy; using default")
+        except Exception:
+            log.exception("[thread_id] custom resolver failed; using default")
+    return f"a2a:{session_id}"
+
+
 def _setup_required_message() -> list[dict[str, Any]]:
     """Returned by chat endpoints when the wizard hasn't been run.
 
@@ -383,6 +405,7 @@ async def _chat_langgraph_stream(
     *,
     caller_trace: dict | None = None,
     resume: bool = False,
+    request_metadata: dict | None = None,
 ):
     """Async generator — yields (event_type, payload) tuples from the
     LangGraph run. Consumed by ``a2a_executor.ProtoAgentExecutor`` to
@@ -399,6 +422,10 @@ async def _chat_langgraph_stream(
     A2A message. When present, Langfuse stamps ``caller_trace_id`` +
     ``caller_span_id`` so operators can cross-reference this trace to
     the dispatching agent's trace in the same project.
+
+    ``request_metadata`` is the merged A2A request metadata; it's handed to
+    the pluggable ``thread_id`` resolver (#571) so a fork can scope memory off
+    it (e.g. per-project working memory) without editing this file.
     """
     import tracing
     from langchain_core.messages import HumanMessage
@@ -489,9 +516,11 @@ async def _chat_langgraph_stream(
 
             # thread_id keys this session's history in the checkpointer (bound
             # at compile time in create_agent_graph). The prefix isolates A2A
-            # sessions from Gradio chat in the shared MemorySaver.
+            # sessions from Gradio chat in the shared MemorySaver. Derivation is
+            # a pluggable seam (#571): a fork registers a resolver to scope memory
+            # off request metadata (e.g. per-project) without editing this file.
             config = {
-                "configurable": {"thread_id": f"a2a:{session_id}"},
+                "configurable": {"thread_id": _resolve_thread_id(request_metadata, session_id)},
                 "recursion_limit": 200,
             }
 
