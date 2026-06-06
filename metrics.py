@@ -22,6 +22,8 @@ _compactions = None
 _tool_calls = None
 _tool_latency = None
 _active_sessions = None
+_a2a_turns = None
+_a2a_turn_latency = None
 
 
 def _prefix() -> str:
@@ -32,6 +34,7 @@ def _prefix() -> str:
 def init():
     global _enabled, _llm_calls, _llm_latency, _llm_tokens, _llm_cache_tokens, _llm_cost
     global _tools_deferred, _compactions, _tool_calls, _tool_latency, _active_sessions
+    global _a2a_turns, _a2a_turn_latency
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -77,6 +80,17 @@ def init():
         _active_sessions = Gauge(
             f"{p}_active_sessions", "Active chat sessions",
         )
+        # A2A turn outcomes — the durable signal for "turns are failing" alerting
+        # straight off /metrics (state ∈ completed|failed|canceled|…). Low
+        # cardinality. Paired latency histogram for turn duration.
+        _a2a_turns = Counter(
+            f"{p}_a2a_turns_total", "A2A turn outcomes by terminal state",
+            ["state"],
+        )
+        _a2a_turn_latency = Histogram(
+            f"{p}_a2a_turn_seconds", "A2A turn wall-clock duration",
+            buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300],
+        )
         _enabled = True
         print(f"[metrics] Prometheus metrics initialized (prefix={p}_)")
     except ImportError:
@@ -121,6 +135,19 @@ def record_compaction():
     fires + how often. Emitted from CountingSummarizationMiddleware."""
     if _enabled and _compactions is not None:
         _compactions.inc()
+
+
+def record_a2a_turn(state: str, duration_s: float | None = None):
+    """Count one terminal A2A turn by ``state`` (completed/failed/canceled) and,
+    when known, observe its wall-clock duration. Emitted from
+    ``server/a2a.py::_record_a2a_telemetry`` so /metrics can alert on a failing
+    or backed-up agent without scraping the telemetry SQL store."""
+    if not _enabled:
+        return
+    if _a2a_turns is not None:
+        _a2a_turns.labels(state=str(state or "unknown")).inc()
+    if _a2a_turn_latency is not None and duration_s is not None and duration_s >= 0:
+        _a2a_turn_latency.observe(duration_s)
 
 
 def record_tool_call(tool_name: str, success: bool, latency_s: float):

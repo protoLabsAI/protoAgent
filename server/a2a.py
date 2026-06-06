@@ -198,6 +198,14 @@ def _record_a2a_telemetry(outcome) -> None:
     """Write one per-turn telemetry row from an executor ``TurnOutcome``
     (ADR 0006 Slice 2). No-op when the telemetry store is off; best-effort so a
     failure never affects the turn."""
+    # Prometheus turn counter (independent of the SQL telemetry store) — lets
+    # /metrics alert on a failing/backed-up agent. Best-effort.
+    try:
+        import metrics
+        metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
+    except Exception:
+        pass
+
     store = STATE.telemetry_store
     if store is None:
         return
