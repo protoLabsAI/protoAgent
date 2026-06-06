@@ -28,6 +28,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pu = sub.add_parser("uninstall", help="remove a git-installed plugin")
     pu.add_argument("id")
     sub.add_parser("sync", help="re-clone locked plugins at their pinned SHA (reproducible set)")
+    pd = sub.add_parser("install-deps", help="pip-install a plugin's declared requires_pip (explicit code-exec)")
+    pd.add_argument("id")
     return p
 
 
@@ -35,7 +37,8 @@ def run_plugin_cli(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.cmd == "install":
-            s = installer.install(args.url, args.ref, force=args.force)
+            s = installer.install(args.url, args.ref, force=args.force,
+                                  allow=installer.configured_allowlist())
             print(f"✓ installed {s['id']} v{s['version']} @ {s['resolved_sha'][:10]}")
             if s["description"]:
                 print(f"  {s['description']}")
@@ -64,9 +67,14 @@ def run_plugin_cli(argv: list[str]) -> int:
             print(f"✓ uninstalled {args.id}")
             return 0
         if args.cmd == "sync":
-            for r in installer.sync():
+            for r in installer.sync(allow=installer.configured_allowlist()):
                 extra = f" ({r['error']})" if r.get("error") else ""
                 print(f"  {r['id']}: {r['status']}{extra}")
+            return 0
+        if args.cmd == "install-deps":
+            deps = installer.install_deps(args.id)
+            print(f"✓ installed {len(deps)} dep(s) for {args.id}: {', '.join(deps)}" if deps
+                  else f"{args.id} declares no deps")
             return 0
     except installer.InstallError as exc:
         print(f"✗ {exc}", file=sys.stderr)

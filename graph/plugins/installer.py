@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,6 +85,33 @@ def _read_lock() -> dict:
 def _write_lock(data: dict) -> None:
     data["plugins"].sort(key=lambda e: e.get("id", ""))
     LOCK_PATH.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
+    """Record install/uninstall/install-deps to the audit log (ADR 0027 D5)."""
+    try:
+        from audit import audit_logger
+        audit_logger.log(
+            session_id="plugins", tool=f"plugin.{action}", args=args,
+            result_summary=summary, duration_ms=0, success=success,
+        )
+    except Exception:  # noqa: BLE001 — auditing must never block the operation
+        log.debug("[plugins] audit log failed for %s", action, exc_info=True)
+
+
+def configured_allowlist() -> list[str] | None:
+    """`plugins.sources.allow` read from the live config file (for the CLI, which
+    runs without a loaded LangGraphConfig). None = open."""
+    try:
+        import yaml
+        cfg_path = _live_config_dir() / "langgraph-config.yaml"
+        if not cfg_path.exists():
+            return None
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        allow = (((data.get("plugins") or {}).get("sources") or {}).get("allow")) or None
+        return [str(x) for x in allow] if allow else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
@@ -165,6 +193,8 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
         "resolved_sha": sha, "installed_at": datetime.now(timezone.utc).isoformat(), "by": by,
     })
     _write_lock(lock)
+    _audit("install", {"url": url, "ref": ref or "", "sha": sha, "id": pid},
+           f"installed {pid}@{sha[:10]}")
     log.info("[plugins] installed %s@%s from %s", pid, sha[:10], url)
     return summary
 
@@ -186,8 +216,33 @@ def uninstall(plugin_id: str) -> bool:
         removed = True
     if not removed:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
+    _audit("uninstall", {"id": plugin_id}, f"uninstalled {plugin_id}")
     log.info("[plugins] uninstalled %s", plugin_id)
     return True
+
+
+def install_deps(plugin_id: str) -> list[str]:
+    """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
+    step that ``install`` deliberately skips (ADR 0027 D4). Returns the deps."""
+    manifest = None
+    for base in (live_plugins_dir(), REPO_ROOT / "plugins"):
+        if (base / plugin_id / "protoagent.plugin.yaml").exists():
+            manifest = load_manifest(base / plugin_id)
+            break
+    if manifest is None:
+        raise InstallError(f"plugin {plugin_id!r} is not installed.")
+    deps = list(manifest.requires_pip)
+    if not deps:
+        return []
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "install", *deps], capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        _audit("install_deps", {"id": plugin_id, "deps": deps}, "pip install failed", success=False)
+        raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
+    _audit("install_deps", {"id": plugin_id, "deps": deps}, f"installed {len(deps)} dep(s)")
+    log.info("[plugins] installed %d dep(s) for %s", len(deps), plugin_id)
+    return deps
 
 
 def list_installed() -> list[dict]:
