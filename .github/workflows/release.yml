@@ -99,7 +99,15 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
 
+      # Build-provenance attestation needs the GitHub attestations feature, which
+      # is unavailable on private repos without a paid plan — so a fork would get
+      # a noisy red error here for a step it can't use. Opt-in (fork-friendly):
+      # set the `ATTESTATIONS_ENABLED` repo variable to `true` to run it; forks
+      # leave it unset and the step is skipped. Enable without editing this file
+      # so upstream changes don't conflict on re-sync (same pattern as
+      # `RELEASE_ENABLED`). `continue-on-error` stays as a belt-and-suspenders.
       - name: Attest build provenance
+        if: vars.ATTESTATIONS_ENABLED == 'true'
         continue-on-error: true
         uses: actions/attest-build-provenance@v1
         with:
