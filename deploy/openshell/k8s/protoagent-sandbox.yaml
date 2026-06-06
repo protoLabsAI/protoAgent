@@ -32,6 +32,19 @@ spec:
           command: ["python", "-m", "server", "--host", "0.0.0.0", "--port", "7870", "--ui", "none"]  # lean headless tier (ADR 0010); --host 0.0.0.0 because this override bypasses entrypoint.sh (the server now defaults to loopback)
           ports:
             - containerPort: 7870
+          # /healthz returns 200 only once the agent graph is compiled (503 during
+          # cold start). Readiness gates traffic until ready; liveness is generous
+          # so a slow first compile (model warm-up) can't trigger a restart loop.
+          readinessProbe:
+            httpGet: { path: /healthz, port: 7870 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 7870 }
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 6
           env:
             - name: PROTOAGENT_INSTANCE         # ADR 0004 — isolate this deployment's stores
               value: "k8s"

@@ -104,4 +104,11 @@ USER sandbox
 WORKDIR /sandbox
 
 EXPOSE 7870
+
+# Readiness/health: /healthz returns 200 only once the agent graph is compiled
+# (503 during the model-cold-start window). start-period covers the
+# frozen-sidecar / first-compile boot so a slow start isn't marked unhealthy.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+    CMD curl -fsS http://localhost:7870/healthz || exit 1
+
 CMD ["/opt/protoagent/entrypoint.sh"]
