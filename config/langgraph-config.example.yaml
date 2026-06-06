@@ -91,6 +91,11 @@ skills:
 # free-text "chat" placeholder so a fresh clone stays callable. The card `name`
 # already follows identity.name / AGENT_NAME.
 a2a:
+  # Deploy-time guard: refuse to start if the card would advertise a loopback URL
+  # (e.g. A2A_PUBLIC_URL unset on a deployed agent → http://127.0.0.1:.../a2a,
+  # unreachable to remote consumers). Leave off for local/desktop runs (loopback
+  # is correct same-host); turn ON for any agent other agents dial over the network.
+  # require_routable_url: true
   # description: "Acme Bot — turns support tickets into triaged, drafted replies."
   # skills:
   #   - id: triage_ticket

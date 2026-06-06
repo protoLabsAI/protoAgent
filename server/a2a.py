@@ -154,6 +154,42 @@ def _a2a_card_url() -> str:
     return f"{base}/a2a"
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
+
+
+def assert_routable_card_url() -> None:
+    """Fail fast at startup if the card would advertise a loopback URL (opt-in).
+
+    A *deployed* agent that advertises ``http://127.0.0.1:.../a2a`` — e.g. because
+    ``A2A_PUBLIC_URL`` wasn't set after a redeploy — is silently unreachable to any
+    remote consumer that dials the card's interface URL. That's a deployment-config
+    regression no test catches; it surfaces only at first cross-host dispatch.
+
+    When ``a2a.require_routable_url`` is set, refuse to start (exit non-zero) rather
+    than discover it later. **Off by default** — local + desktop runs *should*
+    advertise loopback (the client is same-host, and the desktop port is dynamic).
+    Deployed agents opt in via config.
+    """
+    cfg = STATE.graph_config
+    if not (cfg and getattr(cfg, "a2a_require_routable_url", False)):
+        return
+    from urllib.parse import urlparse
+
+    url = _a2a_card_url()
+    host = (urlparse(url).hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        log.critical(
+            "[a2a] refusing to start: the agent card would advertise a loopback "
+            "URL %r (host=%r), unreachable to remote consumers. "
+            "a2a.require_routable_url is set — a deployed agent must advertise its "
+            "externally-reachable address. Set A2A_PUBLIC_URL to the host other "
+            "agents reach (e.g. http://roxy:7870).",
+            url, host or "<empty>",
+        )
+        raise SystemExit(1)
+    log.info("[a2a] card URL %s is routable (require_routable_url check passed)", url)
+
+
 # Template default card description — used when a fork sets no ``a2a.description``
 # in config (#570). Forks override via config, not by editing this file.
 _DEFAULT_CARD_DESCRIPTION = (
