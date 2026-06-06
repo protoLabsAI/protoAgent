@@ -224,6 +224,7 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
     _agent_skills,
     _bearer_configured,
     _build_agent_card_proto,
+    assert_routable_card_url,
     _package_version,
     _record_a2a_telemetry,
     structured_skill_schema,
@@ -615,6 +616,10 @@ def _main():
     )
 
     a2a_card = _build_agent_card_proto()
+    # Deploy-time guard (opt-in): refuse to start if the card would advertise a
+    # loopback URL — a deployed agent that does so is silently unreachable to
+    # remote consumers. No-op unless a2a.require_routable_url is set.
+    assert_routable_card_url()
 
     # Durable SQLite-backed task + push-config stores (survive restart; 24h TTL
     # sweep on tasks). The push-config store rejects SSRF callback URLs at
