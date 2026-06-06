@@ -96,3 +96,48 @@ def test_origin_guard_rejects_unlisted_origin():
 def test_origin_guard_disabled_when_unset():
     a2a_auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
     assert _client().post("/a2a", headers={"Origin": "https://anything.example"}).status_code == 200
+
+
+# ── 3. guard covers the console + OpenAI-compat APIs (prod-readiness) ──────────
+
+
+def _client_multi() -> TestClient:
+    routes = [
+        Route(p, lambda r: PlainTextResponse("ok"), methods=["GET", "POST"])
+        for p in ("/a2a", "/api/config", "/api/events", "/v1/chat/completions", "/healthz")
+    ]
+    app = Starlette(routes=routes)
+    app.add_middleware(a2a_auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_api_and_v1_are_guarded_when_token_set(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    a2a_auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    # operator API + OpenAI-compat now require the bearer (the P0 gap)
+    assert c.post("/api/config").status_code == 401
+    assert c.post("/v1/chat/completions").status_code == 401
+    assert c.post("/a2a").status_code == 401
+    hdr = {"Authorization": "Bearer secret"}
+    assert c.post("/api/config", headers=hdr).status_code == 200
+    assert c.post("/v1/chat/completions", headers=hdr).status_code == 200
+
+
+def test_events_stream_and_healthz_stay_public_when_token_set(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    a2a_auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    # EventSource can't send a bearer; the read-only event stream is exempt.
+    assert c.get("/api/events").status_code == 200
+    # /healthz is outside the guarded prefixes (probes/scrapers stay open).
+    assert c.get("/healthz").status_code == 200
+
+
+def test_apis_open_when_no_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    a2a_auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    # default (no token) → everything open (local console keeps working)
+    for p in ("/a2a", "/api/config", "/v1/chat/completions", "/api/events", "/healthz"):
+        assert c.post(p).status_code in (200, 405)  # 405 only if method not allowed
