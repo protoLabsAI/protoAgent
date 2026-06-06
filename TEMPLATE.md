@@ -120,20 +120,29 @@ its own recursion budget.
 
 If your agent doesn't need the subagent pattern at all, delete
 the registry entry and call `create_agent_graph(config,
-include_subagents=False)` in `server.py`.
+include_subagents=False)` in `server/agent_init.py`.
 
-## 6. Rewrite the agent card
+## 6. Declare the agent card
 
-`server.py::_build_agent_card` has a placeholder card. Replace:
+Don't edit the card builder — its identity is config-driven
+(#570). Declare your `description` + `skills` in the `a2a:`
+section of `config/langgraph-config.yaml` (or contribute skills
+from a plugin via `register_a2a_skill`):
 
-- `name` and `description` with the agent's real surface
-- `skills` — each skill is what A2A callers dispatch to. IDs
-  should match what your tools can actually accomplish.
-- `capabilities.extensions` — declare any A2A extensions your
-  agent implements. `cost-v1` is declared by default because
-  the runtime emits it automatically; add `effect-domain-v1`
-  if your skills mutate shared state you want Workstacean's
-  planner to be aware of.
+```yaml
+a2a:
+  description: "What your agent does, in one line."
+  skills:
+    - id: my_skill        # what A2A callers dispatch to
+      name: My Skill
+      description: ...
+```
+
+- `name` already follows `identity.name` (the setup wizard).
+- `capabilities.extensions` — `cost-v1` is declared by default
+  (the runtime emits it automatically); add `effect-domain-v1`
+  in `server/a2a.py::_build_agent_card_proto` if your skills
+  mutate shared state Workstacean's planner should know about.
 
 ## 7. Set up the model
 
@@ -197,12 +206,12 @@ sqlite poller or a Workstacean adapter, selected at startup via env:
 
 ```bash
 # Default: local sqlite, persists at /sandbox/scheduler/<agent_name>/jobs.db
-python server.py
+python -m server
 
 # Workstacean: set both and restart
 export WORKSTACEAN_API_BASE=http://your-workstacean:3000
 export WORKSTACEAN_API_KEY=...
-python server.py
+python -m server
 ```
 
 Multi-fork safety: every job is namespaced by `AGENT_NAME`, so

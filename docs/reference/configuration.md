@@ -281,6 +281,21 @@ egress:
 
 Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fenced by running under OpenShell (see [Sandboxing & egress](../guides/sandboxing.md)).
 
+## `security`
+
+Opt-in CIDR allowlist for the outbound A2A destinations the agent POSTs to — push-notification **callbacks** (caller-supplied webhook URLs) and **`peer_consult`** (`PEER_<HANDLE>_URL`). Empty/unset = today's behavior: callbacks keep their default private-IP denylist (`a2a_stores`), `peer_consult` is unrestricted.
+
+```yaml
+security:
+  callback_allowlist:
+    - 100.64.0.0/10   # tailnet
+    - 10.0.0.0/8      # private fleet
+```
+
+| Key | Default | What |
+|---|---|---|
+| `callback_allowlist` | `[]` | CIDRs an outbound callback / peer destination may resolve into. **Empty = off.** When set it becomes the policy: a destination is allowed iff **every** resolved IP is inside a listed range (overrides the default callback denylist, so you can permit a specific internal/tailnet range; everything else is rejected). Hot-reloads. |
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback). `aux_model` is a separate, optional cheap/fast alias for non-reasoning calls.
@@ -355,6 +370,29 @@ Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) forma
 | `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` honors `PROTOAGENT_CONFIG_DIR`). |
 
 Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.
+
+## `a2a`
+
+Your fork's **A2A [agent card](agent-card.md) identity** — the advertised skills and description a caller sees. Declare them here (or contribute card skills from a plugin via `register_a2a_skill`) instead of editing `server/a2a.py`. Distinct from `skills` above: those are disk `SKILL.md` *procedural memory* retrieved at inference; these are what the *card* advertises. Omit both keys and the template ships one free-text `chat` placeholder so a fresh clone stays callable. The card `name` follows `identity.name` / `AGENT_NAME`.
+
+```yaml
+a2a:
+  description: "Acme Bot — turns support tickets into triaged, drafted replies."
+  skills:
+    - id: triage_ticket
+      name: Triage Ticket
+      description: Classify a support ticket and draft a reply.
+      tags: [support]
+      examples: ["triage ticket #1234"]
+      # Optional structured output — enforced + emitted as a typed DataPart (#476):
+      # result_mime: application/vnd.protolabs.triage-v1+json
+      # output_schema: { type: object, properties: { ... }, required: [ ... ] }
+```
+
+| Key | Default | What |
+|---|---|---|
+| `description` | template placeholder | The agent card's `description`. |
+| `skills` | one `chat` placeholder | Advertised `AgentSkill`s (`id`/`name`/`description` + optional `tags`/`examples`). A skill declaring `result_mime` + `output_schema` returns schema-enforced structured output as a typed DataPart ([#476](agent-card.md)); the MIME is advertised in its `output_modes`. |
 
 ## `mcp`
 

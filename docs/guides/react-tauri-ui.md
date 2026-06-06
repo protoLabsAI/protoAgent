@@ -100,7 +100,7 @@ apps/web/                     React + Vite operator console
   src/subagents/              manual subagent launcher
   src/lib/api.ts              FastAPI/A2A client
 
-server.py                     FastAPI API + static React asset serving
+server/                       FastAPI API + static React asset serving
 graph/agent.py                LangGraph lead + subagent runtime
 src-tauri/                    Tauri shell after web app works
 ```
@@ -117,7 +117,7 @@ npm run web:build
 npm run web:preview
 ```
 
-The built app lives under `apps/web/dist/`. `server.py` serves it at `/app`
+The built app lives under `apps/web/dist/`. the `server/` package serves it at `/app`
 when that directory contains `index.html`; otherwise the server boots without
 mounting the React surface.
 

@@ -31,8 +31,8 @@ rename / release-pipeline wiring.
 
 | Concern | Where it lives | What it does |
 |---|---|---|
-| A2A server | `a2a_handler.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
-| Agent runtime | `graph/agent.py`, `server.py` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
+| A2A server | `server/a2a.py`, `a2a_executor.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
+| Agent runtime | `graph/agent.py`, `server/` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
 | LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
 | Starter tools | `tools/lg_tools.py`, `tools/github_tools.py` | Default-on set: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 2 HITL (`ask_human`, `request_user_input`) + 4 GitHub read tools over the `gh` CLI + 4 notes + 5 memory + 3 scheduler + 4 beads + inbox/peer (conditional). Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
@@ -76,7 +76,7 @@ own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
 ```
 ┌──────────────┐     A2A JSON-RPC + SSE      ┌─────────────────┐
-│   Consumer   │ ──────────────────────────▶ │  a2a_handler    │
+│   Consumer   │ ──────────────────────────▶ │  A2A handler    │
 │  (any A2A    │                             │  (FastAPI)      │
 │   client)    │ ◀──── cost-v1 DataPart ─────│                 │
 └──────────────┘                             └────────┬────────┘
@@ -108,9 +108,9 @@ subagent `task()` delegation, and the structured-output protocol.
 | `a2a.trace` propagation | No (it's a protocol convention, not a card extension) | Yes — reads caller's Langfuse trace context from `params.metadata["a2a.trace"]` and nests this agent's trace under it |
 
 Declare additional extensions on the card in
-`server.py::_build_agent_card` when your agent's skills actually
-mutate shared state (see `effect-domain-v1` in the Workstacean
-docs for when this applies).
+`server/a2a.py::_build_agent_card_proto` when your agent's skills
+actually mutate shared state (see `effect-domain-v1` in the
+Workstacean docs for when this applies).
 
 ## Push notification support
 
@@ -130,7 +130,7 @@ The A2A handler supports both token shapes the spec permits:
 Both produce `Authorization: Bearer shared-secret` on outgoing
 webhooks. If your fork is getting 401s on callbacks, check which
 shape the consumer is sending before changing anything —
-`_extract_push_token` in `a2a_handler.py` reads both and the
+the dual-token parser in `a2a_auth.py` reads both and the
 test suite covers both.
 
 ## Observability
@@ -212,6 +212,6 @@ complete end-to-end example and cron setup.
 ## Contributing
 
 This is a template repo — bugs and improvements to the shared
-runtime (`a2a_handler.py`, `graph/agent.py`, extension support,
-release pipeline) land here. Domain-specific agent logic lives
-in the fork, not here.
+runtime (the `server/` package, `graph/agent.py`, extension
+support, release pipeline) land here. Domain-specific agent logic
+lives in the fork, not here.

@@ -32,7 +32,7 @@ not "do that thing we discussed").
 
 ## Backend selection
 
-`server.py::_build_scheduler` picks at startup:
+`server/agent_init.py::_build_scheduler` picks at startup:
 
 1. `middleware.scheduler: false` in YAML → no scheduler. The three
    tools don't ship. (Symmetric with `middleware.knowledge` /

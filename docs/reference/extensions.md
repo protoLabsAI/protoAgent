@@ -67,7 +67,7 @@ Declares the **scope of effect** of each skill so a consumer can gate higher-imp
 }
 ```
 
-Purely declarative — keep the declared radius honest with what each skill handler actually does. Uncomment the stanza in `server.py::_build_agent_card` and use your real skill IDs.
+Purely declarative — keep the declared radius honest with what each skill handler actually does. Uncomment the stanza in `server/a2a.py::_build_agent_card_proto` and use your real skill IDs.
 
 ## `hitl-mode-v1`
 
@@ -121,7 +121,7 @@ Fields:
 
 Only declare effects that actually mutate shared state. Over-declaring confuses the planner into routing your agent for goals it can't move.
 
-**Pair with runtime emission**: if you declare an effect, emit a matching `worldstate-delta-v1` DataPart when the tool succeeds at runtime (see `a2a_handler.py::TaskRecord.world_deltas`). Divergence between declared and observed mutations breaks the planner's scoring model.
+**Pair with runtime emission**: if you declare an effect, emit a matching `worldstate-delta-v1` DataPart when the tool succeeds at runtime — yield a `delta` event from the tool and the executor (`a2a_executor.py`) accumulates them onto the terminal artifact. Divergence between declared and observed mutations breaks the planner's scoring model.
 
 See `docs/extensions/effect-domain-v1` in the [protoWorkstacean repo](https://github.com/protoLabsAI/protoWorkstacean) for the full spec.
 
@@ -147,7 +147,7 @@ Emitted as a DataPart on the terminal artifact:
 }
 ```
 
-The template doesn't emit this by default because the shipped tools don't mutate anything. See `a2a_handler.py::TaskRecord.add_delta` for where to hook in.
+The template doesn't emit this by default because the shipped tools don't mutate anything. To hook in, yield a `("delta", {domain, path, op, value})` event from your tool; `a2a_executor.py` collects them into the artifact.
 
 ## `tool-call-v1`
 
@@ -180,7 +180,7 @@ Fields:
 | `input` | Truncated preview of the tool input (on `start`). Structured inputs (dict/list) are rendered as **compact JSON** so the console can pretty-print them; everything else is stringified. |
 | `output` | Truncated preview of the tool result (on `end`). Unwrapped from langchain's `ToolMessage` to its `.content` — the message repr would otherwise leak `name=`/`tool_call_id=` noise into the card. |
 
-**Producer** — `server.py::_run_turn_stream` yields structured `("tool_start"|"tool_end", {...})` tuples from langchain's `astream_events`. Inputs/outputs are coerced via `_coerce_tool_value` / `_coerce_tool_output` (JSON for structured values, `.content` for `ToolMessage`s) and truncated to `_TOOL_PREVIEW_CHARS`. The runner stores the latest on `TaskRecord.last_tool_event` and `_build_status_event` attaches it alongside the existing text status part (`🔧 name: input` / `✅ name → output`), so text-only consumers still see progress — the DataPart is purely additive and backward-compatible.
+**Producer** — `server/chat.py::_run_turn_stream` yields structured `("tool_start"|"tool_end", {...})` tuples from langchain's `astream_events`. Inputs/outputs are coerced via `_coerce_tool_value` / `_coerce_tool_output` (JSON for structured values, `.content` for `ToolMessage`s) and truncated to `_TOOL_PREVIEW_CHARS`. The runner stores the latest on `TaskRecord.last_tool_event` and `_build_status_event` attaches it alongside the existing text status part (`🔧 name: input` / `✅ name → output`), so text-only consumers still see progress — the DataPart is purely additive and backward-compatible.
 
 **Coalescing caveat** — the SSE watcher (`_watch_task`) coalesces bursts of updates, so a tool that starts and ends within a single event-loop tick may only surface one frame. Real tools are slow enough (network, I/O) that `start` and `end` land on separate frames. Consumers must tolerate a missing `start` (render the `end` as a completed card) and dedupe by `(id, phase)`.
 
@@ -220,7 +220,7 @@ Fields:
 | `created_at` | UTC ISO timestamp |
 | `source_session_id` | Provenance — which session produced the artifact |
 
-**Collection** — `a2a_handler.py` reads skills from the `_pending_skills` ContextVar at task completion and appends them as DataParts. Agents and middleware never access the ContextVar directly; they use `emit_skill_artifact()` to add and `get_pending_skills()` to read.
+**Collection** — an emitted skill is serialized by `graph/extensions/skills.py` and surfaced to A2A consumers as a DataPart on the terminal artifact (alongside being persisted to the local index). The mimeType is the contract.
 
 **Indexing** — protoAgent's own `SkillsIndex` (`graph/skills/index.py`) at `/sandbox/skills.db` picks these up on the next sweep and makes them retrievable by `KnowledgeMiddleware.load_skills(query)`. Consumers running their own skill registries can index the DataParts from the A2A stream directly — the mimeType is the contract.
 
@@ -251,11 +251,11 @@ When the caller stamps their trace context:
 }
 ```
 
-The agent reads it in `a2a_handler.py` and stamps `caller_trace_id` + `caller_span_id` into its own Langfuse trace metadata. Operators can then filter Langfuse by `metadata.caller_trace_id` to find every agent trace spawned from a single dispatch.
+The agent reads it in `server/chat.py` and stamps `caller_trace_id` + `caller_span_id` into its own Langfuse trace metadata. Operators can then filter Langfuse by `metadata.caller_trace_id` to find every agent trace spawned from a single dispatch.
 
 ## Adding a new extension
 
-1. Emit or parse in `a2a_handler.py` / `server.py`.
+1. Emit or parse in `a2a_executor.py` / `server/chat.py`.
 2. Declare on the card under `capabilities.extensions` with a URI consumers agree on.
 3. Document the shape in this file.
 4. Add a test to `tests/test_a2a_integration.py` asserting the declaration is present on the card.

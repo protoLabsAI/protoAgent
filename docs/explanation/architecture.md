@@ -4,14 +4,14 @@
 
 ```
 ┌──────────────┐     A2A JSON-RPC + SSE      ┌──────────────────┐
-│   Consumer   │ ──────────────────────────▶ │  a2a_handler.py  │
+│   Consumer   │ ──────────────────────────▶ │  A2A handler     │
 │  (any A2A    │                             │  (FastAPI app)   │
 │   client)    │ ◀──── cost-v1 DataPart ─────│                  │
 └──────────────┘                             └────────┬─────────┘
                                                       │ submits message
                                                       ▼
                                             ┌──────────────────┐
-                                            │  server.py       │
+                                            │  server/chat.py  │
                                             │  _chat_langgraph │
                                             │  _stream         │
                                             └────────┬─────────┘
@@ -47,7 +47,7 @@ A2A is a protocol, not a library. The handler owns:
 The LangGraph runtime has no idea any of this exists. It sees a message, runs a tool loop, produces output. That means:
 
 - If LangGraph's API changes, the A2A handler doesn't break.
-- If A2A's spec changes, only this file changes.
+- If A2A's spec changes, only this layer changes (the `server/a2a.py` + `a2a_executor.py` + `a2a_stores.py` modules).
 - Tests for the protocol are isolated from tests for the agent.
 
 ## Why LangGraph owns the tool loop
@@ -82,7 +82,7 @@ Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config
 
 Three independent layers defend the A2A surface. Each can be enabled or left open for local dev, but production forks should enable all three.
 
-**Bearer authentication** — `a2a_handler.py` reads `A2A_AUTH_TOKEN` at startup. When set, every A2A route (`/a2a`, `message/send`, `tasks/*`, and SSE streaming endpoints) requires `Authorization: Bearer <token>`. Comparison uses `hmac.compare_digest` so timing analysis can't leak the token. When set, the agent card advertises `securitySchemes.bearer` so consumers know to present credentials.
+**Bearer authentication** — `a2a_auth.py` reads `A2A_AUTH_TOKEN` at startup. When set, every A2A route (`/a2a`, `message/send`, `tasks/*`, and SSE streaming endpoints) requires `Authorization: Bearer <token>`. Comparison uses `hmac.compare_digest` so timing analysis can't leak the token. When set, the agent card advertises `securitySchemes.bearer` so consumers know to present credentials.
 
 **Audit redaction** — `graph/middleware/redaction.py` scrubs credentials before anything is written to `audit.jsonl` or emitted as a Langfuse span attribute. Patterns covered: `Authorization: Bearer ...`, OpenAI-style `sk-...` keys, generic `api_key=...` forms, and nested dicts keyed by well-known env var names (`OPENAI_API_KEY`, `LANGFUSE_SECRET_KEY`, `A2A_AUTH_TOKEN`, etc.). This closes the class of bugs where a tool returns a secret in its payload and it leaks into the audit trail or trace.
 
@@ -115,7 +115,7 @@ Beyond the shipped tools, three opt-in seams add capability to a *running* agent
 
 - **Tools enter via one list.** `create_agent_graph` assembles `get_all_tools()` (built-in) plus an `extra_tools` argument, then hands the combined set to the LangGraph loop. Both external sources below feed `extra_tools`, so they're indistinguishable to the model and inherit the same Audit/Langfuse middleware.
 - **MCP** (`tools/mcp_tools.py`) — configured [Model Context Protocol](/guides/mcp) servers (stdio / streamable-HTTP) are connected via `langchain-mcp-adapters`; their tools are discovered at graph-build time, namespaced `<server>__<tool>`, and appended to `extra_tools`. The client is stateless (a fresh session per call), so discovery happens once and tools are event-loop-agnostic.
-- **Plugins** (`graph/plugins/`: `loader`, `registry`, `manifest`, `host`, `pconfig`) — drop-in packages (`protoagent.plugin.yaml` + `register(registry)`) that contribute, via the registry, **tools** (→ `extra_tools`), bundled **`SKILL.md`** dirs (→ the skill index), FastAPI **routers** (mounted under `/plugins/<id>`), background **surfaces** (lifecycle-managed ingress like the Discord gateway), **subagents** (→ `SUBAGENT_REGISTRY`), and managed **MCP servers** (→ `mcp.servers[]` factory), plus their own **config / secrets / Settings** claimed as a top-level YAML section (ADR 0018/0019). A surface/route reaches the agent + event bus + live config via the plugin **host** (`registry.host`: `invoke` / `publish` / `subscribe` / `config` / `apply_settings`). They run **in-process** with the agent's privileges, so a third-party plugin is disabled by default. The first-party **Discord** ingress (`plugins/discord`, a surface + route + tools) and **Google** Gmail/Calendar integration (`plugins/google`, a managed MCP server + route) ship this way — they are **not** wired in `server.py`. See [Plugins](/guides/plugins).
+- **Plugins** (`graph/plugins/`: `loader`, `registry`, `manifest`, `host`, `pconfig`) — drop-in packages (`protoagent.plugin.yaml` + `register(registry)`) that contribute, via the registry, **tools** (→ `extra_tools`), bundled **`SKILL.md`** dirs (→ the skill index), FastAPI **routers** (mounted under `/plugins/<id>`), background **surfaces** (lifecycle-managed ingress like the Discord gateway), **subagents** (→ `SUBAGENT_REGISTRY`), and managed **MCP servers** (→ `mcp.servers[]` factory), plus their own **config / secrets / Settings** claimed as a top-level YAML section (ADR 0018/0019). A surface/route reaches the agent + event bus + live config via the plugin **host** (`registry.host`: `invoke` / `publish` / `subscribe` / `config` / `apply_settings`). They run **in-process** with the agent's privileges, so a third-party plugin is disabled by default. The first-party **Discord** ingress (`plugins/discord`, a surface + route + tools) and **Google** Gmail/Calendar integration (`plugins/google`, a managed MCP server + route) ship this way — they are **not** wired into the core `server/` package. See [Plugins](/guides/plugins).
 
 All are surfaced in `GET /api/runtime/status` (`skills`, `mcp`, `plugins` — with per-plugin route/surface/subagent counts) and load best-effort — a bad skill/server/plugin is logged and skipped, never fatal. Untrusted third-party tools belong on MCP (out-of-process) rather than in-process plugins.
 
@@ -125,7 +125,7 @@ See [LiteLLM gateway](/explanation/litellm-gateway) for the full rationale. The 
 
 ## Why streaming specifically this way
 
-`_chat_langgraph_stream` in `server.py` consumes `astream_events(v2)` and yields structured frames: `tool_start`, `tool_end`, `usage`, `done`. The A2A handler then translates those into A2A SSE frames.
+`_chat_langgraph_stream` in `server/chat.py` consumes `astream_events(v2)` and yields structured frames: `tool_start`, `tool_end`, `usage`, `done`. The A2A executor (`a2a_executor.py`) then translates those into A2A SSE frames.
 
 This extra layer of indirection exists because:
 
