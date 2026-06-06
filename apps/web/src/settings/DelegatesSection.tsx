@@ -106,6 +106,16 @@ export function DelegatesSection() {
             <div className="subagent-row" key={d.name}>
               <div>
                 <strong>
+                  {d.health ? (
+                    <span
+                      className={`delegate-health ${d.health.ok ? "ok" : d.health.ok === false ? "down" : "unknown"}`}
+                      title={d.health.ok
+                        ? `${d.health.detail || "reachable"}${d.health.latency_ms != null ? ` (${d.health.latency_ms} ms)` : ""}`
+                        : d.health.error || "unreachable"}
+                    >
+                      ●
+                    </span>
+                  ) : null}
                   {d.name} <span className="delegate-type-badge">{d.type}</span>
                   {!d.configured ? <span className="delegate-badge-warn">⚠ unconfigured</span> : null}
                   {d.has_secret ? <span className="delegate-badge-ok">secret set</span> : null}

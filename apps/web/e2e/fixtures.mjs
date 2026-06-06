@@ -481,6 +481,7 @@ export const DELEGATES = {
       name: "opus", type: "openai", description: "Heavy reasoning model.",
       configured: true, error: null, has_secret: true,
       url: "https://api.proto-labs.ai/v1", model: "protolabs/reasoning",
+      health: { ok: true, latency_ms: 42, detail: "endpoint reachable" },
     },
   ],
 };

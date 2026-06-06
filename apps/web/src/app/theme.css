@@ -3084,3 +3084,7 @@ textarea {
 .delegate-type-tile-label { font-size: 13px; font-weight: 600; }
 .delegate-type-tile-blurb { font-size: 11px; color: var(--fg-muted); }
 .delegate-field-help { font-size: 11px; color: var(--fg-muted); }
+.delegate-health { font-size: 10px; line-height: 1; }
+.delegate-health.ok { color: #46c46a; }
+.delegate-health.down { color: #e0533a; }
+.delegate-health.unknown { color: var(--fg-muted); }

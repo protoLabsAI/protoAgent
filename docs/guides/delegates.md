@@ -23,7 +23,9 @@ the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-a
 With the plugin enabled, open **Settings → Integrations → Delegates**. The panel:
 
 - **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
-  marker, and a per-row **Test** button (reachability probe);
+  marker, a **live health dot** (a background prober probes each delegate
+  periodically — green reachable / red down / grey not-yet-checked), and a per-row
+  **Test** button for an on-demand probe;
 - **adds** one via a **type picker** (A2A agent / Model endpoint / Coding agent)
   and a form generated from each type's field schema;
 - **edits / deletes** existing ones; secrets you enter are routed to
@@ -119,6 +121,6 @@ curl -s -X POST localhost:7788/api/delegates/test -d '{"type":"a2a","url":"https
 ## Relationship to `code_with` / `peer_consult`
 
 `delegate_to` supersedes them: an `acp` delegate is what `code_with` did, and an
-`a2a` delegate is what `peer_consult` did. Both older tools still work for now and
-will be deprecated once the panel lands (ADR 0025, PR4). New setups should prefer
-`delegates` + `delegate_to`.
+`a2a` delegate is what `peer_consult` did. **Both are now deprecated** (their
+docstrings say so) — they still work for back-compat and will be removed in a
+future release. New setups should use `delegates` + `delegate_to`.
