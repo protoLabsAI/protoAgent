@@ -693,6 +693,16 @@ def _main():
                     headers={"Service-Worker-Allowed": "/"},
                 )
 
+        # Root favicon so a bare browser request (the agent's base URL, not just
+        # /app) shows the brand mark instead of a 404. Both /favicon.svg and the
+        # legacy /favicon.ico path resolve to the SVG mark.
+        favicon_path = static_dir / "favicon.svg"
+        if favicon_path.exists():
+            @fastapi_app.get("/favicon.svg", include_in_schema=False)
+            @fastapi_app.get("/favicon.ico", include_in_schema=False)
+            async def _serve_favicon() -> FileResponse:
+                return FileResponse(str(favicon_path), media_type="image/svg+xml")
+
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # --- Mount Gradio at root (only the 'full' tier) ------------------------
