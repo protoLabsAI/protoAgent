@@ -19,6 +19,12 @@ config/langgraph-config.yaml
 # the wizard has been run. Not config to commit.
 config/.setup-complete
 
+# Git-installed plugins (ADR 0027) — code fetched from a URL into the live plugins
+# dir. NOT committed; it's reproducible from the committed `plugins.lock` via
+# `python -m server plugin sync`. (The lock IS committed — see !plugins.lock.)
+config/plugins/
+!plugins.lock
+
 # Local-run artifacts — autostart stdout/stderr logs + memory middleware
 # fallback directory when /sandbox is not available.
 logs/

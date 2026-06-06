@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Install plugins from a git URL** (ADR 0027, PR1) — `python -m server plugin
+  install <git-url> [--ref <tag|sha>]` clones a plugin repo into the live plugins
+  dir (already discovered by the loader), **pinned to a resolved commit SHA** and
+  recorded in a committed **`plugins.lock`** for reproducible installs
+  (`plugin sync` re-clones the exact set). Also `plugin list` / `uninstall` /
+  `sync`. Safety baked in: **install ≠ enable ≠ trust** — it only fetches code +
+  reads the manifest (data), never imports the plugin and never pip-installs its
+  deps (`requires_pip` is declared, installed explicitly); it refuses to shadow a
+  built-in, rejects a repo with no manifest, drops git metadata, skips submodules,
+  and supports an optional `plugins.sources.allow` allowlist. Manifest gains
+  `requires_pip` / `repository` / `homepage` / `min_protoagent_version`. Console
+  panel + capability-review/audit land in follow-up slices. See
+  [ADR 0027](docs/adr/0027-install-plugins-from-git-url.md).
+
 ## [0.19.0] - 2026-06-06
 
 ### Added

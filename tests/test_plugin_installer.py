@@ -1,0 +1,119 @@
+"""Git-URL plugin installer (ADR 0027) — fetch ≠ enable ≠ trust."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from graph.plugins import installer
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+
+
+def _make_plugin_repo(root: Path, pid: str = "demo_ext", manifest_extra: str = "", tag: str | None = None) -> Path:
+    repo = root / f"src-{pid}"
+    repo.mkdir(parents=True)
+    (repo / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: Demo Ext\nversion: 0.1.0\ndescription: a test plugin\n{manifest_extra}"
+    )
+    (repo / "__init__.py").write_text("def register(registry):\n    pass\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    if tag:
+        _git(repo, "tag", tag)
+    return repo
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """Point the installer's lock + install dir at a temp area (never the real repo)."""
+    monkeypatch.setattr(installer, "LOCK_PATH", tmp_path / "plugins.lock")
+    monkeypatch.setenv("PROTOAGENT_PLUGINS_DIR", str(tmp_path / "installed"))
+    return tmp_path
+
+
+def test_install_fetches_code_writes_lock_does_not_enable(env):
+    repo = _make_plugin_repo(env)
+    summary = installer.install(str(repo))
+
+    assert summary["id"] == "demo_ext"
+    assert len(summary["resolved_sha"]) == 40
+    # code landed in the live plugins dir, git metadata stripped
+    target = installer.live_plugins_dir() / "demo_ext"
+    assert (target / "protoagent.plugin.yaml").exists()
+    assert not (target / ".git").exists()
+    # lock recorded with provenance
+    locked = installer.list_installed()
+    assert locked[0]["id"] == "demo_ext" and locked[0]["present"] is True
+    assert locked[0]["resolved_sha"] == summary["resolved_sha"]
+    # install ≠ enable: nothing enabled it (no config touched, no register run)
+
+
+def test_install_pins_a_tag(env):
+    repo = _make_plugin_repo(env, tag="v1")
+    summary = installer.install(str(repo), "v1")
+    assert summary["requested_ref"] == "v1" and len(summary["resolved_sha"]) == 40
+
+
+def test_duplicate_requires_force(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    with pytest.raises(installer.InstallError, match="already installed"):
+        installer.install(str(repo))
+    installer.install(str(repo), force=True)  # ok with force
+
+
+def test_refuses_to_shadow_a_builtin(env):
+    # `hello` is a real built-in plugin in the repo — must not be installable over.
+    repo = _make_plugin_repo(env, pid="hello")
+    with pytest.raises(installer.InstallError, match="built-in"):
+        installer.install(str(repo))
+
+
+def test_repo_without_manifest_is_rejected(env, tmp_path):
+    bare = tmp_path / "src-bare"
+    bare.mkdir()
+    (bare / "README.md").write_text("not a plugin")
+    _git(bare, "init", "-q")
+    _git(bare, "add", "-A")
+    _git(bare, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x")
+    with pytest.raises(installer.InstallError, match="not a protoAgent plugin"):
+        installer.install(str(bare))
+
+
+def test_bad_url_scheme_rejected(env):
+    with pytest.raises(installer.InstallError, match="unsupported source"):
+        installer.install("ftp://evil.example/x.git")
+
+
+def test_uninstall_removes_code_and_lock(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    installer.uninstall("demo_ext")
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()
+    assert installer.list_installed() == []
+    with pytest.raises(installer.InstallError, match="not installed"):
+        installer.uninstall("demo_ext")
+
+
+def test_sync_recolones_missing_from_lock(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    # simulate a fresh checkout: code gone, lock present
+    import shutil
+    shutil.rmtree(installer.live_plugins_dir() / "demo_ext")
+    assert installer.list_installed()[0]["present"] is False
+    results = installer.sync()
+    assert results == [{"id": "demo_ext", "status": "installed"}]
+    assert (installer.live_plugins_dir() / "demo_ext").exists()
+
+
+def test_source_allowlist_blocks_offlist(env):
+    repo = _make_plugin_repo(env)
+    with pytest.raises(installer.InstallError, match="not on plugins.sources.allow"):
+        installer.install(str(repo), allow=["github.com/protoLabsAI/*"])

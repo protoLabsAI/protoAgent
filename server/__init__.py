@@ -273,6 +273,14 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 
 def _main():
 
+    # Plugin management subcommand (ADR 0027): `python -m server plugin install
+    # <git-url>` (+ list/uninstall/sync). Handled before the server argparse —
+    # it fetches code to disk and exits, never starting the server.
+    if len(sys.argv) > 1 and sys.argv[1] == "plugin":
+        from graph.plugins.cli import run_plugin_cli
+
+        raise SystemExit(run_plugin_cli(sys.argv[2:]))
+
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
     # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m
