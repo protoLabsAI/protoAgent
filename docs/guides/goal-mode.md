@@ -19,7 +19,7 @@ It's modelled on protocli's goal system but deliberately more rigorous for a lon
 4. **Not met** → the controller extracts/refreshes the agent's `<goal_plan>` checklist, then re-invokes the agent on the same thread (history preserved) with a continuation prompt that includes the verifier's reason + evidence and the current plan.
 5. This repeats until met, the **iteration budget** (`goal.max_iterations`) is spent (`exhausted`), the verifier returns the **same evidence too many times** (`goal.no_progress_limit` → `unachievable`), or the agent itself emits `<goal_unachievable reason="…"/>` (`unachievable`).
 
-The loop wraps graph invocation in `server.py` (both the A2A streaming path and the non-streaming chat path); the graph itself is unchanged.
+The loop wraps graph invocation in `server/chat.py` (both the A2A streaming path and the non-streaming chat path); the graph itself is unchanged.
 
 ## Setting a goal
 

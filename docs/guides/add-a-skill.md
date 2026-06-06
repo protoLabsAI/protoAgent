@@ -10,31 +10,22 @@ A *skill* is a named capability A2A callers can dispatch to. Skills live on the 
 
 You don't need a skill for "things the chat UI does" — the Gradio chat is already covered by the default dispatch path.
 
-## 1. Add to the card
+## 1. Declare it in config
 
-Edit the `_SKILL_SPECS` list in `server.py` (the card builder `_build_agent_card_proto` turns it into the card's `skills` via `_agent_skills()`). Each spec is a dict — this is where entries go:
+Card skills are config-driven ([#570](/reference/configuration#a2a)) — declare them in the `a2a:` section of `config/langgraph-config.yaml`, **not** by editing `server/a2a.py`. Each entry is a spec:
 
-```python
-"skills": [
-    {
-        "id": "chat",
-        "name": "Chat",
-        "description": "General-purpose chat interface.",
-        "tags": ["template"],
-        "examples": ["hello", "what can you do?"],
-    },
-    # ↓ new skill
-    {
-        "id": "summarize_pr",
-        "name": "Summarize Pull Request",
-        "description": "Fetch a GitHub PR and return a three-bullet summary of what it changes and why.",
-        "tags": ["github", "summarization"],
-        "examples": [
-            "summarize https://github.com/protoLabsAI/protoAgent/pull/64",
-        ],
-    },
-],
+```yaml
+a2a:
+  skills:
+    - id: summarize_pr
+      name: Summarize Pull Request
+      description: Fetch a GitHub PR and return a three-bullet summary of what it changes and why.
+      tags: [github, summarization]
+      examples:
+        - "summarize https://github.com/protoLabsAI/protoAgent/pull/64"
 ```
+
+The server merges these (plus any contributed by plugins via `register_a2a_skill`) and falls back to the template's `chat` placeholder when none are set. A plugin can ship card skills the same way — `registry.register_a2a_skill(spec)` — so a distributable extension carries its own advertised capabilities.
 
 **IDs are sticky**. `cost-v1` samples, `effect-domain-v1` declarations, and Workstacean's routing all key off the `id`. Pick one and don't rename later.
 
@@ -114,13 +105,13 @@ curl -X POST http://localhost:7870/a2a \
 
 ## 5. Test it
 
-Add to `tests/test_a2a_integration.py`:
+Assert your config declares the skill (it flows to the card via `_resolved_skill_specs`):
 
 ```python
-def test_agent_card_includes_summarize_pr_skill():
-    from server import _SKILL_SPECS
-    skill_ids = {s["id"] for s in _SKILL_SPECS}
-    assert "summarize_pr" in skill_ids
+def test_config_advertises_summarize_pr():
+    from graph.config import LangGraphConfig
+    cfg = LangGraphConfig.from_yaml("config/langgraph-config.yaml")
+    assert "summarize_pr" in {s["id"] for s in cfg.a2a_skills}
 ```
 
 ## Related

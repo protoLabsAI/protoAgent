@@ -59,24 +59,28 @@ def register(registry):
 ```
 
 `register` is called once at load. The registry accepts **six** contribution
-types — a fork adds any of them as a plugin, never editing core `server.py`:
+types — a fork adds any of them as a plugin, never editing the core `server/` package:
 
 | Method | Contributes | Lifecycle |
 |---|---|---|
 | `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
-| `register_skill_dir(path)` | A `SKILL.md` directory | graph build |
+| `register_skill_dir(path)` | A `SKILL.md` directory (procedural memory) | graph build |
+| `register_a2a_skill(spec)` | An A2A **card** skill (what the card advertises; optional structured output) | agent-card build |
 | `register_router(router, prefix=None)` | A FastAPI `APIRouter` | **mounted once** at init (default prefix `/plugins/<id>`) |
 | `register_surface(start, stop=None, name=None, reload=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown, `reload(cfg)` on config save |
 | `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
 | `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
+| `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
 
 ```python
 def register(registry):
     registry.register_tool(hello)
+    registry.register_a2a_skill({"id": "greet", "name": "Greet", "description": "..."})
     registry.register_router(_build_router())        # → GET /plugins/<id>/...
     registry.register_surface(_start, stop=_stop, name="my-surface")
     registry.register_subagent(_build_subagent())    # delegate via task/task_batch
     registry.register_mcp_server(_server_factory)    # a managed MCP server (e.g. Google)
+    registry.register_thread_id_resolver(lambda md, sid: f"proj:{md.get('project')}:{sid}")
 ```
 
 ### Managed MCP servers — `register_mcp_server`

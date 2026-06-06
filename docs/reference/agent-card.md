@@ -1,6 +1,6 @@
 # Agent card
 
-Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by `server.py::_build_agent_card_proto` (which assembles it via `protolabs_a2a.build_agent_card`; skills come from `_SKILL_SPECS` / `_agent_skills()`).
+Served at `/.well-known/agent-card.json` and `/.well-known/agent.json`. Built by `server/a2a.py::_build_agent_card_proto` (which assembles it via `protolabs_a2a.build_agent_card`). Its identity is **config/plugin-driven** ([#570](configuration.md#a2a)) — `name` from `identity.name`, `description` + `skills` from the `a2a:` config section or `register_a2a_skill`, so a fork declares its card without editing the package.
 
 ## Full shape
 
@@ -57,8 +57,9 @@ The card is the **A2A 1.0** (`a2a-sdk` proto) shape, assembled by
 
 > The `provider` block, the four `capabilities.extensions`, and the
 > `securitySchemes` / `securityRequirements` shapes are owned by
-> `protolabs_a2a` (not editable per-fork in `server.py`). Fork the `name`,
-> `description`, `version`, and `skills`.
+> `protolabs_a2a` (not editable per-fork). Customize `name` (`identity.name`),
+> `description` + `skills` (the [`a2a:`](configuration.md#a2a) config section or
+> `register_a2a_skill`), and `version` (your `pyproject`).
 
 ## Field reference
 
@@ -133,12 +134,12 @@ card *also* declares a `bearer` scheme (`{"httpAuthSecurityScheme": {"scheme":
 consumer reading the card learns bearer is accepted, not just `apiKey`. (Both
 shapes come from `protolabs_a2a.security_schemes(bearer=…)`.)
 
-## Fork this file
+## Customize (no core edit)
 
-The card lives in `server.py::_build_agent_card_proto`. The template declares four custom extensions by default — **cost** / **confidence** / **worldstate-delta** / **tool-call** (the URIs come from `protolabs_a2a`; see [Extensions](/reference/extensions)). At a minimum, every fork should replace:
+The card is assembled in `server/a2a.py::_build_agent_card_proto`, but you **don't edit it** — identity is config/plugin-driven ([#570](configuration.md#a2a)). The template declares four custom extensions by default — **cost** / **confidence** / **worldstate-delta** / **tool-call** (the URIs come from `protolabs_a2a`; see [Extensions](/reference/extensions)). At a minimum, every fork sets:
 
-- `name` + `description`
-- `skills` (sourced from `_SKILL_SPECS` / `_agent_skills()` — add your real ones)
+- `name` → `identity.name` (the setup wizard sets it)
+- `description` + `skills` → the [`a2a:`](configuration.md#a2a) config section (or a plugin's `register_a2a_skill`)
 
 ## Related
 

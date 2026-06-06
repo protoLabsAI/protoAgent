@@ -75,7 +75,7 @@ Agent A stamps its current Langfuse context into the outbound A2A request:
 }
 ```
 
-Agent B reads this in `a2a_handler.py`, opens its own trace, and stamps `caller_trace_id=abc123`, `caller_span_id=def456` into that trace's metadata.
+Agent B reads this in `server/chat.py`, opens its own trace, and stamps `caller_trace_id=abc123`, `caller_span_id=def456` into that trace's metadata.
 
 An operator looking at Agent A's Langfuse trace can copy the trace ID and search Agent B (and C, D, …) by `metadata.caller_trace_id == abc123` to find every downstream trace that branched off.
 

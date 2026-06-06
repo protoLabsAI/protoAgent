@@ -67,7 +67,7 @@ See the [starter tools reference](/reference/starter-tools) for the shapes of th
 `graph/subagents/config.py` ships with one `researcher`. Either:
 
 - Add more by registering `SubagentConfig` instances in `SUBAGENT_REGISTRY` and matching fields in `graph/config.py::LangGraphConfig`, or
-- Call `create_agent_graph(config, include_subagents=False)` in `server.py::_init_langgraph_agent()` to skip subagents entirely.
+- Call `create_agent_graph(config, include_subagents=False)` in `server/agent_init.py::_init_langgraph_agent()` to skip subagents entirely.
 
 See [Configure subagents](/guides/subagents) for the full pattern.
 
