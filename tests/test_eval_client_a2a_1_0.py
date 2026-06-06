@@ -33,7 +33,7 @@ import evals.client as ec
 from a2a_executor import ProtoAgentExecutor, set_terminal_hook
 
 
-async def _hello_stream(text, ctx, *, resume=False, caller_trace=None):
+async def _hello_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
     """A minimal lead stream: some text + a usage frame → terminal."""
     yield ("text", "hello world")
     yield ("usage", {"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.001})

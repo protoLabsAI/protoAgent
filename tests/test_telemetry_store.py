@@ -219,7 +219,7 @@ def test_executor_accumulates_distinct_models_in_first_seen_order():
     captured = []
     set_terminal_hook(captured.append)
 
-    async def stream(text, ctx, *, resume=False, caller_trace=None):
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m1"})
         yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m2"})
         yield ("usage", {"input_tokens": 10, "output_tokens": 5, "model": "m1"})  # dup
