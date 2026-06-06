@@ -12,7 +12,8 @@ import sys
 
 import pytest
 
-from plugins.coding_agent import _normalize_agents, register
+import plugins.coding_agent as P
+from plugins.coding_agent import _make_permission, _normalize_agents, register
 from plugins.coding_agent.acp_client import AcpClient, AcpError
 
 # ── a minimal ACP "agent" (server side) we can drive over stdio ───────────────
@@ -46,9 +47,11 @@ while True:
             "update": {"sessionUpdate": "tool_call", "title": "Editing app.py"}}})
         # Ask permission; the client must respond before we continue.
         send({"jsonrpc": "2.0", "id": 999, "method": "session/request_permission",
-              "params": {"sessionId": "s1", "options": [
-                  {"optionId": "no", "kind": "deny"},
-                  {"optionId": "yes", "kind": "allow_once"}]}})
+              "params": {"sessionId": "s1",
+                         "toolCall": {"toolCallId": "t1", "kind": "edit"},
+                         "options": [
+                             {"optionId": "reject", "kind": "reject_once"},
+                             {"optionId": "ok", "kind": "allow_once"}]}})
         resp = json.loads(sys.stdin.readline().strip())
         chosen = resp.get("result", {}).get("outcome", {}).get("optionId")
         for chunk in ("Hello ", "world [" + str(chosen) + "]"):
@@ -155,10 +158,25 @@ async def test_acp_client_drives_a_turn(fake_agent, tmp_path):
     finally:
         await client.close()
 
-    # agent_message_chunks accumulated; auto-allow picked the `allow_once` option.
-    assert answer == "Hello world [yes]"
+    # agent_message_chunks accumulated; default auto-allow picked the allow option.
+    assert answer == "Hello world [ok]"
     # tool_call title narrated via the progress callback.
     assert "Editing app.py" in narrations
+
+
+async def test_acp_client_readonly_policy_denies_edit(fake_agent, tmp_path):
+    # A readonly policy must reject the fake's `edit` permission request — the
+    # client picks the reject_once option, which the fake echoes back.
+    spec = {"name": "ro", "permissions": "readonly", "allow_kinds": [], "deny_kinds": []}
+    client = AcpClient(
+        sys.executable, [str(fake_agent)], cwd=str(tmp_path),
+        permission=_make_permission(spec),
+    )
+    try:
+        answer = await client.prompt("edit a file", timeout=30.0)
+    finally:
+        await client.close()
+    assert answer == "Hello world [reject]"
 
 
 async def test_acp_client_missing_binary_raises_acp_error(tmp_path):
@@ -171,3 +189,95 @@ async def test_acp_client_bad_workdir_raises_acp_error():
     client = AcpClient(sys.executable, [], cwd="/no/such/dir/anywhere")
     with pytest.raises(AcpError):
         await client.prompt("hi", timeout=10.0)
+
+
+# ── permission policy ─────────────────────────────────────────────────────────
+
+_OPTS = [{"optionId": "a", "kind": "allow_once"}, {"optionId": "r", "kind": "reject_once"}]
+
+
+def _perm(policy, kind, options=None, allow=None, deny=None):
+    spec = {
+        "name": "x", "permissions": policy,
+        "allow_kinds": [k.lower() for k in (allow or [])],
+        "deny_kinds": [k.lower() for k in (deny or [])],
+    }
+    return _make_permission(spec)({"toolCall": {"kind": kind}, "options": options or _OPTS})
+
+
+def test_policy_auto_allows_everything():
+    assert _perm("auto", "execute") == "a"
+    assert _perm("auto", "delete") == "a"
+    assert _perm("auto", "edit") == "a"
+
+
+def test_policy_allowlist_denies_risky_allows_safe():
+    assert _perm("allowlist", "edit") == "a"
+    assert _perm("allowlist", "read") == "a"
+    assert _perm("allowlist", "execute") == "r"      # risky → reject option
+    assert _perm("allowlist", "delete") == "r"
+
+
+def test_policy_readonly_allows_read_denies_writes():
+    assert _perm("readonly", "read") == "a"
+    assert _perm("readonly", "search") == "a"
+    assert _perm("readonly", "edit") == "r"
+    assert _perm("readonly", "execute") == "r"
+
+
+def test_policy_deny_cancels_when_no_reject_option():
+    only_allow = [{"optionId": "a", "kind": "allow_once"}]
+    assert _perm("readonly", "edit", options=only_allow) is None
+
+
+def test_policy_custom_allow_deny_kinds():
+    assert _perm("allowlist", "edit", deny=["edit"]) == "r"        # explicitly denied
+    assert _perm("readonly", "edit", allow=["read", "edit"]) == "a"  # explicitly allowed
+
+
+def test_normalize_agents_parses_safety_fields():
+    a = _normalize_agents([{
+        "name": "p", "command": "c", "workdir": "/tmp",
+        "permissions": "READONLY", "confirm": True,
+        "allow_kinds": ["Read"], "deny_kinds": ["Execute"],
+    }])["p"]
+    assert a["permissions"] == "readonly"          # lower-cased
+    assert a["confirm"] is True
+    assert a["allow_kinds"] == ["read"] and a["deny_kinds"] == ["execute"]
+
+
+def test_normalize_agents_bad_policy_falls_back_to_auto():
+    a = _normalize_agents([{"name": "p", "command": "c", "workdir": "/tmp", "permissions": "yolo"}])["p"]
+    assert a["permissions"] == "auto"
+    assert a["confirm"] is False                    # default
+
+
+# ── per-call consent gate (confirm) ───────────────────────────────────────────
+
+
+async def test_confirm_gate_declines(monkeypatch):
+    import langgraph.types as lt
+    monkeypatch.setattr(lt, "interrupt", lambda payload: "no")
+    reg = _StubRegistry({"agents": [
+        {"name": "proto", "command": "proto", "workdir": "/tmp", "confirm": True},
+    ]})
+    register(reg)
+    out = await reg.tools[0].ainvoke({"agent": "proto", "task": "do it"})
+    assert "Declined" in out
+
+
+async def test_confirm_gate_approves_then_runs(monkeypatch):
+    import langgraph.types as lt
+    monkeypatch.setattr(lt, "interrupt", lambda payload: "yes")
+
+    class _StubClient:
+        async def prompt(self, task, progress_callback=None, timeout=600.0):
+            return "did the work"
+
+    monkeypatch.setattr(P, "_client_for", lambda spec: _StubClient())
+    reg = _StubRegistry({"agents": [
+        {"name": "proto", "command": "proto", "workdir": "/tmp", "confirm": True},
+    ]})
+    register(reg)
+    out = await reg.tools[0].ainvoke({"agent": "proto", "task": "do it"})
+    assert out == "did the work"

@@ -29,7 +29,7 @@ config_section: coding_agent
 config:
   # Default per-turn timeout (seconds). Coding is slow; override per agent.
   default_timeout_s: 600
-  # No agents by default — you MUST add your own (see the guide). Example:
+  # No agents by default — you MUST add your own (see the guide). Examples:
   #   agents:
   #     - name: proto             # the name the LLM passes to code_with(agent=…)
   #       command: proto          # binary on PATH
@@ -37,6 +37,22 @@ config:
   #       workdir: ~/dev/my-repo  # session cwd — the confinement boundary
   #       # env: { SOME_KEY: value }   # optional extra env, merged over process env
   #       # timeout_s: 900             # optional per-agent override
+  #       # permissions: allowlist     # auto (default) | allowlist | readonly
+  #       # allow_kinds: []            # override: kinds to allow (readonly/allowlist)
+  #       # deny_kinds: [execute, delete]  # override: kinds to deny (allowlist)
+  #       # confirm: true              # ask the operator before each code_with call
+  #     - name: claude-code
+  #       command: npx
+  #       args: ["@zed-industries/claude-code-acp"]
+  #       workdir: ~/dev/my-repo
+  #     - name: codex
+  #       command: codex
+  #       args: ["acp"]
+  #       workdir: ~/dev/my-repo
+  #     - name: gemini
+  #       command: gemini
+  #       args: ["--experimental-acp"]
+  #       workdir: ~/dev/my-repo
   agents: []
 settings:
   - key: default_timeout_s

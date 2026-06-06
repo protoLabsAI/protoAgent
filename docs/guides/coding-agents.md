@@ -38,6 +38,8 @@ coding_agent:
       workdir: ~/dev/my-repo      # session cwd — the confinement boundary
       # env: { SOME_KEY: value }  # optional extra env, merged over the process env
       # timeout_s: 900            # optional per-agent override (seconds)
+      # permissions: allowlist    # auto (default) | allowlist | readonly
+      # confirm: true             # ask the operator before each code_with call
 ```
 
 Enabling plugins needs a **restart** (plugin tools wire once at process init).
@@ -56,6 +58,14 @@ Any agent that speaks ACP works — just point `command`/`args` at it:
     - name: claude-code
       command: npx
       args: ["@zed-industries/claude-code-acp"]
+      workdir: ~/dev/my-repo
+    - name: codex
+      command: codex
+      args: ["acp"]
+      workdir: ~/dev/my-repo
+    - name: gemini
+      command: gemini
+      args: ["--experimental-acp"]
       workdir: ~/dev/my-repo
 ```
 
@@ -86,24 +96,59 @@ Notes for whoever writes the `task`:
 
 ## Permission posture
 
-PR1 (the current cut) auto-allows the coding agent's actions, confined to its
-workdir:
+A coding agent works in its **config-pinned workdir** (`code_with` takes only
+`agent` + `task`, never a path — the model can't aim it elsewhere) and uses its
+*own* file/shell access there: protoAgent advertises no client-served
+`fs`/`terminal` capability. When the coding agent asks to do something risky it
+sends a `session/request_permission`, which protoAgent answers with the agent's
+**permission policy**:
 
-- **Workdir is config-pinned.** `code_with` takes only `agent` + `task` — never a
-  path. The cwd comes from config, so the model can't aim a coding agent at an
-  arbitrary directory.
-- **Auto-allow within the workdir.** protoAgent advertises no client-served
-  `fs`/`terminal` capability, so the coding agent uses its *own* file/shell
-  access, scoped to the session cwd. Inbound `session/request_permission` is
-  auto-approved. The coding agent self-governs inside its sandbox dir.
-- The subprocess **inherits protoAgent's environment** (plus any per-agent
-  `env`). Run protoAgent under an account whose ambient credentials you're
-  willing to lend the coding agent, or scope the `workdir` to a throwaway
-  checkout.
+| `permissions` | Behaviour |
+|---|---|
+| `auto` *(default)* | Allow everything — the agent self-governs within its workdir. |
+| `allowlist` | Allow all action kinds **except** `execute` and `delete` (override with `allow_kinds` / `deny_kinds`). |
+| `readonly` | Allow only read-like kinds (`read`, `search`, `fetch`, …); deny edits, shell, and deletes. |
 
-Coming in later PRs (ADR 0024): live narration of the coding agent's progress
-("Editing app.py") onto A2A working-status frames; HITL permission gating via
-`ask_human`; allow-by-kind policy.
+Action kinds come from the ACP request (`toolCall.kind`: `read` / `edit` /
+`execute` / `delete` / `fetch` / `move` / `search` / …). Tune a policy per agent:
+
+```yaml
+    - name: proto
+      command: proto
+      args: ["--acp"]
+      workdir: ~/dev/my-repo
+      permissions: allowlist
+      deny_kinds: [execute, delete]   # the allowlist default, shown explicitly
+```
+
+### Per-call consent gate
+
+Set `confirm: true` on an agent and `code_with` asks the operator to approve
+**before each call** to that agent (via `ask_human` — the turn parks as
+`input-required` until you reply `yes`):
+
+```yaml
+    - name: proto
+      command: proto
+      args: ["--acp"]
+      workdir: ~/dev/my-repo
+      confirm: true
+```
+
+> **Per-action** live HITL (approve each individual edit/shell command as the
+> coding agent works) is **not** available: it would require pausing a blocking
+> subprocess session mid-turn, which LangGraph's checkpoint/resume model can't do
+> without re-running the tool. Use `permissions: readonly`/`allowlist` for
+> deterministic per-action control, and `confirm` for a per-call human gate.
+
+### Environment
+
+The subprocess **inherits protoAgent's environment** (plus any per-agent `env`).
+Run protoAgent under an account whose ambient credentials you're willing to lend
+the coding agent, or scope the `workdir` to a throwaway checkout.
+
+Coming in a later PR (ADR 0024): live narration of the coding agent's progress
+("Editing app.py") onto A2A working-status frames.
 
 ## How it works
 

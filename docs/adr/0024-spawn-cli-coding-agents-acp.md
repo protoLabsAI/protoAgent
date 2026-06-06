@@ -75,17 +75,30 @@ code_with(agent="proto", task="add a /healthz route and run the tests")
   → the agent's final message text (the work happens in its own session)
 ```
 
-### Confinement & permission posture (PR1)
+### Confinement & permission posture
 
 - **Workdir is config-pinned.** `code_with` takes only `agent` + `task` — never a
   caller-chosen path. The cwd comes from the matched config entry, so the LLM
   cannot point a coding agent at an arbitrary directory. Workdirs must be listed
   in config; an unknown `agent` returns an error listing the configured ones.
-- **Auto-allow within the workdir.** The client advertises no client-served
+- **By-kind permission policy (PR3).** The client advertises no client-served
   `fs`/`terminal` capability, so the coding agent uses its *own* file/shell
   access, scoped to the session cwd. Inbound `session/request_permission` is
-  auto-approved (first `allow` option), mirroring ORBIS's PR1 policy. The coding
-  agent self-governs inside its sandbox dir.
+  answered by the agent's `permissions` policy, keyed on the request's
+  `toolCall.kind`: `auto` (allow all — the PR1 default, mirroring ORBIS), `allowlist`
+  (deny `execute`/`delete`, allow the rest), or `readonly` (allow only read-like
+  kinds). Overridable per agent with `allow_kinds` / `deny_kinds`.
+- **Per-call consent gate (PR3).** `confirm: true` makes `code_with` ask the
+  operator (via `ask_human` → `input-required`) to approve *before each call* to
+  that agent. The gate runs before any side effect, so the LangGraph resume
+  re-execution is idempotent.
+- **Per-action live HITL is deferred** — approving each individual edit/shell
+  command mid-turn would require pausing a *blocking subprocess session* while
+  asking the operator. LangGraph's `interrupt()` checkpoints and **re-runs the
+  node** on resume, which can't resume a half-finished ACP session awaiting a
+  specific permission response. `readonly`/`allowlist` give deterministic
+  per-action control; `confirm` gives a per-call human gate. (Same coupling blocks
+  live narration — see Scope.)
 - The subprocess inherits the server's env (plus any per-agent `env`). Run
   protoAgent under an account whose ambient credentials you're willing to lend
   the coding agent — or scope its `workdir` to a throwaway checkout.
@@ -108,14 +121,20 @@ conversation; `task_batch` must not interleave two prompts on one session).
 
 ## Scope
 
-**PR1 (this ADR):** ACP client + `code_with` + config + auto-allow + tests +
-docs. Synchronous — the final answer is returned; `tool_call` titles are logged,
-not yet streamed to callers.
+**PR1 (#596):** ACP client + `code_with` + config + auto-allow + tests + docs.
+Synchronous — the final answer is returned; `tool_call` titles are logged.
+
+**PR3 (this update):** by-kind permission policy (`auto`/`allowlist`/`readonly` +
+`allow_kinds`/`deny_kinds`); per-call consent gate (`confirm`); shipped agent
+recipes (claude-code-acp, codex, gemini). Per-action live HITL is documented as
+deferred (the blocking-session constraint above).
 
 **Later PRs:** live narration of `tool_call` titles onto A2A working-status
-frames (so an operator watching a turn sees "Editing app.py"); richer permission
-policy (HITL gating via `ask_human`, allow-by-kind); more shipped agent recipes
-(claude-code-acp, codex, gemini); an eval case.
+frames (so an operator watching a turn sees "Editing app.py") — blocked on the
+same mid-session channel as per-action HITL, so it wants a general progress
+mechanism (event-bus ride-along or a stream-factory `progress` event), not a
+one-off; a gated eval case (needs an eval-runner skip mechanism so it doesn't
+require a coding agent in the default run).
 
 ## Consequences
 
