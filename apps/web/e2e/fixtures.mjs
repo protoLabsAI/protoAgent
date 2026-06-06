@@ -38,7 +38,10 @@ export const RUNTIME_STATUS = {
     // A plugin that contributes a console view (ADR 0026) → a dynamic rail icon + iframe.
     {
       id: "boardy", name: "Boardy", version: "0.1.0", enabled: true, loaded: true, tools: [], skills: 0,
-      views: [{ id: "board", label: "Board", icon: "LayoutDashboard", path: "/plugins/boardy/board" }],
+      views: [
+        { id: "board", label: "Board", icon: "LayoutDashboard", path: "/plugins/boardy/board" },
+        { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
+      ],
     },
   ],
 };

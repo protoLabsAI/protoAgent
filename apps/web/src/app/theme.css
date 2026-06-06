@@ -3109,3 +3109,4 @@ textarea {
 /* Plugin-contributed console views (ADR 0026) — the iframe fills the stage. */
 .plugin-view { padding: 0; overflow: hidden; }
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--bg); display: block; }
+.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--fg-muted); font-size: 13px; }

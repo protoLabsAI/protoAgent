@@ -41,7 +41,8 @@ import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
-import { api, apiUrl } from "../lib/api";
+import { api } from "../lib/api";
+import { PluginView } from "./PluginView";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { NotesWorkspace } from "../lib/types";
@@ -164,6 +165,16 @@ export function App() {
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
+
+  // Stale-surface fallback: if we're on a plugin view that no longer exists (its
+  // plugin was disabled/removed, or a config reload dropped it) — once runtime is
+  // loaded so we don't bounce during boot — fall back to chat instead of a blank
+  // stage. (ADR 0026.)
+  useEffect(() => {
+    if (runtime && typeof surface === "string" && surface.startsWith("plugin:") && !activePluginView) {
+      setSurface("chat");
+    }
+  }, [runtime, surface, activePluginView]);
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
   // brandName() display-cases a bare lower-case slug (e.g. `gina` → `Gina`).
@@ -665,18 +676,12 @@ export function App() {
           {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "settings" ? <SettingsSurface /> : null}
 
-          {/* Plugin view (ADR 0026) — the plugin serves the page; the console
-              hosts it in a same-origin iframe. ChatSurface stays mounted above
-              (hidden) so chat continuity holds while a plugin view is open. */}
+          {/* Plugin view (ADR 0026) — the plugin serves the page; PluginView hosts
+              it in a same-origin iframe. ChatSurface stays mounted above (hidden)
+              so chat continuity holds while a plugin view is open. Keyed so
+              switching views resets the iframe's load state. */}
           {activePluginView ? (
-            <section className="panel stage-panel plugin-view">
-              <iframe
-                className="plugin-view-frame"
-                src={apiUrl(activePluginView.path)}
-                title={activePluginView.label}
-                sandbox="allow-scripts allow-forms allow-same-origin"
-              />
-            </section>
+            <PluginView key={activePluginView.key} view={activePluginView} />
           ) : null}
         </main>
 

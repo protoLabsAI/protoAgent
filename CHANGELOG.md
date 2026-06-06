@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/plugins/<id>/view`) — so a fork gets its own rail dashboard with no console
   rebuild. Surfaces are keyed `plugin:<id>:<viewId>`; chat stays mounted (its
   continuity holds) while a plugin view is open. The `hello` example plugin now
-  ships a demo view. Thin vertical — the full data-driven rail registry +
-  view-tabs + auth/theming bridge land in follow-up slices. See
+  ships a demo view. The view is hosted by a dedicated `PluginView` component with
+  load/error states, and a stale-surface fallback returns to chat if a plugin
+  view's plugin is disabled while it's open. View-tabs + the auth/theming bridge
+  land in a follow-up slice. See
   [ADR 0026](docs/adr/0026-plugin-contributed-console-surfaces.md).
 
 ## [0.18.0] - 2026-06-06
