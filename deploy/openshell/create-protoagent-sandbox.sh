@@ -34,6 +34,6 @@ openshell sandbox create \
   --image "$IMAGE" \
   --publish "127.0.0.1:${PORT}:7870" \
   --mount "$CONFIG:/sandbox/config/langgraph-config.yaml:ro" \
-  -- python server.py --port 7870 --ui none
+  -- python -m server --port 7870 --ui none   # server.py is now the server/ package (ADR 0023); PYTHONPATH baked in the image
 
 echo "✓ protoAgent sandbox created. Inspect: openshell sandbox list"
