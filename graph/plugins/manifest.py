@@ -45,6 +45,15 @@ class PluginManifest:
     # data so it's known without importing the plugin, and surfaced to the
     # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?}.
     views: list[dict] = field(default_factory=list)
+    # Distribution (ADR 0027) — for plugins installed from a git URL.
+    #   requires_pip: declared pip deps. NOT auto-installed (install ≠ code exec);
+    #     the operator installs them explicitly. Missing → clear error on enable.
+    #   repository/homepage: provenance, shown in the install review.
+    #   min_protoagent_version: compat guard (warn/refuse on an older host).
+    requires_pip: list[str] = field(default_factory=list)
+    repository: str = ""
+    homepage: str = ""
+    min_protoagent_version: str = ""
 
 
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
@@ -80,6 +89,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     secrets = data.get("secrets")
     settings = data.get("settings")
     views = data.get("views")
+    requires_pip = data.get("requires_pip")
     return PluginManifest(
         id=pid,
         name=name,
@@ -96,4 +106,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
         views=[v for v in views if isinstance(v, dict) and v.get("id") and v.get("path")]
         if isinstance(views, (list, tuple)) else [],
+        requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],
+        repository=str(data.get("repository", "")).strip(),
+        homepage=str(data.get("homepage", "")).strip(),
+        min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),
     )
