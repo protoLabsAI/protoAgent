@@ -20,6 +20,24 @@ from typing import Any
 log = logging.getLogger("protoagent.mcp")
 
 
+def _mcp_tool_error_handler(exc: Exception) -> str:
+    """Turn an MCP tool failure into a recoverable tool result (roxy #58).
+
+    ``langchain-mcp-adapters`` raises ``ToolException`` when the server returns an
+    error (e.g. a board ``404 Feature not found`` from a stale id). Left unhandled
+    that propagates out of the ToolNode and fails the WHOLE A2A turn. Setting this
+    as each MCP tool's ``handle_tool_error`` makes the tool return this string to
+    the model instead — so a single recoverable tool error (stale arg, transient
+    4xx) degrades into something the model can adapt to, not a dead turn.
+    """
+    return (
+        f"Tool error: {exc}. The tool call failed — commonly a stale/invalid "
+        "argument (e.g. an id that no longer exists) or a transient error. Do NOT "
+        "treat this as fatal: adjust the arguments and retry, try a different "
+        "approach, or continue without this tool's result."
+    )
+
+
 def _server_connection(server: dict) -> dict | None:
     """Map a config ``mcp.servers[]`` entry to a langchain-mcp-adapters
     connection dict. Returns ``None`` for an entry missing its essential fields
@@ -226,6 +244,12 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
             if tool.name in core_names:
                 log.warning("[mcp] %s: %s collides with a core tool — skipped", name, tool.name)
                 continue
+            # roxy #58: a tool error (e.g. board 404) must degrade into a tool
+            # result the model can recover from, not fail the whole turn.
+            try:
+                tool.handle_tool_error = _mcp_tool_error_handler
+            except Exception:  # noqa: BLE001 — best-effort; never block tool registration
+                log.debug("[mcp] %s: could not set handle_tool_error on %s", name, tool.name)
             kept.append(tool)
 
         clients.append(client)
