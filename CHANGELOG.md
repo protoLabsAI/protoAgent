@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-06-06
+
 ### Added
 - **Plugin-contributed console surfaces** (ADR 0026, PR1) — a plugin can declare
   a `views:` block in its manifest (`{id, label, icon, path}`); the console reads
