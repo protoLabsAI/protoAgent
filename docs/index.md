@@ -4,9 +4,6 @@ hero:
   name: protoAgent
   text: LangGraph + A2A template for protoLabs agents
   tagline: Clone. Run. Walk the wizard. Chat. Fork when you're ready to ship.
-  image:
-    src: /protoagent-banner.png
-    alt: protoAgent
   actions:
     - theme: brand
       text: Spin up your first agent
@@ -41,4 +38,4 @@ This site follows the [Diátaxis](https://diataxis.fr) framework:
 
 ## Canonical reference implementation
 
-[protoLabsAI/quinn](https://github.com/protoLabsAI/quinn) was the first agent built on this template. When the docs here don't cover something specific, Quinn is the filled-in example to consult.
+[protoLabsAI/roxy](https://github.com/protoLabsAI/roxy) is a filled-in fork built on this template — an autonomous ProtoMaker portfolio manager (persona, A2A skills, project registry). When the docs here don't cover something specific, Roxy is the filled-in example to consult.

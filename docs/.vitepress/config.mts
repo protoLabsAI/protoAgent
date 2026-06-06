@@ -18,32 +18,7 @@ export default defineConfig({
   // lives in the repo (committed, shared) but is NOT part of the published site.
   srcExclude: ["dev/**"],
 
-  head: [
-    ["link", { rel: "icon", href: "/protoAgent/favicon.svg" }],
-    // Social / OpenGraph preview — the banner renders as the large card image
-    // on GitHub, Slack, Discord, X, etc. Absolute URL (GitHub Pages base).
-    ["meta", { property: "og:type", content: "website" }],
-    ["meta", { property: "og:title", content: "protoAgent" }],
-    ["meta", {
-      property: "og:description",
-      content: "Template repository for building protoLabs A2A agents on LangGraph.",
-    }],
-    ["meta", {
-      property: "og:image",
-      content: "https://protolabsai.github.io/protoAgent/protoagent-banner.png",
-    }],
-    ["meta", { property: "og:url", content: "https://protolabsai.github.io/protoAgent/" }],
-    ["meta", { name: "twitter:card", content: "summary_large_image" }],
-    ["meta", { name: "twitter:title", content: "protoAgent" }],
-    ["meta", {
-      name: "twitter:description",
-      content: "Template repository for building protoLabs A2A agents on LangGraph.",
-    }],
-    ["meta", {
-      name: "twitter:image",
-      content: "https://protolabsai.github.io/protoAgent/protoagent-banner.png",
-    }],
-  ],
+  head: [["link", { rel: "icon", href: "/protoAgent/favicon.svg" }]],
 
   themeConfig: {
     logo: "/favicon.svg",

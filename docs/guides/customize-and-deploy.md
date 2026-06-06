@@ -117,4 +117,4 @@ Once the checklist is done, `rm TEMPLATE.md` and rewrite `README.md` to describe
 
 ## Canonical reference implementation
 
-[protoLabsAI/quinn](https://github.com/protoLabsAI/quinn) is the first agent built on this template, now running in production. When this guide doesn't cover a specific decision, Quinn is the filled-in example — worth a skim before you invent something new.
+[protoLabsAI/roxy](https://github.com/protoLabsAI/roxy) is a fork built on this template, running in production as an autonomous ProtoMaker portfolio manager. When this guide doesn't cover a specific decision, Roxy is the filled-in example — worth a skim before you invent something new.
