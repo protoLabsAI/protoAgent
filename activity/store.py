@@ -56,6 +56,8 @@ class ActivityLog:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
+        db.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         db.row_factory = sqlite3.Row
         return db
 

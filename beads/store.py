@@ -53,6 +53,8 @@ class BeadsStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        self._conn.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 
