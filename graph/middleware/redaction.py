@@ -23,10 +23,21 @@ PATTERNS: dict[str, re.Pattern] = {
     "generic_api_key": re.compile(
         r"(?i)(?:api[_\-]?key|apikey)(?:[\"'\s:=]+)([A-Za-z0-9_\-]{16,})",
     ),
+    # Provider token shapes a tool error / payload might echo into the audit log.
+    "google_oauth": re.compile(r"\bya29\.[A-Za-z0-9_\-]+"),
+    "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}\b"),
+    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "discord_token": re.compile(r"\b[MNO][A-Za-z0-9_\-]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b"),
+    "client_secret": re.compile(
+        r"(?i)client[_\-]?secret(?:[\"'\s:=]+)([A-Za-z0-9_\-]{12,})",
+    ),
     "env_var_assignment": re.compile(
         r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
         r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
-        r"PRIVATE_KEY)\s*[=:]\s*\S+",
+        r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
+        r"CLIENT_SECRET)\s*[=:]\s*\S+",
     ),
 }
 
@@ -49,6 +60,14 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "auth_token",
     "access_token",
     "private_key",
+    "DISCORD_BOT_TOKEN",
+    "bot_token",
+    "GATEWAY_API_KEY",
+    "GH_PAT",
+    "client_secret",
+    "CLIENT_SECRET",
+    "refresh_token",
+    "REFRESH_TOKEN",
 })
 
 _PLACEHOLDER = "[REDACTED]"
@@ -80,6 +99,18 @@ def _redact_string_simple(value: str) -> str:
         return key + _PLACEHOLDER
 
     value = PATTERNS["env_var_assignment"].sub(_replace_env_var, value)
+
+    # Provider token shapes — full-match redaction.
+    for _name in ("google_oauth", "google_api_key", "github_token",
+                  "slack_token", "aws_access_key", "discord_token"):
+        value = PATTERNS[_name].sub(_PLACEHOLDER, value)
+
+    # client_secret — redact the captured credential value group.
+    def _replace_client_secret(m: re.Match) -> str:
+        full, cred = m.group(0), m.group(1)
+        return full[: len(full) - len(cred)] + _PLACEHOLDER
+
+    value = PATTERNS["client_secret"].sub(_replace_client_secret, value)
     return value
 
 
