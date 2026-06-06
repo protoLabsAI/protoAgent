@@ -80,6 +80,7 @@ async def _operator_subagent_run(req: dict):
         prompt=req.get("prompt", ""),
         subagent_type=req.get("type") or req.get("subagent_type", "researcher"),
         emit_skill=bool(req.get("emit_skill", False)),
+        extra_tools=STATE.plugin_tools + STATE.mcp_tools,
     )
 
 
@@ -91,6 +92,7 @@ async def _operator_subagent_batch(req: dict):
         knowledge_store=STATE.knowledge_store,
         scheduler=STATE.scheduler,
         tasks=req.get("tasks", []),
+        extra_tools=STATE.plugin_tools + STATE.mcp_tools,
     )
 
 
@@ -159,6 +161,7 @@ async def _operator_workflow_run(name: str, inputs: dict) -> dict:
         STATE.graph_config, STATE.workflow_registry,
         knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
         name=name, inputs=inputs or {},
+        extra_tools=STATE.plugin_tools + STATE.mcp_tools,
     )
 
 
