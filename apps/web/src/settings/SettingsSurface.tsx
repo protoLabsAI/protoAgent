@@ -144,6 +144,17 @@ function SettingsBody() {
 
   return (
     <>
+      {/* Sub-nav above the header, matching the other rail surfaces (System,
+          Knowledge, Activity) which render their stage-subnav above the panel. */}
+      {categories.length > 1 ? (
+        <div className="stage-subnav settings-subnav">
+          {categories.map((c) => (
+            <button key={c} className={c === category ? "active" : ""} onClick={() => setActiveCategory(c)}>
+              {c}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="panel-header">
         <div>
           <h1>Settings</h1>
@@ -166,15 +177,6 @@ function SettingsBody() {
           </button>
         </div>
       </div>
-      {categories.length > 1 ? (
-        <div className="stage-subnav settings-subnav">
-          {categories.map((c) => (
-            <button key={c} className={c === category ? "active" : ""} onClick={() => setActiveCategory(c)}>
-              {c}
-            </button>
-          ))}
-        </div>
-      ) : null}
       <div className="stage-body">
         {pendingRestart.length ? (
           <div className="settings-banner" role="alert">
