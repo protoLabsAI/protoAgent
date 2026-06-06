@@ -21,9 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema. Declare delegates in a top-level `delegates:` list; editing it +
   Save & Reload swaps the roster live (no restart). Unifies what `code_with`
   (acp) and `peer_consult` (a2a) did and adds model-endpoint delegation. Ships
-  disabled; enable with `plugins: { enabled: [delegates] }`. A REST CRUD API and a
-  console panel to manage delegates from the UI land in follow-up slices.
+  disabled; enable with `plugins: { enabled: [delegates] }`. A console panel to
+  manage delegates from the UI lands in a follow-up slice.
   See [the guide](docs/guides/delegates.md).
+- **Delegate CRUD REST API** (ADR 0025, PR2) — `/api/delegates` (GET/POST/PUT/
+  DELETE) + `/api/delegates/test` (reachability probe — agent-card GET for a2a,
+  `/v1/models` ping for openai, binary-on-PATH + workdir for acp) +
+  `/api/delegate-types` (the field schema that drives the panel). Mutations write
+  the config + route each delegate's secret to the gitignored `secrets.yaml`
+  (a `delegate_secrets` overlay keyed `<name>.<field>` — never echoed back or kept
+  in tracked config), then hot-reload so the new roster is live next turn. Same
+  operator-console posture as `/api/config`.
 
 ## [0.16.0] - 2026-06-06
 
