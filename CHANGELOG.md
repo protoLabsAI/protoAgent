@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Eval-case gating (`requires_env`)** — an eval case can now declare
+  `requires_env: [VAR, …]`; when any is unset the case is **skipped** (shown
+  `SKIP`, excluded from the pass/fail tally) instead of run, so a case needing an
+  optional integration doesn't break the default board. Uses it to ship a gated
+  `code_with_delegation` case (ADR 0024) that verifies end-to-end coding-agent
+  delegation over a live A2A turn — run it with `EVAL_CODING_AGENT=1` once a
+  coding agent is configured. See [Eval your fork](docs/guides/evals.md).
 - **Spawn CLI coding agents over ACP** — a new opt-in `coding_agent` plugin
   (ADR 0024) adds a `code_with(agent, task)` tool that hands a real, repo-scoped
   coding job to a purpose-built CLI coding agent (protoCLI `proto`, Claude Code,

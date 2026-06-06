@@ -129,12 +129,16 @@ Synchronous — the final answer is returned; `tool_call` titles are logged.
 recipes (claude-code-acp, codex, gemini). Per-action live HITL is documented as
 deferred (the blocking-session constraint above).
 
+**PR4:** a gated eval case (`code_with_delegation`) verifying end-to-end
+delegation over a live A2A turn, plus a `requires_env` skip mechanism in the eval
+runner so the case (and any future case needing an optional integration) is
+skipped — not failed — when its prerequisite env var is unset.
+
 **Later PRs:** live narration of `tool_call` titles onto A2A working-status
 frames (so an operator watching a turn sees "Editing app.py") — blocked on the
 same mid-session channel as per-action HITL, so it wants a general progress
 mechanism (event-bus ride-along or a stream-factory `progress` event), not a
-one-off; a gated eval case (needs an eval-runner skip mechanism so it doesn't
-require a coding agent in the default run).
+one-off.
 
 ## Consequences
 

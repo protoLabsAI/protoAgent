@@ -188,3 +188,40 @@ def test_workflow_cases_reference_real_recipes():
     for c in TASKS:
         if c.get("kind") == "workflow":
             assert c["workflow"] in bundled, f"{c['id']} → unknown recipe {c['workflow']!r}"
+
+
+# ── requires_env skip mechanism (ADR 0024 coding-agent eval) ──────────────────
+
+
+def test_requirements_unmet_skips_when_env_missing(monkeypatch):
+    monkeypatch.delenv("EVAL_X", raising=False)
+    assert runner._requirements_unmet({"requires_env": ["EVAL_X"]}) == "requires_env EVAL_X"
+
+
+def test_requirements_met_runs_when_env_set(monkeypatch):
+    monkeypatch.setenv("EVAL_X", "1")
+    assert runner._requirements_unmet({"requires_env": ["EVAL_X"]}) is None
+
+
+def test_no_requirements_runs():
+    assert runner._requirements_unmet({}) is None
+    assert runner._requirements_unmet({"requires_env": []}) is None
+
+
+def test_code_with_eval_case_present_and_gated():
+    case = {c["id"]: c for c in TASKS}.get("code_with_delegation")
+    assert case is not None, "code_with_delegation case missing"
+    assert case["requires_env"] == ["EVAL_CODING_AGENT"]   # skips by default
+    assert case["expected_tools"] == ["code_with"]
+    assert case["kind"] == "ask"
+
+
+def test_board_counts_skipped_separately(capsys):
+    results = [
+        runner.CaseResult("a", "tool", "A", passed=True, detail="ok"),
+        runner.CaseResult("b", "tool", "B", passed=True, detail="skipped: requires_env X", skipped=True),
+    ]
+    runner._print_board(results)
+    out = capsys.readouterr().out
+    assert "1/1 passed (1 skipped)" in out
+    assert "SKIP" in out
