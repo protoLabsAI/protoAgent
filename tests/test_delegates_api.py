@@ -125,3 +125,24 @@ def test_test_endpoint_acp_probe(client):
 
 def test_test_endpoint_unknown_type_400(client):
     assert client.post("/api/delegates/test", json={"type": "nope"}).status_code == 400
+
+
+def test_public_view_redacts_secrets_including_nested_env():
+    raw = {
+        "name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp",
+        "env": {"HOME": "/h", "OPENAI_BASE_URL": "https://g/v1", "OPENAI_API_KEY": "sk-LEAK"},
+    }
+    view = api._public_view(raw)
+    assert "sk-LEAK" not in str(view)               # nested env secret redacted
+    assert view["env"]["OPENAI_API_KEY"] == "***"
+    assert view["env"]["HOME"] == "/h"              # non-secret env preserved
+
+
+def test_public_view_drops_top_level_secrets():
+    raw = {"name": "o", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "sk-X"}
+    view = api._public_view(raw)
+    assert "sk-X" not in str(view) and "api_key" not in view
+    raw2 = {"name": "h", "type": "a2a", "url": "https://h/a2a",
+            "auth": {"scheme": "bearer", "token": "SEKRET-TOKEN"}}
+    view2 = api._public_view(raw2)
+    assert "SEKRET-TOKEN" not in str(view2) and view2["auth"] == {"scheme": "bearer"}
