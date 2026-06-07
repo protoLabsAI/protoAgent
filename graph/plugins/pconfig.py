@@ -39,6 +39,7 @@ class PluginConfigSchema:
     defaults: dict = field(default_factory=dict)
     secrets: list = field(default_factory=list)
     settings: list = field(default_factory=list)
+    test: bool = False  # has a /api/config/test-<section> check (ADR 0029)
 
 
 def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[PluginConfigSchema]:
@@ -74,6 +75,7 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[Plugin
             claimed[section] = m.id
             out.append(PluginConfigSchema(
                 m.id, section, dict(m.config or {}), list(m.secrets or []), list(m.settings or []),
+                test=bool(getattr(m, "test", False)),
             ))
         return out
     except Exception:  # noqa: BLE001 — discovery is best-effort

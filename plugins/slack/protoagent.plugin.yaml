@@ -10,6 +10,7 @@ description: >-
 enabled: false
 requires_pip: ["websockets>=12"]
 config_section: slack
+test: true   # /api/config/test-slack (chat_surface wirer)
 config:
   enabled: false
   admin_ids: []
