@@ -55,6 +55,7 @@ class PluginRegistry:
         self.mcp_servers: list = []       # factories: config -> entry dict | None
         self.thread_id_resolver = None    # (request_metadata, session_id) -> str (#571)
         self.goal_verifiers: dict = {}    # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
+        self.goal_hooks: list = []        # {on_achieved, on_failed} terminal reactions (ADR 0028)
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -102,6 +103,21 @@ class PluginRegistry:
             return
         key = name if ":" in name else f"{self.plugin_id}:{name}"
         self.goal_verifiers[key] = fn
+
+    def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:
+        """React when a goal reaches a terminal state (ADR 0028 D4). ``on_achieved``
+        / ``on_failed`` take the terminal ``GoalState`` (sync or async) — push a
+        notification, record a finding, or set the next goal. A raising hook is
+        logged + swallowed."""
+        if not (callable(on_achieved) or callable(on_failed)):
+            log.warning("[plugins] %s: register_goal_hook needs on_achieved and/or on_failed",
+                        self.plugin_id)
+            return
+        self.goal_hooks.append({
+            "plugin_id": self.plugin_id,
+            "on_achieved": on_achieved if callable(on_achieved) else None,
+            "on_failed": on_failed if callable(on_failed) else None,
+        })
 
     def register_a2a_skill(self, spec: dict) -> None:
         """Contribute an A2A *card* skill — advertised on the agent card and,

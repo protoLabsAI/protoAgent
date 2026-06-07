@@ -148,8 +148,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.thread_id_resolver = _plugins.thread_id_resolver  # thread_id seam (#571)
     # Register plugin-contributed goal verifiers (ADR 0028) — re-set on each
     # (re)load so a config change refreshes the available `plugin` verifiers.
+    from graph.goals import hooks as _goal_hooks
     from graph.goals import verifiers as _goal_verifiers
     _goal_verifiers.set_plugin_verifiers(_plugins.goal_verifiers)
+    _goal_hooks.set_goal_hooks(_plugins.goal_hooks)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph

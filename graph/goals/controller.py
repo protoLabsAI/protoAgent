@@ -156,14 +156,14 @@ class GoalController:
         result = await run_verifier(state.verifier, ctx)
 
         if result.met:
-            return self._finish(state, "achieved", result.reason or "verifier passed",
+            return await self._finish(state, "achieved", result.reason or "verifier passed",
                                 evidence=result.evidence)
 
         # 2. Verifier not met — honour an explicit give-up from the agent.
         giveup = _GIVEUP_RE.search(last_text or "")
         if giveup:
             reason = (giveup.group(1) or "agent flagged the goal unachievable").strip()
-            return self._finish(state, "unachievable", reason)
+            return await self._finish(state, "unachievable", reason)
 
         # 3. Not met — refresh checklist, track progress, decide continue vs stop.
         plan = _GOAL_PLAN_RE.search(last_text or "")
@@ -180,11 +180,11 @@ class GoalController:
 
         limit = getattr(self._config, "goal_no_progress_limit", 3)
         if state.iteration >= state.max_iterations:
-            return self._finish(state, "exhausted",
+            return await self._finish(state, "exhausted",
                                 f"ran out of iteration budget ({state.max_iterations})",
                                 evidence=result.evidence)
         if state.no_progress_streak >= limit:
-            return self._finish(state, "unachievable",
+            return await self._finish(state, "unachievable",
                                 f"no progress after {state.no_progress_streak} attempts: {result.reason}",
                                 evidence=result.evidence)
 
@@ -196,14 +196,17 @@ class GoalController:
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
 
-    def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
+    async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time
+        from graph.goals.hooks import fire_goal_hooks
         state.status = status
         state.last_reason = reason
         if evidence:
             state.last_evidence = evidence
         state.finished_at = time()
         self._store.set(state)
+        # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
+        await fire_goal_hooks(status, state)
         glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗"}.get(status, "•")
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 

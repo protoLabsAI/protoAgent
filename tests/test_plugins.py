@@ -345,3 +345,12 @@ def test_plugin_goal_verifier_is_collected(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg(plugins_enabled=["gverify"]))
     assert "gverify:credits" in res.goal_verifiers   # auto-namespaced (ADR 0028)
+
+
+def test_plugin_goal_hook_is_collected(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "plugins"
+    body = "def register(reg):\n    reg.register_goal_hook(on_achieved=lambda s: None)\n"
+    _make_plugin(root, "ghook", enabled=True, body=body)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg(plugins_enabled=["ghook"]))
+    assert len(res.goal_hooks) == 1 and res.goal_hooks[0]["plugin_id"] == "ghook"  # ADR 0028 D4
