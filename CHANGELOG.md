@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`controller.evaluate_now(session_id)`** (ADR 0030 D2.2) — a plugin can trigger an
+  immediate verifier-only goal check from its own state-change path (e.g. right after a
+  sale clears), so achievement is caught promptly instead of at the next monitor tick.
+  No agent turn, no drive bookkeeping; met → finish (hooks fire). Completes ADR 0030.
 - **Monitor goals** (ADR 0030 D1/D2.1/D3) — a goal can be `"mode": "monitor"` for a
   metric an *external* process drives (a background engine, training run, deployment).
   Monitor goals aren't added to the agent continuation loop (no wasted turns), **never

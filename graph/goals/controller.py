@@ -216,6 +216,30 @@ class GoalController:
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
 
+    async def evaluate_now(self, session_id: str) -> Decision | None:
+        """Run the active goal's verifier immediately — no agent turn, no drive
+        bookkeeping (ADR 0030 D2.2). A plugin calls this from its own state-change
+        path (e.g. right after a sale clears) so achievement is caught promptly
+        instead of at the next monitor tick. Met → finish (hooks fire); not-met →
+        record evidence + return None (iteration/no-progress untouched)."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return None
+        ctx = VerifyContext(
+            config=self._config, condition=state.condition,
+            last_text="", tool_summary="", cwd=os.getcwd(),
+        )
+        result = await run_verifier(state.verifier, ctx)
+        if result.met:
+            return await self._finish(state, "achieved", result.reason or "verifier passed",
+                                      evidence=result.evidence)
+        from time import time
+        state.last_reason = result.reason
+        state.last_evidence = result.evidence
+        state.last_checked = time()
+        self._store.set(state)
+        return None
+
     async def tick_monitor_goals(self) -> int:
         """Evaluate every active monitor goal out-of-band — verifier-only, no agent
         turn (ADR 0030 D2.1). The server runs this on a cadence so a met goal
