@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Test route are shared. Ships a **Telegram** plugin (`plugins/telegram`, opt-in)
   as the ~80-line reference — Slack/WhatsApp/etc. follow the same shape. Discord stays
   bespoke (richer extras) and can migrate incrementally.
+- **Slack plugin** (`plugins/slack`, opt-in) — a Socket Mode `ChatAdapter` (no public
+  URL), proving the standard handles a **websocket** transport as cleanly as Telegram's
+  HTTP long-poll. Needs a bot token (xoxb-) + an app-level token (xapp-).
 
 ## [0.22.0] - 2026-06-07
 

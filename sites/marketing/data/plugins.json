@@ -65,6 +65,19 @@
     }
   },
   {
+    "id": "slack",
+    "name": "Slack",
+    "official": true,
+    "tagline": "Run your agent as a Slack app over Socket Mode (no public URL) — inbound messages, replies back out. A communication plugin (ADR 0029) with a websocket transport.",
+    "adds": ["surface", "config"],
+    "bundled": true,
+    "enable": "slack",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/slack",
+      "docs": "/docs/guides/communication-plugins"
+    }
+  },
+  {
     "id": "google",
     "name": "Google (Gmail + Calendar)",
     "official": true,
