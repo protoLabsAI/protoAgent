@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`register_embedder` hook** (ADR 0031 follow-up) — a plugin can supply an in-process
+  embedder (`registry.register_embedder(name, factory→embed_fn)`), selected with
+  `knowledge.embedder: "<name>"`, so the built-in hybrid store can embed locally
+  (fastembed / sentence-transformers) without the gateway round-trip. Degrade-safe:
+  unregistered / None / error falls back to the gateway embedder.
+
 ## [0.23.0] - 2026-06-07
 
 ### Changed

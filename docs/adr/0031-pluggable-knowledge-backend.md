@@ -79,11 +79,17 @@ live-reload path.
 - The store interface is now explicit (`KnowledgeBackend`), so a backend author knows the
   exact surface to implement.
 
+## Embedder (shipped as a follow-up)
+
+The embedder is gateway-routed by default (model-swappable via `embed_model`).
+**`register_embedder(name, factory)`** + a `knowledge.embedder` selector let a plugin
+supply an **in-process** embedder (fastembed / sentence-transformers, no gateway
+round-trip) for the built-in hybrid store — degrade-safe to the gateway embedder on an
+unregistered name / None / error. A plugin-supplied *backend* (above) owns its own
+embedding, so the selector applies to the built-in-store path only.
+
 ## Out of scope / future
 
-- **The embedder** stays gateway-routed (model-swappable via `embed_model`). A
-  `register_embedder` hook (for an in-process embedder like fastembed/sentence-transformers,
-  no gateway round-trip) is a natural follow-up but not part of this ADR.
 - Retrieval **fusion** (RRF) lives in the backend now — a custom backend owns its own
   ranking, so no separate seam is needed.
 
