@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-06-07
+
 ### Changed
 - **Plugin console-view icon allowlist widened** (ADR 0026 D4) — the `views[].icon`
   set grew from 9 to ~35 lucide names spanning dashboards, data, comms, dev, AI,
