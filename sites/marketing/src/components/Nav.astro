@@ -1,0 +1,17 @@
+---
+const repo = 'https://github.com/protoLabsAI/protoAgent';
+---
+
+<header class="fixed top-0 inset-x-0 z-50 h-14 border-b border-[var(--color-edge)] bg-[#0a0a0c]/80 backdrop-blur">
+  <nav class="mx-auto max-w-6xl h-full px-5 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
+      <img src="/favicon.svg" alt="" width="22" height="22" />
+      <span>protoAgent</span>
+    </a>
+    <div class="flex items-center gap-6 text-sm text-zinc-400">
+      <a href="/docs/" class="hover:text-white transition-colors">Docs</a>
+      <a href="/docs/guides/plugin-registry" class="hover:text-white transition-colors hidden sm:inline">Plugins</a>
+      <a href={repo} class="hover:text-white transition-colors">GitHub</a>
+    </div>
+  </nav>
+</header>
