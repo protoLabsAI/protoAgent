@@ -146,6 +146,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
     STATE.thread_id_resolver = _plugins.thread_id_resolver  # thread_id seam (#571)
+    # Register plugin-contributed goal verifiers (ADR 0028) — re-set on each
+    # (re)load so a config change refreshes the available `plugin` verifiers.
+    from graph.goals import verifiers as _goal_verifiers
+    _goal_verifiers.set_plugin_verifiers(_plugins.goal_verifiers)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
     # here and consumed once by _main (mount) + the startup hook (start) — they
     # don't hot-reload. Subagents register into SUBAGENT_REGISTRY before the graph

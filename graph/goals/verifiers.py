@@ -205,12 +205,41 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
         return VerifyResult(False, f"evaluator error: {type(exc).__name__}", "")
 
 
+# Plugin-contributed verifiers (ADR 0028), keyed by their namespaced name
+# (``<plugin-id>:<name>``). Populated by the loader at graph build via
+# ``set_plugin_verifiers`` (re-set on config reload). In-process, reviewed code
+# with declarative args — no shell, no eval (that's why a ``plugin`` goal is the
+# only verifier type safe to set programmatically; see ADR 0028 D3).
+_PLUGIN_VERIFIERS: dict = {}
+
+
+def set_plugin_verifiers(mapping: dict | None) -> None:
+    """Replace the registered plugin verifier set (called at build + reload)."""
+    _PLUGIN_VERIFIERS.clear()
+    _PLUGIN_VERIFIERS.update(mapping or {})
+
+
+async def _verify_plugin(spec: dict, ctx: VerifyContext) -> VerifyResult:
+    """Dispatch a ``{"type":"plugin","check":"<id>:<name>","args":{…}}`` goal to a
+    plugin-registered verifier. ``args`` are declarative data the verifier validates."""
+    name = (spec or {}).get("check") or ""
+    fn = _PLUGIN_VERIFIERS.get(name)
+    if fn is None:
+        return VerifyResult(False, f"unknown plugin verifier {name!r}", "")
+    try:
+        return await fn(spec, ctx)
+    except Exception as exc:  # a bad verifier must never mark a goal met
+        log.warning("[goal] plugin verifier %s error: %s", name, exc)
+        return VerifyResult(False, f"verifier error: {type(exc).__name__}", "")
+
+
 VERIFIERS = {
     "command": _verify_command,
     "test": _verify_test,
     "ci": _verify_ci,
     "data": _verify_data,
     "llm": _verify_llm,
+    "plugin": _verify_plugin,
 }
 
 

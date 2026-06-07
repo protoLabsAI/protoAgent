@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugin-contributed goal verifiers** (ADR 0028, PR1) — a plugin can
+  `registry.register_goal_verifier("<name>", fn)` to contribute an in-process goal
+  verifier (auto-namespaced `<plugin-id>:<name>`), referenced by a new **`plugin`**
+  verifier type: `{"type":"plugin","check":"<id>:<name>","args":{…}}`. `args` are
+  declarative data the verifier validates — no shell, no `eval` — so a plugin can
+  ground-truth its own domain state without the `command` verifier's shell-out. A
+  bad/erroring verifier never marks a goal met. Wired through the loader + re-set on
+  config reload. (PR2 will allow setting a `plugin`-verifier goal programmatically.)
+
 ## [0.21.0] - 2026-06-07
 
 ### Added
