@@ -1,0 +1,21 @@
+id: slack
+name: Slack
+version: 0.1.0
+description: >-
+  Run your agent as a Slack app over **Socket Mode** (no public URL needed) —
+  inbound messages, replies back out. A communication plugin (ADR 0029) on the
+  ChatAdapter standard. Needs a bot token (xoxb-) + an app-level token (xapp-,
+  scope `connections:write`). Off until both are set in Settings → Slack.
+# Bundled but opt-in — enable with `plugins: { enabled: [slack] }`.
+enabled: false
+requires_pip: ["websockets>=12"]
+config_section: slack
+config:
+  enabled: false
+  admin_ids: []
+secrets: [bot_token, app_token]
+settings:
+  - { key: enabled, label: "Enable Slack", type: bool, description: "Inbound Socket Mode gateway. Needs both tokens below; reconnects live on save." }
+  - { key: bot_token, label: "Bot token (xoxb-)", type: secret, description: "OAuth bot token from your Slack app (scopes: chat:write, app_mentions:read or message.* events)." }
+  - { key: app_token, label: "App-level token (xapp-)", type: secret, description: "App-level token with `connections:write` (Slack app → Basic Information → App-Level Tokens). Required for Socket Mode." }
+  - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Slack user IDs allowed to message the bot (one per line). Empty = anyone." }
