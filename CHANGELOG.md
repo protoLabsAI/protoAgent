@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-subagent model override in config** (ADR 0001) — `subagents.<name>.model` pins a
+  subagent to a specific model (blank = `routing.aux_model` → main model), so an operator
+  can put a heavy-reasoning subagent on the main model while the rest route to a cheaper
+  alias — no code. Applied to the runtime registry at build + reload (the resolution path
+  in `_run_subagent` already existed); surfaced in the runtime status.
 - **Telemetry: export + disk visibility + retention guardrail** —
   `GET /api/telemetry/export` + an **Export CSV** button download every recorded turn;
   the **Runtime** panel now shows on-disk DB sizes (knowledge / telemetry / checkpoint /

@@ -40,6 +40,10 @@ subagents:
       - memory_recall
       - memory_list
     max_turns: 40
+    # Per-subagent model override (blank = routing.aux_model, then the main model).
+    # Pin a heavy-reasoning subagent to the main model even when aux_model routes
+    # the rest to a cheaper alias, e.g.:  model: protolabs/reasoning
+    model: ""
 
 middleware:
   # All four subsystems default ON. The template constructs the

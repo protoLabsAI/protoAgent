@@ -218,6 +218,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "enabled": config.researcher.enabled,
                 "tools": list(config.researcher.tools),
                 "max_turns": config.researcher.max_turns,
+                "model": config.researcher.model,
             },
         },
         "middleware": {
