@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Communication-plugin standard** (ADR 0029) — a `ChatAdapter` contract +
+  `register_chat_surface` helper (`graph/plugins/chat_surface.py`) so a chat
+  integration only implements transport (connect / receive / send); admin-gating,
+  per-conversation threads, agent invoke, reply-chunking, lifecycle + reconnect, and
+  the Test route are shared. Ships a **Telegram** plugin (`plugins/telegram`, opt-in)
+  as the ~80-line reference — Slack/WhatsApp/etc. follow the same shape. Discord stays
+  bespoke (richer extras) and can migrate incrementally.
+
 ## [0.22.0] - 2026-06-07
 
 ### Changed

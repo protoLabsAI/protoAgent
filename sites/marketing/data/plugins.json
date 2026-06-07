@@ -52,6 +52,19 @@
     }
   },
   {
+    "id": "telegram",
+    "name": "Telegram",
+    "official": true,
+    "tagline": "Run your agent as a Telegram bot — inbound DMs/groups, replies back out. The reference communication plugin (ADR 0029) — ~80 lines of transport on the ChatAdapter standard.",
+    "adds": ["surface", "config"],
+    "bundled": true,
+    "enable": "telegram",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/telegram",
+      "docs": "/docs/guides/communication-plugins"
+    }
+  },
+  {
     "id": "google",
     "name": "Google (Gmail + Calendar)",
     "official": true,
