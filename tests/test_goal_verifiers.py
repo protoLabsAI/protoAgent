@@ -128,3 +128,55 @@ async def test_llm_verifier_parses_json(monkeypatch):
     )
     assert res.met is True
     assert res.reason == "done"
+
+
+# ── plugin-contributed verifiers (ADR 0028, PR1) ─────────────────────────────
+
+from graph.goals.types import VerifyResult  # noqa: E402
+from graph.goals.verifiers import set_plugin_verifiers  # noqa: E402
+
+
+async def _ok_verifier(spec, ctx):
+    return VerifyResult(True, "met", str(spec.get("args", {}).get("min", "")))
+
+
+@pytest.mark.asyncio
+async def test_plugin_verifier_dispatches():
+    set_plugin_verifiers({"demo:check": _ok_verifier})
+    try:
+        res = await run_verifier(
+            {"type": "plugin", "check": "demo:check", "args": {"min": 5}}, VerifyContext()
+        )
+        assert res.met is True and res.reason == "met" and res.evidence == "5"
+    finally:
+        set_plugin_verifiers({})
+
+
+@pytest.mark.asyncio
+async def test_unknown_plugin_verifier_is_not_met():
+    set_plugin_verifiers({})
+    res = await run_verifier({"type": "plugin", "check": "nope"}, VerifyContext())
+    assert res.met is False and "unknown" in res.reason
+
+
+@pytest.mark.asyncio
+async def test_plugin_verifier_error_never_marks_met():
+    async def _boom(spec, ctx):
+        raise RuntimeError("kaboom")
+    set_plugin_verifiers({"demo:boom": _boom})
+    try:
+        res = await run_verifier({"type": "plugin", "check": "demo:boom"}, VerifyContext())
+        assert res.met is False and "error" in res.reason
+    finally:
+        set_plugin_verifiers({})
+
+
+def test_registry_auto_namespaces_and_guards():
+    from pathlib import Path
+    from graph.plugins.registry import PluginRegistry
+    reg = PluginRegistry("myplugin", Path("."))
+    reg.register_goal_verifier("credits", _ok_verifier)        # → myplugin:credits
+    reg.register_goal_verifier("other:explicit", _ok_verifier) # kept as-is
+    reg.register_goal_verifier("", _ok_verifier)               # invalid — ignored
+    reg.register_goal_verifier("bad", None)                    # invalid — ignored
+    assert set(reg.goal_verifiers) == {"myplugin:credits", "other:explicit"}
