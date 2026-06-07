@@ -30,6 +30,7 @@ class PluginLoadResult:
     skill_dirs: list = field(default_factory=list)
     workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
+    goal_hooks: list = field(default_factory=list)       # {on_achieved, on_failed} (ADR 0028)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
     routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
     surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
@@ -234,6 +235,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 log.warning("[plugins] %s: goal verifier %s collides — skipped", manifest.id, name)
                 continue
             result.goal_verifiers[name] = fn
+        result.goal_hooks.extend(registry.goal_hooks)  # ADR 0028 D4
         for f in registry.mcp_servers:
             result.mcp_servers.append({"plugin_id": manifest.id, "factory": f})
         entry["loaded"] = True

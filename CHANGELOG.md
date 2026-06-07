@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Goal lifecycle hooks** (ADR 0028, PR3) — a plugin can
+  `registry.register_goal_hook(on_achieved=…, on_failed=…)` to react when a goal
+  reaches a terminal state (achieved → `on_achieved`; exhausted/unachievable →
+  `on_failed`), fired from the controller's `_finish`. Push a notification, record a
+  finding, or set the next goal — the goal system becomes a self-improving-loop
+  building block, not a dead-end status. Sync or async; a raising hook is logged +
+  swallowed (never breaks the goal loop). Completes ADR 0028.
 - **Safe programmatic goal-set** (ADR 0028, PR2) — `GoalController.set_goal_safe()`
   + `POST /api/goals` let an agent/plugin/REST caller establish a standing goal
   **only** with a `plugin` verifier. `command`/`test`/`ci` (shell) and `data`
