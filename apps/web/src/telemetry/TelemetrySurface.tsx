@@ -14,6 +14,7 @@ import {
 import { Suspense } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { PanelHeader } from "../app/PanelHeader";
 import { telemetryQuery } from "../lib/queries";
 
 // Telemetry dashboard (ADR 0006 Slice 3) — reads /api/telemetry/* (the local
@@ -48,15 +49,15 @@ function TelemetryBody() {
 
   return (
     <>
-      <div className="panel-header">
-        <div>
-          <h1>Telemetry</h1>
-          <p className="panel-kicker">per-turn cost &amp; latency · {summary?.turns ?? 0} turns recorded</p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-          <RefreshCw size={15} className={isFetching ? "spin" : ""} /> Refresh
-        </button>
-      </div>
+      <PanelHeader
+        title="Telemetry"
+        kicker={`per-turn cost & latency · ${summary?.turns ?? 0} turns recorded`}
+        actions={
+          <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            <RefreshCw size={16} className={isFetching ? "spin" : ""} />
+          </button>
+        }
+      />
 
       <div className="stage-body">
         {!enabled ? (

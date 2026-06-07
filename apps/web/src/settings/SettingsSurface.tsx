@@ -9,6 +9,7 @@ const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { StageSubnav } from "../app/StageSubnav";
+import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -196,28 +197,26 @@ function SettingsBody() {
         />
       ) : null}
       <section className="panel stage-panel settings-panel">
-      <div className="panel-header">
-        <div>
-          <h1>Settings</h1>
-          <p className="panel-kicker">
-            {dirtyKeys.length ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}` : "applies on save"}
-          </p>
-        </div>
-        <div className="settings-actions">
-          <button className="secondary-button" type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
-            {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-            Test connection
-          </button>
-          <button className="secondary-button" type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
-            <RotateCcw size={15} />
-            Discard
-          </button>
-          <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
-            <Save size={16} />
-            Save &amp; apply
-          </button>
-        </div>
-      </div>
+      <PanelHeader
+        title="Settings"
+        kicker={dirtyKeys.length ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}` : "applies on save"}
+        actions={
+          <>
+            <button className="secondary-button" type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
+              {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+              Test connection
+            </button>
+            <button className="secondary-button" type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
+              <RotateCcw size={15} />
+              Discard
+            </button>
+            <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
+              <Save size={16} />
+              Save &amp; apply
+            </button>
+          </>
+        }
+      />
       <div className="stage-body">
         {pendingRestart.length ? (
           <div className="settings-banner" role="alert">

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
+import { PanelHeader } from "../app/PanelHeader";
 import { onServerEvent } from "../lib/events";
 import type { ActivityEntry } from "../lib/types";
 
@@ -117,15 +118,15 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
 
   return (
     <section className="panel stage-panel" data-testid="activity-surface">
-      <div className="panel-header">
-        <div>
-          <h1>Activity</h1>
-          <p className="panel-kicker">what the agent did on its own — and why</p>
-        </div>
-        <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
-          {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-        </button>
-      </div>
+      <PanelHeader
+        title="Activity"
+        kicker="what the agent did on its own — and why"
+        actions={
+          <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
+            {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+          </button>
+        }
+      />
 
       <div className="stage-body activity-body">
         <div className="activity-feed" ref={scrollRef}>

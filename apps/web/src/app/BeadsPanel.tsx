@@ -17,6 +17,7 @@ import {
 import { Suspense, useState } from "react";
 
 import { api } from "../lib/api";
+import { PanelHeader } from "./PanelHeader";
 import { beadsIssuesQuery, queryKeys } from "../lib/queries";
 import type { BeadsIssue } from "../lib/types";
 import {
@@ -254,12 +255,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
 export function BeadsPanel({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   return (
     <section className="panel side-panel beads-panel">
-      <div className="panel-header compact">
-        <div>
-          <h2>Beads</h2>
-          <p className="panel-kicker">the agent's task board</p>
-        </div>
-      </div>
+      <PanelHeader compact title="Beads" kicker="the agent's task board" />
       <QueryErrorResetBoundary>
         {({ reset }) => (
           <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="beads" />}>

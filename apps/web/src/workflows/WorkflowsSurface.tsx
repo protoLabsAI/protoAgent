@@ -8,6 +8,7 @@ import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import { queryKeys, subagentsQuery, workflowsQuery } from "../lib/queries";
 import type { WorkflowRunResult } from "../lib/types";
@@ -78,22 +79,20 @@ function WorkflowsBody() {
 
   return (
     <>
-      <div className="panel-header">
-        <div>
-          <h1>Workflows</h1>
-          <p className="panel-kicker">
-            step-by-step recipes the engine runs over subagents · {workflows.length} recipe{workflows.length === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="panel-actions">
-          <button className="icon-button" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
-            <Plus size={16} />
-          </button>
-          <button className="icon-button" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
-            <RefreshCw size={16} />
-          </button>
-        </div>
-      </div>
+      <PanelHeader
+        title="Workflows"
+        kicker={`step-by-step recipes the engine runs over subagents · ${workflows.length} recipe${workflows.length === 1 ? "" : "s"}`}
+        actions={
+          <>
+            <button className="icon-button" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
+              <Plus size={16} />
+            </button>
+            <button className="icon-button" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
+              <RefreshCw size={16} />
+            </button>
+          </>
+        }
+      />
 
       <div className="stage-body">
         {building ? (

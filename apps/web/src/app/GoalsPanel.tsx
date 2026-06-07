@@ -8,6 +8,7 @@ import { Trash2 } from "lucide-react";
 import { Suspense } from "react";
 
 import { api } from "../lib/api";
+import { PanelHeader } from "./PanelHeader";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "./ScrollArea";
@@ -79,14 +80,11 @@ function GoalsList() {
 export function GoalsPanel() {
   return (
     <section className="panel side-panel goals-panel">
-      <div className="panel-header compact">
-        <div>
-          <h2>Goals</h2>
-          <p className="panel-kicker">
-            the agent's standing goals · set with <code>/goal</code> in chat
-          </p>
-        </div>
-      </div>
+      <PanelHeader
+        compact
+        title="Goals"
+        kicker={<>the agent's standing goals · set with <code>/goal</code> in chat</>}
+      />
       <ScrollArea className="goals-list" ariaLabel="Goals">
         <QueryErrorResetBoundary>
           {({ reset }) => (

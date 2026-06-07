@@ -2,6 +2,7 @@ import { Brain, Database, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { PanelHeader } from "../app/PanelHeader";
 import type { KnowledgeChunk } from "../lib/types";
 
 // Knowledge → Store (ADR 0020) — a searchable window onto the agent's knowledge
@@ -53,17 +54,15 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
 
   return (
     <section className="panel stage-panel" data-testid="knowledge-store">
-      <div className="panel-header">
-        <div>
-          <h1>Knowledge</h1>
-          <p className="panel-kicker">
-            searchable knowledge base{total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}
-          </p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
-          <RefreshCw size={15} className={loading ? "spin" : ""} /> Refresh
-        </button>
-      </div>
+      <PanelHeader
+        title="Knowledge"
+        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}`}
+        actions={
+          <button className="icon-button" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
+            <RefreshCw size={16} className={loading ? "spin" : ""} />
+          </button>
+        }
+      />
 
       <div className="stage-body">
         <input

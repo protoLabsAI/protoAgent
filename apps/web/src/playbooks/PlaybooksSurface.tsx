@@ -2,6 +2,7 @@ import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "../app/ConfirmDialog";
+import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import type { Playbook } from "../lib/types";
 
@@ -78,17 +79,15 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
 
   return (
     <section className="panel stage-panel" data-testid="playbooks-surface">
-      <div className="panel-header">
-        <div>
-          <h1>Skills</h1>
-          <p className="panel-kicker">
-            methodology the agent retrieves into context · {pinned} pinned · {learned} learned
-          </p>
-        </div>
-        <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
-          <RefreshCw size={15} className={loading ? "spin" : ""} /> Refresh
-        </button>
-      </div>
+      <PanelHeader
+        title="Skills"
+        kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned`}
+        actions={
+          <button className="icon-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
+            <RefreshCw size={16} className={loading ? "spin" : ""} />
+          </button>
+        }
+      />
 
       <div className="stage-body">
         <input

@@ -2,6 +2,7 @@ import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
+import { PanelHeader } from "../app/PanelHeader";
 
 // Author a workflow recipe from the console (Sprint C): name + inputs + steps
 // (id, subagent, prompt, depends_on) + output → POST /api/workflows, which
@@ -81,12 +82,15 @@ export function WorkflowBuilder({
 
   return (
     <div className="workflow-builder">
-      <div className="panel-header compact">
-        <h2>New workflow</h2>
-        <button className="icon-button" type="button" onClick={onCancel} title="Cancel">
-          <X size={16} />
-        </button>
-      </div>
+      <PanelHeader
+        compact
+        title="New workflow"
+        actions={
+          <button className="icon-button" type="button" onClick={onCancel} title="Cancel">
+            <X size={16} />
+          </button>
+        }
+      />
 
       <label className="field">
         <span>Name *</span>

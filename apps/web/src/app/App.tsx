@@ -74,6 +74,7 @@ import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { StageSubnav } from "./StageSubnav";
+import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { NotesWorkspace } from "../lib/types";
@@ -763,28 +764,27 @@ export function App() {
 
           {rightPanel === "notes" ? (
             <section className="panel side-panel notes-panel">
-              <div className="panel-header compact">
-                <div>
-                  <h2>{activeTab?.name || "Notes"}</h2>
-                  <p className="panel-kicker">
-                    {workspace ? `${workspace.tabOrder.length} tab${workspace.tabOrder.length === 1 ? "" : "s"}${notesDirty ? " • unsaved" : ""}` : "not loaded"}
-                  </p>
-                </div>
-                <div className="notes-actions">
-                  <button className="icon-button" type="button" onClick={createNote} disabled={!workspace} title="New note">
-                    <Plus size={16} />
-                  </button>
-                  <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note">
-                    <Trash2 size={16} />
-                  </button>
-                  <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change">
-                    <Undo2 size={16} />
-                  </button>
-                  <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">
-                    {notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-                  </button>
-                </div>
-              </div>
+              <PanelHeader
+                compact
+                title={activeTab?.name || "Notes"}
+                kicker={workspace ? `${workspace.tabOrder.length} tab${workspace.tabOrder.length === 1 ? "" : "s"}${notesDirty ? " • unsaved" : ""}` : "not loaded"}
+                actions={
+                  <>
+                    <button className="icon-button" type="button" onClick={createNote} disabled={!workspace} title="New note">
+                      <Plus size={16} />
+                    </button>
+                    <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note">
+                      <Trash2 size={16} />
+                    </button>
+                    <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change">
+                      <Undo2 size={16} />
+                    </button>
+                    <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">
+                      {notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                    </button>
+                  </>
+                }
+              />
               {workspace ? (
                 <div className="notes-tabbar">
                   {workspace.tabOrder.map((tabId) => {
