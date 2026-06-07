@@ -41,6 +41,13 @@ gitignored (re-cloned from the lock).
 
 ## Publish one
 
+> **Start from the devkit.** Enable the bundled **`plugin-devkit`** plugin
+> (`plugins: { enabled: [plugin-devkit] }`) — it's the canonical full-bundle
+> example *and* it gives the agent a `scaffold_plugin` tool, a `plugin-architect`
+> subagent + `design-plugin` workflow, and the `building-plugins` skill. With it
+> on, just ask the agent to *"build a plugin that …"* and it scaffolds a working
+> skeleton for you to fill in.
+
 A plugin is a directory (its own repo) with a manifest + a `register()`. The
 **conventional layout** — everything here is picked up when the plugin is enabled:
 

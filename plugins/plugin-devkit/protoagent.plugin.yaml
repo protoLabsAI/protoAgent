@@ -1,0 +1,28 @@
+id: plugin-devkit
+name: Plugin Devkit
+version: 0.1.0
+description: >-
+  The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
+  contribution type in one repo — a tool (`scaffold_plugin`), a subagent
+  (`plugin-architect`), a bundled `SKILL.md` skill, a workflow (`design-plugin`),
+  a console view, and config/settings — and it gives the agent what it needs to
+  build its own plugins: the building-plugins skill (the how) + the scaffold tool
+  (the doing). Enable it, then ask the agent to build a plugin.
+enabled: false
+
+# Declarative (surfaced, not enforced): scaffold_plugin writes plugin skeletons
+# into the live plugins dir.
+capabilities:
+  network: []
+  filesystem: scoped
+
+# Config + Settings (ADR 0019) — where scaffolded plugins are written.
+config_section: plugin_devkit
+config:
+  target_dir: ""
+settings:
+  - { key: target_dir, label: "Scaffold target dir", type: string, description: "Where scaffold_plugin writes new plugins (blank = the live plugins dir)." }
+
+# Console view (ADR 0026) — a quick-reference card for the plugin contract.
+views:
+  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /plugins/plugin-devkit/guide }

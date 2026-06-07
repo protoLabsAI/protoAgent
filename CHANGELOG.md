@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin Devkit** — `plugins/plugin-devkit`, a featured first-class plugin that
+  is both the canonical **full-bundle example** and the **plugin-authoring kit**.
+  In one plugin it demonstrates every contribution type — a tool
+  (**`scaffold_plugin`**, writes a new plugin skeleton on disk), a subagent
+  (**`plugin-architect`**), a bundled **`building-plugins` skill** (the authoring
+  contract), a **`design-plugin` workflow** (request → spec), a **console view**,
+  and **config/settings**. Enable it (it ships disabled, like `hello`) to let the
+  agent build its own plugins. See [Install & publish plugins](docs/guides/plugin-registry.md).
 - **Clean plugin delete** (ADR 0027) — `plugin uninstall <id>` now also removes the
   plugin's `plugins.enabled`/`disabled` reference (no more dangling-enabled errors
   on the next restart), on top of the code dir + `plugins.lock` entry. A new
