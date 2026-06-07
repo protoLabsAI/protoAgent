@@ -69,3 +69,22 @@ def test_scaffold_refuses_overwrite(tmp_path):
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     scaffold.invoke({"name": "dup"})
     assert "already exists" in scaffold.invoke({"name": "dup"})
+
+
+def test_scaffold_communication_plugin(monkeypatch, tmp_path):
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"; out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    msg = scaffold.invoke({"name": "My Chat", "summary": "demo", "with_comms": True})
+    assert "communication plugin" in msg
+    pdir = out_root / "my-chat"
+    manifest = (pdir / "protoagent.plugin.yaml").read_text()
+    init = (pdir / "__init__.py").read_text()
+    assert "config_section: my-chat" in manifest and "bot_token" in manifest
+    assert "register_chat_surface" in init and "class MyChatAdapter" in init
+
+    # the scaffolded comms skeleton must itself LOAD (registers a surface)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [out_root])
+    res = load_plugins(_cfg(plugins_enabled=["my-chat"]))
+    meta = next(m for m in res.meta if m["id"] == "my-chat")
+    assert meta["loaded"], meta.get("error")
