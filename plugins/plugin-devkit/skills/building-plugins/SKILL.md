@@ -33,6 +33,10 @@ Map the ask to the contribution surface:
   conventional `skills/` and `workflows/` subdirs (no code).
 - **console view** (rail icon + page) → declared in the manifest `views:`.
 - **config / secrets / Settings fields** → declared in the manifest.
+- **chat integration** (Discord/Slack/Telegram-style) → it's a *communication
+  plugin* — use `scaffold_plugin(..., with_comms=True)` to get a `ChatAdapter`
+  skeleton on the shared wirer (ADR 0029); you implement only connect/receive/send.
+  See `docs/guides/communication-plugins.md` and `plugins/telegram` for a reference.
 
 ## 2. Lay out the directory
 ```

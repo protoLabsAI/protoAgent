@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Slack plugin** (`plugins/slack`, opt-in) — a Socket Mode `ChatAdapter` (no public
   URL), proving the standard handles a **websocket** transport as cleanly as Telegram's
   HTTP long-poll. Needs a bot token (xoxb-) + an app-level token (xapp-).
+- **Devkit comms scaffold** — `scaffold_plugin(..., with_comms=True)` writes a
+  `ChatAdapter` skeleton on the shared wirer, so the agent can stub a new chat
+  integration itself.
 
 ## [0.22.0] - 2026-06-07
 
