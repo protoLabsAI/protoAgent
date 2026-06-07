@@ -79,7 +79,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters, no_progress = self._parse_set(rest)
+        spec, condition, max_iters, no_progress, mode = self._parse_set(rest)
         if condition is None:
             return ("Could not parse goal. Use `/goal <text>` or "
                     '`/goal {"condition": "...", "verifier": {"type": "command", '
@@ -88,6 +88,7 @@ class GoalController:
             session_id=session_id,
             condition=condition,
             verifier=spec,
+            mode=mode,  # "drive" (default) | "monitor" (ADR 0030)
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress,  # per-goal patience (ADR 0030 D4); None → config
         )
@@ -101,7 +102,8 @@ class GoalController:
 
     def set_goal_safe(self, session_id: str, condition: str, verifier: dict,
                       max_iterations: int | None = None,
-                      no_progress_limit: int | None = None) -> tuple[bool, str]:
+                      no_progress_limit: int | None = None,
+                      mode: str = "drive") -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
         programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
@@ -116,6 +118,7 @@ class GoalController:
             return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
         state = GoalState(
             session_id=session_id, condition=condition, verifier=verifier,
+            mode=("monitor" if mode == "monitor" else "drive"),  # ADR 0030 (still plugin-gated)
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,  # per-goal patience (ADR 0030 D4)
         )
@@ -123,21 +126,22 @@ class GoalController:
         return (True, f"Goal set. {state.status_line()}")
 
     def _parse_set(self, rest: str):
-        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None)."""
+        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None, mode)."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None, None)
+                return ({}, None, None, None, "drive")
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None, None)
+                return ({}, None, None, None, "drive")
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
-            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"))
+            mode = "monitor" if data.get("mode") == "monitor" else "drive"
+            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), mode)
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None, None)
+        return ({"type": "llm"}, rest, None, None, "drive")
 
     # --- evaluation --------------------------------------------------------
 
@@ -161,6 +165,19 @@ class GoalController:
         if result.met:
             return await self._finish(state, "achieved", result.reason or "verifier passed",
                                 evidence=result.evidence)
+
+        # Monitor goals (ADR 0030): an external process drives the metric, not the
+        # agent's turns — so on not-met there's nothing for the agent to do. Record
+        # the check and wait for the next one; no continuation, no iteration/no-
+        # progress bookkeeping, no exhaustion. It ends only on achieved / cleared
+        # (/ a future deadline). This is what closes ADR-0028 D6.
+        if state.mode == "monitor":
+            from time import time
+            state.last_reason = result.reason
+            state.last_evidence = result.evidence
+            state.last_checked = time()
+            self._store.set(state)
+            return None
 
         # 2. Verifier not met — honour an explicit give-up from the agent.
         giveup = _GIVEUP_RE.search(last_text or "")
@@ -198,6 +215,24 @@ class GoalController:
             message=self._continuation(state, result),
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
+
+    async def tick_monitor_goals(self) -> int:
+        """Evaluate every active monitor goal out-of-band — verifier-only, no agent
+        turn (ADR 0030 D2.1). The server runs this on a cadence so a met goal
+        doesn't sit ``active`` until the next session turn. Returns how many reached
+        a terminal state this tick."""
+        finished = 0
+        for state in list(self._store.all()):
+            if not (state.active and state.mode == "monitor"):
+                continue
+            try:
+                decision = await self.evaluate(state.session_id, last_text="")
+            except Exception:  # noqa: BLE001 — one bad goal must not stop the tick
+                log.exception("[goal] monitor tick failed for %s", state.session_id)
+                continue
+            if decision is not None and decision.action == "done":
+                finished += 1
+        return finished
 
     async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time

@@ -33,6 +33,17 @@ Send a control message through any channel (A2A, Gradio chat, OpenAI-compat):
   ```
   /goal {"condition": "unit tests pass", "verifier": {"type": "test", "command": "python -m pytest -q"}}
   ```
+- **Monitor goal** (ADR 0030) — for a metric driven by an *external* process (a
+  background engine, a training run, a deployment), not the agent's turns. Add
+  `"mode": "monitor"`: the agent **isn't** re-invoked, the goal **never exhausts**,
+  and it's checked **out-of-band** on a cadence (`goal.monitor_interval`, default 60s),
+  firing the verifier's `on_achieved` hook when it passes.
+  ```
+  /goal {"condition": "treasury ≥ 1,000,000", "mode": "monitor", "verifier": {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
+  ```
+  (Default is `"mode": "drive"` — the agent *is* the work, the bounded loop above.)
+- **Per-goal patience:** add `"no_progress_limit": N` to widen/narrow one goal's
+  no-progress tolerance without changing the global default.
 - **Status:** `/goal`
 - **Clear:** `/goal clear` (aliases: `stop`, `off`, `cancel`, `reset`, `none`)
 
