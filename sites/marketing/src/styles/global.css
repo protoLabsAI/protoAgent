@@ -1,50 +1,54 @@
 @import "tailwindcss";
+/* Canonical protoLabs brand tokens (from @protolabsai/design — source: protoContent).
+   Use these instead of hand-rolled hexes so the site tracks the brand. */
+@import "@protolabsai/design/css/tokens";
 
+/* Map the brand tokens into Tailwind's theme so utilities (bg-accent, text-fg…)
+   AND var() refs resolve to the canonical values. */
 @theme {
-  --color-surface-0: #0a0a0c;
-  --color-surface-1: #111113;
-  --color-surface-2: #161619;
-  --color-surface-3: #1d1d21;
-  --color-accent:     #9b87f2;  /* protoLabs brand violet */
-  --color-accent-dim: #7c6fd6;
-  --color-accent-alt: #b6a6ff;
-  --color-muted: #8b8b94;
-  --color-edge: rgba(255, 255, 255, 0.08);
-  --font-sans: 'Geist', system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --color-bg: var(--pl-color-bg);
+  --color-bg-raised: var(--pl-color-bg-raised);
+  --color-fg: var(--pl-color-fg);
+  --color-fg-muted: var(--pl-color-fg-muted);
+  --color-accent: var(--pl-color-brand-lavender);
+  --color-accent-light: var(--pl-color-brand-lavender-light);
+  --color-edge: var(--pl-color-border);
+  --font-sans: var(--pl-font-sans);
+  --font-mono: var(--pl-font-mono);
 }
 
 html {
-  background: var(--color-surface-0);
-  color: #ededed;
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--pl-font-sans);
   min-height: 100vh;
 }
 
+/* Brand gradient (canonical) for hero wordmark + accents. */
 .gradient-text {
-  background: linear-gradient(135deg, #b6a6ff 0%, #9b87f2 45%, #7c6fd6 100%);
+  background: var(--pl-gradient-brand);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-/* Soft violet glow behind the hero */
+/* Soft brand glow behind the hero. */
 .hero-glow {
-  background: radial-gradient(60% 50% at 50% 0%, rgba(155, 135, 242, 0.18) 0%, transparent 70%);
+  background: radial-gradient(60% 50% at 50% 0%, rgba(155, 135, 242, 0.16) 0%, transparent 70%);
 }
 
 .card {
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-edge);
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
   border-radius: 14px;
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  transition: border-color var(--pl-motion-base, 200ms) ease, transform var(--pl-motion-base, 200ms) ease;
 }
 .card:hover {
-  border-color: rgba(155, 135, 242, 0.35);
+  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent);
   transform: translateY(-2px);
 }
