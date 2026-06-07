@@ -8,6 +8,7 @@ import { Check, RefreshCw } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
 import { inboxQuery, queryKeys } from "../lib/queries";
@@ -50,15 +51,16 @@ function InboxBody({
 
   return (
     <>
-      <div className="panel-header compact">
-        <div>
-          <h2>Inbox</h2>
-          <p className="panel-kicker">{items.length} pending</p>
-        </div>
-        <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-          <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-        </button>
-      </div>
+      <PanelHeader
+        compact
+        title="Inbox"
+        kicker={`${items.length} pending`}
+        actions={
+          <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            <RefreshCw size={16} className={isFetching ? "spin" : ""} />
+          </button>
+        }
+      />
 
       <div className="inbox-list">
         {items.length === 0 ? (

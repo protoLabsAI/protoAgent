@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Unified panel headers** — every surface's header (title + kicker + actions) now renders
+  through one shared `PanelHeader` component, with a single `.panel-actions` wrapper.
+  Consolidated the duplicate `.settings-actions` / `.notes-actions` classes and standardized
+  refresh buttons to icon-only. Completes the panel-layout single-source-of-truth pass
+  (with `StageSubnav`).
 - **Unified panel sub-tabs** — every surface's sub-tab strip now renders through one
   shared `StageSubnav` component, always **above the panel card**. Previously Settings +
   plugin views rendered their tabs *inside* the card (so they read as part of the heading)

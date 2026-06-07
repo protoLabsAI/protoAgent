@@ -8,6 +8,7 @@ import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import {
@@ -172,21 +173,21 @@ function ScheduleBody() {
 
   return (
     <>
-      <div className="panel-header">
-        <div>
-          <h1>Schedule</h1>
-          <p className="panel-kicker">{jobs.length} job{jobs.length === 1 ? "" : "s"} · {backend}</p>
-        </div>
-        <div className="settings-actions">
-          <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-            <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-          </button>
-          <button className="primary-button" type="button" onClick={() => setModalOpen(true)}
-                  disabled={backend === "disabled"} data-testid="schedule-new">
-            <Plus size={16} /> New schedule
-          </button>
-        </div>
-      </div>
+      <PanelHeader
+        title="Schedule"
+        kicker={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${backend}`}
+        actions={
+          <>
+            <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+              <RefreshCw size={16} className={isFetching ? "spin" : ""} />
+            </button>
+            <button className="primary-button" type="button" onClick={() => setModalOpen(true)}
+                    disabled={backend === "disabled"} data-testid="schedule-new">
+              <Plus size={16} /> New schedule
+            </button>
+          </>
+        }
+      />
 
       <div className="stage-body">
         {add.isError ? <p className="settings-status">Couldn't schedule: {add.error instanceof Error ? add.error.message : String(add.error)}</p> : null}

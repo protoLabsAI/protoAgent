@@ -3,6 +3,7 @@ import { Bot, Database, Settings2, Sparkles } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
+import { PanelHeader } from "./PanelHeader";
 import { runtimeStatusQuery, subagentsQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
@@ -33,13 +34,11 @@ function RuntimeBody() {
 
   return (
     <>
-      <div className="panel-header">
-        <div>
-          <h1>Runtime</h1>
-          <p className="panel-kicker">{runtime.model?.name || "model not configured"}</p>
-        </div>
-        <StatusPill label={runtime.scheduler.backend || "scheduler"} tone="muted" />
-      </div>
+      <PanelHeader
+        title="Runtime"
+        kicker={runtime.model?.name || "model not configured"}
+        actions={<StatusPill label={runtime.scheduler.backend || "scheduler"} tone="muted" />}
+      />
       <div className="stage-body">
         <div className="metric-grid">
           <Metric icon={<Bot size={16} />} label="Agent" value={brandName(runtime.identity?.name)} />

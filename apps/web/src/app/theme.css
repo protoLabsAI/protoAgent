@@ -1505,8 +1505,9 @@ textarea {
 
 .panel-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  padding: 12px;
+  gap: 8px;
 }
 
 .output-block {
@@ -2060,11 +2061,6 @@ textarea {
   padding: 12px;
 }
 
-.notes-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 .notes-tabbar {
   display: flex;
@@ -2839,11 +2835,6 @@ textarea {
 }
 
 /* ── Settings surface ─────────────────────────────────────────────────────── */
-.settings-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .settings-banner {
   display: flex;
   align-items: center;
