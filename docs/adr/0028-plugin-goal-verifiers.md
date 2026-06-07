@@ -1,6 +1,6 @@
 # 0028 — Plugin-contributed goal verifiers (+ safe programmatic goals)
 
-Status: **Proposed**
+Status: **Accepted** (sliced — D3 amended to `plugin`-only after review; see D3/D5)
 
 > Authored from the protoTrader-in-space fork, where an autonomous agent makes
 > progress out-of-band (a background engine + a scheduler tick) and surfaced the
@@ -79,13 +79,27 @@ The dispatcher resolves `check` against the registered verifiers; `args` are **d
 data** validated by the plugin's verifier (never interpolated into a shell). Names are
 namespaced `<plugin-id>:<name>` to avoid collisions.
 
-### D3 — Safe programmatic goal-set (gated to non-shell verifiers)
+### D3 — Safe programmatic goal-set (gated to the `plugin` verifier only)
 
 Add a goal-set path (a tool and/or `POST /api/goals`) that accepts a goal **only** with a
-`plugin` or `data` verifier — **never** `command`/`test`/`ci`. Because those allowed
-verifiers carry no host-shell surface, an agent or plugin can establish and close a
-standing objective **without opening RCE**. The operator-only gate is preserved exactly
-where it matters (the shell verifiers), and nowhere else.
+`plugin` verifier — **never** `command`/`test`/`ci` **and never `data`**. A `plugin`
+verifier is reviewed in-process code whose `args` are **declarative data the plugin itself
+validates** (no shell, no `eval`, no path), so an agent or plugin can establish and close a
+standing objective **without opening a code-execution surface**.
+
+> **Why `data` is excluded (review finding).** An earlier draft allowed `data` too, on the
+> reasoning that it "carries no host-shell surface." It doesn't — but it carries a different
+> code-exec surface: the `data` verifier runs `eval(spec["expr"], {"__builtins__":
+> _SAFE_BUILTINS}, {"data": data})` (`verifiers.py`). Restricted *builtins* is **not** a
+> sandbox — attribute access is open, so a spec-supplied `expr` escapes via
+> `().__class__.__bases__[0].__subclasses__()` → `os`/`subprocess` (full RCE), and `data`'s
+> `spec["path"]` is an arbitrary file read. Letting an agent set a `data` goal would hand it
+> that sink — re-opening, in a better-hidden form, exactly the RCE the shell verifiers are
+> kept operator-only for. So `data` stays **operator-only** alongside `command`/`test`/`ci`;
+> only `plugin` is safe to set programmatically.
+
+The operator `/goal` path keeps full access to every verifier type (it's already gated to
+trusted operator input). D3 only governs the *programmatic* (agent/plugin/REST) set.
 
 ### D4 — Goal lifecycle hooks (optional)
 
@@ -98,10 +112,18 @@ dead-end status.
 
 A plugin goal verifier is **trusted, reviewed, in-process code** — the same posture as any
 enabled plugin (ADR 0027: *install ≠ enable ≠ trust*; enabling **is** the trust decision).
-What makes D3 safe is the combination the built-in `command` verifier lacks: **declarative
-args + no host shell.** The RCE surface that justified operator-only is the shell verifiers,
-and they stay operator-only. We are not loosening the trust boundary; we are giving plugins
-a verifier path that never had the RCE surface to begin with.
+What makes the `plugin` verifier safe for D3 is the combination the built-in
+`command`/`data` verifiers lack: **declarative, plugin-validated args + no host shell + no
+`eval` + no arbitrary path.** The code-exec surfaces that justify operator-only are the
+shell verifiers (`command`/`test`/`ci`) **and** the `data` verifier's `eval` (see D3), and
+all of them stay operator-only. We are not loosening the trust boundary; we are giving
+plugins a verifier path that never had a code-exec surface to begin with.
+
+> **Sharp edge to harden separately:** the `data` verifier's restricted-builtins `eval` is
+> escapable even for operator-set goals (it's just gated to trusted input today). A
+> follow-up should replace it with a real safe evaluator (e.g. a small AST allowlist like
+> the `calculator` tool uses) so `data` could eventually be eligible for programmatic set
+> too. Tracked as future work, not part of this ADR.
 
 ### D6 — Out-of-band evaluation (DEFERRED / future slice)
 
@@ -137,7 +159,7 @@ distant target — using it for the latter storms the loop).
 
 - **PR1** — `register_goal_verifier` + the `plugin` verifier type (D1, D2). The core; makes
   ground-truthing domain state a first-class plugin capability.
-- **PR2** — safe programmatic set gated to `plugin`/`data` verifiers, via a goal tool and/or
+- **PR2** — safe programmatic set gated to the `plugin` verifier only, via a goal tool and/or
   REST (D3).
 - **PR3** — lifecycle hooks (D4).
 - **Future** — out-of-band evaluation (D6).
