@@ -1,0 +1,22 @@
+# Bundled by plugin-devkit — turn a plain-English request into a concrete plugin
+# spec using the plugin-architect subagent. Run it:
+#   run_workflow("design-plugin", {"request": "a plugin that posts daily standups to Slack"})
+# Then hand the spec to `scaffold_plugin` (or fill in the scaffolded skeleton).
+name: design-plugin
+description: Turn a plain-English request into a protoAgent plugin spec (manifest + register sketch).
+version: 1
+inputs:
+  - name: request
+    description: What the plugin should do.
+    required: true
+steps:
+  - id: design
+    subagent: plugin-architect
+    prompt: |
+      Design a protoAgent plugin for this request:
+      {{inputs.request}}
+
+      Output, concretely: the plugin id + name, the contribution types it needs,
+      a complete protoagent.plugin.yaml, and a register() sketch. Smallest plugin
+      that satisfies the request.
+output: "{{steps.design.output}}"
