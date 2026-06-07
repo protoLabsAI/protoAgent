@@ -74,10 +74,12 @@ Core surfaces are unchanged in behavior.
 
 ### D4 — Icons: a lucide-name allowlist (+ optional plugin SVG)
 
-`icon` is a **lucide-react icon name** the console maps from a curated set;
-unknown/missing → a default "plugin" glyph. A plugin may instead point `icon` at
-an SVG it serves (`/plugins/<id>/icon.svg`) for a custom mark. Lucide-name is the
-common path (matches the rest of the rail).
+`icon` is a **lucide-react icon name** the console maps from a curated allowlist
+(broadened to cover dashboards, data, comms, dev, AI, finance, space/fleet, and
+security — e.g. `LayoutDashboard`, `BarChart3`, `Rocket`, `Satellite`, `Bot`,
+`Coins`, `Workflow`, `Shield`); an unknown/missing name → a default "plugin" glyph.
+A plugin may instead point `icon` at an SVG it serves (`/plugins/<id>/icon.svg`)
+for a custom mark. Lucide-name is the common path (matches the rest of the rail).
 
 ### D5 — Auth: same-origin, token handed in post-load (no token-in-URL)
 
