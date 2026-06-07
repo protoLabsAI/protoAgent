@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Friendlier Schedule tab** — "New schedule" now opens a **modal** that builds the
+  schedule for you: a **calendar** picker for one-off (→ ISO datetime), **presets** for
+  recurring (hourly / daily / weekdays / weekly + a time picker, → cron), and a raw-cron
+  escape hatch — with a live plain-English preview ("every weekday at 9:00 AM"). No
+  hand-written cron required. The list now shows each job's schedule in plain English too.
+
 ### Added
 - **Desktop build CI** — `.github/workflows/desktop-build.yml` builds the macOS desktop
   app (`.dmg` — the Tauri shell + the PyInstaller server sidecar), signs + notarizes it
