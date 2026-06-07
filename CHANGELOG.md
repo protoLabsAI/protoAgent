@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-07
+
 ### Changed
 - **Console: "Playbooks" renamed to "Skills"** — the surface always *was* the skill
   index (`SKILL.md`); the "Playbook" label collided with Workflows. Now labeled Skills,
