@@ -50,6 +50,8 @@ class GoalState:
     checklist: str = ""
     iteration: int = 0
     max_iterations: int = 8
+    # Per-goal patience (ADR 0030 D4); None → the config goal_no_progress_limit.
+    no_progress_limit: int | None = None
     no_progress_streak: int = 0
     last_reason: str = ""
     last_evidence: str = ""

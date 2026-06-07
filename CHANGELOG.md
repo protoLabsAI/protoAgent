@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-goal `no_progress_limit`** (ADR 0030 D4) — a goal can carry its own patience
+  (`/goal {"…", "no_progress_limit": N}` or via `set_goal_safe`), overriding the global
+  `goal_no_progress_limit` for that one goal. First slice of monitor goals.
 - **Generic plugin "Test connection" button** (ADR 0029) — a plugin manifest can
   declare `test: true` and the console renders a Test-connection button for its
   Settings group (POSTs the group's fields to `/api/config/test-<section>`, unset
