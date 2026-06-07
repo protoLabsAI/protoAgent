@@ -405,15 +405,12 @@ _OVERRIDABLE_SUBAGENTS = ("researcher",)
 
 
 def _apply_config_subagents(config) -> None:
-    """Apply the per-subagent **model** override from YAML (``subagents.<name>.model``)
-    onto the built-in registry entries — the operator-facing half of the override that
-    ``_run_subagent`` already honors (per-subagent → routing.aux_model → main model).
-    Blank model = the base model (idempotent across reloads); preserves the entry's
-    tools/prompt (incl. any plugin tweaks). Runs at init + reload.
-
-    Scoped to ``model`` on purpose: ``tools``/``max_turns`` in ``SubagentDef`` are not
-    wired here because the config-side defaults intentionally mirror — but don't track —
-    the registry's, so clobbering them would drop registry-only tools (e.g. memory_ingest)."""
+    """Apply the YAML subagent override (``subagents.<name>``: enabled / tools /
+    max_turns / model) onto the built-in registry entries — what makes the documented
+    knobs actually take effect at runtime (the resolution path in ``_run_subagent``
+    already existed). Derives each entry from its static default (SSOT, so it's
+    idempotent across reloads and an un-overridden config is a true no-op);
+    ``enabled: false`` removes the subagent (not delegatable). Runs at init + reload."""
     try:
         from dataclasses import replace
 
@@ -425,11 +422,17 @@ def _apply_config_subagents(config) -> None:
     for name in _OVERRIDABLE_SUBAGENTS:
         base = bases.get(name)
         sub = getattr(config, name, None)
-        entry = SUBAGENT_REGISTRY.get(name)
-        if base is None or sub is None or entry is None:
+        if base is None or sub is None:
             continue
-        model = (getattr(sub, "model", "") or "").strip()
-        SUBAGENT_REGISTRY[name] = replace(entry, model=model or base.model)
+        if not getattr(sub, "enabled", True):
+            SUBAGENT_REGISTRY.pop(name, None)  # disabled → not delegatable
+            continue
+        SUBAGENT_REGISTRY[name] = replace(
+            base,
+            tools=list(sub.tools) if sub.tools else list(base.tools),
+            max_turns=sub.max_turns or base.max_turns,
+            model=(sub.model or "").strip() or base.model,
+        )
 
 
 def _build_plugins(config, existing_tools=None):
