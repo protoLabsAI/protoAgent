@@ -171,10 +171,24 @@ async def _run_subagent(
     # Subagent model: per-subagent override → routing.aux_model → main model.
     sub_llm = create_llm(config, model_name=_resolve_aux_model(config, getattr(sub_config, "model", "")))
 
+    # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
+    # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
+    # rate-limited tool is blocked inside a delegation. (Per-instance limiter: each
+    # subagent run gets its own window — a per-delegation cap, not a shared budget.)
+    sub_middleware = [AuditMiddleware()]
+    if getattr(config, "enforcement_enabled", False) and (
+        config.enforcement_disallowed_tools or config.enforcement_rate_limits
+    ):
+        from graph.middleware.enforcement import EnforcementMiddleware
+        sub_middleware.insert(0, EnforcementMiddleware(
+            disallowed_tools=config.enforcement_disallowed_tools,
+            rate_limits=config.enforcement_rate_limits,
+        ))
+
     subagent = create_agent(
         model=sub_llm,
         tools=sub_tools,
-        middleware=[AuditMiddleware()],
+        middleware=sub_middleware,
         system_prompt=build_subagent_prompt(subagent_type),
     )
 
