@@ -123,6 +123,7 @@ First-party plugins ship in `plugins/` (off by default — enable via `plugins.e
 | [`coding_agent`](./plugins/coding_agent/) | tool | Spawn a CLI coding agent (protoCLI, Claude Code, Codex, Gemini) over ACP |
 | [`discord`](./plugins/discord/) | surface · tool | Run the agent as a Discord bot — inbound DMs + outbound posting |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
+| [`slack`](./plugins/slack/) | surface | Run the agent as a Slack app over Socket Mode (websocket transport) |
 | [`google`](./plugins/google/) | mcp | Gmail + Calendar via a managed MCP server with in-app OAuth |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
 
