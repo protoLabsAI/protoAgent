@@ -31,7 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clear "declared deps not installed — run install-deps" diagnostic when an enabled
   plugin's deps are missing; **audit logging** of install/uninstall/install-deps;
   and a **`plugins.sources.allow`** allowlist (host/org globs) enforced on CLI +
-  console installs. See
+  console installs. PR4 makes a plugin repo a **full bundle**: `register()` already
+  contributes tools / subagents / routes / MCP / views, and conventional
+  **`skills/`** (SKILL.md) + **`workflows/`** (`*.yaml`) subdirs are now
+  auto-discovered (data — no boilerplate; `register_workflow_dir()` for non-standard
+  paths), so installing a repo pulls in skills + workflows too. Publish + install
+  guide: [`plugin-registry.md`](docs/guides/plugin-registry.md). See
   [ADR 0027](docs/adr/0027-install-plugins-from-git-url.md).
 
 ## [0.19.0] - 2026-06-06

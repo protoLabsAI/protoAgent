@@ -110,8 +110,14 @@ fast-follow; untrusted code → MCP (D1).
 - **PR2:** console **Plugins** panel + the install/review/uninstall API (paste URL →
   review card → install → enable/disable → uninstall). e2e.
 - **PR3:** `requires_pip` + `install-deps` + missing-dep diagnostics; capability
-  review surfacing + audit logging; `plugins.sources.allow` enforcement; docs
-  (`guides/plugin-registry.md` "install + publish a plugin" + the untrusted→MCP note).
+  review surfacing + audit logging; `plugins.sources.allow` enforcement.
+- **PR4 — full bundle:** a plugin repo contributes the *whole* extension set, not
+  just tools. `register()` already covers tools / subagents / routes / MCP / views;
+  PR4 auto-discovers conventional **`skills/`** (SKILL.md) and **`workflows/`**
+  (`*.yaml`) subdirs (data — no `register_*` boilerplate; a `register_workflow_dir()`
+  exists for non-standard locations) so installing a repo pulls in skills +
+  workflows too. Docs: `guides/plugin-registry.md` (install + publish the full
+  bundle + the untrusted→MCP note).
 
 ## Consequences
 
