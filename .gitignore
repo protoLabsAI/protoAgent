@@ -78,3 +78,8 @@ apps/web/test-results/
 apps/web/playwright-report/
 apps/web/blob-report/
 apps/web/.playwright/
+
+# Astro marketing site build artifacts (Cloudflare Pages builds these)
+sites/marketing/dist/
+sites/marketing/node_modules/
+sites/marketing/.astro/

@@ -1,0 +1,102 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const repo = 'https://github.com/protoLabsAI/protoAgent';
+
+const features = [
+  {
+    title: 'A2A out of the box',
+    body: 'JSON-RPC 2.0 over /a2a, SSE streaming, the tasks/* lifecycle, a well-known agent card, push notifications, and a cost-v1 DataPart on every turn — spec-compliant and already tested.',
+  },
+  {
+    title: 'Extend without forking',
+    body: 'SKILL.md skills, MCP servers, and plugins that add tools, subagents, workflows, and console views — installable straight from a git URL, pinned in a lockfile. Share a plugin as a repo.',
+  },
+  {
+    title: 'An operator console',
+    body: 'A React console (+ a desktop app) with live token-by-token streaming, chat that survives navigation, knowledge, delegates, and a plugins panel. Run from chat, manage from surfaces.',
+  },
+];
+
+const steps = [
+  { n: '1', title: 'Clone & run', body: 'Pull the template and start the server — python -m server. Zero config to first boot.' },
+  { n: '2', title: 'Walk the wizard', body: 'Connect your model, name the agent, pick a persona. The setup wizard tests the connection and you’re live.' },
+  { n: '3', title: 'Chat, then fork', body: 'Talk to your agent in the console. Add skills, plugins, and subagents. Fork it to ship your own.' },
+];
+---
+
+<BaseLayout title="protoAgent — clone, run, chat, ship A2A agents">
+  <!-- Hero -->
+  <section class="relative">
+    <div class="hero-glow absolute inset-0 -z-10 h-[480px]"></div>
+    <div class="mx-auto max-w-4xl px-5 pt-24 pb-20 text-center">
+      <div class="inline-flex items-center gap-2 rounded-full border border-[var(--color-edge)] bg-[var(--color-surface-1)] px-3 py-1 text-xs text-zinc-400 mb-7">
+        <span class="size-1.5 rounded-full bg-[var(--color-accent)]"></span>
+        LangGraph + A2A agent template
+      </div>
+      <h1 class="text-5xl sm:text-6xl font-bold tracking-tight leading-[1.05]">
+        Clone. Run. Chat.<br /><span class="gradient-text">Ship your own agent.</span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
+        protoAgent is a production-shaped template for building protoLabs agents — A2A on
+        LangGraph, an operator console, and an extension system you grow with skills,
+        MCP servers, and git-installable plugins.
+      </p>
+      <div class="mt-9 flex items-center justify-center gap-3">
+        <a href="/docs/tutorials/first-agent" class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition">
+          Get started
+        </a>
+        <a href={repo} class="rounded-lg border border-[var(--color-edge)] px-5 py-3 font-medium text-zinc-200 hover:border-[var(--color-accent)]/50 transition">
+          View on GitHub
+        </a>
+      </div>
+      <p class="mt-5 text-xs text-zinc-500">Desktop app coming soon — signed builds in progress.</p>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="mx-auto max-w-6xl px-5 py-8">
+    <div class="grid gap-5 sm:grid-cols-3">
+      {features.map((f) => (
+        <div class="card p-6">
+          <h3 class="font-semibold text-lg mb-2">{f.title}</h3>
+          <p class="text-sm text-zinc-400 leading-relaxed">{f.body}</p>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="mx-auto max-w-5xl px-5 py-16">
+    <h2 class="text-center text-3xl font-bold tracking-tight mb-12">From clone to shipped</h2>
+    <div class="grid gap-8 sm:grid-cols-3">
+      {steps.map((s) => (
+        <div class="text-center">
+          <div class="mx-auto mb-4 flex size-10 items-center justify-center rounded-full border border-[var(--color-accent)]/40 text-[var(--color-accent)] font-semibold">{s.n}</div>
+          <h3 class="font-semibold mb-1">{s.title}</h3>
+          <p class="text-sm text-zinc-400 max-w-xs mx-auto">{s.body}</p>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <!-- Quickstart -->
+  <section class="mx-auto max-w-3xl px-5 py-8">
+    <div class="card p-6">
+      <div class="text-xs uppercase tracking-wide text-zinc-500 mb-3">Quickstart</div>
+      <pre class="overflow-x-auto text-sm leading-relaxed text-zinc-300"><code>git clone https://github.com/protoLabsAI/protoAgent
+cd protoAgent && pip install -r requirements.txt
+python -m server            <span class="text-zinc-500"># walk the wizard at http://localhost:7870</span></code></pre>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="mx-auto max-w-4xl px-5 py-20 text-center">
+    <h2 class="text-3xl font-bold tracking-tight">Build your agent tonight.</h2>
+    <p class="mt-3 text-zinc-400">Free starter tools, a working A2A server, and a console — on a fresh clone.</p>
+    <div class="mt-7 flex items-center justify-center gap-3">
+      <a href="/docs/" class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition">Read the docs</a>
+      <a href="/docs/guides/plugin-registry" class="rounded-lg border border-[var(--color-edge)] px-5 py-3 font-medium text-zinc-200 hover:border-[var(--color-accent)]/50 transition">Build a plugin</a>
+    </div>
+  </section>
+</BaseLayout>
