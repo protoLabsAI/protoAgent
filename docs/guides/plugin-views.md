@@ -24,8 +24,11 @@ views:
 The console reads this from `/api/runtime/status` and renders a rail icon per
 view (keyed `plugin:<id>:<viewId>`). When selected, it hosts `path` in a
 same-origin **iframe** that fills the stage; `tabs` render as a sub-nav that swaps
-the iframe page. `icon` is a [lucide](https://lucide.dev) name (unknown → a
-generic plugin glyph).
+the iframe page. `icon` is a [lucide](https://lucide.dev) name from the console's
+allowlist — covering dashboards, data, comms, dev, AI, finance, space/fleet, and
+security (e.g. `LayoutDashboard`, `BarChart3`, `Database`, `Workflow`, `Bot`,
+`Rocket`, `Satellite`, `Coins`, `Shield`); an unknown name falls back to a generic
+plugin glyph.
 
 ## Serve the page
 

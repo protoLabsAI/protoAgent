@@ -23,6 +23,36 @@ import {
   Target,
   Undo2,
   Trash2,
+  // Plugin-view rail icons (ADR 0026) — a broader lucide allowlist so plugins
+  // (dashboards, data, comms, dev, finance, space/fleet, AI) find a fitting glyph.
+  Bot,
+  Brain,
+  Code,
+  Coins,
+  Compass,
+  Cpu,
+  DollarSign,
+  Folder,
+  GitBranch,
+  Globe,
+  Layers,
+  LineChart,
+  Map,
+  Network,
+  Package,
+  PieChart,
+  Plug,
+  Radar,
+  Rocket,
+  Satellite,
+  Shield,
+  Ship,
+  Table,
+  Terminal,
+  TrendingUp,
+  Wallet,
+  Workflow,
+  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -64,7 +94,22 @@ type Surface = "chat" | "activity" | "studio" | "knowledge" | "system" | "settin
 // Lucide icon names a plugin view may use for its rail glyph (ADR 0026, PR1 set;
 // PR2 widens the allowlist). Unknown/missing → a generic plugin glyph.
 const PLUGIN_VIEW_ICONS: Record<string, LucideIcon> = {
-  Sparkles, LayoutDashboard, Puzzle, Boxes, BarChart3, Database, Gauge, BookOpen, Target,
+  // general
+  Sparkles, LayoutDashboard, Puzzle, Boxes, Gauge, Target, Activity, Settings2,
+  // data / viz
+  BarChart3, LineChart, PieChart, TrendingUp, Database, Table, Layers,
+  // comms / content
+  MessageSquare, Inbox, CalendarClock, FileText, Folder, BookOpen, BookMarked,
+  // dev / tools
+  Code, Terminal, GitBranch, Package, Plug, Workflow, Network, Cpu, Zap,
+  // ai
+  Bot, Brain,
+  // finance
+  DollarSign, Coins, Wallet,
+  // space / fleet / geo
+  Rocket, Ship, Satellite, Radar, Globe, Compass, Map,
+  // security
+  Shield,
 };
 function pluginViewIcon(name?: string): ReactNode {
   const Icon = (name && PLUGIN_VIEW_ICONS[name]) || Puzzle;

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugin console-view icon allowlist widened** (ADR 0026 D4) — the `views[].icon`
+  set grew from 9 to ~35 lucide names spanning dashboards, data, comms, dev, AI,
+  finance, **space/fleet** (`Rocket`/`Ship`/`Satellite`/`Radar`), and security, so a
+  plugin's rail icon fits its domain (unknown names still fall back to a generic glyph).
+
 ### Added
 - **`set_goal` tool** (ADR 0028) — the lead agent can set its **own** standing goal,
   ground-truthed by a plugin verifier: `set_goal(condition, check, check_args, …)`
