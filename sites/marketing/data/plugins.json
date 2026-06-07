@@ -65,6 +65,32 @@
     }
   },
   {
+    "id": "spacetraders",
+    "name": "SpaceTraders",
+    "official": true,
+    "tagline": "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin.",
+    "adds": ["tool", "subagent", "workflow", "skill", "view"],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/spacetraders-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/spacetraders-plugin",
+      "docs": "https://github.com/protoLabsAI/spacetraders-plugin#readme"
+    }
+  },
+  {
+    "id": "prototrader-finance",
+    "name": "protoTrader Finance",
+    "official": true,
+    "tagline": "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard.",
+    "adds": ["tool", "subagent", "workflow", "view"],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/prototrader-finance",
+    "links": {
+      "source": "https://github.com/protoLabsAI/prototrader-finance",
+      "docs": "https://github.com/protoLabsAI/prototrader-finance#readme"
+    }
+  },
+  {
     "id": "hello",
     "name": "Hello (example)",
     "official": true,
