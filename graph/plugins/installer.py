@@ -199,26 +199,84 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
     return summary
 
 
-def uninstall(plugin_id: str) -> bool:
-    """Remove a git-installed plugin (live dir + lock entry). Built-ins are refused."""
+def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
+    """Remove the plugin's references from the live langgraph-config.yaml (ADR 0027):
+    always the `plugins.enabled`/`disabled` entry (a dangling enabled entry is just
+    broken); with ``purge`` also the plugin's `config_section` block. Comment-safe
+    (ruamel). Returns True if anything changed."""
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+    cfg = _live_config_dir() / "langgraph-config.yaml"
+    if not cfg.exists():
+        return False
+    doc = load_yaml_doc(cfg)
+    if not isinstance(doc, dict):
+        return False
+    changed = False
+    plugins = doc.get("plugins")
+    if isinstance(plugins, dict):
+        for key in ("enabled", "disabled"):
+            lst = plugins.get(key)
+            if isinstance(lst, list) and plugin_id in lst:
+                while plugin_id in lst:
+                    lst.remove(plugin_id)
+                changed = True
+    if purge and section in doc:
+        del doc[section]
+        changed = True
+    if changed:
+        save_yaml_doc(doc, cfg)
+    return changed
+
+
+def _clean_secrets(section: str) -> bool:
+    """Remove the plugin's section from the live secrets.yaml overlay (purge only)."""
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+    sec = _live_config_dir() / "secrets.yaml"
+    if not sec.exists():
+        return False
+    doc = load_yaml_doc(sec)
+    if isinstance(doc, dict) and section in doc:
+        del doc[section]
+        save_yaml_doc(doc, sec)
+        return True
+    return False
+
+
+def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
+    """Remove a git-installed plugin and its references. ALWAYS removes the code
+    dir, the `plugins.lock` entry, and the `plugins.enabled`/`disabled` reference.
+    With ``purge=True`` ALSO removes the plugin's config section + its secrets.
+    Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
+    returned for the operator to remove. Returns a report dict."""
     if (REPO_ROOT / "plugins" / plugin_id).exists():
         raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
     target = live_plugins_dir() / plugin_id
-    removed = False
+    # Read the manifest BEFORE deleting — purge needs the config section + we report
+    # the declared deps.
+    manifest = load_manifest(target) if (target / "protoagent.plugin.yaml").exists() else None
+    section = (manifest.config_section if manifest else "") or plugin_id
+    deps_left = list(manifest.requires_pip) if manifest else []
+
+    removed: list[str] = []
     if target.exists():
         shutil.rmtree(target)
-        removed = True
+        removed.append("code")
     lock = _read_lock()
     before = len(lock["plugins"])
     lock["plugins"] = [e for e in lock["plugins"] if e.get("id") != plugin_id]
     if len(lock["plugins"]) != before:
         _write_lock(lock)
-        removed = True
+        removed.append("lock")
+    if _clean_config_refs(plugin_id, section, purge):
+        removed.append("config" if purge else "enabled-ref")
+    if purge and _clean_secrets(section):
+        removed.append("secrets")
+
     if not removed:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
-    _audit("uninstall", {"id": plugin_id}, f"uninstalled {plugin_id}")
-    log.info("[plugins] uninstalled %s", plugin_id)
-    return True
+    _audit("uninstall", {"id": plugin_id, "purge": purge}, f"uninstalled {plugin_id} ({', '.join(removed)})")
+    log.info("[plugins] uninstalled %s (%s)", plugin_id, ", ".join(removed))
+    return {"id": plugin_id, "removed": removed, "deps_left": deps_left, "purged": purge}
 
 
 def install_deps(plugin_id: str) -> list[str]:

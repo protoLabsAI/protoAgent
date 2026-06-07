@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Clean plugin delete** (ADR 0027) — `plugin uninstall <id>` now also removes the
+  plugin's `plugins.enabled`/`disabled` reference (no more dangling-enabled errors
+  on the next restart), on top of the code dir + `plugins.lock` entry. A new
+  **`--purge`** flag (CLI) / `?purge=true` (the `DELETE /api/plugins/{id}` route)
+  *also* removes the plugin's config section + its secrets (comment-safe via ruamel).
+  Config/secrets are kept by default so a reinstall restores settings; pip deps are
+  never auto-removed (shared venv) but are reported. Returns a removal report.
+
 ## [0.20.0] - 2026-06-07
 
 ### Added

@@ -25,8 +25,9 @@ def _build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--force", action="store_true", help="replace an already-installed plugin of the same id")
 
     sub.add_parser("list", help="list git-installed plugins (from plugins.lock)")
-    pu = sub.add_parser("uninstall", help="remove a git-installed plugin")
+    pu = sub.add_parser("uninstall", help="remove a git-installed plugin (code + lock + enabled ref)")
     pu.add_argument("id")
+    pu.add_argument("--purge", action="store_true", help="also remove the plugin's config section + secrets")
     sub.add_parser("sync", help="re-clone locked plugins at their pinned SHA (reproducible set)")
     pd = sub.add_parser("install-deps", help="pip-install a plugin's declared requires_pip (explicit code-exec)")
     pd.add_argument("id")
@@ -63,8 +64,12 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}{mark}")
             return 0
         if args.cmd == "uninstall":
-            installer.uninstall(args.id)
-            print(f"✓ uninstalled {args.id}")
+            rep = installer.uninstall(args.id, purge=args.purge)
+            print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
+            if rep["deps_left"]:
+                print(f"  declared deps left installed (shared venv — remove manually if unused): {', '.join(rep['deps_left'])}")
+            if not args.purge:
+                print("  config + secrets kept (reinstall restores them). Use --purge to remove them too.")
             return 0
         if args.cmd == "sync":
             for r in installer.sync(allow=installer.configured_allowlist()):

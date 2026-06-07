@@ -69,9 +69,10 @@ def register_plugin_routes(app) -> None:
         return {"installed": summary, "restart_required": True}
 
     @app.delete("/api/plugins/{plugin_id}")
-    async def _uninstall(plugin_id: str):
+    async def _uninstall(plugin_id: str, purge: bool = False):
+        # purge=true also removes the plugin's config section + secrets (ADR 0027).
         try:
-            installer.uninstall(plugin_id)
+            report = installer.uninstall(plugin_id, purge=purge)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True}
+        return {"ok": True, **report}

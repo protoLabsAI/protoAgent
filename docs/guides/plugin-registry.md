@@ -12,10 +12,17 @@ MCP servers, and config — all from the one repo. See
 ```sh
 python -m server plugin install https://github.com/owner/protoagent-plugin-x --ref v1.0
 python -m server plugin list
-python -m server plugin uninstall protoagent-plugin-x
+python -m server plugin uninstall protoagent-plugin-x            # code + lock + enabled ref
+python -m server plugin uninstall protoagent-plugin-x --purge    # also config section + secrets
 python -m server plugin sync          # re-clone the locked set (CI / fresh checkout)
 python -m server plugin install-deps protoagent-plugin-x   # explicit, separate
 ```
+
+**Uninstall removes** the plugin's code, its `plugins.lock` entry, and its
+`plugins.enabled` reference (so nothing dangles). It **keeps** the plugin's config
+section + secrets by default (a reinstall restores your settings); pass `--purge`
+to remove those too. Declared pip deps are **never** auto-removed (shared venv) —
+they're reported so you can `pip uninstall` them if unused.
 
 **Console:** Settings → Integrations → **Plugins** — paste the URL, review the
 manifest + capabilities, install, uninstall.
