@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-07
+
 ### Added
 - **Install plugins from a git URL** (ADR 0027, PR1) — `python -m server plugin
   install <git-url> [--ref <tag|sha>]` clones a plugin repo into the live plugins
