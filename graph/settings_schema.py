@@ -256,6 +256,10 @@ def build_schema(config, *, model_options: list[str] | None = None) -> list[dict
         if spec.get("maximum") is not None:
             entry["maximum"] = spec["maximum"]
         groups.setdefault(group, {"section": group, "fields": []})["fields"].append(entry)
+        # A plugin that declares `test: true` (ADR 0029) gets a generic console
+        # "Test connection" button posting the group's fields to its test route.
+        if getattr(sch, "test", False):
+            groups[group]["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
 
     out = list(groups.values())
     # Insertion order = first appearance in FIELDS (core), then plugins.

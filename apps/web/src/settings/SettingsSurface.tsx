@@ -10,7 +10,7 @@ const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { SettingsField } from "../lib/types";
+import type { SettingsField, SettingsGroup } from "../lib/types";
 import { DelegatesSection } from "./DelegatesSection";
 import { PluginsSection } from "./PluginsSection";
 
@@ -108,6 +108,28 @@ function SettingsBody() {
     onSuccess: (r) =>
       setStatus(r.ok ? "connection OK — the model responded." : `connection failed — ${r.error || "no response"}`),
     onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
+
+  // Generic "Test connection" for any group whose plugin declares one (ADR 0029).
+  // Posts the group's fields (short keys; unset secrets fall back to saved config).
+  const [testingSection, setTestingSection] = useState<string | null>(null);
+  const groupFields = (group: SettingsGroup): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const f of group.fields) {
+      const short = f.key.split(".").pop() as string;
+      if (f.key in dirty) out[short] = dirty[f.key];
+      else if (f.type !== "secret") out[short] = f.value;  // never echo an unset secret
+    }
+    return out;
+  };
+  const testGroup = useMutation({
+    mutationFn: (vars: { endpoint: string; fields: Record<string, unknown> }) =>
+      api.testConfig(vars.endpoint, vars.fields),
+    onMutate: () => setStatus("testing connection…"),
+    onSuccess: (r) =>
+      setStatus(r.ok ? `connection OK${r.identity ? ` — ${r.identity}` : ""}` : `connection failed — ${r.error || "no response"}`),
+    onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
+    onSettled: () => setTestingSection(null),
   });
 
   // Verify a Discord bot token (pending edit or saved). Shows the bot name.
@@ -241,6 +263,29 @@ function SettingsBody() {
                 <a className="settings-help-link" href={GOOGLE_GUIDE_URL} target="_blank" rel="noreferrer">
                   Get an OAuth client <ExternalLink size={13} />
                 </a>
+              </div>
+            ) : null}
+            {/* Generic Test button (ADR 0029) — any plugin group that declares a
+                test endpoint (e.g. communication plugins). Discord/Google above are
+                bespoke and don't set `test`, so there's no overlap. */}
+            {group.test ? (
+              <div className="settings-group-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setTestingSection(group.section);
+                    testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) });
+                  }}
+                  disabled={(testGroup.isPending && testingSection === group.section) || save.isPending}
+                >
+                  {testGroup.isPending && testingSection === group.section ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : (
+                    <ShieldCheck size={15} />
+                  )}
+                  Test connection
+                </button>
               </div>
             ) : null}
           </section>
