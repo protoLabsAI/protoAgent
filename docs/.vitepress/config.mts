@@ -60,6 +60,7 @@ export default defineConfig({
             { text: "MCP servers", link: "/guides/mcp" },
             { text: "Plugins", link: "/guides/plugins" },
             { text: "Plugin console views", link: "/guides/plugin-views" },
+            { text: "Build a communication plugin", link: "/guides/communication-plugins" },
             { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
             { text: "Goal mode", link: "/guides/goal-mode" },
             { text: "Scheduler", link: "/guides/scheduler" },

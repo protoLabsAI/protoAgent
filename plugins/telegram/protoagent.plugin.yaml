@@ -1,0 +1,21 @@
+id: telegram
+name: Telegram
+version: 0.1.0
+description: >-
+  Run your agent as a Telegram bot — inbound DMs/groups via long-poll, replies
+  back out. The reference **communication plugin** (ADR 0029): built on the
+  ChatAdapter standard, so it's ~80 lines of transport + a manifest. Off until you
+  set a bot token in Settings → Telegram. Disable with `plugins: { disabled: [telegram] }`.
+# Bundled but opt-in — enable with `plugins: { enabled: [telegram] }` (Discord is
+# the always-loaded legacy default; new comms plugins are download-to-use).
+enabled: false
+requires_env: []
+config_section: telegram
+config:
+  enabled: false
+  admin_ids: []
+secrets: [bot_token]
+settings:
+  - { key: enabled, label: "Enable Telegram", type: bool, description: "Inbound gateway. Needs the bot token below; reconnects live on save." }
+  - { key: bot_token, label: "Bot token", type: secret, description: "From @BotFather (/newbot). Use “Test connection” to verify before saving." }
+  - { key: admin_ids, label: "Admin user IDs", type: string_list, description: "Telegram numeric user IDs allowed to message the bot (one per line). Empty = anyone." }
