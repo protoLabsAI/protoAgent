@@ -39,3 +39,4 @@ decision, numbered, never deleted (supersede instead).
 | [0028](./0028-plugin-goal-verifiers.md) | Plugin-contributed goal verifiers (+ safe programmatic goals) | Accepted (sliced) |
 | [0029](./0029-communication-plugins-standard.md) | A standard for communication (chat-surface) plugins | Accepted |
 | [0030](./0030-monitor-goals.md) | Monitor goals — cadence-evaluated, hook-reactive objectives (closes 0028 D6) | Accepted (sliced) |
+| [0031](./0031-pluggable-knowledge-backend.md) | Pluggable knowledge backend (register_knowledge_store + Protocol + selector) | Accepted |
