@@ -93,6 +93,32 @@ class GoalController:
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
 
+    # Verifier types safe to set PROGRAMMATICALLY (agent / plugin / REST). Only
+    # `plugin` qualifies (ADR 0028 D3): command/test/ci shell out, and `data`
+    # eval()s a spec expr — all code-exec sinks that stay operator-only (/goal).
+    SAFE_PROGRAMMATIC_VERIFIERS = frozenset({"plugin"})
+
+    def set_goal_safe(self, session_id: str, condition: str, verifier: dict,
+                      max_iterations: int | None = None) -> tuple[bool, str]:
+        """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
+        Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
+        programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
+        operator `/goal` path keeps full access. Returns (ok, message)."""
+        vtype = (verifier or {}).get("type")
+        if vtype not in self.SAFE_PROGRAMMATIC_VERIFIERS:
+            return (False, f"programmatic goals must use a 'plugin' verifier (got {vtype!r}); "
+                    "command/test/ci/data verifiers are operator-only — set them with /goal.")
+        if not condition:
+            return (False, "a goal condition is required.")
+        if not (verifier.get("check")):
+            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        state = GoalState(
+            session_id=session_id, condition=condition, verifier=verifier,
+            max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
+        )
+        self._store.set(state)
+        return (True, f"Goal set. {state.status_line()}")
+
     def _parse_set(self, rest: str):
         """Return (verifier_spec, condition, max_iterations|None)."""
         if rest.lstrip().startswith("{"):

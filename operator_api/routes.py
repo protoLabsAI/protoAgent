@@ -181,6 +181,7 @@ def register_operator_routes(
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
     workflows_list: Callable[[], dict[str, Any]] | None = None,
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -355,6 +356,20 @@ def register_operator_routes(
                 return await goal_clear(session_id)
             except Exception as exc:
                 raise _http_error(exc) from exc
+
+    # Programmatic goal-set (ADR 0028 D3) — accepts ONLY a `plugin` verifier;
+    # command/test/ci/data stay operator-only (/goal). 400 on a rejected verifier.
+    if goal_set is not None:
+
+        @app.post("/api/goals")
+        async def _goal_set(body: dict):
+            try:
+                res = await goal_set(body or {})
+            except Exception as exc:
+                raise _http_error(exc) from exc
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("error") or res.get("message"))
+            return res
 
     # --- Slash commands ------------------------------------------------------
     # The chat console fetches the registered `/`-commands the server handles
