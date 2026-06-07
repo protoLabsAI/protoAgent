@@ -73,6 +73,7 @@ import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
+import { StageSubnav } from "./StageSubnav";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
 import type { NotesWorkspace } from "../lib/types";
@@ -665,41 +666,45 @@ export function App() {
             </div>
           ) : null}
 
-          {/* In-surface sub-nav for the grouped rail surfaces. */}
+          {/* Sub-nav for the grouped rail surfaces — the canonical strip above the
+              panel card (StageSubnav: single source of truth, shared with Settings +
+              plugin views). */}
           {surface === "activity" ? (
-            <div className="stage-subnav">
-              <button className={activityTab === "thread" ? "active" : ""} onClick={() => setActivityTab("thread")}>
-                <Activity size={15} /> Thread
-              </button>
-              <button className={activityTab === "inbox" ? "active" : ""} onClick={() => setActivityTab("inbox")}>
-                <Inbox size={15} /> Inbox
-                {inboxUnread ? <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span> : null}
-              </button>
-              <button className={activityTab === "schedule" ? "active" : ""} onClick={() => setActivityTab("schedule")}>
-                <CalendarClock size={15} /> Schedule
-              </button>
-            </div>
+            <StageSubnav
+              active={activityTab}
+              onSelect={(id) => setActivityTab(id as typeof activityTab)}
+              tabs={[
+                { id: "thread", label: "Thread", icon: Activity },
+                {
+                  id: "inbox", label: "Inbox", icon: Inbox,
+                  badge: inboxUnread ? (
+                    <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>
+                  ) : null,
+                },
+                { id: "schedule", label: "Schedule", icon: CalendarClock },
+              ]}
+            />
           ) : null}
           {surface === "knowledge" ? (
-            // Store (factual memory) + Playbooks (procedural memory) — ADR 0020.
-            <div className="stage-subnav">
-              <button className={knowledgeTab === "store" ? "active" : ""} onClick={() => setKnowledgeTab("store")}>
-                <Database size={15} /> Store
-              </button>
-              <button className={knowledgeTab === "playbooks" ? "active" : ""} onClick={() => setKnowledgeTab("playbooks")}>
-                <BookMarked size={15} /> Skills
-              </button>
-            </div>
+            // Store (factual memory) + Skills (procedural memory) — ADR 0020.
+            <StageSubnav
+              active={knowledgeTab}
+              onSelect={(id) => setKnowledgeTab(id as typeof knowledgeTab)}
+              tabs={[
+                { id: "store", label: "Store", icon: Database },
+                { id: "playbooks", label: "Skills", icon: BookMarked },
+              ]}
+            />
           ) : null}
           {surface === "system" ? (
-            <div className="stage-subnav">
-              <button className={systemTab === "runtime" ? "active" : ""} onClick={() => setSystemTab("runtime")}>
-                <Gauge size={15} /> Runtime
-              </button>
-              <button className={systemTab === "telemetry" ? "active" : ""} onClick={() => setSystemTab("telemetry")}>
-                <BarChart3 size={15} /> Telemetry
-              </button>
-            </div>
+            <StageSubnav
+              active={systemTab}
+              onSelect={(id) => setSystemTab(id as typeof systemTab)}
+              tabs={[
+                { id: "runtime", label: "Runtime", icon: Gauge },
+                { id: "telemetry", label: "Telemetry", icon: BarChart3 },
+              ]}
+            />
           ) : null}
 
           {/* ChatSurface is rendered UNCONDITIONALLY and hidden via `active` when

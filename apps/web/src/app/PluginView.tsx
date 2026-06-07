@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { StageSubnav } from "./StageSubnav";
 import type { PluginView as PluginViewType } from "../lib/types";
 
 // Curated console theme tokens forwarded to a plugin view so it can match the
@@ -55,16 +56,11 @@ export function PluginView({ view }: { view: PluginViewType }) {
   }
 
   return (
-    <section className="panel stage-panel plugin-view">
-      {tabs.length ? (
-        <div className="stage-subnav">
-          {tabs.map((t) => (
-            <button key={t.id} className={t.id === activeTab ? "active" : ""} onClick={() => setActiveTab(t.id)}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+    <>
+      {/* Sub-tab strip above the panel card — shared StageSubnav (single source of truth). */}
+      <StageSubnav active={activeTab} onSelect={setActiveTab}
+                   tabs={tabs.map((t) => ({ id: t.id, label: t.label }))} />
+      <section className="panel stage-panel plugin-view">
       <div className="plugin-view-body">
         {failed ? (
           <div className="plugin-view-state" role="alert">
@@ -91,6 +87,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
           </>
         )}
       </div>
-    </section>
+      </section>
+    </>
   );
 }

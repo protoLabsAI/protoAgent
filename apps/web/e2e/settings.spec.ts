@@ -12,14 +12,14 @@ async function openSettings(page) {
 }
 
 async function category(page, name) {
-  await page.locator(".settings-subnav").getByRole("button", { name, exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name, exact: true }).click();
 }
 
 test("groups are organized into a category sub-nav; Agent leads", async ({ page }) => {
   await openSettings(page);
   // Category sub-nav from the mock schema: Agent · Behavior · System, plus
   // Integrations (surfaced because the delegates plugin is reachable — ADR 0025).
-  expect(await page.locator(".settings-subnav button").allTextContents()).toEqual([
+  expect(await page.locator(".stage-subnav button").allTextContents()).toEqual([
     "Agent",
     "Behavior",
     "System",
