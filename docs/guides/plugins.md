@@ -200,3 +200,13 @@ plugins:
 
 Restart, then check `GET /api/runtime/status` — the `hello` plugin shows
 `loaded: true` with its `hello` tool and `greeting` skill.
+
+## Related
+
+- **[Plugin console views](/guides/plugin-views)** — give a plugin its own
+  left-rail icon + view (a dashboard) in the console (ADR 0026).
+- **[Install & publish plugins (git URLs)](/guides/plugin-registry)** — install a
+  plugin from a git URL (`python -m server plugin install <url>`) or publish one as
+  a shareable repo. A repo is a full bundle: besides what `register()` adds, a
+  conventional `skills/` (SKILL.md) and `workflows/` (`*.yaml`) are auto-discovered
+  (ADR 0027).
