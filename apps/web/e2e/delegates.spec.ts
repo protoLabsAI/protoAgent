@@ -7,7 +7,7 @@ import { expect, test } from "@playwright/test";
 async function openIntegrations(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".settings-subnav").getByRole("button", { name: "Integrations", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Integrations", exact: true }).click();
 }
 
 test("lists configured delegates with type + secret badges", async ({ page }) => {
