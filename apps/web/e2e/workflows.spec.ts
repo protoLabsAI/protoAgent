@@ -13,7 +13,8 @@ async function openWorkflows(page) {
 
 test("lists a recipe with its steps and inputs", async ({ page }) => {
   await openWorkflows(page);
-  await expect(page.getByText("1 recipe", { exact: true })).toBeVisible();
+  // The kicker reads "…recipes the engine runs over subagents · 1 recipe" (ADR 0009 contrast copy).
+  await expect(page.getByText(/\b1 recipe\b/)).toBeVisible();
   // The recipe's description + step DAG render.
   await expect(page.getByText("Research a topic, then write a brief.")).toBeVisible();
   const steps = page.locator(".workflow-step");
