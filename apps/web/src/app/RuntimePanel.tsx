@@ -1,5 +1,5 @@
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, Database, Settings2, Sparkles } from "lucide-react";
+import { Bot, Database, HardDrive, Settings2, Sparkles } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
@@ -14,6 +14,19 @@ import { StatusPill } from "./StatusPill";
 
 function formatBool(value: boolean) {
   return value ? "on" : "off";
+}
+
+function fmtBytes(n: number | null | undefined): string {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
@@ -46,6 +59,19 @@ function RuntimeBody() {
           <Metric icon={<Database size={16} />} label="Knowledge" value={runtime.knowledge.resolved_path || runtime.knowledge.configured_path || "disabled"} />
           <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime.goal.enabled))} />
         </div>
+        {runtime.storage ? (
+          <>
+            <p className="panel-kicker">
+              Storage{runtime.storage.telemetry_retention_days ? ` · telemetry kept ${runtime.storage.telemetry_retention_days}d` : ""}
+            </p>
+            <div className="metric-grid">
+              <Metric icon={<HardDrive size={16} />} label="Knowledge DB" value={fmtBytes(runtime.storage.knowledge_bytes)} />
+              <Metric icon={<HardDrive size={16} />} label="Telemetry DB" value={fmtBytes(runtime.storage.telemetry_bytes)} />
+              <Metric icon={<HardDrive size={16} />} label="Checkpoints DB" value={fmtBytes(runtime.storage.checkpoint_bytes)} />
+              <Metric icon={<HardDrive size={16} />} label="Skills DB" value={fmtBytes(runtime.storage.skills_bytes)} />
+            </div>
+          </>
+        ) : null}
         <p className="panel-kicker">Middleware</p>
         <div className="table-list">
           {middleware.map(([name, enabled]) => (

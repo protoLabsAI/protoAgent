@@ -62,6 +62,8 @@ def _operator_runtime_status():
             "tool_count": len(STATE.mcp_tools),
         },
         plugins=STATE.plugin_meta,
+        telemetry_store=STATE.telemetry_store,
+        checkpoint_path=STATE.checkpoint_path,
     )
 
 
