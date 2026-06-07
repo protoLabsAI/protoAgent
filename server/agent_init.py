@@ -519,7 +519,19 @@ async def _checkpoint_prune_loop() -> None:
                     )
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
-        await asyncio.sleep(max(1, interval_h) * 3600)
+        # Telemetry retention guardrail (ADR 0006) — drop turns older than the
+        # configured window so the per-turn store can't grow unbounded. 0 = keep all.
+        keep_days = getattr(cfg, "telemetry_retention_days", 0) if cfg else 0
+        if STATE.telemetry_store is not None and keep_days > 0:
+            try:
+                removed = await asyncio.to_thread(STATE.telemetry_store.prune, keep_days)
+                if removed:
+                    log.info("[telemetry-prune] removed %d turn(s) older than %dd", removed, keep_days)
+            except Exception:
+                log.exception("[telemetry-prune] sweep failed")
+        # Tick at the checkpoint interval if set, else hourly (so telemetry pruning
+        # still runs when checkpoint pruning is off).
+        await asyncio.sleep(max(1, interval_h or 1) * 3600)
 
 
 async def _monitor_goals_loop() -> None:

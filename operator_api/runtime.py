@@ -19,6 +19,8 @@ def build_runtime_status(
     skills_index: Any = None,
     mcp: dict[str, Any] | None = None,
     plugins: list[dict[str, Any]] | None = None,
+    telemetry_store: Any = None,
+    checkpoint_path: str = "",
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -114,4 +116,23 @@ def build_runtime_status(
             "loaded": cache_warmer is not None,
             "interval_seconds": getattr(config, "cache_warming_interval_seconds", None),
         },
+        # On-disk store sizes (bytes) so growth is visible from the console.
+        "storage": {
+            "knowledge_bytes": _file_size(getattr(knowledge_store, "path", None)),
+            "telemetry_bytes": _file_size(getattr(telemetry_store, "path", None)),
+            "checkpoint_bytes": _file_size(checkpoint_path),
+            "skills_bytes": _file_size(getattr(skills_index, "path", None)),
+            "telemetry_retention_days": getattr(config, "telemetry_retention_days", None),
+        },
     }
+
+
+def _file_size(path: Any) -> int | None:
+    """File size in bytes, or None if the path is unset/missing (best-effort)."""
+    if not path:
+        return None
+    try:
+        import os
+        return os.path.getsize(str(path))
+    except OSError:
+        return None

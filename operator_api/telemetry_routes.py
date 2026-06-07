@@ -30,6 +30,31 @@ def register_telemetry_routes(app) -> None:
             return {"enabled": False, "turns": []}
         return {"enabled": True, "turns": STATE.telemetry_store.recent(limit=min(max(1, limit), 500))}
 
+    @app.get("/api/telemetry/export")
+    async def _api_telemetry_export(since: str | None = None):
+        """Download every recorded turn as CSV (optionally those ended at/after
+        ``since``). Read-only; empty CSV when the store is off."""
+        import csv
+        import io
+
+        from fastapi.responses import PlainTextResponse
+
+        from telemetry_store import _COLUMNS
+
+        rows = STATE.telemetry_store.recent(limit=10_000_000) if STATE.telemetry_store else []
+        if since:
+            rows = [r for r in rows if (r.get("ended_at") or "") >= since]
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=list(_COLUMNS), extrasaction="ignore")
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return PlainTextResponse(
+            buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="telemetry.csv"'},
+        )
+
     @app.get("/api/telemetry/insights")
     async def _api_telemetry_insights():
         # Advise-only flywheel signal (ADR 0006 Slice 4): flag outlier turns +

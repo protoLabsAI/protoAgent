@@ -51,3 +51,42 @@ def test_recent_limit_is_clamped(monkeypatch):
     assert seen["limit"] == 500  # clamped to the 500 ceiling
     c.get("/api/telemetry/recent?limit=0")
     assert seen["limit"] == 1  # clamped to the floor
+
+
+def test_export_returns_csv(monkeypatch):
+    class _Store:
+        def recent(self, limit=50):
+            return [
+                {"task_id": "t1", "session_id": "s", "model": "m", "cost_usd": 0.01,
+                 "ended_at": "2026-06-07T10:00:00+00:00"},
+                {"task_id": "t2", "session_id": "s", "model": "m", "cost_usd": 0.02,
+                 "ended_at": "2026-06-08T10:00:00+00:00"},
+            ]
+
+    c = _client(monkeypatch, _Store())
+    res = c.get("/api/telemetry/export")
+    assert res.status_code == 200
+    assert "text/csv" in res.headers["content-type"]
+    assert "attachment; filename=" in res.headers.get("content-disposition", "")
+    body = res.text
+    assert body.splitlines()[0].startswith("task_id,")  # header from _COLUMNS
+    assert "t1" in body and "t2" in body
+
+
+def test_export_since_filter(monkeypatch):
+    class _Store:
+        def recent(self, limit=50):
+            return [
+                {"task_id": "old", "ended_at": "2026-06-01T00:00:00+00:00"},
+                {"task_id": "new", "ended_at": "2026-06-09T00:00:00+00:00"},
+            ]
+
+    c = _client(monkeypatch, _Store())
+    body = c.get("/api/telemetry/export?since=2026-06-05T00:00:00+00:00").text
+    assert "new" in body and "old" not in body
+
+
+def test_export_empty_when_store_off(monkeypatch):
+    c = _client(monkeypatch, None)
+    res = c.get("/api/telemetry/export")
+    assert res.status_code == 200 and res.text.splitlines()[0].startswith("task_id,")

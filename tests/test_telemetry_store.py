@@ -276,3 +276,8 @@ def test_config_telemetry_default_on():
     from graph.config import LangGraphConfig
 
     assert LangGraphConfig().telemetry_enabled is True
+
+
+def test_retention_config_default_is_bounded():
+    from graph.config import LangGraphConfig
+    assert LangGraphConfig().telemetry_retention_days == 90  # guardrail on by default
