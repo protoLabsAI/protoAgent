@@ -79,7 +79,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters = self._parse_set(rest)
+        spec, condition, max_iters, no_progress = self._parse_set(rest)
         if condition is None:
             return ("Could not parse goal. Use `/goal <text>` or "
                     '`/goal {"condition": "...", "verifier": {"type": "command", '
@@ -89,6 +89,7 @@ class GoalController:
             condition=condition,
             verifier=spec,
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress,  # per-goal patience (ADR 0030 D4); None → config
         )
         self._store.set(state)
         return f"Goal set. {state.status_line()}"
@@ -99,7 +100,8 @@ class GoalController:
     SAFE_PROGRAMMATIC_VERIFIERS = frozenset({"plugin"})
 
     def set_goal_safe(self, session_id: str, condition: str, verifier: dict,
-                      max_iterations: int | None = None) -> tuple[bool, str]:
+                      max_iterations: int | None = None,
+                      no_progress_limit: int | None = None) -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
         programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
@@ -115,26 +117,27 @@ class GoalController:
         state = GoalState(
             session_id=session_id, condition=condition, verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress_limit,  # per-goal patience (ADR 0030 D4)
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
 
     def _parse_set(self, rest: str):
-        """Return (verifier_spec, condition, max_iterations|None)."""
+        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None)."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None)
+                return ({}, None, None, None)
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None)
+                return ({}, None, None, None)
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
-            return (verifier, condition, data.get("max_iterations"))
+            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"))
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None)
+        return ({"type": "llm"}, rest, None, None)
 
     # --- evaluation --------------------------------------------------------
 
@@ -178,7 +181,7 @@ class GoalController:
         state.last_evidence = result.evidence
         state.iteration += 1
 
-        limit = getattr(self._config, "goal_no_progress_limit", 3)
+        limit = state.no_progress_limit or getattr(self._config, "goal_no_progress_limit", 3)
         if state.iteration >= state.max_iterations:
             return await self._finish(state, "exhausted",
                                 f"ran out of iteration budget ({state.max_iterations})",
