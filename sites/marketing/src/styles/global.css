@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface-0: #0a0a0c;
+  --color-surface-1: #111113;
+  --color-surface-2: #161619;
+  --color-surface-3: #1d1d21;
+  --color-accent:     #9b87f2;  /* protoLabs brand violet */
+  --color-accent-dim: #7c6fd6;
+  --color-accent-alt: #b6a6ff;
+  --color-muted: #8b8b94;
+  --color-edge: rgba(255, 255, 255, 0.08);
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+}
+
+html {
+  background: var(--color-surface-0);
+  color: #ededed;
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #b6a6ff 0%, #9b87f2 45%, #7c6fd6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Soft violet glow behind the hero */
+.hero-glow {
+  background: radial-gradient(60% 50% at 50% 0%, rgba(155, 135, 242, 0.18) 0%, transparent 70%);
+}
+
+.card {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-edge);
+  border-radius: 14px;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.card:hover {
+  border-color: rgba(155, 135, 242, 0.35);
+  transform: translateY(-2px);
+}
