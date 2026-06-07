@@ -446,6 +446,7 @@ def _main():
         scheduler_cancel=_console._operator_scheduler_cancel,
         goal_list=_console._operator_goals_list,
         goal_clear=_console._operator_goals_clear,
+        goal_set=_console._operator_goals_set,
         chat_commands=_console._operator_chat_commands,
         workflows_list=_console._operator_workflows_list,
         workflows_run=_console._operator_workflow_run,

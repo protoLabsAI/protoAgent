@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Safe programmatic goal-set** (ADR 0028, PR2) — `GoalController.set_goal_safe()`
+  + `POST /api/goals` let an agent/plugin/REST caller establish a standing goal
+  **only** with a `plugin` verifier. `command`/`test`/`ci` (shell) and `data`
+  (`eval`) verifiers are refused programmatically — they stay operator-only via
+  `/goal` — so a non-operator goal-set can never reach a code-exec sink (D3). The
+  REST route 400s a rejected verifier.
 - **Plugin-contributed goal verifiers** (ADR 0028, PR1) — a plugin can
   `registry.register_goal_verifier("<name>", fn)` to contribute an in-process goal
   verifier (auto-namespaced `<plugin-id>:<name>`), referenced by a new **`plugin`**
