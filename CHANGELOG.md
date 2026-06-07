@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`set_goal` tool** (ADR 0028) — the lead agent can set its **own** standing goal,
+  ground-truthed by a plugin verifier: `set_goal(condition, check, check_args, …)`
+  builds a `plugin` verifier and routes through `set_goal_safe`, so the agent
+  literally can't open a shell/`eval` goal (those stay operator-only via `/goal`).
+  Registered only when goal mode is on; reads the current session at call time.
 - **Goal lifecycle hooks** (ADR 0028, PR3) — a plugin can
   `registry.register_goal_hook(on_achieved=…, on_failed=…)` to react when a goal
   reaches a terminal state (achieved → `on_achieved`; exhausted/unachievable →

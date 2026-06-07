@@ -682,7 +682,40 @@ def _build_beads_tools(beads_store) -> list:
     return [beads_create, beads_list, beads_update, beads_close]
 
 
-def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None):
+def _build_set_goal_tool():
+    """The lead agent sets its OWN standing goal — verified by a plugin verifier
+    only (ADR 0028). The agent literally can't open a shell/eval goal here: the
+    tool hardcodes ``type="plugin"`` and routes through ``set_goal_safe``."""
+
+    @tool
+    def set_goal(condition: str, check: str, check_args: dict | None = None,
+                 max_iterations: int | None = None) -> str:
+        """Set a standing goal for THIS session, ground-truthed by a plugin verifier.
+
+        You'll be re-invoked toward `condition` until the plugin verifier named by
+        `check` (a registered "<plugin-id>:<name>" verifier) passes. `check_args` is
+        declarative data the verifier reads (e.g. {"min": 1000000}). Only plugin
+        verifiers are allowed — shell/test/data goals are operator-only via /goal.
+        Returns the goal status, or an error if goal mode is off / `check` is unknown.
+        """
+        import tracing
+        from runtime.state import STATE
+        if STATE.goal_controller is None:
+            return "Goal mode is not enabled."
+        session_id = tracing.current_session_id()
+        if not session_id:
+            return "No active session — set_goal can only run during a turn."
+        verifier = {"type": "plugin", "check": check, "args": check_args or {}}
+        _ok, msg = STATE.goal_controller.set_goal_safe(
+            session_id, condition, verifier, max_iterations,
+        )
+        return msg
+
+    return set_goal
+
+
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
+                  beads_store=None, goal_enabled=False):
     """Return every LangChain tool the lead agent + subagents can use.
 
     Optional dependencies:
@@ -726,6 +759,8 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_
         tools.extend(_build_inbox_tools(inbox_store))
     if beads_store is not None:
         tools.extend(_build_beads_tools(beads_store))
+    if goal_enabled:
+        tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
     # Fork denylist (config ``tools.disabled``): drop named core tools without
     # editing this function. Applied last so it covers every branch above.
     if _disabled_tools:
