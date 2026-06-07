@@ -283,6 +283,9 @@ class LangGraphConfig:
     # and is instance-scoped (ADR 0004).
     telemetry_enabled: bool = True
     telemetry_db_path: str = "/sandbox/telemetry.db"
+    # Retention guardrail (ADR 0006) — turns older than this are pruned by the
+    # periodic maintenance loop so the store can't grow unbounded. 0 = keep forever.
+    telemetry_retention_days: int = 90
     # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
     # latest N checkpoints per session, and TTL whole sessions idle past
     # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
@@ -548,6 +551,7 @@ class LangGraphConfig:
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
+            telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get("keep_per_thread", cls.checkpoint_keep_per_thread),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),

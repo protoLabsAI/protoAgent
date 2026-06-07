@@ -39,6 +39,13 @@ export type RuntimeStatus = {
     loaded: boolean;
     interval_seconds?: number | null;
   };
+  storage?: {
+    knowledge_bytes?: number | null;
+    telemetry_bytes?: number | null;
+    checkpoint_bytes?: number | null;
+    skills_bytes?: number | null;
+    telemetry_retention_days?: number | null;
+  };
   skills?: {
     enabled: boolean;
     count: number;

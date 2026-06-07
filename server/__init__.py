@@ -499,11 +499,12 @@ def _main():
                 await STATE.cache_warmer.start()
             except Exception:
                 log.exception("[cache-warmer] startup failed")
-        # Checkpoint pruner — periodic sweep to keep the SQLite history DB bounded.
-        if (
-            STATE.checkpoint_path
-            and STATE.graph_config is not None
-            and STATE.graph_config.checkpoint_prune_interval_hours > 0
+        # Periodic maintenance — checkpoint pruning and/or telemetry retention.
+        # Starts if either is enabled (the loop guards each step independently).
+        _cfg = STATE.graph_config
+        if _cfg is not None and (
+            (STATE.checkpoint_path and _cfg.checkpoint_prune_interval_hours > 0)
+            or getattr(_cfg, "telemetry_retention_days", 0) > 0
         ):
             import asyncio
             STATE.checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())

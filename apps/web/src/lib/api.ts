@@ -405,6 +405,15 @@ export const api = {
   },
 
   // Real completion probe — the true auth check (unlike `models`, which only
+  // Download all telemetry as CSV (carries the bearer; returns a Blob to save).
+  async exportTelemetry(): Promise<Blob> {
+    const res = await fetch(apiUrl("/api/telemetry/export"), {
+      headers: applyAuth(new Headers()),
+    });
+    if (!res.ok) throw new Error(`export failed: ${res.status}`);
+    return res.blob();
+  },
+
   // lists). Blank fields fall back to the saved config (Settings re-test).
   testModel(apiBase: string, apiKey: string, model: string) {
     return request<{ ok: boolean; error: string }>("/api/config/test-model", {

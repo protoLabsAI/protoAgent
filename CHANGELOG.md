@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Telemetry: export + disk visibility + retention guardrail** —
+  `GET /api/telemetry/export` + an **Export CSV** button download every recorded turn;
+  the **Runtime** panel now shows on-disk DB sizes (knowledge / telemetry / checkpoint /
+  skills); and `telemetry.retention_days` (default **90**) wires the maintenance loop to
+  prune turns older than the window so the per-turn store can't grow unbounded (0 = keep
+  forever).
+
 ### Changed
 - **Unified panel headers** — every surface's header (title + kicker + actions) now renders
   through one shared `PanelHeader` component, with a single `.panel-actions` wrapper.
