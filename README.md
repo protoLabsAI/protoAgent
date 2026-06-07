@@ -100,6 +100,36 @@ The A2A handler never talks to the LLM directly — it submits a
 message to the LangGraph runtime, which owns the tool loop, the
 subagent `task()` delegation, and the structured-output protocol.
 
+## Plugins
+
+A plugin is a drop-in package — a repo with a `protoagent.plugin.yaml` manifest — that
+extends a **running** agent without forking: tools, `SKILL.md` skills, subagents,
+workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail
+views**, and its own config / secrets / Settings. Install one from a git URL:
+
+```bash
+python -m server plugin install https://github.com/you/your-plugin   # pinned in plugins.lock
+python -m server plugin uninstall your-plugin --purge                # removes code, config + secrets
+```
+
+**Browse the directory → [agent.protolabs.studio/plugins](https://agent.protolabs.studio/plugins)**
+
+First-party plugins ship in `plugins/` (off by default — enable via `plugins.enabled`):
+
+| Plugin | Adds | What it does |
+| --- | --- | --- |
+| [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
+| [`delegates`](./plugins/delegates/) | tool · settings | Hot-swappable registry of agents/endpoints (`delegate_to` over a2a / openai / acp) |
+| [`coding_agent`](./plugins/coding_agent/) | tool | Spawn a CLI coding agent (protoCLI, Claude Code, Codex, Gemini) over ACP |
+| [`discord`](./plugins/discord/) | surface · tool | Run the agent as a Discord bot — inbound DMs + outbound posting |
+| [`google`](./plugins/google/) | mcp | Gmail + Calendar via a managed MCP server with in-app OAuth |
+| [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
+
+**Publish your own:** tag your repo with the [`protoagent-plugin`](https://github.com/topics/protoagent-plugin)
+GitHub topic, then open a PR adding it to [`plugins.json`](./sites/marketing/data/plugins.json)
+to list it on the directory. See [Install & publish plugins](./docs/guides/plugin-registry.md),
+[Plugins](./docs/guides/plugins.md), [Console views](./docs/guides/plugin-views.md).
+
 ## A2A extensions shipped by default
 
 | URI | Declared on card | Emitted at runtime |

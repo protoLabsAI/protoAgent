@@ -1,0 +1,80 @@
+[
+  {
+    "id": "plugin-devkit",
+    "name": "Plugin Devkit",
+    "official": true,
+    "tagline": "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle.",
+    "adds": ["tool", "subagent", "skill", "workflow", "view"],
+    "bundled": true,
+    "enable": "plugin-devkit",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/plugin-devkit",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
+    "id": "delegates",
+    "name": "Delegate Registry",
+    "official": true,
+    "tagline": "A hot-swappable registry of the agents and endpoints your agent can talk to — fleet A2A agents, OpenAI-compatible endpoints, ACP coding agents — managed from the console.",
+    "adds": ["tool", "settings"],
+    "bundled": true,
+    "enable": "delegates",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/delegates",
+      "docs": "/docs/guides/delegates"
+    }
+  },
+  {
+    "id": "coding_agent",
+    "name": "CLI Coding Agent (ACP)",
+    "official": true,
+    "tagline": "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol.",
+    "adds": ["tool"],
+    "bundled": true,
+    "enable": "coding_agent",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coding_agent",
+      "docs": "/docs/guides/coding-agents"
+    }
+  },
+  {
+    "id": "discord",
+    "name": "Discord",
+    "official": true,
+    "tagline": "Run your agent as a Discord bot — an inbound DM/channel gateway plus outbound posting tools.",
+    "adds": ["surface", "tool", "secrets"],
+    "bundled": true,
+    "enable": "discord",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/discord",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
+    "id": "google",
+    "name": "Google (Gmail + Calendar)",
+    "official": true,
+    "tagline": "Gmail + Calendar via a managed MCP server, connected in-app with an OAuth consent flow — no credentials.json to wrangle.",
+    "adds": ["mcp", "secrets"],
+    "bundled": true,
+    "enable": "google",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/google",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
+    "id": "hello",
+    "name": "Hello (example)",
+    "official": true,
+    "tagline": "A minimal starting point — one tool, one bundled skill, and a console view. Copy it to scaffold your own plugin by hand.",
+    "adds": ["tool", "skill", "view"],
+    "bundled": true,
+    "enable": "hello",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello",
+      "docs": "/docs/guides/plugins"
+    }
+  }
+]

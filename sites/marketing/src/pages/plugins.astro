@@ -1,0 +1,79 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import plugins from '../../data/plugins.json';
+
+const topic = 'https://github.com/topics/protoagent-plugin';
+const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json';
+const publishDocs = '/docs/guides/plugin-registry';
+const lavender = 'var(--pl-color-brand-lavender)';
+---
+
+<BaseLayout
+  title="Plugins — protoAgent"
+  description="Plugins for protoAgent — drop-in packages that add tools, skills, subagents, workflows, console views, and more. Install from a git URL."
+>
+  <div class="max-w-5xl mx-auto px-6 py-24">
+    <h1 class="text-4xl font-bold mb-2">Plugins</h1>
+    <p class="text-zinc-400 mb-3 text-lg max-w-2xl">
+      Drop-in packages that extend a running agent — tools, skills, subagents, workflows,
+      FastAPI routes, console rail views, managed MCP servers, and their own config + secrets.
+    </p>
+    <p class="text-zinc-500 mb-14 text-sm max-w-2xl">
+      A plugin is just a repo — install one with
+      <code class="px-1.5 py-0.5 rounded bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] font-mono text-zinc-300">python -m server plugin install &lt;git-url&gt;</code>
+      (pinned in <code class="font-mono text-zinc-400">plugins.lock</code>). The first-party ones below ship with protoAgent.
+    </p>
+
+    <div class="grid sm:grid-cols-2 gap-5">
+      {plugins.map((p) => (
+        <div class="card p-6 flex flex-col gap-3">
+          <div class="flex items-center gap-2.5">
+            <h2 class="font-semibold text-zinc-100">{p.name}</h2>
+            {p.official && (
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider"
+                    style={`color:${lavender};background:color-mix(in srgb, ${lavender} 12%, transparent);border:1px solid color-mix(in srgb, ${lavender} 35%, transparent);`}>
+                Official
+              </span>
+            )}
+          </div>
+          <p class="text-sm text-zinc-400 flex-1">{p.tagline}</p>
+          <div class="flex flex-wrap gap-1.5">
+            {p.adds.map((a) => (
+              <span class="px-1.5 py-0.5 rounded text-[11px] font-mono text-zinc-400 bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)]">{a}</span>
+            ))}
+          </div>
+          <div class="mt-1 font-mono text-xs text-zinc-500">
+            {p.bundled
+              ? <span>Bundled · enable <span class="text-zinc-300">{p.enable}</span> in <span class="text-zinc-300">plugins.enabled</span></span>
+              : <span>plugin install <span class="text-zinc-300">{p.install}</span></span>}
+          </div>
+          <div class="flex items-center gap-4 text-sm pt-1">
+            <a href={p.links.source} target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white transition-colors">Source ↗</a>
+            <a href={p.links.docs} target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white transition-colors">Docs ↗</a>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <!-- Publish your own -->
+    <div class="mt-16 card p-8">
+      <h2 class="text-2xl font-semibold mb-2">Publish your own</h2>
+      <p class="text-zinc-400 mb-6 max-w-2xl text-sm">
+        A plugin is a public repo with a <code class="font-mono text-zinc-300">protoagent.plugin.yaml</code> manifest.
+        Anyone can install it from its git URL. To get it discovered + listed here:
+      </p>
+      <ol class="space-y-3 text-sm text-zinc-300 mb-6">
+        <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">1.</span>
+          <span>Tag your repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> GitHub topic — that makes it discoverable across GitHub.</span></li>
+        <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">2.</span>
+          <span>Open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> to feature it on this page.</span></li>
+      </ol>
+      <div class="flex flex-wrap items-center gap-4">
+        <a href={publishDocs} target="_blank" rel="noopener noreferrer"
+           class="rounded-lg px-4 py-2 text-sm font-medium text-[var(--pl-color-bg)]" style={`background:${lavender}`}>Publishing guide</a>
+        <a href={topic} target="_blank" rel="noopener noreferrer"
+           class="rounded-lg border border-[var(--pl-color-border)] px-4 py-2 text-sm font-medium text-zinc-200 hover:border-white/30 transition-colors">Browse the topic ↗</a>
+      </div>
+    </div>
+  </div>
+</BaseLayout>
