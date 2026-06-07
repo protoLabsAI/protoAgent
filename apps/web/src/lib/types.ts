@@ -132,7 +132,12 @@ export type SettingsField = {
   maximum?: number;
 };
 
-export type SettingsGroup = { section: string; category?: string; fields: SettingsField[] };
+export type SettingsGroup = {
+  section: string;
+  category?: string;
+  fields: SettingsField[];
+  test?: { endpoint: string };  // ADR 0029 — generic "Test connection" button
+};
 
 export type WorkflowSummary = {
   name: string;

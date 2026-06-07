@@ -11,6 +11,7 @@ description: >-
 enabled: false
 requires_env: []
 config_section: telegram
+test: true   # /api/config/test-telegram (chat_surface wirer)
 config:
   enabled: false
   admin_ids: []

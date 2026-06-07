@@ -413,6 +413,16 @@ export const api = {
     });
   },
 
+  // Generic plugin "Test connection" (ADR 0029) — POST the group's fields (short
+  // keys) to the plugin's test route. Blank/omitted fields fall back to the saved
+  // config. Returns {ok, identity, error}. Used by any group with a `test` endpoint.
+  testConfig(endpoint: string, fields: Record<string, unknown>) {
+    return request<{ ok: boolean; identity: string | null; error: string | null }>(endpoint, {
+      method: "POST",
+      body: fields,
+    });
+  },
+
   // Verify a Discord bot token by fetching its identity. Blank falls back to the
   // saved token. Returns the bot username on success ("Connected as <bot>").
   testDiscord(botToken: string) {

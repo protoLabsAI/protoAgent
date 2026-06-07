@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Generic plugin "Test connection" button** (ADR 0029) — a plugin manifest can
+  declare `test: true` and the console renders a Test-connection button for its
+  Settings group (POSTs the group's fields to `/api/config/test-<section>`, unset
+  secrets falling back to saved config) — no React edit. Telegram + Slack get it via
+  the `chat_surface` wirer's test route; Discord keeps its bespoke button.
 - **Communication-plugin standard** (ADR 0029) — a `ChatAdapter` contract +
   `register_chat_surface` helper (`graph/plugins/chat_surface.py`) so a chat
   integration only implements transport (connect / receive / send); admin-gating,

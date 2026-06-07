@@ -40,6 +40,11 @@ class PluginManifest:
     config: dict = field(default_factory=dict)
     secrets: list[str] = field(default_factory=list)
     settings: list[dict] = field(default_factory=list)
+    # Test action (ADR 0029) — when true, the plugin serves a credential check at
+    # `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts
+    # one), and the console renders a generic "Test connection" button for the
+    # group. No console edit needed per plugin.
+    test: bool = False
     # Console surfaces (ADR 0026) — each entry adds a left-rail icon opening a
     # full view (an iframe of a page the plugin serves at `path`). Declared as
     # data so it's known without importing the plugin, and surfaced to the
@@ -104,6 +109,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         config=cfg if isinstance(cfg, dict) else {},
         secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
         settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
+        test=bool(data.get("test", False)),
         views=[v for v in views if isinstance(v, dict) and v.get("id") and v.get("path")]
         if isinstance(views, (list, tuple)) else [],
         requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],
