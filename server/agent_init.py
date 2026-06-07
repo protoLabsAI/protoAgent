@@ -462,6 +462,26 @@ async def _checkpoint_prune_loop() -> None:
         await asyncio.sleep(max(1, interval_h) * 3600)
 
 
+async def _monitor_goals_loop() -> None:
+    """Out-of-band cadence for monitor goals (ADR 0030 D2.1): periodically run each
+    active monitor goal's verifier — no agent turn, no model call — so a met
+    long-horizon objective finishes (firing its on_achieved hook) without waiting
+    for a session turn. Verifier-only; the `drive` loop is untouched."""
+    await asyncio.sleep(15)  # let boot settle before the first tick
+    while True:
+        ctrl = STATE.goal_controller
+        cfg = STATE.graph_config
+        interval = getattr(cfg, "goal_monitor_interval", 60) if cfg else 60
+        if ctrl is not None:
+            try:
+                n = await ctrl.tick_monitor_goals()
+                if n:
+                    log.info("[goal-monitor] %d monitor goal(s) reached a terminal state", n)
+            except Exception:
+                log.exception("[goal-monitor] tick failed")
+        await asyncio.sleep(max(5, interval))
+
+
 async def _retire_thread(thread_id: str) -> str | None:
     """Harvest a thread to the knowledge base (best-effort) then delete its
     checkpoints. Shared by the prune sweep and explicit tab deletion. Returns

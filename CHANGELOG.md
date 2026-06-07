@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Monitor goals** (ADR 0030 D1/D2.1/D3) — a goal can be `"mode": "monitor"` for a
+  metric an *external* process drives (a background engine, training run, deployment).
+  Monitor goals aren't added to the agent continuation loop (no wasted turns), **never
+  exhaust** (a long-horizon target is expected to sit unmet across checks), and are
+  evaluated **out-of-band** on a cadence (`goal.monitor_interval`, default 60s) — firing
+  the ADR-0028 `on_achieved` hook when met. Closes ADR-0028's deferred D6. `drive` goals
+  are unchanged. Surfaced by the SpaceTraders fleet fork (a `credits ≥ 1M` goal that
+  stormed the drive loop in minutes).
 - **Per-goal `no_progress_limit`** (ADR 0030 D4) — a goal can carry its own patience
   (`/goal {"…", "no_progress_limit": N}` or via `set_goal_safe`), overriding the global
   `goal_no_progress_limit` for that one goal. First slice of monitor goals.
