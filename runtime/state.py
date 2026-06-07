@@ -22,6 +22,7 @@ class AppState:
     checkpointer: Any = None
     checkpoint_path: Any = None
     checkpoint_prune_task: Any = None
+    monitor_goals_task: Any = None  # ADR 0030 monitor-goal cadence loop
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     skills_index: Any = None

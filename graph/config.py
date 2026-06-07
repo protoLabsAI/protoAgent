@@ -241,6 +241,7 @@ class LangGraphConfig:
     goal_enabled: bool = True
     goal_max_iterations: int = 8          # continuation budget per goal
     goal_no_progress_limit: int = 3       # identical verifier evidence N times -> unachievable
+    goal_monitor_interval: int = 60       # seconds between out-of-band monitor-goal checks (ADR 0030)
     goal_eval_model: str = ""             # blank = main model (llm verifier / fuzzy goals)
     goal_verify_timeout: float = 120.0    # seconds for command/test/ci verifiers
 
@@ -528,6 +529,7 @@ class LangGraphConfig:
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
             goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
+            goal_monitor_interval=data.get("goal", {}).get("monitor_interval", cls.goal_monitor_interval),
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
