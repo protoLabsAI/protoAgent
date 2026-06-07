@@ -143,6 +143,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
         _plugins.tools, _plugins.skill_dirs, _plugins.meta,
     )
+    STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
     STATE.thread_id_resolver = _plugins.thread_id_resolver  # thread_id seam (#571)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
@@ -569,6 +570,12 @@ def _build_workflow_registry(config):
         bundled = _bundle_root() / "workflows"
         if bundled.is_dir():
             dirs.append(str(bundled))
+        # Plugin-bundled workflow recipes (ADR 0027) — enabled plugins' workflows/
+        # dirs, so installing a plugin repo pulls in its workflows too. Before the
+        # writable dir below, so a user-saved recipe still wins on a name clash.
+        for d in (getattr(STATE, "plugin_workflow_dirs", None) or []):
+            if Path(d).is_dir():
+                dirs.append(str(d))
         # Writable dir for user / agent-emitted recipes (same fallback shape).
         writable = scope_leaf(Path(config.workflow_dir).expanduser())
         try:

@@ -47,6 +47,7 @@ class PluginRegistry:
         self.host = HOST
         self.tools: list = []
         self.skill_dirs: list[Path] = []
+        self.workflow_dirs: list[Path] = []  # dirs of *.yaml workflow recipes (ADR 0027)
         self.a2a_skills: list[dict] = []  # A2A card skill specs (#570)
         self.routers: list[dict] = []     # {"router", "prefix"}
         self.surfaces: list[dict] = []    # {"name", "start", "stop"}
@@ -75,6 +76,17 @@ class PluginRegistry:
         if not p.is_absolute():
             p = self.plugin_dir / p
         self.skill_dirs.append(p)
+
+    def register_workflow_dir(self, path: str | Path) -> None:
+        """Add a directory of ``*.yaml`` workflow recipes bundled with the plugin
+        (ADR 0027). Relative paths resolve against the plugin's own directory. A
+        conventional ``<plugin>/workflows/`` dir is auto-discovered without this
+        call; use it for a non-standard location.
+        """
+        p = Path(path)
+        if not p.is_absolute():
+            p = self.plugin_dir / p
+        self.workflow_dirs.append(p)
 
     def register_a2a_skill(self, spec: dict) -> None:
         """Contribute an A2A *card* skill — advertised on the agent card and,

@@ -1,0 +1,98 @@
+# Install & publish plugins (git URLs)
+
+Plugins can live in their own GitHub repo and be installed by URL — so you can
+make one and share it, and pull others in. A plugin repo is a **full bundle**: it
+can contribute tools, subagents, SKILL.md skills, workflows, console views, routes,
+MCP servers, and config — all from the one repo. See
+[ADR 0027](/adr/0027-install-plugins-from-git-url) for the design + safety model.
+
+## Install one
+
+**CLI:**
+```sh
+python -m server plugin install https://github.com/owner/protoagent-plugin-x --ref v1.0
+python -m server plugin list
+python -m server plugin uninstall protoagent-plugin-x
+python -m server plugin sync          # re-clone the locked set (CI / fresh checkout)
+python -m server plugin install-deps protoagent-plugin-x   # explicit, separate
+```
+
+**Console:** Settings → Integrations → **Plugins** — paste the URL, review the
+manifest + capabilities, install, uninstall.
+
+Either way, **install fetches code only — it does not enable or run it.** To
+enable: add the plugin's id to `plugins.enabled` in your config and restart.
+
+```yaml
+plugins:
+  enabled: [protoagent-plugin-x]
+```
+
+Install pins the **resolved commit SHA** and records it in a committed
+`plugins.lock`, so `plugin sync` reproduces the exact set. The code itself is
+gitignored (re-cloned from the lock).
+
+## Publish one
+
+A plugin is a directory (its own repo) with a manifest + a `register()`. The
+**conventional layout** — everything here is picked up when the plugin is enabled:
+
+```
+my-plugin/
+  protoagent.plugin.yaml      # manifest (id, name, version, requires_pip, views, …)
+  __init__.py                 # def register(registry): … — tools, subagents, etc.
+  skills/                     # SKILL.md skills — auto-discovered (data, no code)
+    my-skill/SKILL.md
+  workflows/                  # *.yaml workflow recipes — auto-discovered (data)
+    my-recipe.yaml
+```
+
+`register(registry)` contributes the **code** extensions:
+
+```python
+def register(registry):
+    registry.register_tool(my_tool)            # a LangChain tool
+    registry.register_subagent(my_subagent)    # a SubagentConfig
+    registry.register_router(my_router)         # FastAPI routes at /plugins/<id>
+    registry.register_mcp_server(my_factory)    # a managed MCP server
+    # skills/ and workflows/ are auto-discovered — no call needed. For a
+    # non-standard location: registry.register_workflow_dir("recipes")
+```
+
+`skills/` and `workflows/` are **data**, so they're auto-discovered from those
+conventional subdirs — no boilerplate. **Console views** (a rail icon + page) are
+declared in the manifest — see [Plugin console views](/guides/plugin-views).
+
+Declare pip dependencies (they are **not** auto-installed — see Safety):
+
+```yaml
+# protoagent.plugin.yaml
+id: my-plugin
+name: My Plugin
+version: 1.0.0
+repository: https://github.com/owner/my-plugin
+requires_pip: ["httpx>=0.27"]
+min_protoagent_version: "0.20.0"
+```
+
+## Safety
+
+The model is **informed trust + a verifiable supply chain**, not a sandbox — an
+enabled plugin runs in-process *as the agent* (like a pip dependency). So:
+
+- **Install ≠ enable ≠ trust.** Installing only fetches code + reads the manifest
+  (data); it never imports the plugin. Enabling (`plugins.enabled`) is the trust
+  decision — review the manifest + capabilities first.
+- **Deps are explicit.** `requires_pip` is declared, never auto-installed (pip runs
+  arbitrary build code). Run `plugin install-deps <id>` after reviewing them; a
+  missing dep gives a clear "run install-deps" message on enable.
+- **Pinned + reproducible.** Installs pin a commit SHA in `plugins.lock`.
+- **Optional source allowlist.** Lock installs down to trusted orgs:
+  ```yaml
+  plugins:
+    sources:
+      allow: ["github.com/yourorg/*"]
+  ```
+- **Audited.** install / uninstall / install-deps are written to the audit log.
+- **Untrusted code? Use [MCP](/guides/mcp) instead** — it runs out-of-process and
+  is sandboxable. Git plugins are for code you've reviewed and trust.
