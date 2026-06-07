@@ -147,6 +147,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
     STATE.thread_id_resolver = _plugins.thread_id_resolver  # thread_id seam (#571)
+    # A plugin may provide the knowledge backend (ADR 0031) — swap it in now (the
+    # graph compiles below with STATE.knowledge_store). Default built-in store stays
+    # the collision-check binding + the degrade-safe fallback.
+    STATE.knowledge_store = _apply_plugin_knowledge_backend(
+        STATE.graph_config, STATE.knowledge_store, _plugins)
     # Register plugin-contributed goal verifiers (ADR 0028) — re-set on each
     # (re)load so a config change refreshes the available `plugin` verifiers.
     from graph.goals import hooks as _goal_hooks
@@ -246,6 +251,30 @@ def _build_knowledge_store(config):
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
         return None
+
+
+def _apply_plugin_knowledge_backend(config, store, plugins):
+    """ADR 0031 — if ``knowledge.backend`` names a plugin-registered backend, build
+    it and use it instead of the built-in ``store``. Degrade-safe: an unregistered
+    name, a None return, or a factory error keeps ``store`` (never KB-less by
+    surprise). Called after plugins load, at both init and reload."""
+    backend = (getattr(config, "knowledge_backend", "") or "").strip()
+    if not backend:
+        return store
+    factory = (getattr(plugins, "knowledge_stores", {}) or {}).get(backend)
+    if factory is None:
+        log.warning("[server] knowledge.backend %r not registered by any plugin — built-in store", backend)
+        return store
+    try:
+        built = factory(config)
+    except Exception as exc:  # noqa: BLE001 — degrade to the built-in store
+        log.warning("[server] knowledge backend %r failed: %s — built-in store", backend, exc)
+        return store
+    if built is None:
+        log.warning("[server] knowledge backend %r returned None — built-in store", backend)
+        return store
+    log.info("[server] knowledge: plugin backend %r", backend)
+    return built
 
 
 def _build_skills_index(config, extra_skill_dirs=None):
@@ -857,6 +886,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_tools = new_plugins.tools
             new_plugin_skill_dirs = new_plugins.skill_dirs
             new_plugin_meta = new_plugins.meta
+            # Plugin knowledge backend (ADR 0031) — swap before the graph rebuild.
+            new_store = _apply_plugin_knowledge_backend(new_config, new_store, new_plugins)
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_workflow_registry = _build_workflow_registry(new_config)
             new_inbox_store = _build_inbox_store(new_config)

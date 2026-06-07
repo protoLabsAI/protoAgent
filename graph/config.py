@@ -251,6 +251,10 @@ class LangGraphConfig:
     # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
     # is read-only or absent (e.g. local ``python server.py``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
+    # Knowledge backend selector (ADR 0031) — "" = the built-in SQLite/FTS5 store;
+    # otherwise the name of a plugin-registered backend (register_knowledge_store).
+    # An unregistered name / a factory error degrades to the built-in store.
+    knowledge_backend: str = ""
     # The gateway's embedding model (NOT the chat model). Default is what the
     # protoLabs gateway serves; forks on a different gateway set this to a model
     # their gateway has (check GET /v1/models). A wrong/absent model degrades to
@@ -535,6 +539,7 @@ class LangGraphConfig:
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
+            knowledge_backend=knowledge.get("backend", cls.knowledge_backend),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),

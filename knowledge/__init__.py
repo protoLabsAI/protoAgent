@@ -7,6 +7,7 @@ eval harness can assert side effects against real DB state.
 See ``knowledge.store.KnowledgeStore`` for the public API.
 """
 
+from knowledge.backend import KnowledgeBackend
 from knowledge.store import KnowledgeStore, Chunk
 
-__all__ = ["KnowledgeStore", "Chunk"]
+__all__ = ["KnowledgeStore", "Chunk", "KnowledgeBackend"]
