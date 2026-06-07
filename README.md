@@ -122,8 +122,15 @@ First-party plugins ship in `plugins/` (off by default — enable via `plugins.e
 | [`delegates`](./plugins/delegates/) | tool · settings | Hot-swappable registry of agents/endpoints (`delegate_to` over a2a / openai / acp) |
 | [`coding_agent`](./plugins/coding_agent/) | tool | Spawn a CLI coding agent (protoCLI, Claude Code, Codex, Gemini) over ACP |
 | [`discord`](./plugins/discord/) | surface · tool | Run the agent as a Discord bot — inbound DMs + outbound posting |
+| [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
 | [`google`](./plugins/google/) | mcp | Gmail + Calendar via a managed MCP server with in-app OAuth |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
+
+**Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
+small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,
+per-conversation threads, reply-chunking, lifecycle, and Test button are handled for
+you. See [Build a communication plugin](./docs/guides/communication-plugins.md)
+([ADR 0029](./docs/adr/0029-communication-plugins-standard.md)).
 
 **Publish your own:** tag your repo with the [`protoagent-plugin`](https://github.com/topics/protoagent-plugin)
 GitHub topic, then open a PR adding it to [`plugins.json`](./sites/marketing/data/plugins.json)
