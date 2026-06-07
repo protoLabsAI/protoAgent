@@ -54,6 +54,7 @@ class PluginRegistry:
         self.subagents: list = []         # SubagentConfig instances
         self.mcp_servers: list = []       # factories: config -> entry dict | None
         self.thread_id_resolver = None    # (request_metadata, session_id) -> str (#571)
+        self.goal_verifiers: dict = {}    # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -87,6 +88,20 @@ class PluginRegistry:
         if not p.is_absolute():
             p = self.plugin_dir / p
         self.workflow_dirs.append(p)
+
+    def register_goal_verifier(self, name: str, fn) -> None:
+        """Contribute an in-process goal verifier (ADR 0028) — an async
+        ``(spec, ctx) -> VerifyResult`` referenced by a ``{"type":"plugin",
+        "check":"<name>"}`` goal. Name it ``<plugin-id>:<verifier>`` to avoid
+        collisions; ``args`` in the spec are declarative data your verifier
+        validates (no shell, no eval). This is the only verifier type safe to set
+        programmatically (D3)."""
+        if not name or not callable(fn):
+            log.warning("[plugins] %s: register_goal_verifier needs a name + callable: %r / %r",
+                        self.plugin_id, name, fn)
+            return
+        key = name if ":" in name else f"{self.plugin_id}:{name}"
+        self.goal_verifiers[key] = fn
 
     def register_a2a_skill(self, spec: dict) -> None:
         """Contribute an A2A *card* skill — advertised on the agent card and,
