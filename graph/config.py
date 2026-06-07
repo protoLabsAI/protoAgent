@@ -74,6 +74,9 @@ class SubagentDef:
     enabled: bool = True
     tools: list[str] = field(default_factory=list)
     max_turns: int = 30
+    # Per-subagent model override (ADR 0001) — blank = routing.aux_model → main model.
+    # Applied onto the registry's SubagentConfig at build (see _apply_config_subagents).
+    model: str = ""
 
 
 @dataclass
@@ -601,6 +604,7 @@ class LangGraphConfig:
                     enabled=sub.get("enabled", True),
                     tools=sub.get("tools", getattr(config, name).tools),
                     max_turns=sub.get("max_turns", getattr(config, name).max_turns),
+                    model=sub.get("model", getattr(config, name).model),
                 ))
 
         return config

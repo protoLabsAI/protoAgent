@@ -165,6 +165,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # (`global STATE.plugin_routers, STATE.plugin_surfaces` is declared at the top of the fn.)
     STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
     _register_plugin_subagents(_plugins.subagents)
+    _apply_config_subagents(STATE.graph_config)  # YAML subagent overrides (tools/max_turns/model)
 
     # MCP — external Model Context Protocol servers; their tools become agent
     # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
@@ -395,6 +396,40 @@ def _register_plugin_subagents(subagents) -> None:
         SUBAGENT_REGISTRY[name] = cfg
         _plugin_subagent_names.add(name)
         log.info("[plugins] registered subagent: %s", name)
+
+
+# Built-in subagents whose runtime config the operator can override in YAML
+# (subagents.<name>.{enabled,tools,max_turns,model}). Add an entry here + a
+# SubagentDef field on LangGraphConfig when you make another built-in overridable.
+_OVERRIDABLE_SUBAGENTS = ("researcher",)
+
+
+def _apply_config_subagents(config) -> None:
+    """Apply the per-subagent **model** override from YAML (``subagents.<name>.model``)
+    onto the built-in registry entries — the operator-facing half of the override that
+    ``_run_subagent`` already honors (per-subagent → routing.aux_model → main model).
+    Blank model = the base model (idempotent across reloads); preserves the entry's
+    tools/prompt (incl. any plugin tweaks). Runs at init + reload.
+
+    Scoped to ``model`` on purpose: ``tools``/``max_turns`` in ``SubagentDef`` are not
+    wired here because the config-side defaults intentionally mirror — but don't track —
+    the registry's, so clobbering them would drop registry-only tools (e.g. memory_ingest)."""
+    try:
+        from dataclasses import replace
+
+        from graph.subagents import config as _sub
+        from graph.subagents.config import SUBAGENT_REGISTRY
+    except Exception:  # noqa: BLE001
+        return
+    bases = {"researcher": getattr(_sub, "RESEARCHER_CONFIG", None)}
+    for name in _OVERRIDABLE_SUBAGENTS:
+        base = bases.get(name)
+        sub = getattr(config, name, None)
+        entry = SUBAGENT_REGISTRY.get(name)
+        if base is None or sub is None or entry is None:
+            continue
+        model = (getattr(sub, "model", "") or "").strip()
+        SUBAGENT_REGISTRY[name] = replace(entry, model=model or base.model)
 
 
 def _build_plugins(config, existing_tools=None):
@@ -931,6 +966,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_meta = new_plugins.meta
             # Plugin knowledge backend (ADR 0031) — swap before the graph rebuild.
             new_store = _apply_plugin_knowledge_backend(new_config, new_store, new_plugins)
+            _register_plugin_subagents(new_plugins.subagents)
+            _apply_config_subagents(new_config)  # YAML subagent overrides take effect on reload
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_workflow_registry = _build_workflow_registry(new_config)
             new_inbox_store = _build_inbox_store(new_config)
