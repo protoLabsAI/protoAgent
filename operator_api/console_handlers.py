@@ -147,6 +147,21 @@ async def _operator_goals_clear(session_id: str) -> dict:
     return {"cleared": bool(cleared)}
 
 
+async def _operator_goals_set(body: dict) -> dict:
+    """Programmatic goal-set (ADR 0028 D3) — plugin-verifier goals only; the route
+    maps ok=False to 400."""
+    if STATE.goal_controller is None:
+        return {"ok": False, "error": "goal mode is not enabled"}
+    sid = str((body or {}).get("session_id") or "").strip()
+    if not sid:
+        return {"ok": False, "error": "session_id is required"}
+    ok, msg = STATE.goal_controller.set_goal_safe(
+        sid, (body or {}).get("condition"), (body or {}).get("verifier") or {},
+        (body or {}).get("max_iterations"),
+    )
+    return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
+
+
 def _operator_workflows_list() -> dict:
     if STATE.workflow_registry is None:
         return {"workflows": []}
