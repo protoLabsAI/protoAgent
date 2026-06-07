@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-06-07
+
 ### Added
 - **Plugin Devkit** — `plugins/plugin-devkit`, a featured first-class plugin that
   is both the canonical **full-bundle example** and the **plugin-authoring kit**.
