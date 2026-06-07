@@ -32,6 +32,7 @@ class PluginLoadResult:
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
     goal_hooks: list = field(default_factory=list)       # {on_achieved, on_failed} (ADR 0028)
     knowledge_stores: dict = field(default_factory=dict)  # name -> backend factory (ADR 0031)
+    embedders: dict = field(default_factory=dict)        # name -> embed_fn factory (ADR 0031)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
     routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
     surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
@@ -242,6 +243,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 log.warning("[plugins] %s: knowledge backend %s collides — skipped", manifest.id, name)
                 continue
             result.knowledge_stores[name] = factory
+        for name, factory in registry.embedders.items():  # ADR 0031 follow-up
+            if name in result.embedders:
+                log.warning("[plugins] %s: embedder %s collides — skipped", manifest.id, name)
+                continue
+            result.embedders[name] = factory
         for f in registry.mcp_servers:
             result.mcp_servers.append({"plugin_id": manifest.id, "factory": f})
         entry["loaded"] = True

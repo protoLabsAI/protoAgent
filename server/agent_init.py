@@ -254,27 +254,58 @@ def _build_knowledge_store(config):
 
 
 def _apply_plugin_knowledge_backend(config, store, plugins):
-    """ADR 0031 — if ``knowledge.backend`` names a plugin-registered backend, build
-    it and use it instead of the built-in ``store``. Degrade-safe: an unregistered
-    name, a None return, or a factory error keeps ``store`` (never KB-less by
-    surprise). Called after plugins load, at both init and reload."""
+    """ADR 0031 — swap in a plugin-provided knowledge **backend** (``knowledge.backend``)
+    or, failing that, a plugin **embedder** for the built-in hybrid store
+    (``knowledge.embedder``), selected by config. Degrade-safe: an unregistered name,
+    a None return, or a factory error keeps ``store`` (never KB-less by surprise).
+    Called after plugins load, at both init and reload."""
     backend = (getattr(config, "knowledge_backend", "") or "").strip()
-    if not backend:
-        return store
-    factory = (getattr(plugins, "knowledge_stores", {}) or {}).get(backend)
+    if backend:
+        factory = (getattr(plugins, "knowledge_stores", {}) or {}).get(backend)
+        if factory is None:
+            log.warning("[server] knowledge.backend %r not registered by any plugin — built-in store", backend)
+            return store
+        try:
+            built = factory(config)
+        except Exception as exc:  # noqa: BLE001 — degrade to the built-in store
+            log.warning("[server] knowledge backend %r failed: %s — built-in store", backend, exc)
+            return store
+        if built is None:
+            log.warning("[server] knowledge backend %r returned None — built-in store", backend)
+            return store
+        log.info("[server] knowledge: plugin backend %r", backend)
+        return built
+    # No plugin store selected — maybe a plugin embedder for the built-in hybrid store.
+    embedder = (getattr(config, "knowledge_embedder", "") or "").strip()
+    if embedder:
+        return _apply_plugin_embedder(config, store, plugins, embedder)
+    return store
+
+
+def _apply_plugin_embedder(config, store, plugins, name):
+    """ADR 0031 follow-up — rebuild the built-in store as a HybridKnowledgeStore using
+    a plugin-registered in-process embedder (``register_embedder``). Degrade-safe:
+    unregistered / None / error keeps ``store`` (the gateway-embedder one)."""
+    factory = (getattr(plugins, "embedders", {}) or {}).get(name)
     if factory is None:
-        log.warning("[server] knowledge.backend %r not registered by any plugin — built-in store", backend)
+        log.warning("[server] knowledge.embedder %r not registered by any plugin — gateway embedder", name)
         return store
     try:
-        built = factory(config)
-    except Exception as exc:  # noqa: BLE001 — degrade to the built-in store
-        log.warning("[server] knowledge backend %r failed: %s — built-in store", backend, exc)
+        embed_fn = factory(config)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[server] embedder %r failed: %s — gateway embedder", name, exc)
         return store
-    if built is None:
-        log.warning("[server] knowledge backend %r returned None — built-in store", backend)
+    if embed_fn is None:
+        log.warning("[server] embedder %r returned None — gateway embedder", name)
         return store
-    log.info("[server] knowledge: plugin backend %r", backend)
-    return built
+    try:
+        from knowledge.hybrid_store import HybridKnowledgeStore
+        rebuilt = HybridKnowledgeStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
+        log.info("[server] knowledge: hybrid store with plugin embedder %r", name)
+        return rebuilt
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[server] hybrid store w/ embedder %r failed: %s — built-in store", name, exc)
+        return store
 
 
 def _build_skills_index(config, extra_skill_dirs=None):

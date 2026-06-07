@@ -368,3 +368,17 @@ def test_plugin_knowledge_store_is_collected(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg(plugins_enabled=["kbplugin"]))
     assert "pgvector" in res.knowledge_stores  # ADR 0031
+
+
+def test_plugin_embedder_is_collected(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "plugins"
+    body = (
+        "def _embed(config):\n"
+        "    return lambda text: [0.0, 1.0]\n"
+        "def register(reg):\n"
+        "    reg.register_embedder('local', _embed)\n"
+    )
+    _make_plugin(root, "embplugin", enabled=True, body=body)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg(plugins_enabled=["embplugin"]))
+    assert "local" in res.embedders  # ADR 0031 follow-up
