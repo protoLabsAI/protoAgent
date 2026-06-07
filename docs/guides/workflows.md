@@ -2,9 +2,24 @@
 
 A **workflow** is a reusable, multi-step recipe over your subagents: research →
 extract angles → write a brief, each step feeding the next, some running in
-parallel. Define it once as YAML, run it many times with different inputs. It's
-the multi-step generalization of a single-subagent skill — see
+parallel. Define it once as YAML, run it many times with different inputs. See
 [ADR 0002](/adr/0002-reusable-subagent-workflows) for the design.
+
+## Skills vs Workflows
+
+These get conflated — the console lists the skill index ("Skills") next to
+"Workflows" — but they're two different altitudes (ADR 0009):
+
+| | **Skill** ([`SKILL.md`](/guides/skills)) | **Workflow** (`*.yaml`) |
+| --- | --- | --- |
+| What | methodology — *how/when* to approach a task | a DAG of subagent steps with dependencies |
+| How it runs | **retrieved** by relevance + **injected into context**; the model reads it and decides whether/how to follow | **executed** by the engine — fixed steps, deterministic |
+| In control | the model (advisory) | the engine (orchestrated) |
+| Trigger | automatic (semantic retrieval mid-turn) | explicit (run by name) |
+
+Rule of thumb: a **skill advises**, a **workflow runs**. Reach for a skill when the
+model should *know how* to do something; a workflow when you need *the same steps,
+the same way, every time*.
 
 ## Anatomy
 

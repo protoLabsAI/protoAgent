@@ -20,12 +20,12 @@ test("Knowledge lands on the searchable Store and lists chunks", async ({ page }
   await expect(surface.getByPlaceholder(/Search the knowledge base/)).toBeVisible();
 });
 
-test("Knowledge sub-nav switches between Store and Playbooks", async ({ page }) => {
+test("Knowledge sub-nav switches between Store and Skills", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Knowledge" }).click();
 
   await expect(page.getByTestId("knowledge-store")).toBeVisible();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Playbooks", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Skills", exact: true }).click();
   await expect(page.getByTestId("playbooks-surface")).toBeVisible();
   await page.locator(".stage-subnav").getByRole("button", { name: "Store", exact: true }).click();
   await expect(page.getByTestId("knowledge-store")).toBeVisible();

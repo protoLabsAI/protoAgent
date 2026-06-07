@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Console: "Playbooks" renamed to "Skills"** — the surface always *was* the skill
+  index (`SKILL.md`); the "Playbook" label collided with Workflows. Now labeled Skills,
+  with kickers + a "Skills vs Workflows" doc clarifying the distinction (a skill **advises**
+  / is retrieved; a workflow **runs** / is executed). `/api/playbooks` route unchanged.
+
 ### Added
 - **Pluggable knowledge backend** (ADR 0031) — `registry.register_knowledge_store(name,
   factory)` + a `knowledge.backend` config selector let a plugin supply the store
