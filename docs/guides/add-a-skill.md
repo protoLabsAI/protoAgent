@@ -98,7 +98,7 @@ curl -X POST http://localhost:7870/a2a \
           "role": "user",
           "parts": [{"text": "summarize https://github.com/protoLabsAI/protoAgent/pull/64"}]
         },
-        "metadata": {"skill": "summarize_pr"}
+        "metadata": {"skillHint": "summarize_pr"}
       }
     }'
 ```

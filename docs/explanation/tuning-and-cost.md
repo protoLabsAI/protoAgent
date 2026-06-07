@@ -13,7 +13,7 @@ are config flags in `config/langgraph-config.yaml`. This page is the map.
 | Aux-model routing | `compaction.model`, `goal.eval_model` | main model | Run summarization + goal-verification on a cheaper/faster model |
 | Programmatic tool calling | `execute_code.*` | off | One script composes many tools in a single turn |
 | Prompt / prefix caching | `prompt_cache.*` | on (Anthropic-gated) | Cache the stable system+tools prefix across turns |
-| Cache warming | `cache_warming.*` | off | Keep the cached prefix warm for sporadic, latency-sensitive traffic |
+| Cache warming | `prompt_cache.warm.*` | off | Keep the cached prefix warm for sporadic, latency-sensitive traffic |
 | Provider failover | `routing.fallback_models` | none | Retry on fallback models when the primary errors |
 | Iteration budget | `model.max_iterations`, subagent `max_turns` | 50 / per-subagent | Stop runaway loops |
 
@@ -80,7 +80,7 @@ inside a hardened container, not on a workstation handling untrusted input.
 
 `prompt_cache` applies Anthropic cache breakpoints to the stable system+tools
 prefix; it's a safe no-op on non-Anthropic models (vLLM gateways do prefix
-caching server-side). `cache_warming` reproduces the cached prefix on an
+caching server-side). `prompt_cache.warm` reproduces the cached prefix on an
 interval so the first request after an idle gap hits a warm cache — only worth
 it for sporadic, latency-sensitive workloads on the `1h` tier; for steady
 traffic it's pure cost.

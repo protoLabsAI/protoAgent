@@ -169,7 +169,7 @@ on forks. Update the repo check in all three when forking.
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.11+ (CI runs 3.12)
 - Docker (for the bundled deployment)
 - A LiteLLM-compatible OpenAI gateway somewhere on the network
   (see `config/langgraph-config.yaml`)

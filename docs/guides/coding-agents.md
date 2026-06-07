@@ -1,5 +1,12 @@
 # Spawn CLI coding agents (ACP)
 
+::: warning Prefer `delegate_to`
+The standalone `code_with` tool is **deprecated**. The unified [delegate
+registry](/guides/delegates) (ADR 0025) does the same thing via an **`acp`**
+delegate — `delegate_to(target, query)` — and is managed/hot-swappable from the
+console. This guide still explains the ACP mechanics, which both paths share.
+:::
+
 An **optional, opt-in plugin** ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp))
 that lets the lead agent hand a real coding job to a purpose-built **CLI coding
 agent** — protoCLI (`proto`), Claude Code, Codex, Gemini CLI — and get the result

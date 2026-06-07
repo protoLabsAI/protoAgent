@@ -54,7 +54,7 @@ RESEARCHER_CONFIG = SubagentConfig(
     # ...
     tools=[
         "current_time", "web_search", "fetch_url",
-        "memory_recall", "memory_list",
+        "memory_recall", "memory_ingest", "memory_list",
         "git_sha",   # ← new
     ],
     # ...

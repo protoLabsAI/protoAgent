@@ -103,11 +103,12 @@ The template reads `params.metadata["a2a.trace"]` on incoming requests:
 
 This is a protoLabs convention, not part of the A2A spec. It's how the fleet ties multi-agent Langfuse traces together. Consumers that don't know about it just don't stamp the field — the agent's trace becomes a standalone root instead of a child. No breakage.
 
+Tasks **are** persisted now: the SQLite-backed `DatabaseTaskStore` (`a2a_stores.py`) writes to an instance-scoped `a2a-tasks.db` (24h TTL), and push configs to `a2a-push.db`; non-terminal tasks left over from a restart are marked failed. Auth ships **bearer-token** (`A2A_AUTH_TOKEN` / `auth.token`) — when set, the card advertises a `bearer` security scheme — alongside API-key. See [A2A endpoints](/reference/a2a-endpoints) + [agent card](/reference/agent-card).
+
 ## What the template doesn't do
 
-- **Long-lived tasks**: the template doesn't persist tasks across restarts. If you need durable task state, swap `_store` for a Redis/SQLite-backed impl.
-- **Multi-tenancy**: every task sees the same auth context. If you need per-caller isolation, extend the API-key middleware.
-- **OAuth**: only API-key auth ships. A2A security schemes allow OAuth2; wire it up in `_build_agent_card.securitySchemes` + middleware if needed.
+- **Multi-tenancy**: every task sees the same auth context. If you need per-caller isolation, extend the auth middleware.
+- **OAuth2**: bearer + API-key ship; A2A security schemes also allow OAuth2 — wire it up in the card's `securitySchemes` (`server/a2a.py`, via `protolabs_a2a`) + middleware if needed.
 
 ## Related
 
