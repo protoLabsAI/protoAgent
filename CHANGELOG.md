@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pluggable knowledge backend** (ADR 0031) — `registry.register_knowledge_store(name,
+  factory)` + a `knowledge.backend` config selector let a plugin supply the store
+  (pgvector / Qdrant / Chroma / a managed vector DB) instead of the built-in SQLite/FTS5,
+  with no core edit. Degrade-safe: an unregistered name / None / a factory error keeps the
+  built-in store. A new `KnowledgeBackend` Protocol (`knowledge.backend`) formalizes the
+  consumed surface. The embedder stays gateway-routed (model-swappable via `embed_model`).
 - **`controller.evaluate_now(session_id)`** (ADR 0030 D2.2) — a plugin can trigger an
   immediate verifier-only goal check from its own state-change path (e.g. right after a
   sale clears), so achievement is caught promptly instead of at the next monitor tick.
