@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Subagent YAML override now actually applies at runtime** — `subagents.<name>.{enabled,
+  tools,max_turns}` was parsed into config but never reached the runtime registry (only the
+  status API read it back, so the documented knob silently did nothing). Wired through
+  `_apply_config_subagents` (init + reload); `enabled: false` removes the subagent. The
+  config-side default now derives from the registry entry (single source of truth) so it
+  can't drift — the old hardcoded default was already missing `memory_ingest`.
+
 ### Added
 - **Per-subagent model override in config** (ADR 0001) — `subagents.<name>.model` pins a
   subagent to a specific model (blank = `routing.aux_model` → main model), so an operator

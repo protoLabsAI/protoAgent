@@ -16,6 +16,11 @@ from pathlib import Path
 
 import yaml
 
+# The built-in researcher's runtime defaults are the single source of truth; the
+# config-side SubagentDef mirrors them so the YAML override layer can't drift
+# (graph/subagents/config has no graph.config dep — no import cycle).
+from graph.subagents.config import RESEARCHER_CONFIG
+
 # Secrets (model API key, A2A bearer) live in an untracked ``secrets.yaml``
 # sibling of the main config, never in the tracked YAML. See graph/config_io
 # for the write side. ``from_yaml`` overlays them below; both still fall back
@@ -112,13 +117,12 @@ class LangGraphConfig:
     # graph/subagents/config.py). Add fields here as you add entries to
     # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
     # are the YAML-overridable layer.
+    # Defaults derived from the registry entry (SSOT) so the YAML-overridable layer
+    # always matches the runtime default — an un-overridden config is a true no-op.
     researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=[
-            "current_time",
-            "web_search", "fetch_url",
-            "memory_recall", "memory_list",
-        ],
-        max_turns=40,
+        tools=list(RESEARCHER_CONFIG.tools),
+        max_turns=RESEARCHER_CONFIG.max_turns,
+        model=RESEARCHER_CONFIG.model,
     ))
 
     # Sub-agent fan-out — the `task_batch` tool runs delegations concurrently.
