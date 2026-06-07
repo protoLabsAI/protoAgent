@@ -1,0 +1,49 @@
+[
+  {
+    "version": "v0.21.0",
+    "date": "2026-06-07",
+    "changes": [
+      "Plugin Devkit — a featured plugin that teaches the agent to build its own plugins (a scaffold tool, a plugin-architect subagent, and the authoring skill, in one bundle).",
+      "Clean plugin delete — uninstall now also removes a plugin's enabled reference, with --purge to wipe its config + secrets too."
+    ]
+  },
+  {
+    "version": "v0.20.0",
+    "date": "2026-06-06",
+    "changes": [
+      "Install plugins from a git URL — `python -m server plugin install <url>`, pinned in a lockfile, with the safety model built in (install ≠ enable ≠ trust).",
+      "A plugin repo is a full bundle: tools, subagents, skills, workflows, and console views all come in.",
+      "Console Plugins panel — paste a URL, review, install, uninstall."
+    ]
+  },
+  {
+    "version": "v0.19.0",
+    "date": "2026-06-06",
+    "changes": [
+      "Plugins can add their own console rail views — a dashboard or page, no console rebuild."
+    ]
+  },
+  {
+    "version": "v0.18.0",
+    "date": "2026-06-06",
+    "changes": [
+      "Token-by-token answer streaming in the console chat.",
+      "Chat keeps going when you navigate away and back, and self-heals an interrupted stream.",
+      "Brand favicon across the app + docs."
+    ]
+  },
+  {
+    "version": "v0.17.0",
+    "date": "2026-06-06",
+    "changes": [
+      "Unified delegate registry + a hot-swappable console panel — manage the agents and endpoints your agent talks to (a2a / openai / acp) from Settings."
+    ]
+  },
+  {
+    "version": "v0.16.0",
+    "date": "2026-06-06",
+    "changes": [
+      "Spawn CLI coding agents over ACP — hand a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI."
+    ]
+  }
+]
