@@ -82,7 +82,7 @@ function WorkflowsBody() {
         <div>
           <h1>Workflows</h1>
           <p className="panel-kicker">
-            {workflows.length} recipe{workflows.length === 1 ? "" : "s"}
+            step-by-step recipes the engine runs over subagents · {workflows.length} recipe{workflows.length === 1 ? "" : "s"}
           </p>
         </div>
         <div className="panel-actions">

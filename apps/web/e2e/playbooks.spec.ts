@@ -7,7 +7,7 @@ test("Knowledge → Playbooks lists pinned + learned skills and supports search"
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Knowledge" }).click();
   // Knowledge lands on Store now (ADR 0020) — switch to the Playbooks sub-tab.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Playbooks", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Skills", exact: true }).click();
 
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -19,7 +19,7 @@ test("Knowledge → Playbooks lists pinned + learned skills and supports search"
   await expect(surface.getByText("learned").first()).toBeVisible();
 
   // Search narrows the list.
-  await surface.getByPlaceholder(/Search playbooks/).fill("triage");
+  await surface.getByPlaceholder(/Search skills/).fill("triage");
   await expect(surface.getByText("pr-triage-flow")).toBeVisible();
   await expect(surface.getByText("web-research")).toBeHidden();
 });
@@ -27,7 +27,7 @@ test("Knowledge → Playbooks lists pinned + learned skills and supports search"
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Knowledge" }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Playbooks", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
 

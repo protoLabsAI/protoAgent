@@ -80,9 +80,9 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
     <section className="panel stage-panel" data-testid="playbooks-surface">
       <div className="panel-header">
         <div>
-          <h1>Playbooks</h1>
+          <h1>Skills</h1>
           <p className="panel-kicker">
-            retrieved methodology · {pinned} pinned · {learned} learned
+            methodology the agent retrieves into context · {pinned} pinned · {learned} learned
           </p>
         </div>
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
@@ -94,7 +94,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
         <input
           className="playbook-search"
           type="search"
-          placeholder="Search playbooks (name, description, tools)…"
+          placeholder="Search skills (name, description, tools)…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -139,7 +139,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                   <button
                     type="button"
                     className="icon-button danger"
-                    title={p.source === "disk" ? "Delete (re-seeds from SKILL.md on restart)" : "Delete playbook"}
+                    title={p.source === "disk" ? "Delete (re-seeds from SKILL.md on restart)" : "Delete skill"}
                     onClick={() => setPending(p)}
                     data-testid={`playbook-delete-${p.id}`}
                   >
@@ -154,7 +154,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
 
       <ConfirmDialog
         open={pending !== null}
-        title="Delete playbook?"
+        title="Delete skill?"
         message={
           pending
             ? `Remove "${pending.name}"${pending.source === "disk" ? " — note: a pinned SKILL.md re-seeds on the next restart." : "."}`
@@ -166,7 +166,9 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
       />
 
       <p className="playbook-foot">
-        <BookMarked size={13} /> Playbooks are methodology the agent retrieves into context (ADR 0009) — they don't run, they advise.
+        <BookMarked size={13} /> Skills (`SKILL.md`) are methodology the agent <strong>retrieves</strong> into
+        context (ADR 0009) — they advise, they don't run. For deterministic step-by-step runs
+        across subagents, see <strong>Studio → Workflows</strong>.
       </p>
     </section>
   );

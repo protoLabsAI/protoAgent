@@ -687,7 +687,7 @@ export function App() {
                 <Database size={15} /> Store
               </button>
               <button className={knowledgeTab === "playbooks" ? "active" : ""} onClick={() => setKnowledgeTab("playbooks")}>
-                <BookMarked size={15} /> Playbooks
+                <BookMarked size={15} /> Skills
               </button>
             </div>
           ) : null}
