@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Desktop build CI** — `.github/workflows/desktop-build.yml` builds the macOS desktop
+  app (`.dmg` — the Tauri shell + the PyInstaller server sidecar), signs + notarizes it
+  with the org Apple Developer ID, and attaches it to the GitHub release on a semver tag.
+  Manual dispatch builds an unsigned dev artifact for iteration. Gives the marketing site
+  a real download to point at.
 - **`register_embedder` hook** (ADR 0031 follow-up) — a plugin can supply an in-process
   embedder (`registry.register_embedder(name, factory→embed_fn)`), selected with
   `knowledge.embedder: "<name>"`, so the built-in hybrid store can embed locally
