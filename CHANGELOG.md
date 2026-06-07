@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Unified panel sub-tabs** — every surface's sub-tab strip now renders through one
+  shared `StageSubnav` component, always **above the panel card**. Previously Settings +
+  plugin views rendered their tabs *inside* the card (so they read as part of the heading)
+  while the rail surfaces rendered them above — now all consistent (single source of truth).
 - **Friendlier Schedule tab** — "New schedule" now opens a **modal** that builds the
   schedule for you: a **calendar** picker for one-off (→ ISO datetime), **presets** for
   recurring (hourly / daily / weekdays / weekly + a time picker, → cron), and a raw-cron

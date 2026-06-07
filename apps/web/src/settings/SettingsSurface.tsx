@@ -8,6 +8,7 @@ const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/disco
 const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google#oauth-client";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StageSubnav } from "../app/StageSubnav";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -22,18 +23,32 @@ import { PluginsSection } from "./PluginsSection";
 // ErrorBoundary.
 
 export function SettingsSurface() {
+  // SettingsBody owns its own panel <section> (so the sub-tab strip can sit ABOVE
+  // the card, consistent with the rail surfaces). The loading/error fallbacks carry
+  // their own card so the layout doesn't jump.
   return (
-    <section className="panel stage-panel settings-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="settings" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading settings…" />}>
-              <SettingsBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <ErrorBoundary
+          onReset={reset}
+          fallback={(a) => (
+            <section className="panel stage-panel settings-panel">
+              <PanelError {...a} label="settings" />
+            </section>
+          )}
+        >
+          <Suspense
+            fallback={
+              <section className="panel stage-panel settings-panel">
+                <PanelSkeleton label="Loading settings…" />
+              </section>
+            }
+          >
+            <SettingsBody />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
   );
 }
 
@@ -171,17 +186,16 @@ function SettingsBody() {
 
   return (
     <>
-      {/* Sub-nav above the header, matching the other rail surfaces (System,
-          Knowledge, Activity) which render their stage-subnav above the panel. */}
+      {/* Canonical sub-tab strip — above the panel card, shared with the rail
+          surfaces + plugin views (StageSubnav: single source of truth). */}
       {categories.length > 1 ? (
-        <div className="stage-subnav settings-subnav">
-          {categories.map((c) => (
-            <button key={c} className={c === category ? "active" : ""} onClick={() => setActiveCategory(c)}>
-              {c}
-            </button>
-          ))}
-        </div>
+        <StageSubnav
+          active={category}
+          onSelect={setActiveCategory}
+          tabs={categories.map((c) => ({ id: c, label: c }))}
+        />
       ) : null}
+      <section className="panel stage-panel settings-panel">
       <div className="panel-header">
         <div>
           <h1>Settings</h1>
@@ -297,6 +311,7 @@ function SettingsBody() {
         {/* Git-installed plugins (ADR 0027) — install/manage from a URL, under Integrations. */}
         {category === "Integrations" ? <PluginsSection /> : null}
       </div>
+      </section>
     </>
   );
 }
