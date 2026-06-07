@@ -28,14 +28,14 @@ A **skill-v1 artifact** is a structured record of a successful subagent run:
 
 Skills are emitted as A2A `DataPart` objects (MIME type
 `application/vnd.protolabs.skill-v1+json`) and accumulated in the
-skill index at `/sandbox/skills/index.jsonl`.
+SQLite skill index at `/sandbox/skills.db` (FTS5-backed).
 
 ---
 
 ## Step 1 — Emit a skill from a subagent run
 
-Call `task()` with `emit_skill=True` in your subagent configuration to capture the
-workflow as a reusable recipe:
+Set `allow_skill_emission=True` in the subagent's config to capture a successful
+run as a reusable recipe:
 
 ```python
 # graph/subagents/config.py
@@ -88,7 +88,7 @@ Here is the complete feedback cycle in one diagram:
                                               ▼
                                      ┌──────────────────┐
                                      │  skill index     │
-                                     │  (index.jsonl)   │
+                                     │  (skills.db)     │
                                      └────────┬─────────┘
                                               │ queried by
                                               ▼
@@ -131,12 +131,12 @@ Run the curator manually:
 # Dry-run — compute changes but write nothing
 python -m graph.skills.curator --dry-run
 
-# Full run with defaults (/sandbox/skills/index.jsonl → audit.jsonl)
+# Full run with defaults (/sandbox/skills.db → audit.jsonl)
 python -m graph.skills.curator
 
 # Custom paths and thresholds
 python -m graph.skills.curator \
-    --index /sandbox/skills/index.jsonl \
+    --db /sandbox/skills.db \
     --audit /sandbox/audit/curator.jsonl \
     --prune-threshold 0.15 \
     --half-life 60
@@ -193,15 +193,17 @@ Example output:
 
 ## What happens to pruned skills?
 
-Pruned skills are removed from the active index but recorded in `audit.jsonl`.  If you
-need to recover a pruned skill, grep the audit log for its `id` or `name`:
+Pruned skills are deleted from the SQLite index but recorded in `audit.jsonl`.  If you
+need to recover one, find it in the audit log:
 
 ```bash
 grep 'outdated search recipe' audit.jsonl | python -m json.tool
 ```
 
-Then restore it by adding the original JSONL entry back to `index.jsonl` with a
-refreshed `last_used` timestamp and confidence reset to 1.0.
+The index is a database, not an append-only file, so you don't edit it by hand —
+re-create the skill the normal way: author it as a `SKILL.md` on disk (see
+[Add a skill](/guides/add-a-skill)) so it reloads on boot, or let a subagent
+re-emit it on the next successful run.
 
 ---
 

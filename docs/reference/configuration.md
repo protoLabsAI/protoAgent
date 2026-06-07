@@ -50,6 +50,8 @@ knowledge:
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `50` | Upper bound on tool-call loops per task. |
+| `request_timeout` | `120.0` | Per-call gateway timeout (seconds) — bounds a hung/slow gateway so a turn fails cleanly. |
+| `max_retries` | `2` | Transient-retry cap on the LLM client (→ `llm_max_retries`). |
 | `top_p` | _(unset)_ | Nucleus sampling. Standard OpenAI param; sent only when set. |
 | `presence_penalty` | _(unset)_ | Standard OpenAI param; sent only when set. |
 | `top_k` | `-1` | Top-k sampling. Rides `extra_body` (vLLM-style gateways). `-1`/negative = gateway default. |
@@ -351,10 +353,12 @@ Only read when `middleware.knowledge` is `true`.
 | Key | Default | What |
 |---|---|---|
 | `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
-| `embed_model` | `nomic-embed-text` | Reserved for forks that bolt embeddings on top of the FTS5 baseline. The bundled store ignores it. |
+| `embeddings` | `true` | Hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused). `false` = keyword-only FTS5. (ADR 0021.) |
+| `embed_model` | `qwen3-embedding` | Gateway embedding model used when `embeddings` is on — must be a model your gateway serves (not the chat model). |
+| `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |
 | `top_k` | `5` | Results per query fed into state. |
 
-The bundled store is sqlite + FTS5 (with an automatic LIKE fallback when FTS5 isn't available). One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
+The bundled store is hybrid by default — FTS5 keyword search fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage; set `embeddings: false` for keyword-only. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
 
 **Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
 
@@ -393,6 +397,7 @@ a2a:
 |---|---|---|
 | `description` | template placeholder | The agent card's `description`. |
 | `skills` | one `chat` placeholder | Advertised `AgentSkill`s (`id`/`name`/`description` + optional `tags`/`examples`). A skill declaring `result_mime` + `output_schema` returns schema-enforced structured output as a typed DataPart ([#476](agent-card.md)); the MIME is advertised in its `output_modes`. |
+| `require_routable_url` | `false` | When `true`, refuse to boot if the card would advertise a loopback URL (e.g. `A2A_PUBLIC_URL` unset on a deployed agent → silently unreachable to remote callers). Off by default — local/desktop runs *should* advertise loopback. |
 
 ## `mcp`
 
@@ -454,8 +459,9 @@ Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribut
 | `enabled` | `[]` | Plugin `id`s to load. A plugin also loads if its own manifest has `enabled: true`. |
 | `disabled` | `[]` | Plugin `id`s to force **OFF** even when their manifest says `enabled: true` — the way a fork drops a bundled first-party plugin (e.g. `discord`, `google`) without deleting its directory or editing core. |
 | `dir` | `""` | Override the writable plugins root (default `<config-dir>/plugins`). |
+| `sources.allow` | `[]` | Optional allowlist of host/org globs for git-URL installs (e.g. `[github.com/yourorg/*]`); empty = any URL (gated install). (ADR 0027.) |
 
-Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `discord`, `google`) and writable (`<config-dir>/plugins/`); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`, routes/surfaces/subagents counts). See the [Plugins guide](../guides/plugins.md).
+Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `discord`, `google`, `plugin-devkit`) and writable (`<config-dir>/plugins/`, where git-URL installs land); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`, `views`, routes/surfaces/subagents counts). Plugins are installable from a git URL (`python -m server plugin install <url>`) — see [Install & publish plugins](../guides/plugin-registry.md) — and a repo can ship tools, subagents, skills, workflows, and console views. See the [Plugins guide](../guides/plugins.md).
 
 ### Plugin-declared config sections (ADR 0019)
 

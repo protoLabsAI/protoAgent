@@ -59,14 +59,20 @@ LangGraph's `create_agent` gives you:
 - Middleware hooks (before_model, after_model, before_tool, after_tool) for tracing, auditing, knowledge injection
 - Subagent delegation via the `task` tool, inheriting the parent's context
 
-The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ordered:
+The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ordered (optional links are config-gated):
 
-1. **KnowledgeMiddleware** (optional) — injects retrieved context before each LLM call; also loads prior session summaries from `/sandbox/memory/` as a `<prior_sessions>` block
-2. **AuditMiddleware** — records every tool call to JSONL + Langfuse
-3. **MemoryMiddleware** (optional) — persists session summaries to `/sandbox/memory/` on session end
-4. **MessageCaptureMiddleware** — captures `message()` tool calls for later retrieval
+1. **PromptCacheMiddleware** — sets Anthropic cache breakpoints on the stable system+tools prefix (the knowledge context is delivered just after it)
+2. **EnforcementMiddleware** (optional) — capability/effect-domain enforcement
+3. **KnowledgeMiddleware** (optional) — injects retrieved knowledge + human-authored skills before each LLM call; also loads prior session memory
+4. **ToolDeferralMiddleware** (optional) — progressive tool disclosure (ADR 0005)
+5. **AuditMiddleware** — records every tool call to JSONL + Langfuse
+6. **MemoryMiddleware** (optional) — extracts conversation findings to the knowledge store
+7. **KnowledgeIngestMiddleware** (optional) — harvests durable facts
+8. **CountingSummarizationMiddleware** (optional) — context compaction with a Prometheus counter (ADR 0006)
+9. **ModelFallbackMiddleware** (optional) — retry on fallback models (`routing.fallback_models`)
+10. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
 
-Middleware order matters. Knowledge must run before audit (so the injected context is captured). Message capture runs last so every upstream transformation is already applied.
+Order matters: prompt-cache + knowledge run before audit (so injected context is captured), and message capture runs last.
 
 ## Session memory
 
@@ -135,7 +141,7 @@ This extra layer of indirection exists because:
 
 If you strip the indirection, you'd need to push A2A concerns up into LangGraph and LangGraph concerns down into the A2A handler. Both bad.
 
-## The `_build_agent_card` reality
+## The `_build_agent_card_proto` reality
 
 The agent card is just a JSON blob. Nothing on the server side reads it — it's declarative, for consumers only. That's why [adding a skill](/guides/add-a-skill) requires updating both the card AND the system prompt: the card tells callers what's possible, the prompt tells the LLM how to behave when it sees a matching request.
 

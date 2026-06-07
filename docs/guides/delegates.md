@@ -112,10 +112,10 @@ and **never returned** by `GET /api/delegates`; `has_secret` tells the panel one
 is stored.
 
 ```bash
-curl -s localhost:7788/api/delegate-types | jq '.types[].type'
-curl -s -X POST localhost:7788/api/delegates -d '{"name":"opus","type":"openai",
+curl -s localhost:7870/api/delegate-types | jq '.types[].type'
+curl -s -X POST localhost:7870/api/delegates -d '{"name":"opus","type":"openai",
   "url":"https://api.proto-labs.ai/v1","model":"protolabs/reasoning","api_key":"…"}'
-curl -s -X POST localhost:7788/api/delegates/test -d '{"type":"a2a","url":"https://peer/a2a"}'
+curl -s -X POST localhost:7870/api/delegates/test -d '{"type":"a2a","url":"https://peer/a2a"}'
 ```
 
 ## Relationship to `code_with` / `peer_consult`

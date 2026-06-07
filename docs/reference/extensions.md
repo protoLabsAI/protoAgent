@@ -29,7 +29,7 @@ Captured by the `on_chat_model_end` handler in `_chat_langgraph_stream`. Require
 
 **Consumers** (like Workstacean's A2AExecutor) extract this DataPart onto `result.data` and record per-(agent, skill) samples. The consumer keys on the `skill` ID from the card, so skill IDs must be stable.
 
-`costUsd` is not captured today — deriving it from model rates is a follow-up. Consumers tolerate missing `costUsd` and can compute it from `usage` themselves.
+`costUsd` **is** emitted: `pricing.py::cost_usd` derives it from the model's rates and the captured `usage`, and it rides this DataPart (and the telemetry store). Consumers still tolerate a missing/zero `costUsd` (unknown model → no rate) and can recompute from `usage` themselves.
 
 ## `confidence-v1`
 
@@ -127,9 +127,9 @@ See `docs/extensions/effect-domain-v1` in the [protoWorkstacean repo](https://gi
 
 ## `worldstate-delta-v1`
 
-**URI**: (runtime artifact only, not a card extension)
+**URI**: `https://proto-labs.ai/a2a/ext/worldstate-delta-v1`
 **Direction**: emitted when tools with declared effects succeed
-**Declared on card**: n/a
+**Declared on card**: yes (declared in `capabilities.extensions` by default)
 
 Emitted as a DataPart on the terminal artifact:
 

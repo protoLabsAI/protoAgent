@@ -76,7 +76,7 @@ See [Configure subagents](/guides/subagents) for the full pattern.
 Edit `config/langgraph-config.yaml::model.name`. Two options:
 
 1. **Gateway alias** — register `protolabs/<your-name>` in your LiteLLM gateway, set `name: protolabs/<your-name>`. Swapping models becomes a gateway edit.
-2. **Direct model** — set `name: openai/gpt-4o` or `anthropic/claude-opus-4-6` and let the gateway route through directly.
+2. **Direct model** — set `name: openai/gpt-4o` or `anthropic/claude-opus-4-8` and let the gateway route through directly.
 
 Option 1 is preferred.
 

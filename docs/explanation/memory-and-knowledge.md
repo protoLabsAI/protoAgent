@@ -39,8 +39,9 @@ onto primitives it already has:
 
 Everything that writes to the store funnels through `KnowledgeStore.add_chunk`:
 
-1. **Memory tools** — the agent calls `memory_write` (and friends) to record a
-   fact the user shared. See [Starter tools](../reference/starter-tools.md).
+1. **Memory tools** — the agent calls `memory_ingest` (and friends:
+   `memory_recall`, `memory_list`, `memory_stats`) to record a fact the user
+   shared. See [Starter tools](../reference/starter-tools.md).
 2. **Harvest on retirement** — when a chat thread is retired (aged out by the
    checkpoint pruner, or deleted), `graph/conversation_harvest.py` runs a single
    **session-end pass** (cheap aux model): it stores an episodic *summary* and,
@@ -73,25 +74,25 @@ The operator can browse and search the whole store in the console under
 
 ## Semantic recall (embeddings)
 
-By default the store is **keyword-only** (FTS5). Keyword search misses
-paraphrases — *"how do I ship a build?"* won't match a stored *"the release
-pipeline is manual via workflow_dispatch"*. Turning on **embeddings** upgrades
-the store to `HybridKnowledgeStore`: it fuses FTS5 with **vector similarity**
-using Reciprocal Rank Fusion, so lexical *and* semantic hits reinforce each
-other. An embedding circuit breaker falls back to FTS5 on an embedding outage —
-quality degrades, availability never does.
+The store ships **hybrid by default** (`HybridKnowledgeStore`): it fuses FTS5
+keyword search with **vector similarity** using Reciprocal Rank Fusion, so lexical
+*and* semantic hits reinforce each other. Keyword-only search misses paraphrases —
+*"how do I ship a build?"* won't match a stored *"the release pipeline is manual
+via workflow_dispatch"* — which is why embeddings are on by default. An embedding
+circuit breaker falls back to FTS5 on an embedding outage — quality degrades,
+availability never does. Set `embeddings: false` for keyword-only.
 
 ```yaml
 knowledge:
-  embeddings: true             # off by default
+  embeddings: true             # on by default
   embed_model: qwen3-embedding # MUST be a model your gateway serves (see below)
 ```
 
 ::: warning The embed model is gateway-specific
 `embed_model` must name a model your [LiteLLM gateway](litellm-gateway.md)
-actually serves — it is **not** the chat model. The template default
-(`nomic-embed-text`) suits a local Ollama gateway; the protoLabs gateway serves
-`qwen3-embedding`. Check `GET /v1/models` for what your key can access. With a
+actually serves — it is **not** the chat model. The default `qwen3-embedding`
+suits the protoLabs gateway; for a local Ollama gateway set something it serves
+(e.g. `nomic-embed-text`). Check `GET /v1/models` for what your key can access. With a
 wrong model every embed call 401/404s, the breaker opens, and you silently get
 keyword-only search.
 :::
@@ -107,8 +108,8 @@ All under the `knowledge:` block (see [Configuration](../reference/configuration
 | Key | Default | Effect |
 |---|---|---|
 | `db_path` | `/sandbox/knowledge/agent.db` | store location (instance-scoped) |
-| `embeddings` | `false` | hybrid semantic + keyword search (vs keyword-only) |
-| `embed_model` | `nomic-embed-text` | gateway embedding model (set per your gateway) |
+| `embeddings` | `true` | hybrid semantic + keyword search (vs keyword-only) |
+| `embed_model` | `qwen3-embedding` | gateway embedding model (set per your gateway) |
 | `facts` | `true` | extract semantic facts during the harvest pass |
 | `top_k` | `5` | how many chunks retrieval injects per turn |
 | `middleware.knowledge` | `true` | turn the whole subsystem on/off |

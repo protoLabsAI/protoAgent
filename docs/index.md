@@ -20,7 +20,7 @@ features:
   - title: Free starter tools
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
   - title: Plugin system
-    details: Drop-in packages add tools, skills, FastAPI routes, background surfaces, subagents and managed MCP servers without forking. Discord ingress and Google (Gmail+Calendar) ship as first-party plugins.
+    details: Drop-in packages add tools, skills, subagents, workflows, FastAPI routes, console rail views, and managed MCP servers without forking — and install from a git URL (python -m server plugin install, pinned in plugins.lock). Discord, Google (Gmail+Calendar), and the plugin-devkit ship first-party.
   - title: Release pipeline
     details: Dispatch prepare-release → semver bump PR → merge → tag → GHCR image → GitHub release → Discord embed. Flip the RELEASE_ENABLED repo variable to enable it on a fork.
 ---

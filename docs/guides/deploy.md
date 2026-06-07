@@ -100,7 +100,7 @@ Watchtower polls `latest` every 60 seconds and recreates the container when the 
 
 ## 7. Cut a release
 
-From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `minor` / `major`. It opens a bump PR, auto-merges it once the required checks pass, and tags `vX.Y.Z`, which triggers `release.yml` → stable semver Docker tags → GitHub release → Discord post (if configured).
+From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `minor` / `major`. It opens a `chore: release vX.Y.Z` bump PR (version + rolled-up CHANGELOG) — **no auto-merge, no auto-tag**. A human merges it once CI is green, then pushes the `vX.Y.Z` tag, which triggers `release.yml` → stable semver Docker tags → GitHub release → Discord post (if configured). See [Releasing](/guides/releasing) for the full flow.
 
 Releases are **manual / on-demand** — merging a PR does **not** cut a release. See the [Releasing runbook](/guides/releasing) for the changelog protocol + the branch ruleset.
 
