@@ -105,6 +105,64 @@ steps:
 output: "{{{{steps.do.output}}}}"
 """
 
+# Communication plugin (ADR 0029) — a ChatAdapter on the shared wirer.
+_COMMS_MANIFEST_STUB = """id: {id}
+name: {name}
+version: 0.1.0
+description: >-
+  {summary}
+enabled: false
+config_section: {id}
+config:
+  enabled: false
+  admin_ids: []
+secrets: [bot_token]
+settings:
+  - {{ key: enabled, label: "Enable {name}", type: bool, description: "Inbound gateway. Needs the token below; reconnects live on save." }}
+  - {{ key: bot_token, label: "Bot token", type: secret, description: "Platform bot token. Use Test connection to verify." }}
+  - {{ key: admin_ids, label: "Admin user IDs", type: string_list, description: "User IDs allowed to message the bot (one per line). Empty = anyone." }}
+"""
+
+_COMMS_INIT_STUB = '''"""{name} — a communication plugin (scaffolded by plugin-devkit, ADR 0029).
+
+Implement the transport (connect / receive / send); the shared wirer handles
+admin-gating, per-conversation threads, agent invoke, reply-chunking, lifecycle,
+and the Test route. Reference: plugins/telegram. Guide:
+docs/guides/communication-plugins.md.
+"""
+
+from __future__ import annotations
+
+from graph.plugins.chat_surface import InboundMessage, register_chat_surface
+
+
+class {cls}Adapter:
+    id = "{id}"
+    chunk_limit = 4000  # your platform's message-length cap (0 = no chunking)
+
+    def configured(self, cfg) -> bool:
+        return bool((cfg.get("bot_token") or "").strip())
+
+    async def validate(self, cfg):
+        """Verify the token (the Test button). Return (ok, identity|None, error|None)."""
+        token = (cfg.get("bot_token") or "").strip()
+        if not token:
+            return (False, None, "No bot token set.")
+        # TODO: call your platform's auth/me endpoint and return its identity.
+        return (True, None, None)
+
+    async def run(self, handle, *, cfg, host):
+        """Connect, then loop. For each inbound message:
+            async def reply(text): ...send it back...
+            await handle(InboundMessage(text=..., user_id=..., channel_id=..., reply=reply))
+        Runs until cancelled."""
+        raise NotImplementedError("Implement {cls}Adapter.run — see plugins/telegram.")
+
+
+def register(registry):
+    register_chat_surface(registry, {cls}Adapter())
+'''
+
 
 def _build_scaffold_tool(config: dict | None):
     """Closes over the plugin's config so the tool knows where to write."""
@@ -117,9 +175,15 @@ def _build_scaffold_tool(config: dict | None):
         with_view: bool = False,
         with_skill: bool = False,
         with_workflow: bool = False,
+        with_comms: bool = False,
     ) -> str:
         """Scaffold a new protoAgent plugin SKELETON on disk (manifest + register()
         + optional view/skill/workflow stubs), ready to fill in and enable.
+
+        Set ``with_comms=True`` for a **communication plugin** (a chat integration —
+        Discord/Slack/Telegram-style): it writes a `ChatAdapter` skeleton on the
+        shared wirer (ADR 0029) instead of the default tool plugin, so you only fill
+        in connect/receive/send. See the communication-plugins guide.
 
         Writes into the live plugins dir (or the configured target_dir). Does NOT
         enable it or run any code — review, fill in the logic, then add the id to
@@ -134,6 +198,30 @@ def _build_scaffold_tool(config: dict | None):
         if target.exists():
             return f"✗ {pid!r} already exists at {target} — pick another name or remove it first."
         (target).mkdir(parents=True)
+
+        # Communication plugin (ADR 0029) — a ChatAdapter, different shape from the
+        # default tool plugin; the tool/view stubs don't apply.
+        if with_comms:
+            cls = "".join(w[:1].upper() + w[1:] for w in re.split(r"[-_ ]+", name) if w) or id_us.title()
+            (target / "protoagent.plugin.yaml").write_text(
+                _COMMS_MANIFEST_STUB.format(id=pid, name=name, summary=summary)
+            )
+            (target / "__init__.py").write_text(
+                _COMMS_INIT_STUB.format(id=pid, name=name, cls=cls)
+            )
+            made = ["protoagent.plugin.yaml", "__init__.py (ChatAdapter)"]
+            if with_skill:
+                sk = target / "skills" / f"{pid}-skill"
+                sk.mkdir(parents=True)
+                (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name))
+                made.append("skills/")
+            return (
+                f"✓ scaffolded communication plugin {pid!r} at {target}\n"
+                f"  wrote: {', '.join(made)}\n"
+                f"  next: implement {cls}Adapter.run/validate (see plugins/telegram), then enable —\n"
+                f"        add '{pid}' to plugins.enabled and restart.\n"
+                f"  (see docs/guides/communication-plugins.md)"
+            )
 
         views_block = (
             f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /plugins/{pid}/view }}\n"
