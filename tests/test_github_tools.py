@@ -23,6 +23,8 @@ async def test_repo_required_no_silent_default():
                 arg = {"repo": ""}
             if name == "github_get_commit_diff":
                 arg = {"repo": "", "ref": "abc"}
+            if name == "github_run_failure":
+                arg = {"repo": "", "run_id": 1}
             out = await t.ainvoke(arg)
             assert out.startswith("Error:"), name
             assert "no default" in out.lower() or "owner/name" in out.lower()
@@ -88,3 +90,47 @@ async def test_run_gh_missing_binary():
     with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
         rc, out, err = await run_gh(["pr", "view", "1"])
     assert rc == 1 and "not installed" in err
+
+
+@pytest.mark.asyncio
+async def test_ci_runs_happy_path():
+    payload = json.dumps([
+        {"databaseId": 101, "name": "CI", "status": "completed", "conclusion": "failure",
+         "headBranch": "main", "event": "push", "createdAt": "t", "url": "http://x/101"},
+        {"databaseId": 102, "name": "CI", "status": "completed", "conclusion": "success",
+         "headBranch": "main", "event": "push", "createdAt": "t", "url": "http://x/102"},
+    ])
+    with patch("tools.github_tools.run_gh", return_value=(0, payload, "")):
+        out = await _tools()["github_ci_runs"].ainvoke({"repo": "o/r"})
+    assert "#101 [failure]" in out and "http://x/101" in out
+    assert "2 recent run(s)" in out
+
+
+@pytest.mark.asyncio
+async def test_ci_runs_empty():
+    with patch("tools.github_tools.run_gh", return_value=(0, "[]", "")):
+        out = await _tools()["github_ci_runs"].ainvoke({"repo": "o/r", "branch": "main"})
+    assert "No recent runs" in out and "main" in out
+
+
+@pytest.mark.asyncio
+async def test_run_failure_extracts_error_lines():
+    log = (
+        "build\tCompile\t2026-01-01T00:00:00Z all good here\n"
+        "test\tRun tests\t2026-01-01T00:00:01Z AssertionError: expected 1 to equal 2\n"
+        "test\tRun tests\t2026-01-01T00:00:02Z 1 passed, 1 failed\n"
+        "test\tRun tests\t2026-01-01T00:00:03Z just a normal line\n"
+    )
+    with patch("tools.github_tools.run_gh", return_value=(0, log, "")):
+        out = await _tools()["github_run_failure"].ainvoke({"repo": "o/r", "run_id": 101})
+    assert "AssertionError: expected 1 to equal 2" in out
+    assert "1 passed, 1 failed" in out      # matched on "fail"
+    assert "all good here" not in out        # non-error line filtered out
+
+
+@pytest.mark.asyncio
+async def test_run_failure_falls_back_to_tail():
+    log = "job\tstep\t2026Z benign line one\njob\tstep\t2026Z benign line two\n"
+    with patch("tools.github_tools.run_gh", return_value=(0, log, "")):
+        out = await _tools()["github_run_failure"].ainvoke({"repo": "o/r", "run_id": 5})
+    assert "benign line two" in out          # tail fallback when nothing matches

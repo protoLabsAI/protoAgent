@@ -1,4 +1,4 @@
-"""GitHub read tools — PRs, issues, commits — over the ``gh`` CLI.
+"""GitHub read tools — PRs, issues, commits, CI runs/failures — over the ``gh`` CLI.
 
 Closes the long-standing fleet requests for GitHub read access
 (protoAgent #158, #159). Each tool requires an explicit ``repo``
@@ -23,6 +23,15 @@ from tools.fallbacks import with_fallback
 from tools.gh_cli import check_gh_error, run_gh
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+# Error-relevant lines to surface from a failed CI log (github_run_failure) — the
+# deterministic version of hand-grepping a CI log for what actually broke.
+_CI_ERR_RE = re.compile(
+    r"(error|fail|✕|✗|×|not ok|exit code|command not found|exception|traceback|"
+    r"assertion|timeout|expected .* to|cannot |refused|unauthorized|forbidden|"
+    r"panic|fatal)",
+    re.IGNORECASE,
+)
 
 
 def _bad_repo(repo: str) -> str | None:
@@ -163,4 +172,94 @@ def get_github_tools() -> list:
             diff = diff[:max_chars] + f"\n… (truncated at {max_chars} chars)"
         return f"Commit {repo}@{ref}:\n\n{diff}"
 
-    return [github_get_pr, github_get_issue, github_list_issues, github_get_commit_diff]
+    @tool
+    @with_fallback()
+    async def github_ci_runs(repo: str, branch: str = "", limit: int = 15) -> str:
+        """List recent GitHub Actions runs for a repo — for CI triage.
+
+        Args:
+            repo: Repository as ``owner/name`` (required, no default).
+            branch: Optional branch filter (e.g. ``main``).
+            limit: Max runs to return (capped at 50).
+
+        Feed a failing run's id to ``github_run_failure`` to see why it failed.
+        """
+        err = _bad_repo(repo)
+        if err:
+            return err
+        args = [
+            "run", "list", "--repo", repo,
+            "--limit", str(max(1, min(int(limit), 50))),
+            "--json", "databaseId,name,status,conclusion,headBranch,event,createdAt,url",
+        ]
+        if branch.strip():
+            args += ["--branch", branch.strip()]
+        rc, out, serr = await run_gh(args)
+        gh_err = check_gh_error(rc, serr)
+        if gh_err:
+            return gh_err
+        try:
+            runs = json.loads(out)
+        except json.JSONDecodeError:
+            return f"Error: could not parse gh output: {out[:200]}"
+        if not runs:
+            return f"No recent runs for {repo}" + (f" on {branch}" if branch.strip() else "")
+        lines = [
+            f"#{r.get('databaseId')} [{r.get('conclusion') or r.get('status')}] "
+            f"{r.get('name')} ({r.get('headBranch')} · {r.get('event')}) — {r.get('url')}"
+            for r in runs
+        ]
+        return f"{repo} — {len(runs)} recent run(s):\n" + "\n".join(lines)
+
+    @tool
+    @with_fallback()
+    async def github_run_failure(repo: str, run_id: int, max_lines: int = 40) -> str:
+        """Explain why a GitHub Actions run failed — the error lines from its
+        failed steps (the deterministic version of hand-grepping a CI log).
+
+        Args:
+            repo: Repository as ``owner/name`` (required, no default).
+            run_id: The run id (``databaseId`` from ``github_ci_runs``).
+            max_lines: Cap on error lines returned (capped at 80).
+
+        Pulls only the failed steps' logs (``gh run view --log-failed``), keeps the
+        error-relevant lines (matched, deduped), and falls back to the log tail
+        when nothing matches.
+        """
+        err = _bad_repo(repo)
+        if err:
+            return err
+        cap = max(5, min(int(max_lines), 80))
+        rc, out, serr = await run_gh(
+            ["run", "view", str(run_id), "--repo", repo, "--log-failed"], timeout=60
+        )
+        gh_err = check_gh_error(rc, serr)
+        if gh_err:
+            return gh_err
+        # gh prefixes each line "<job>\t<step>\t<timestamp> <message>"; keep the tail.
+        raw = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+        seen: set = set()
+        uniq: list[str] = []
+        for ln in raw:
+            msg = ln.split("\t")[-1]
+            if _CI_ERR_RE.search(msg):
+                key = msg[:120]
+                if key not in seen:
+                    seen.add(key)
+                    uniq.append(msg[:200])
+        picked = uniq[-cap:] if uniq else [ln.split("\t")[-1][:200] for ln in raw[-cap:]]
+        if not picked:
+            return (
+                f"Run {run_id} in {repo}: no failed-step log lines "
+                "(run may not have failed, or its logs expired)."
+            )
+        return f"{repo} run {run_id} — failure log ({len(picked)} line(s)):\n" + "\n".join(picked)
+
+    return [
+        github_get_pr,
+        github_get_issue,
+        github_list_issues,
+        github_get_commit_diff,
+        github_ci_runs,
+        github_run_failure,
+    ]
