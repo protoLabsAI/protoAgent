@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Console IA: Runtime is top-level with tabs; Plugins is its own section** — the dense
+  System panel is split into **Runtime → Overview · Tools · MCP · Subagents · Telemetry**
+  (a new `/api/tools` endpoint feeds the live tool inventory), and plugins get a dedicated
+  **Plugins** rail section (loaded overview + git-URL install/manage, moved out of Settings).
 - **Scheduler is a first-class right-rail panel** — moved from Activity → Schedule to the
   right rail (Notes · Beads · Goals · Schedule), one click from chat.
 

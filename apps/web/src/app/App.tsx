@@ -23,6 +23,7 @@ import {
   Target,
   Undo2,
   Trash2,
+  Wrench,
   // Plugin-view rail icons (ADR 0026) — a broader lucide allowlist so plugins
   // (dashboards, data, comms, dev, finance, space/fleet, AI) find a fitting glyph.
   Bot,
@@ -83,6 +84,10 @@ import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
 import { RuntimePanel } from "./RuntimePanel";
+import { ToolsPanel } from "./ToolsPanel";
+import { McpPanel } from "./McpPanel";
+import { SubagentsPanel } from "./SubagentsPanel";
+import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { runtimeStatusQuery } from "../lib/queries";
 
@@ -91,7 +96,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 // Core surfaces are the fixed literals; plugin views (ADR 0026) add dynamic
 // surfaces keyed `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal
 // autocomplete while allowing those runtime keys.
-type Surface = "chat" | "activity" | "studio" | "knowledge" | "system" | "settings" | (string & {});
+type Surface = "chat" | "activity" | "studio" | "knowledge" | "runtime" | "plugins" | "settings" | (string & {});
 
 // Lucide icon names a plugin view may use for its rail glyph (ADR 0026, PR1 set;
 // PR2 widens the allowlist). Unknown/missing → a generic plugin glyph.
@@ -120,7 +125,7 @@ function pluginViewIcon(name?: string): ReactNode {
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
 // old "Run" tab is gone and Studio is just Workflows.
-type SystemTab = "runtime" | "telemetry";
+type RuntimeTab = "overview" | "tools" | "mcp" | "subagents" | "telemetry";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox";
@@ -173,7 +178,7 @@ export function App() {
   // Background-streaming indicator for the Chat rail (narrow selector → only
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
-  const [systemTab, setSystemTab] = useState<SystemTab>("runtime");
+  const [runtimeTab, setRuntimeTab] = useState<RuntimeTab>("overview");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
@@ -636,10 +641,16 @@ export function App() {
             onClick={() => setSurface("knowledge")}
           />
           <RailButton
-            active={surface === "system"}
-            label="System"
+            active={surface === "runtime"}
+            label="Runtime"
             icon={<Gauge size={18} />}
-            onClick={() => setSurface("system")}
+            onClick={() => setSurface("runtime")}
+          />
+          <RailButton
+            active={surface === "plugins"}
+            label="Plugins"
+            icon={<Puzzle size={18} />}
+            onClick={() => setSurface("plugins")}
           />
           <RailButton
             active={surface === "settings"}
@@ -696,12 +707,15 @@ export function App() {
               ]}
             />
           ) : null}
-          {surface === "system" ? (
+          {surface === "runtime" ? (
             <StageSubnav
-              active={systemTab}
-              onSelect={(id) => setSystemTab(id as typeof systemTab)}
+              active={runtimeTab}
+              onSelect={(id) => setRuntimeTab(id as typeof runtimeTab)}
               tabs={[
-                { id: "runtime", label: "Runtime", icon: Gauge },
+                { id: "overview", label: "Overview", icon: Gauge },
+                { id: "tools", label: "Tools", icon: Wrench },
+                { id: "mcp", label: "MCP", icon: Plug },
+                { id: "subagents", label: "Subagents", icon: Bot },
                 { id: "telemetry", label: "Telemetry", icon: BarChart3 },
               ]}
             />
@@ -718,9 +732,12 @@ export function App() {
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
 
 
-          {surface === "system" && systemTab === "runtime" ? <RuntimePanel /> : null}
-
-          {surface === "system" && systemTab === "telemetry" ? <TelemetrySurface /> : null}
+          {surface === "runtime" && runtimeTab === "overview" ? <RuntimePanel /> : null}
+          {surface === "runtime" && runtimeTab === "tools" ? <ToolsPanel /> : null}
+          {surface === "runtime" && runtimeTab === "mcp" ? <McpPanel /> : null}
+          {surface === "runtime" && runtimeTab === "subagents" ? <SubagentsPanel /> : null}
+          {surface === "runtime" && runtimeTab === "telemetry" ? <TelemetrySurface /> : null}
+          {surface === "plugins" ? <PluginsSurface /> : null}
           {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
           {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "settings" ? <SettingsSurface /> : null}

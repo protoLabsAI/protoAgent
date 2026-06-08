@@ -170,6 +170,7 @@ def register_operator_routes(
     *,
     runtime_status: Callable[[], dict[str, Any]],
     subagent_list: Callable[[], list[dict[str, Any]]],
+    tools_list: Callable[[], dict[str, Any]] = lambda: {"tools": [], "count": 0},
     subagent_run: Callable[[dict[str, Any]], Awaitable[str]],
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
     beads_service: BeadsService | None = None,
@@ -217,6 +218,10 @@ def register_operator_routes(
     @app.get("/api/subagents")
     async def _subagents():
         return {"subagents": subagent_list()}
+
+    @app.get("/api/tools")
+    async def _tools():
+        return tools_list()
 
     @app.post("/api/subagents/run")
     async def _subagent_run(req: SubagentRunRequest):

@@ -21,6 +21,7 @@ import type {
   SlashCommand,
   Playbook,
   Subagent,
+  ToolInfo,
   TelemetryInsights,
   TelemetrySummary,
   TelemetryTurn,
@@ -465,6 +466,10 @@ export const api = {
 
   subagents() {
     return request<{ subagents: Subagent[] }>("/api/subagents");
+  },
+
+  tools() {
+    return request<{ tools: ToolInfo[]; count: number }>("/api/tools");
   },
 
   runSubagent(body: {

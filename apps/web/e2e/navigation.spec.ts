@@ -44,12 +44,20 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
 
-test("runtime surface surfaces skills, MCP servers, and plugins", async ({ page }) => {
-  await openSub(page, "System", "Runtime");
+test("runtime surface: overview, tools, and MCP tabs", async ({ page }) => {
+  await page.getByRole("button", { name: "Runtime", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Runtime" })).toBeVisible();
+  await expect(page.getByText("SKILL.md skills loaded")).toBeVisible(); // overview
 
-  // Extensibility blocks — the features added across the initiative.
-  await expect(page.getByText("SKILL.md skills loaded")).toBeVisible();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Tools", exact: true }).click();
+  await expect(page.getByText("web_search")).toBeVisible();
+
+  await page.locator(".stage-subnav").getByRole("button", { name: "MCP", exact: true }).click();
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
-  await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible(); // plugin
+});
+
+test("plugins are their own section listing loaded plugins", async ({ page }) => {
+  await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Plugins" })).toBeVisible();
+  await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
 });
