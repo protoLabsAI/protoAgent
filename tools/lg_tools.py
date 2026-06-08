@@ -540,6 +540,7 @@ def _build_scheduler_tools(scheduler) -> list:
         prompt: str,
         when: str,
         job_id: str | None = None,
+        timezone: str | None = None,
     ) -> str:
         """Schedule a future task. The agent receives ``prompt`` as a
         new turn when the schedule fires.
@@ -561,21 +562,26 @@ def _build_scheduler_tools(scheduler) -> list:
                 cannot infer "now" from training data.
             job_id: Optional human-readable id for the job. Auto-
                 generated if omitted; you'll need it later to cancel.
+            timezone: Optional IANA timezone (e.g. ``"America/Chicago"``)
+                the cron expression is evaluated in, handling DST — so
+                ``"0 9 * * *"`` means 9am local. Omit for UTC. Ignored
+                for one-shot ISO times (those carry their own offset).
 
         Returns ``"Scheduled job <id> next at <iso>."`` on success,
-        an error string on malformed ``when`` or backend failure.
+        an error string on malformed ``when`` / ``timezone`` or backend failure.
         """
         # Dedup guard: don't create a second job identical to an existing active
-        # one (same prompt + schedule). This is the common cause of scheduled-task
-        # spam — a loop that re-schedules itself on each run/restart accumulates
-        # duplicates that all fire together. (Remote backends may return [] here;
-        # then we skip the check and let the backend own dedup.)
+        # one (same prompt + schedule + timezone). This is the common cause of
+        # scheduled-task spam — a loop that re-schedules itself on each run/restart
+        # accumulates duplicates that all fire together. (Remote backends may return
+        # [] here; then we skip the check and let the backend own dedup.)
         try:
             for j in await asyncio.to_thread(scheduler.list_jobs):
                 if (
                     getattr(j, "enabled", True)
                     and (j.prompt or "").strip() == prompt.strip()
                     and j.schedule == when
+                    and (getattr(j, "timezone", None) or None) == (timezone or None)
                 ):
                     return (
                         f"Already scheduled as {j.id} (next at "
@@ -584,7 +590,7 @@ def _build_scheduler_tools(scheduler) -> list:
         except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
             pass
         try:
-            job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id)
+            job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id, timezone=timezone)
         except ValueError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001

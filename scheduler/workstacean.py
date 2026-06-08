@@ -68,7 +68,10 @@ class WorkstaceanScheduler:
 
     # ── public API ──────────────────────────────────────────────────────────
 
-    def add_job(self, prompt: str, schedule: str, *, job_id: str | None = None) -> Job:
+    def add_job(
+        self, prompt: str, schedule: str, *, job_id: str | None = None,
+        timezone: str | None = None,
+    ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
         # Validate the schedule eagerly so a malformed expr fails at
@@ -89,6 +92,8 @@ class WorkstaceanScheduler:
                 "action": "add",
                 "id": normalized_id,
                 "schedule": schedule,
+                # Workstacean evaluates cron in this IANA tz (omitted → its default).
+                **({"timezone": timezone} if timezone else {}),
                 "topic": topic,
                 "payload": {
                     "content": prompt,
@@ -109,6 +114,7 @@ class WorkstaceanScheduler:
             schedule=schedule,
             agent_name=self.agent_name,
             next_fire=None,  # Workstacean owns the schedule state
+            timezone=timezone,
         )
 
     def cancel_job(self, job_id: str) -> bool:

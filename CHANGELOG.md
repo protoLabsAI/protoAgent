@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Scheduler: per-job timezone** — cron jobs can name an IANA timezone (e.g.
+  `America/Chicago`); `"0 9 * * *"` then means 9am local, DST-aware, stored as UTC.
+  Exposed via `schedule_task(timezone=…)`, the `/api/scheduler/jobs` API, and a timezone
+  picker in the console's Schedule modal (recurring jobs). Defaults to UTC; Workstacean
+  gets it natively.
+
 ### Fixed
 - **Scheduler: fix duplicate/runaway scheduled fires** — `message/send` blocks until the
   turn is terminal, so the old 30s fire timeout false-failed any longer turn and re-fired it
