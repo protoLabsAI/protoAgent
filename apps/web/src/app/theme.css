@@ -408,11 +408,11 @@ h2 {
   position: relative; /* anchors the resize handle on its left edge */
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 10px;
   overflow: hidden;
   padding: 12px;
+  /* Mirror .stage exactly (ADR 0035 D1 — symmetric rails): a plain cell whose single surface
+     child fills via its own height:100%. (The old inner grid auto/auto/1fr was for a multi-child
+     right panel; post-renderSurface it left the lone surface stuck in the content-sized first row.) */
 }
 
 /* Collapsed panels: the workspace grid sets their track to 0; zero the box so

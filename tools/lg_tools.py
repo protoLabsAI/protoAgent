@@ -742,11 +742,9 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
-    # Project-notes tools — read/write the operator console's Notes panel tabs,
-    # gated per-tab by the operator's Agent-read/write toggles. Always included
-    # so "what's on my Todo tab?" reaches the notes, not the memory store.
-    from tools.notes_tools import get_notes_tools
-    tools.extend(get_notes_tools())
+    # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):
+    # read_note / write_note / append_note over one shared markdown doc. Enabled
+    # by default (the plugin manifest), so the agent gets them without a core list here.
     # A2A peer-consult tools — only when at least one PEER_<HANDLE>_URL is set,
     # so agents with no federation peers aren't cluttered.
     from tools.peer_tools import get_peer_tools, list_env_peers

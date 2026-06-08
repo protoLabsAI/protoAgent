@@ -141,8 +141,9 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
 # A `ui: react` view runs in-process with the host's React/query/auth, so trust is host-decided
 # here — NEVER self-declared by a plugin manifest. Every plugin not in this set (and not in the
 # operator's ``plugins.trusted`` allowlist) defaults to the sandboxed iframe. Add an id only when
-# we ship + vet that plugin as first-party (e.g. ``notes`` once ADR 0034 S4 ports it).
-_SHIPPED_TRUSTED_PLUGINS: frozenset[str] = frozenset()
+# we ship + vet that plugin as first-party.
+#   notes — the first-class React reference plugin (ADR 0034 S4); first-party, vetted.
+_SHIPPED_TRUSTED_PLUGINS: frozenset[str] = frozenset({"notes"})
 
 
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:

@@ -299,25 +299,6 @@ export type HitlPayload = {
   detail?: string; // approval shape — the command/action being approved
 };
 
-export type NotesWorkspace = {
-  version: number;
-  workspaceVersion: number;
-  activeTabId: string;
-  tabOrder: string[];
-  tabs: Record<
-    string,
-    {
-      id: string;
-      name: string;
-      content: string;
-      permissions: {
-        agentRead: boolean;
-        agentWrite: boolean;
-      };
-      metadata: Record<string, unknown>;
-    }
-  >;
-};
 
 export type BeadsIssue = {
   id: string;

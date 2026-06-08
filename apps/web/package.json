@@ -9,7 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "build:remotes": "vite build -c remotes/hello-react/vite.config.ts"
+    "build:remotes": "vite build -c remotes/hello-react/vite.config.ts && vite build -c remotes/notes/vite.config.ts"
   },
   "dependencies": {
     "@protolabsai/design": "^0.3.0",

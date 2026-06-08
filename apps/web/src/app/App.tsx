@@ -93,7 +93,6 @@ import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent } from "../lib/events";
-import type { NotesWorkspace } from "../lib/types";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
@@ -182,23 +181,6 @@ function pluginViewIcon(name?: string): ReactNode {
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
-
-function createNoteTab() {
-  const now = Date.now();
-  const id = `note-${now}-${Math.random().toString(36).slice(2, 8)}`;
-  return {
-    id,
-    name: "Notes",
-    content: "",
-    permissions: { agentRead: true, agentWrite: true },
-    metadata: {
-      createdAt: now,
-      updatedAt: now,
-      wordCount: 0,
-      characterCount: 0,
-    },
-  };
-}
 
 function useLocalStorageState(key: string, fallback: string) {
   const [value, setValue] = useState(() => {
@@ -309,35 +291,7 @@ export function App() {
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);
   const bootReady = bootOverride || setupPending || engineReady;
-  const [workspace, setWorkspace] = useState<NotesWorkspace | null>(null);
   const [error, setError] = useState("");
-
-  const [notesBusy, setNotesBusy] = useState(false);
-  const [notesDirty, setNotesDirty] = useState(false);
-
-
-
-  const activeTab = workspace?.tabs[workspace.activeTabId] || null;
-  const canUndoNote = Boolean(
-    ((activeTab?.metadata as Record<string, unknown> | undefined)?.history as unknown[] | undefined)?.length,
-  );
-
-  // Notes are agent-global (one persistent store). Beads/Goals/runtime own their
-  // data via TanStack Query (ADR 0013); this only loads the notes workspace.
-  async function refreshProjectState() {
-    try {
-      const notesPayload = await api.getNotes();
-      setWorkspace(notesPayload.workspace);
-      setNotesDirty(false);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    }
-  }
-
-  // Load notes once on mount (runtime loads via its own query).
-  useEffect(() => {
-    void refreshProjectState();
-  }, []);
 
   // Clear the stale "Load failed" strip once the engine reports ready. The
   // graph compile (cold start, finishing setup, or a model change) runs inline
@@ -353,36 +307,6 @@ export function App() {
   useEffect(() => {
     if (!projectPath.trim() && runtime?.project.path) setProjectPath(runtime.project.path);
   }, [runtime, projectPath, setProjectPath]);
-
-  useEffect(() => {
-    if (!notesDirty || !workspace) return;
-    const handle = window.setTimeout(() => {
-      void saveWorkspaceSnapshot(workspace, { quiet: true });
-    }, 800);
-    return () => window.clearTimeout(handle);
-  }, [notesBusy, notesDirty, workspace]);
-
-  // Live notes refresh — the agent (via notes_write) or another tab can change
-  // the workspace on disk. Poll while the Notes panel is open and adopt newer
-  // server state, but never clobber the user's unsaved edits (notesDirty) and
-  // keep their active tab selection.
-  useEffect(() => {
-    if (rightPanel !== "notes") return;
-    const handle = window.setInterval(async () => {
-      if (notesDirty || notesBusy) return;
-      try {
-        const { workspace: latest } = await api.getNotes();
-        setWorkspace((current) => {
-          if (!current || latest.workspaceVersion <= current.workspaceVersion) return current;
-          const keepActive = latest.tabs[current.activeTabId] ? current.activeTabId : latest.activeTabId;
-          return { ...latest, activeTabId: keepActive };
-        });
-      } catch {
-        /* transient — retry next tick */
-      }
-    }, 4000);
-    return () => window.clearInterval(handle);
-  }, [rightPanel, notesDirty, notesBusy]);
 
 
   // Goals now own their data via TanStack Query inside <GoalsPanel> (ADR 0013) —
@@ -423,152 +347,6 @@ export function App() {
   useEffect(() => {
     if (viewingInbox()) setInboxUnread(0);
   }, [surface, activityTab]);
-
-  function updateWorkspace(nextWorkspace: NotesWorkspace) {
-    setWorkspace(nextWorkspace);
-    setNotesDirty(true);
-  }
-
-  // Undo the last write to the active tab, restoring the previous version from
-  // the per-tab history that notes_write / the editor record.
-  function undoActiveNote() {
-    if (!workspace || !activeTab) return;
-    const meta = (activeTab.metadata || {}) as Record<string, unknown>;
-    const history = (meta.history as Array<{ content: string }> | undefined) || [];
-    if (!history.length) return;
-    const restored = history[history.length - 1].content;
-    updateWorkspace({
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      tabs: {
-        ...workspace.tabs,
-        [activeTab.id]: {
-          ...activeTab,
-          content: restored,
-          metadata: {
-            ...meta,
-            history: history.slice(0, -1),
-            updatedAt: Date.now(),
-            characterCount: restored.length,
-            wordCount: restored.split(/\s+/).filter(Boolean).length,
-          },
-        },
-      },
-    });
-  }
-
-  function saveActiveNote(content: string) {
-    if (!workspace || !activeTab) return;
-    const nextWorkspace: NotesWorkspace = {
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      tabs: {
-        ...workspace.tabs,
-        [activeTab.id]: {
-          ...activeTab,
-          content,
-          metadata: {
-            ...activeTab.metadata,
-            updatedAt: Date.now(),
-            characterCount: content.length,
-            wordCount: content.trim() ? content.trim().split(/\s+/).length : 0,
-          },
-        },
-      },
-    };
-    updateWorkspace(nextWorkspace);
-  }
-
-  async function saveWorkspaceSnapshot(
-    snapshot: NotesWorkspace,
-    options: { quiet?: boolean } = {},
-  ) {
-    if (notesBusy) return;
-    setNotesBusy(true);
-    if (!options.quiet) setError("");
-    try {
-      await api.saveNotes(snapshot);
-      setNotesDirty(false);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setNotesBusy(false);
-    }
-  }
-
-  async function persistNotes() {
-    if (!workspace) return;
-    await saveWorkspaceSnapshot(workspace);
-  }
-
-  function createNote() {
-    if (!workspace) return;
-    const tab = createNoteTab();
-    updateWorkspace({
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      activeTabId: tab.id,
-      tabOrder: [...workspace.tabOrder, tab.id],
-      tabs: { ...workspace.tabs, [tab.id]: tab },
-    });
-  }
-
-  function deleteActiveNote() {
-    if (!workspace || workspace.tabOrder.length <= 1) return;
-    const name = workspace.tabs[workspace.activeTabId]?.name || "this note";
-    setConfirmState({
-      title: "Delete this note?",
-      message: `"${name}" will be removed from the workspace.`,
-      confirmLabel: "Delete note",
-      onConfirm: doDeleteActiveNote,
-    });
-  }
-
-  function doDeleteActiveNote() {
-    if (!workspace || workspace.tabOrder.length <= 1) return;
-    const nextOrder = workspace.tabOrder.filter((id) => id !== workspace.activeTabId);
-    const nextTabs = { ...workspace.tabs };
-    delete nextTabs[workspace.activeTabId];
-    updateWorkspace({
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      activeTabId: nextOrder[0],
-      tabOrder: nextOrder,
-      tabs: nextTabs,
-    });
-  }
-
-  function renameActiveNote(name: string) {
-    if (!workspace || !activeTab) return;
-    updateWorkspace({
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      tabs: {
-        ...workspace.tabs,
-        [activeTab.id]: {
-          ...activeTab,
-          name,
-          metadata: { ...activeTab.metadata, updatedAt: Date.now() },
-        },
-      },
-    });
-  }
-
-  function toggleActiveNotePermission(permission: "agentRead" | "agentWrite", value: boolean) {
-    if (!workspace || !activeTab) return;
-    updateWorkspace({
-      ...workspace,
-      workspaceVersion: workspace.workspaceVersion + 1,
-      tabs: {
-        ...workspace.tabs,
-        [activeTab.id]: {
-          ...activeTab,
-          permissions: { ...activeTab.permissions, [permission]: value },
-          metadata: { ...activeTab.metadata, updatedAt: Date.now() },
-        },
-      },
-    });
-  }
 
   // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
   function startRightResize(e: React.MouseEvent) {
@@ -646,7 +424,6 @@ export function App() {
     { id: "agent", label: "Agent", icon: <Bot size={18} /> },
     { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
     { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
-    { id: "notes", label: "Notes", icon: <FileText size={18} /> },
     { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
     { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
@@ -734,45 +511,8 @@ export function App() {
             <SettingsSurface tab={settingsTab} />
           </>
         );
-      case "notes":
-        return (
-          <section className="panel side-panel notes-panel">
-            <PanelHeader
-              compact
-              title={activeTab?.name || "Notes"}
-              kicker={workspace ? `${workspace.tabOrder.length} tab${workspace.tabOrder.length === 1 ? "" : "s"}${notesDirty ? " • unsaved" : ""}` : "not loaded"}
-              actions={
-                <>
-                  <button className="icon-button" type="button" onClick={createNote} disabled={!workspace} title="New note"><Plus size={16} /></button>
-                  <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note"><Trash2 size={16} /></button>
-                  <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change"><Undo2 size={16} /></button>
-                  <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">{notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}</button>
-                </>
-              }
-            />
-            {workspace ? (
-              <div className="notes-tabbar">
-                {workspace.tabOrder.map((tabId) => {
-                  const tab = workspace.tabs[tabId];
-                  if (!tab) return null;
-                  return (
-                    <button className={tab.id === workspace.activeTabId ? "active" : ""} type="button" key={tab.id} onClick={() => updateWorkspace({ ...workspace, activeTabId: tab.id })}>
-                      {tab.name || "Notes"}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-            {activeTab ? (
-              <div className="notes-meta">
-                <input value={activeTab.name} onChange={(e) => renameActiveNote(e.target.value)} aria-label="Note name" />
-                <label className="checkbox-field"><input type="checkbox" checked={activeTab.permissions.agentRead} onChange={(e) => toggleActiveNotePermission("agentRead", e.target.checked)} /><span>Agent read</span></label>
-                <label className="checkbox-field"><input type="checkbox" checked={activeTab.permissions.agentWrite} onChange={(e) => toggleActiveNotePermission("agentWrite", e.target.checked)} /><span>Agent write</span></label>
-              </div>
-            ) : null}
-            <textarea className="notes-editor" value={activeTab?.content || ""} onChange={(e) => saveActiveNote(e.target.value)} placeholder="Project notes" disabled={!workspace} />
-          </section>
-        );
+      // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
+      // plugin-view case below, not a native surface.
       case "beads":
         return <BeadsPanel confirm={setConfirmState} />;
       case "goals":
@@ -802,7 +542,7 @@ export function App() {
   const leftMembers = railSurfaces("left").map((s) => s.id);
   const rightMembers = railSurfaces("right").map((s) => s.id);
   const leftActive = leftMembers.includes(surface) ? surface : (leftMembers[0] ?? "chat");
-  const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "notes");
+  const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "beads");
   // Chat mounts unconditionally on whichever side it's on (streaming continuity, #613).
   const chatRail: "left" | "right" = railOrder.right.includes("chat") ? "right" : "left";
 
@@ -843,7 +583,6 @@ export function App() {
             className={`status-dot tone-${health.tone}`}
             onClick={() => {
               void runtimeQ.refetch();
-              void refreshProjectState();
             }}
             title={
               `Setup: ${runtime?.setup_complete ? "complete" : "pending"}\n` +
@@ -985,7 +724,6 @@ export function App() {
         onProjectPathChange={setProjectPath}
         onFinished={() => {
           void runtimeQ.refetch();
-          void refreshProjectState();
         }}
       />
 

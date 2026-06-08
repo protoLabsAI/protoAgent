@@ -79,7 +79,7 @@ _TOOL_CATEGORY = {
     "fetch_url": "General", "ask_human": "General", "request_user_input": "General",
     "github_get_pr": "GitHub", "github_get_issue": "GitHub",
     "github_list_issues": "GitHub", "github_get_commit_diff": "GitHub",
-    "notes_list": "Notes", "notes_read": "Notes", "notes_write": "Notes", "notes_revert": "Notes",
+    "read_note": "Notes", "write_note": "Notes", "append_note": "Notes",
     "memory_ingest": "Memory", "memory_recall": "Memory", "memory_list": "Memory",
     "memory_stats": "Memory",
     "schedule_task": "Scheduler", "list_schedules": "Scheduler", "cancel_schedule": "Scheduler",

@@ -94,18 +94,18 @@ test("right-click a rail surface opens a context menu that moves it (ADR 0036)",
   const rightRail = page.locator(".rail-right");
   const leftRail = page.locator(".rail:not(.rail-right)");
 
-  // Notes starts on the right rail.
-  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+  // Beads starts on the right rail.
+  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
 
   // Right-click it → the context menu opens with the move item.
-  await rightRail.getByRole("button", { name: "Notes", exact: true }).click({ button: "right" });
+  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
   const menu = page.getByTestId("context-menu");
   await expect(menu).toBeVisible();
   await menu.getByText("Move to left rail").click();
 
-  // Notes moved to the left rail (store-backed → persists, but checking the move is enough here).
-  await expect(leftRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
-  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toHaveCount(0);
+  // Beads moved to the left rail (store-backed → persists, but checking the move is enough here).
+  await expect(leftRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toHaveCount(0);
 });
 
 test("Chat is movable too — right-click → move to the right rail (ADR 0036)", async ({ page }) => {
