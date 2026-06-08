@@ -5,46 +5,46 @@ const repo = 'https://github.com/protoLabsAI/protoAgent';
 
 const features = [
   {
-    title: 'A2A out of the box',
-    body: 'JSON-RPC 2.0 over /a2a, SSE streaming, the tasks/* lifecycle, a well-known agent card, push notifications, and a cost-v1 DataPart on every turn — spec-compliant and already tested.',
+    title: 'A2A-native, built for fleets',
+    body: 'Every agent is a spec-compliant A2A 1.0 server — agent card, JSON-RPC, streaming, push, a cost DataPart on every turn. Delegate to other a2a / openai / acp endpoints. Run one, or orchestrate many across your machines.',
   },
   {
-    title: 'Extend without forking',
-    body: 'SKILL.md skills, MCP servers, and plugins that add tools, subagents, workflows, and console views — installable straight from a git URL, pinned in a lockfile. Share a plugin as a repo.',
+    title: 'A lean core, not a bundle',
+    body: "Start small and legible, then add tools, skills, subagents, workflows, memory backends, and console views as git-URL plugins — pinned, removable, shareable as repos. You opt in to surface area; you don't fight to remove it.",
   },
   {
     title: 'An operator console',
-    body: 'A React console (+ a desktop app) with live token-by-token streaming, chat that survives navigation, knowledge, delegates, and a plugins panel. Run from chat, manage from surfaces.',
+    body: 'A React console (+ a native desktop app) with live token-by-token streaming, chat that survives navigation, knowledge, delegates, cost telemetry, and plugin dashboards that slot right in. Run from chat, manage from surfaces.',
   },
   {
     title: 'Headless or hands-on',
-    body: 'API-first: run it with no UI and drive it over the OpenAI-compatible API (/v1/chat/completions) or A2A — point any OpenAI client or agent fleet at it. Same agent, tools, memory, and goals, no browser.',
+    body: 'API-first: run it with no UI and drive it over the OpenAI-compatible /v1 API or A2A — point any OpenAI client or agent at it. Powered by your models, local or hosted. The console is optional, not the product.',
   },
 ];
 
 const steps = [
   { n: '1', title: 'Clone & run', body: 'Pull the template and start the server — python -m server. Zero config to first boot.' },
   { n: '2', title: 'Walk the wizard', body: 'Connect your model, name the agent, pick a persona. The setup wizard tests the connection and you’re live.' },
-  { n: '3', title: 'Chat, then fork', body: 'Talk to your agent in the console. Add skills, plugins, and subagents. Fork it to ship your own.' },
+  { n: '3', title: 'Extend, then ship', body: 'Add skills, plugins, and subagents; wire it to your fleet over A2A. Fork it to ship your own.' },
 ];
 ---
 
-<BaseLayout title="protoAgent — clone, run, chat, ship A2A agents">
+<BaseLayout title="protoAgent — the lean, A2A-native agent you own" description="A lean, A2A-native agent on LangGraph: ships a small core, grows with git-URL plugins. Run one agent or orchestrate a fleet — from a console, the OpenAI API, or A2A. Local-first.">
   <!-- Hero -->
   <section class="relative">
     <div class="hero-glow absolute inset-0 -z-10 h-[480px]"></div>
     <div class="mx-auto max-w-4xl px-5 pt-24 pb-20 text-center">
       <div class="inline-flex items-center gap-2 rounded-full border border-[var(--color-edge)] bg-[var(--color-surface-1)] px-3 py-1 text-xs text-zinc-400 mb-7">
         <span class="size-1.5 rounded-full bg-[var(--color-accent)]"></span>
-        LangGraph + A2A agent template
+        Built on LangGraph · A2A-native · yours to extend
       </div>
       <h1 class="text-5xl sm:text-6xl font-bold tracking-tight leading-[1.05]">
-        Clone. Run. Chat.<br /><span class="gradient-text">Ship your own agent.</span>
+        Build an agent.<br /><span class="gradient-text">Orchestrate a fleet.</span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
-        protoAgent is a production-shaped template for building protoLabs agents — A2A on
-        LangGraph, an operator console, and an extension system you grow with skills,
-        MCP servers, and git-installable plugins.
+        protoAgent ships a small, legible core — then you add exactly what you need as
+        plugins, instead of deleting what you don't. Every agent speaks A2A, so it runs
+        solo or as part of a fleet across your machines. Local models, your stack, no bloat.
       </p>
       <div class="mt-9 flex items-center justify-center gap-3">
         <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer" class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition">
@@ -96,8 +96,8 @@ python -m server            <span class="text-zinc-500"># walk the wizard at htt
 
   <!-- CTA -->
   <section class="mx-auto max-w-4xl px-5 py-20 text-center">
-    <h2 class="text-3xl font-bold tracking-tight">Build your agent tonight.</h2>
-    <p class="mt-3 text-zinc-400">Free starter tools, a working A2A server, and a console — on a fresh clone.</p>
+    <h2 class="text-3xl font-bold tracking-tight">Clone it tonight. Own every line.</h2>
+    <p class="mt-3 text-zinc-400">A working A2A server, starter tools, and a console — on a fresh clone. Grow it into whatever you need; <a href="/features" class="text-[var(--pl-color-brand-lavender)] hover:brightness-110">see how it compares</a>.</p>
     <div class="mt-7 flex items-center justify-center gap-3">
       <a href="/docs/" target="_blank" rel="noopener noreferrer" class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition">Read the docs</a>
       <a href="/docs/guides/plugin-registry" target="_blank" rel="noopener noreferrer" class="rounded-lg border border-[var(--color-edge)] px-5 py-3 font-medium text-zinc-200 hover:border-[var(--color-accent)]/50 transition">Build a plugin</a>
