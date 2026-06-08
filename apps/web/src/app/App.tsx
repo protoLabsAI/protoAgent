@@ -241,7 +241,7 @@ export function App() {
   const setRightCollapsed = useUI((s) => s.setRightCollapsed);
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
-  const railOf = useUI((s) => s.railOf);
+  const railOrder = useUI((s) => s.railOrder);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -643,14 +643,18 @@ export function App() {
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
     { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
   ];
-  // Surfaces (+ plugin views) assigned to a rail side. Plugin views follow their manifest
-  // placement (rail→left, right→right); core surfaces follow railOf. Chat is always left.
+  // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core surfaces follow the
+  // saved order; plugin views append by their manifest placement (rail→left, right→right) — they
+  // aren't ordered by the user yet. Chat is pinned to the left rail's order.
+  const coreMeta = new globalThis.Map(CORE_SURFACES.map((s) => [s.id, s] as const));
   function railSurfaces(side: "left" | "right"): { id: string; label: string; icon: ReactNode }[] {
-    const core = CORE_SURFACES.filter((s) => (s.id === "chat" ? side === "left" : (railOf[s.id] ?? "left") === side));
+    const ordered = (railOrder[side] ?? [])
+      .map((id) => coreMeta.get(id))
+      .filter((s): s is { id: string; label: string; icon: ReactNode } => Boolean(s));
     const plugins = (side === "left" ? pluginRail : pluginRightPanels).map((v) => ({
       id: v.key, label: v.label, icon: pluginViewIcon(v.icon),
     }));
-    return [...core, ...plugins];
+    return [...ordered, ...plugins];
   }
 
   function renderSurface(id: string): ReactNode {
