@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ACP-only setups need no gateway** (ADR 0033) — when the runtime is `acp:<agent>` and no
+  OpenAI-compatible gateway key is set, protoAgent's auxiliary LLM calls (compaction, goal
+  verification, fact extraction) fall back to the same coding agent via an `AcpChatModel`
+  adapter, and headless validation no longer requires a gateway. (Embeddings still need an
+  embed endpoint, else semantic recall degrades to keyword — unchanged.)
+
 ### Fixed
 - **Instance-scoped config** (ADR 0004) — with `PROTOAGENT_INSTANCE` set, the live config +
   secrets + setup-marker are now per-instance (seeded from the default's on first boot), so a
