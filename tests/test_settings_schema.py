@@ -16,8 +16,8 @@ def test_schema_groups_and_values():
     cfg = LangGraphConfig()
     groups = build_schema(cfg, model_options=["a", "b"])
     # Grouped + ordered by category: the Agent category leads, its sections in
-    # FIELDS order (Model, Routing, Goal mode, Tools, Identity).
-    assert [g["section"] for g in groups][:3] == ["Model", "Routing", "Goal mode"]
+    # FIELDS order (Model, Routing, Agent runtime, …).
+    assert [g["section"] for g in groups][:3] == ["Model", "Routing", "Agent runtime"]
     fields = [f for g in groups for f in g["fields"]]
     # Every core FIELD is present. (build_schema also appends plugin-declared
     # settings — e.g. the discord plugin — so count only the core-keyed fields,

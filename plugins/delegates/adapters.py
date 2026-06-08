@@ -352,22 +352,43 @@ class AcpAdapter(Adapter):
         d.confirm = str(raw.get("confirm", "")).strip().lower() in ("1", "true", "yes")
         return d
 
+    @staticmethod
+    def _spec(d: Delegate) -> dict:
+        """The coding_agent spec dict for this delegate. Shared by ``dispatch`` and
+        ``teardown`` so both compute the SAME client cache key (which includes
+        ``workdir``) — so a caller that scopes ``workdir`` per call (e.g. via
+        ``dataclasses.replace`` onto a disposable worktree) tears down the exact
+        client it dispatched."""
+        return {
+            "name": d.name, "command": d.command, "args": d.args, "workdir": d.workdir,
+            "env": d.env or None, "permissions": d.permissions,
+            "allow_kinds": d.allow_kinds, "deny_kinds": d.deny_kinds,
+        }
+
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         # Reuse the ADR 0024 ACP client + by-kind permission policy.
         from plugins.coding_agent import _client_for, _make_permission
         from plugins.coding_agent.acp_client import AcpError
 
-        spec = {
-            "name": d.name, "command": d.command, "args": d.args, "workdir": d.workdir,
-            "env": d.env or None, "permissions": d.permissions,
-            "allow_kinds": d.allow_kinds, "deny_kinds": d.deny_kinds,
-        }
+        spec = self._spec(d)
         client = _client_for(spec)
         client._permission = _make_permission(spec)
         try:
             return await client.prompt(query, timeout=timeout or d.timeout_s)
         except AcpError as exc:
             raise DelegateError(str(exc))
+
+    async def teardown(self, d: Delegate) -> bool:
+        """Evict + terminate the cached ACP subprocess for this delegate.
+
+        ``dispatch`` caches a long-lived ``AcpClient`` (subprocess + session) keyed
+        partly on ``workdir``. A caller that dispatches into a transient, per-call
+        ``workdir`` should call this when done (e.g. in a ``finally``) so the child
+        is reaped rather than left running — a plain cache ``pop`` forgets the
+        handle but leaves the process alive. Returns True if a live client was
+        closed; no-op (False) if none was started. Idempotent."""
+        from plugins.coding_agent import evict_client
+        return await evict_client(self._spec(d))
 
     async def probe(self, d: Delegate) -> dict:
         import os

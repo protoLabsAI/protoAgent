@@ -150,6 +150,27 @@ def _client_for(spec: dict) -> AcpClient:
     return client
 
 
+async def evict_client(spec: dict) -> bool:
+    """Drop the cached client for ``spec`` AND terminate its subprocess.
+
+    The dispatch/relaunch paths ``_CLIENTS.pop(...)`` on an ``AcpError`` only
+    *forget* the handle, leaving the child to be reaped by GC. A caller that
+    dispatches into a short-lived, per-call ``workdir`` (e.g. a disposable git
+    worktree) needs a *deterministic* reap — otherwise each scoped ``workdir``
+    leaves its own ``AcpClient`` subprocess behind (the cache key includes
+    ``workdir``). This pops the cached client and ``await``s ``client.close()`` so
+    the process actually dies. Returns True if a live client was closed; idempotent.
+    """
+    client = _CLIENTS.pop(_cache_key(spec), None)
+    if client is None:
+        return False
+    try:
+        await client.close()
+    except Exception:  # noqa: BLE001 — teardown is best-effort
+        log.warning("[coding_agent/%s] close during evict failed", spec.get("name"), exc_info=True)
+    return True
+
+
 def _approved(decision) -> bool:
     return str(decision).strip().lower() in _APPROVALS
 

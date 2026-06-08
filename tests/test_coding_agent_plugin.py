@@ -281,3 +281,45 @@ async def test_confirm_gate_approves_then_runs(monkeypatch):
     register(reg)
     out = await reg.tools[0].ainvoke({"agent": "proto", "task": "do it"})
     assert out == "did the work"
+
+
+async def test_evict_client_pops_and_closes():
+    """evict_client removes the cached client AND awaits close() — a plain pop
+    would forget the handle but leave the subprocess alive."""
+    spec = {
+        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp/wt-1",
+        "permissions": "allowlist", "allow_kinds": [], "deny_kinds": [],
+    }
+
+    class _FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    fake = _FakeClient()
+    P._CLIENTS[P._cache_key(spec)] = fake
+
+    assert await P.evict_client(spec) is True
+    assert fake.closed is True
+    assert P._cache_key(spec) not in P._CLIENTS
+    # idempotent: nothing cached for this spec now
+    assert await P.evict_client(spec) is False
+
+
+async def test_evict_client_swallows_close_errors():
+    """A close() that raises must not propagate — teardown is best-effort, and the
+    cache entry is dropped regardless."""
+    spec = {
+        "name": "proto", "command": "proto", "args": [], "workdir": "/tmp/wt-2",
+        "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+    }
+
+    class _BadClient:
+        async def close(self):
+            raise RuntimeError("terminate blew up")
+
+    P._CLIENTS[P._cache_key(spec)] = _BadClient()
+    assert await P.evict_client(spec) is True          # did not raise
+    assert P._cache_key(spec) not in P._CLIENTS

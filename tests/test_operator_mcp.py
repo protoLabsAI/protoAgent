@@ -49,3 +49,35 @@ def test_build_server_exposes_allowlisted_as_mcp():
     server, exposed = build_server(_cfg(["calculator"]))
     assert exposed == ["calculator"]
     assert server is not None
+
+
+def test_star_exposes_all_except_execute_code(monkeypatch):
+    from langchain_core.tools import tool
+
+    @tool
+    def execute_code(code: str) -> str:
+        """run code"""
+        return code
+
+    @tool
+    def plugin_thing(x: str) -> str:
+        """a plugin tool"""
+        return x
+
+    monkeypatch.setattr(STATE, "plugin_tools", [execute_code, plugin_thing], raising=False)
+    names = {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "calculator" in names and "plugin_thing" in names   # core + plugin all flow
+    assert "execute_code" not in names                          # excluded from the wildcard
+
+
+def test_star_plus_explicit_name_still_includes_it(monkeypatch):
+    from langchain_core.tools import tool
+
+    @tool
+    def execute_code(code: str) -> str:
+        """run code"""
+        return code
+
+    monkeypatch.setattr(STATE, "plugin_tools", [execute_code], raising=False)
+    names = {t.name for t in operator_tools(_cfg(["*", "execute_code"]))}
+    assert "execute_code" in names   # naming it explicitly overrides the wildcard exclusion

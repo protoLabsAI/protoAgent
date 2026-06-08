@@ -527,3 +527,31 @@ def test_list_soul_presets_missing_dir_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(config_io, "PRESETS_DIR", fake)
 
     assert config_io.list_soul_presets() == []
+
+
+def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) -> None:
+    """A PROTOAGENT_INSTANCE-scoped config seeds from the unscoped base (config + secrets +
+    setup-marker) so a new instance boots usable instead of into the wizard (ADR 0004)."""
+    import paths
+    from graph import config_io
+
+    base = tmp_path / "langgraph-config.yaml"; base.write_text("model:\n  name: base-config\n")
+    base_secrets = tmp_path / "secrets.yaml"; base_secrets.write_text("model:\n  api_key: SEKRET\n")
+    base_marker = tmp_path / ".setup-complete"; base_marker.write_text("")
+    scoped = tmp_path / "foo" / "langgraph-config.yaml"
+    scoped_secrets = tmp_path / "foo" / "secrets.yaml"
+    scoped_marker = tmp_path / "foo" / ".setup-complete"
+
+    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", base)
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", scoped)
+    monkeypatch.setattr(config_io, "_BASE_SECRETS_YAML", base_secrets)
+    monkeypatch.setattr(config_io, "SECRETS_YAML_PATH", scoped_secrets)
+    monkeypatch.setattr(config_io, "_BASE_SETUP_MARKER", base_marker)
+    monkeypatch.setattr(config_io, "SETUP_MARKER_PATH", scoped_marker)
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", tmp_path / "missing.example.yaml")
+    monkeypatch.setattr(paths, "instance_id", lambda: "foo")
+
+    assert config_io.ensure_live_config() is True
+    assert "base-config" in scoped.read_text()                     # inherited the base config
+    assert scoped_secrets.read_text() == base_secrets.read_text()  # + secrets
+    assert scoped_marker.exists()                                  # + setup state (no re-wizard)
