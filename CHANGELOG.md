@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Operator tools as an MCP server** (ADR 0033 slice 1) — publish this agent's tools (core +
+  plugin, allowlist-gated) as an MCP server via `python -m server.operator_mcp` (stdio or HTTP),
+  so any MCP client (Claude Desktop, Cursor) or an ACP runtime can operate the instance. Config:
+  `operator_mcp.enabled` + `operator_mcp.tools`. Stores-only boot (no background loops).
+
 ### Docs
 - **ADR 0033** (Proposed) — pluggable agent runtime over ACP: drive the runtime with an external coding agent (proto/codex/claude/copilot/opencode), runtime≠model axis, operator-tools MCP bus, and a cache-disciplined runtime context contract.
 
