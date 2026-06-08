@@ -56,8 +56,14 @@ test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) 
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
-test("plugins are their own section listing loaded plugins", async ({ page }) => {
+test("plugins section: Loaded/Disabled groups, marketplace, and install", async ({ page }) => {
   await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Plugins" })).toBeVisible();
+  // Installed shows both a loaded and a disabled plugin (the two status groups).
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
+  await expect(page.getByText("Zzz Disabled", { exact: false })).toBeVisible();
+  await expect(page.locator(".panel-kicker", { hasText: "Marketplace" })).toBeVisible();
+  // Marketplace discovery + install-from-git section both present.
+  await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
