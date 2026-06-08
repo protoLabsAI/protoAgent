@@ -50,6 +50,13 @@ export const RUNTIME_STATUS = {
         { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
         // A right-rail panel (ADR 0026 placement:"right") — sits with Notes/Beads/Goals.
         { id: "scratch", label: "Scratch", icon: "FileText", path: "/plugins/boardy/scratch", placement: "right" },
+        // A first-class React view (ADR 0034 `ui:"react"`) — a federated remote mounted into
+        // the host tree, not an iframe. Points at the built hello-react remote the host serves.
+        {
+          id: "react-panel", label: "React Panel", icon: "Atom", placement: "right",
+          ui: "react", path: "/plugins/boardy/scratch",
+          remote: { url: "/app/remotes/hello-react/assets/remoteEntry.js", module: "./Panel" },
+        },
       ],
     },
   ],

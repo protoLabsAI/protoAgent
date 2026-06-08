@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { FederatedView } from "../plugins/FederatedView";
 import { StageSubnav } from "./StageSubnav";
 import type { PluginView as PluginViewType } from "../lib/types";
 
@@ -53,6 +54,19 @@ export function PluginView({ view }: { view: PluginViewType }) {
     } catch {
       /* cross-origin / detached — best effort */
     }
+  }
+
+  // ADR 0034 — a `ui: react` view mounts a federated React remote into the host tree
+  // (one React, shared query cache) instead of an iframe. The iframe path below is
+  // unchanged and stays the default for `ui: iframe` / untrusted plugins.
+  if (view.ui === "react" && view.remote) {
+    return (
+      <section className="panel stage-panel plugin-view">
+        <div className="plugin-view-body">
+          <FederatedView label={view.label} remote={view.remote} />
+        </div>
+      </section>
+    );
   }
 
   return (
