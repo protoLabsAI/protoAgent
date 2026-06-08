@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ACP answer-text streams** — the coding agent's reply now streams to the chat as it's
+  produced (answer-text deltas forwarded as `text` frames, interleaved with tool cards in
+  order), instead of landing all at once when the turn completes. Granularity follows the
+  agent (proto sends coarse chunks; token-streaming agents render finer).
+
 ## [0.28.0] - 2026-06-08
 
 ### Added

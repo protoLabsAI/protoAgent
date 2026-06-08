@@ -100,6 +100,7 @@ class AcpClient:
         self._answer = ""
         self._progress: ProgressCallback | None = None
         self._on_tool: ToolCallback | None = None
+        self._on_text: ProgressCallback | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -226,6 +227,7 @@ class AcpClient:
             text = (update.get("content") or {}).get("text", "")
             if text:
                 self._answer += text
+                await self._emit_text(text)   # stream the delta (token-ish) to the UI
         elif kind == "tool_call":
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start).
@@ -290,6 +292,13 @@ class AcpClient:
             except Exception as exc:  # best-effort — tool cards never break a turn
                 logger.warning("[acp/%s] tool_callback raised: %s", self.name, exc)
 
+    async def _emit_text(self, delta: str) -> None:
+        if self._on_text and delta:
+            try:
+                await self._on_text(delta)
+            except Exception as exc:  # best-effort — streaming never breaks a turn
+                logger.warning("[acp/%s] text_callback raised: %s", self.name, exc)
+
     # -- JSON-RPC primitives -------------------------------------------------
 
     async def _send(self, obj: dict) -> None:
@@ -349,18 +358,21 @@ class AcpClient:
         *,
         progress_callback: ProgressCallback | None = None,
         tool_callback: ToolCallback | None = None,
+        text_callback: ProgressCallback | None = None,
         timeout: float = 600.0,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
 
-        Streams ``tool_call`` titles to ``progress_callback`` (text narration) and
-        structured start/end events to ``tool_callback`` (for UI tool cards) while the
-        agent works. Raises ``AcpError`` on transport/protocol failure.
+        Streams ``tool_call`` titles to ``progress_callback`` (text narration), structured
+        start/end events to ``tool_callback`` (UI tool cards), and answer-text deltas to
+        ``text_callback`` (token-ish streaming) as the agent works. Raises ``AcpError`` on
+        transport/protocol failure.
         """
         await self._ensure_started()
         self._answer = ""
         self._progress = progress_callback
         self._on_tool = tool_callback
+        self._on_text = text_callback
         try:
             result = await self._request(
                 "session/prompt",
@@ -373,6 +385,7 @@ class AcpClient:
         finally:
             self._progress = None
             self._on_tool = None
+            self._on_text = None
         stop = (result or {}).get("stopReason")
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, stop)
         return self._answer.strip()

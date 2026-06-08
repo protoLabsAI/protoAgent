@@ -93,8 +93,9 @@ to. The agent runs with its own permissions on the host (its CLI's auth + sandbo
 ## Limits
 
 - The native and ACP runtimes don't run in the same turn — `agent_runtime` picks one.
-- Tool calls stream as cards, but the agent's **answer text** isn't token-streamed yet — the
-  final message lands when the turn completes.
+- The agent's answer **streams** as it emits text chunks (and tool calls render as cards in
+  order). Granularity is the agent's — proto sends a few coarse chunks rather than per-token;
+  agents that stream token-by-token render finer.
 - Instances run from the **same directory** share a derived workspace; give each an explicit
   `PROTOAGENT_INSTANCE` if you run several on one box (see [Run multiple instances](/guides/multi-instance)).
 - Validate live — a real coding agent's behavior (and ACP version) is the true test; CI mocks it.

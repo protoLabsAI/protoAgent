@@ -534,37 +534,43 @@ async def _chat_langgraph_stream(
             from runtime.acp_runtime import is_acp_runtime
             if is_acp_runtime(STATE.graph_config):
                 rt = _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
-                # Bridge the agent's tool events (emitted from the ACP reader loop) into the
-                # same tool_start/tool_end frames the native runtime yields → live tool cards.
+                # Bridge the agent's reader-loop callbacks (answer-text deltas + tool events)
+                # into the same text / tool_start / tool_end frames the native runtime yields,
+                # in arrival order → live streaming + tool cards.
                 _ACP_DONE = object()
-                tool_q: asyncio.Queue = asyncio.Queue()
+                frame_q: asyncio.Queue = asyncio.Queue()
+
+                async def _on_text(delta: str) -> None:
+                    await frame_q.put(("text", delta))
 
                 async def _on_tool(ev: dict) -> None:
-                    await tool_q.put(ev)
+                    if ev.get("phase") == "start":
+                        await frame_q.put(("tool_start", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
+                                                          "input": ev.get("input", "")}))
+                    elif ev.get("phase") == "end":
+                        await frame_q.put(("tool_end", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
+                                                        "output": ev.get("output", "")}))
 
                 async def _drive():
                     try:
-                        return await rt.run_turn(message, tool_callback=_on_tool)
+                        return await rt.run_turn(message, text_callback=_on_text, tool_callback=_on_tool)
                     finally:
-                        await tool_q.put(_ACP_DONE)
+                        await frame_q.put(_ACP_DONE)
 
                 driver = asyncio.create_task(_drive())
                 while True:
-                    ev = await tool_q.get()
-                    if ev is _ACP_DONE:
+                    frame = await frame_q.get()
+                    if frame is _ACP_DONE:
                         break
-                    if ev.get("phase") == "start":
-                        yield ("tool_start", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
-                                              "input": ev.get("input", "")})
-                    elif ev.get("phase") == "end":
-                        yield ("tool_end", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
-                                            "output": ev.get("output", "")})
+                    yield frame   # (kind, payload) — already normalized
                 try:
                     answer = await driver
                 except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
                     log.exception("[acp-runtime] turn failed")
                     yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
                     return
+                # The answer already streamed as text deltas; `done` finalizes (executor appends
+                # only meta when text was streamed, so no duplication).
                 yield ("done", answer)
                 return
 

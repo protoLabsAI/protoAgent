@@ -197,14 +197,18 @@ class AcpRuntime:
             self._client = self._client_factory()
         return self._client
 
-    async def run_turn(self, message: str, *, progress_callback=None, tool_callback=None) -> str:
+    async def run_turn(self, message: str, *, progress_callback=None, tool_callback=None, text_callback=None) -> str:
         """Run one turn: per-turn context delta + message → ACP → write back. Persona is
         carried by the AGENTS.md file, not the prompt. ``tool_callback`` receives the agent's
-        structured tool start/end events (for UI cards)."""
+        structured tool start/end events (UI cards); ``text_callback`` receives answer-text
+        deltas (token-ish streaming)."""
         client = self._ensure_client()
         ctx = self._context.assemble(query=message)
         prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
-        answer = await client.prompt(prompt, progress_callback=progress_callback, tool_callback=tool_callback)
+        answer = await client.prompt(
+            prompt, progress_callback=progress_callback,
+            tool_callback=tool_callback, text_callback=text_callback,
+        )
         self._context.after_turn(user=message, response=answer)
         return answer
 
