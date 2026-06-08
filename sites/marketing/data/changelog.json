@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.27.0",
+    "date": "2026-06-08",
+    "changes": [
+      "Run protoAgent's brain on a coding agent — proto, Codex, or Claude can now drive the runtime over ACP, while protoAgent stays the operable A2A / console / goals / scheduling shell around it.",
+      "Publish protoAgent's tools as an MCP server — point Claude Desktop, Cursor, or a coding agent at an instance and operate it (notes, beads, memory, workflows), allowlist-gated.",
+      "Context is assembled cache-friendly under the hood — a stable persona prefix plus per-turn deltas — so the coding agent's own prompt caching stays intact."
+    ]
+  },
+  {
     "version": "v0.26.0",
     "date": "2026-06-08",
     "changes": [
