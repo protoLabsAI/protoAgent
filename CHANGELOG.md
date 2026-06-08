@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugins view reorganized** — three sections: **Installed** (grouped Loaded → Disabled,
+  alphabetical within each) → **Marketplace** (browse the directory + the `protoagent-plugin`
+  GitHub topic) → **Install from a git URL**.
+
 ### Fixed
 - **Marketing changelog stays in sync** — `sites/marketing/data/changelog.json` is now
   derived from CHANGELOG.md (`scripts/changelog.py json`, run in prepare-release) instead of
