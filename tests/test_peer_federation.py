@@ -121,3 +121,45 @@ async def test_peer_consult_routes_skill_hint(monkeypatch):
     params = captured["json"]["params"]
     assert params["message"]["metadata"]["skillHint"] == "bug_triage"
     assert params["metadata"]["skillHint"] == "bug_triage"
+
+
+@pytest.mark.asyncio
+async def test_peer_consult_uses_a2a_1_0_method(monkeypatch):
+    """A2A 1.0: method `SendMessage` (not v0.3 `message/send`), `ROLE_USER` enum,
+    and text-only parts (no `kind`)."""
+    monkeypatch.setenv("PEER_ALICE_URL", "https://alice.example")
+    captured = {}
+
+    class _Cap(_FakeClient):
+        async def post(self, url, json=None, headers=None):
+            captured["body"] = json
+            return self._responses.pop(0)
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **k: _Cap([_Resp(_task("completed", "ok"))]))
+    out = await _tools()["peer_consult"].ainvoke({"name": "alice", "message": "q"})
+    assert out == "[alice] ok"
+    assert captured["body"]["method"] == "SendMessage"
+    msg = captured["body"]["params"]["message"]
+    assert msg["role"] == "ROLE_USER"
+    assert msg["parts"] == [{"text": "q"}]
+
+
+def test_extract_text_unwraps_a2a_1_0_task_envelope():
+    from tools.peer_tools import _extract_text
+    # 1.0 wraps the task: result.task.artifacts[].parts[].text (parts carry no `kind`)
+    assert _extract_text({"task": {"artifacts": [{"parts": [{"text": "hello"}]}]}}) == "hello"
+    assert _extract_text(
+        {"task": {"status": {"message": {"parts": [{"text": "via status"}]}}}}) == "via status"
+    # bare-Message / v0.3 shape (no task envelope) still parses
+    assert _extract_text({"artifacts": [{"parts": [{"kind": "text", "text": "legacy"}]}]}) == "legacy"
+
+
+def test_is_terminal_handles_1_0_and_legacy_states():
+    from tools.peer_tools import _is_terminal
+    assert _is_terminal("TASK_STATE_COMPLETED")
+    assert _is_terminal("TASK_STATE_FAILED")
+    assert _is_terminal("completed")            # v0.3 lowercase
+    assert not _is_terminal("TASK_STATE_WORKING")
+    assert not _is_terminal(None)

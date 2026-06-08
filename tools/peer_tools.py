@@ -51,21 +51,30 @@ def list_env_peers() -> list[dict]:
 
 
 def _extract_text(result) -> str | None:
-    """Pull text content out of an A2A Task/message result dict."""
+    """Pull text out of an A2A 1.0 result — a ``{"task": ...}`` envelope (the
+    ``SendMessage`` / ``GetTask`` response) or a bare Message. Tolerant of parts
+    with or without an explicit ``kind`` tag (1.0 text parts carry just ``text``)."""
     if not isinstance(result, dict):
         return None
-    for art in result.get("artifacts") or []:
-        chunks = [p.get("text", "") for p in art.get("parts", []) if p.get("kind") == "text"]
+    task = result.get("task", result) or {}
+    for art in task.get("artifacts") or []:
+        chunks = [p.get("text", "") for p in art.get("parts", []) if p.get("text")]
         if any(chunks):
             return "\n".join(c for c in chunks if c)
-    status = result.get("status") or {}
-    msg = status.get("message") or {}
-    parts = [p.get("text", "") for p in (msg.get("parts") or []) if p.get("kind") == "text"]
+    msg = (task.get("status") or {}).get("message") or {}
+    parts = [p.get("text", "") for p in (msg.get("parts") or []) if p.get("text")]
     text = "\n".join(p for p in parts if p)
     return text or None
 
 
-_TERMINAL = {"completed", "failed", "canceled"}
+_TERMINAL = {"completed", "failed", "canceled"}  # v0.3 spellings (back-compat)
+
+
+def _is_terminal(state) -> bool:
+    """True for A2A 1.0 terminal task states (``TASK_STATE_COMPLETED`` / ``FAILED``
+    / ``CANCELLED`` / ``REJECTED``) and their v0.3 lowercase spellings."""
+    return str(state or "").upper().endswith(
+        ("COMPLETED", "FAILED", "CANCELED", "CANCELLED", "REJECTED"))
 
 
 def get_peer_tools() -> list:
@@ -131,8 +140,8 @@ def get_peer_tools() -> list:
             return data.get("result") or {}
 
         msg: dict = {
-            "role": "user",
-            "parts": [{"kind": "text", "text": message}],
+            "role": "ROLE_USER",
+            "parts": [{"text": message}],
             "messageId": str(uuid.uuid4()),
         }
         params: dict = {"message": msg}
@@ -144,25 +153,28 @@ def get_peer_tools() -> list:
             params["metadata"] = hint
 
         try:
-            # A delegated skill answers synchronously on message/send and can run
+            # A delegated skill answers synchronously on SendMessage and can run
             # for a minute+ (e.g. Quinn's bug_triage ≈ 58s) — the peer holds the
             # connection until done rather than returning a task to poll. Give the
             # request room; the polling loop below covers peers that DO go async.
             async with httpx.AsyncClient(timeout=httpx.Timeout(200.0, connect=10.0)) as client:
-                result = await _rpc(client, "message/send", params)
+                result = await _rpc(client, "SendMessage", params)
                 # Inline reply? (some peers answer synchronously)
                 text = _extract_text(result)
                 if text:
                     return f"[{name}] {text}"
-                # Otherwise poll the task to a terminal state.
-                task_id = result.get("id")
-                state = (result.get("status") or {}).get("state")
+                # Otherwise poll the task to a terminal state (A2A 1.0: GetTask,
+                # task in a `result.task` envelope, TASK_STATE_* enums).
+                task = result.get("task", result) or {}
+                task_id = task.get("id")
+                state = (task.get("status") or {}).get("state")
                 polls = 0
-                while task_id and state not in _TERMINAL and polls < _MAX_POLLS:
+                while task_id and not _is_terminal(state) and polls < _MAX_POLLS:
                     await asyncio.sleep(_POLL_INTERVAL_S)
                     polls += 1
-                    result = await _rpc(client, "tasks/get", {"id": task_id})
-                    state = (result.get("status") or {}).get("state")
+                    result = await _rpc(client, "GetTask", {"name": task_id})
+                    task = result.get("task", result) or {}
+                    state = (task.get("status") or {}).get("state")
                 text = _extract_text(result)
                 if text:
                     return f"[{name}] {text}"
