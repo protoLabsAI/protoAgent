@@ -430,6 +430,7 @@ async def _chat_langgraph_stream(
     import tracing
 
     from graph.goals.goal_turn import goal_turn
+    from graph.middleware.request_context import request_metadata_scope
 
     trace_meta: dict = {"message_preview": message[:100]}
     if caller_trace:
@@ -446,7 +447,7 @@ async def _chat_langgraph_stream(
         session_id=session_id,
         name="a2a-stream",
         metadata=trace_meta,
-    ):
+    ), request_metadata_scope(request_metadata):
         try:
             # Goal control messages (/goal ...) short-circuit the turn: set /
             # status / clear a goal and return the reply without running the graph.

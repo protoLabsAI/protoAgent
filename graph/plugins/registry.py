@@ -52,6 +52,7 @@ class PluginRegistry:
         self.routers: list[dict] = []     # {"router", "prefix"}
         self.surfaces: list[dict] = []    # {"name", "start", "stop"}
         self.subagents: list = []         # SubagentConfig instances
+        self.middleware: list = []        # factories: (config) -> AgentMiddleware|None (ADR 0032)
         self.mcp_servers: list = []       # factories: config -> entry dict | None
         self.thread_id_resolver = None    # (request_metadata, session_id) -> str (#571)
         self.goal_verifiers: dict = {}    # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
@@ -232,3 +233,22 @@ class PluginRegistry:
                         self.plugin_id, config)
             return
         self.subagents.append(config)
+
+    def register_middleware(self, factory) -> None:
+        """Add a plugin-contributed LangGraph ``AgentMiddleware`` (ADR 0032).
+
+        ``factory`` is ``(config) -> AgentMiddleware | None`` — it receives the live
+        ``LangGraphConfig`` and returns a middleware instance (or None to opt out).
+        Plugin middleware is appended to the chain just before the internal
+        message-capture middleware (so before/after-model + tool hooks run, and the
+        turn is still captured). For per-request data, read
+        ``graph.middleware.request_context.current_request_metadata()``.
+
+        This is the last core extension point that previously forced a fork to edit
+        ``graph/agent.py`` / ``a2a_executor.py``.
+        """
+        if not callable(factory):
+            log.warning("[plugins] %s: register_middleware needs a callable factory, got %r",
+                        self.plugin_id, factory)
+            return
+        self.middleware.append(factory)
