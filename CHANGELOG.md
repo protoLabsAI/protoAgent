@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Goals no longer leak between agents** — the goal store wasn't instance-scoped, so two
+  agents on one machine shared `/sandbox/goals` and collided on shared session ids (e.g. the
+  `system:activity` thread used by scheduled turns). Now namespaced by `PROTOAGENT_INSTANCE`
+  (ADR 0004), matching the memory/knowledge/scheduler stores.
+
 ### Changed
 - **Console IA: "Agent" section + editable identity; Knowledge simplified; Settings→Overview**
   — renamed Runtime→**Agent** with tabs **Identity** (edit name + SOUL.md inline, save = hot

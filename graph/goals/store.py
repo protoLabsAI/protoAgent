@@ -21,13 +21,20 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_base() -> Path:
+    # Per-instance scoping (ADR 0004): namespace by PROTOAGENT_INSTANCE so two
+    # agents on one machine don't share a goals dir — without this, scheduled /
+    # activity turns (shared session id "system:activity") collide and goals leak
+    # across agents. No-op when PROTOAGENT_INSTANCE is unset (single instance).
+    from paths import scope_leaf
+
     candidates = []
     env = os.environ.get("GOAL_PATH", "").strip()
     if env:
         candidates.append(Path(env))
     candidates.append(Path("/sandbox/goals"))
     candidates.append(Path.home() / ".protoagent" / "goals")
-    for path in candidates:
+    for raw in candidates:
+        path = scope_leaf(raw)
         try:
             path.mkdir(parents=True, exist_ok=True)
             # confirm writable
@@ -38,7 +45,7 @@ def _resolve_base() -> Path:
         except OSError:
             continue
     # Last resort: a temp dir (keeps the server alive even if nothing is writable).
-    fallback = Path(tempfile.gettempdir()) / "protoagent_goals"
+    fallback = scope_leaf(Path(tempfile.gettempdir()) / "protoagent_goals")
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
