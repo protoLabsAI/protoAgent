@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-06-08
+
 ### Added
 - **Plugin right-rail panels** (ADR 0026) — a plugin console view can set `placement: "right"`
   to render as a right-sidebar panel (alongside Notes/Beads/Goals/Schedule) instead of a
