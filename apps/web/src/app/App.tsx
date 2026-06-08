@@ -57,8 +57,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import type { ComponentType, CSSProperties, LazyExoticComponent, ReactNode } from "react";
 import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
@@ -98,8 +98,11 @@ import { runtimeStatusQuery } from "../lib/queries";
 // autocomplete while allowing those runtime keys.
 type Surface = "chat" | "activity" | "studio" | "knowledge" | "runtime" | "plugins" | "settings" | (string & {});
 
-// Lucide icon names a plugin view may use for its rail glyph (ADR 0026, PR1 set;
-// PR2 widens the allowlist). Unknown/missing → a generic plugin glyph.
+// A plugin view names its rail glyph by lucide icon name. The curated set below
+// is the common-case fast path (already bundled); anything else falls back to the
+// full lucide set by name, so a plugin author can use ANY lucide icon — PascalCase
+// (`LineChart`) or kebab-case (`line-chart`) — without us extending an allowlist.
+// Unknown/missing → a generic plugin glyph.
 const PLUGIN_VIEW_ICONS: Record<string, LucideIcon> = {
   // general
   Sparkles, LayoutDashboard, Puzzle, Boxes, Gauge, Target, Activity, Settings2,
@@ -118,9 +121,39 @@ const PLUGIN_VIEW_ICONS: Record<string, LucideIcon> = {
   // security
   Shield,
 };
+// "line-chart" / "line_chart" / "LineChart" → "LineChart" (lucide's key style).
+function toPascalCase(name: string): string {
+  return name.replace(/(^|[-_ ])([a-z0-9])/g, (_m, _sep, ch: string) => ch.toUpperCase());
+}
+
+// Off the curated path, resolve ANY lucide icon by name — but lazily: the dynamic
+// import pulls the full lucide set into a separate chunk that only loads when a
+// plugin actually uses a non-curated glyph, so the main bundle stays lean.
+type IconComp = LazyExoticComponent<ComponentType<{ size?: number }>>;
+// NB: `Map` is shadowed by the lucide Map icon import — use the global explicitly.
+const lazyIconCache = new globalThis.Map<string, IconComp>();
+function lazyLucideIcon(key: string): IconComp {
+  let comp = lazyIconCache.get(key);
+  if (!comp) {
+    comp = lazy(async () => {
+      const m = await import("lucide-react");
+      const Icon = (m.icons as Record<string, LucideIcon>)[key] || m.Puzzle;
+      return { default: Icon as ComponentType<{ size?: number }> };
+    });
+    lazyIconCache.set(key, comp);
+  }
+  return comp;
+}
 function pluginViewIcon(name?: string): ReactNode {
-  const Icon = (name && PLUGIN_VIEW_ICONS[name]) || Puzzle;
-  return <Icon size={18} />;
+  if (!name) return <Puzzle size={18} />;
+  const Curated = PLUGIN_VIEW_ICONS[name];
+  if (Curated) return <Curated size={18} />;
+  const Lazy = lazyLucideIcon(toPascalCase(name));
+  return (
+    <Suspense fallback={<Puzzle size={18} />}>
+      <Lazy size={18} />
+    </Suspense>
+  );
 }
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
