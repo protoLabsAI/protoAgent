@@ -844,32 +844,6 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          <div className="segmented">
-            <button type="button" className={rightPanel === "notes" ? "active" : ""} onClick={() => setRightPanel("notes")}>
-              <FileText size={15} />
-              Notes
-            </button>
-            <button type="button" className={rightPanel === "beads" ? "active" : ""} onClick={() => setRightPanel("beads")}>
-              <Boxes size={15} />
-              Beads
-            </button>
-            <button type="button" className={rightPanel === "goals" ? "active" : ""} onClick={() => setRightPanel("goals")}>
-              <Target size={15} />
-              Goals
-            </button>
-            <button type="button" className={rightPanel === "schedule" ? "active" : ""} onClick={() => setRightPanel("schedule")}>
-              <CalendarClock size={15} />
-              Schedule
-            </button>
-            {/* Plugin-contributed right-rail panels (ADR 0026) — placement: "right". */}
-            {pluginRightPanels.map((v) => (
-              <button key={v.key} type="button" className={rightPanel === v.key ? "active" : ""} onClick={() => setRightPanel(v.key)}>
-                {pluginViewIcon(v.icon)}
-                {v.label}
-              </button>
-            ))}
-          </div>
-
           {activeRightPluginPanel ? (
             <PluginView key={activeRightPluginPanel.key} view={activeRightPluginPanel} />
           ) : null}
@@ -950,6 +924,35 @@ export function App() {
 
           {rightPanel === "goals" ? <GoalsPanel /> : null}
           {rightPanel === "schedule" ? <SchedulePanel /> : null}
+        </aside>
+
+        {/* Right rail (ADR 0035 D1) — mirrors the left rail on the far edge; its surfaces
+            (Notes/Beads/Goals/Schedule + plugin right-views) replace the old segmented strip.
+            Picking one ensures the right surface is expanded. */}
+        <aside className="rail rail-right" aria-label="Context surfaces">
+          {([
+            ["notes", "Notes", <FileText size={18} />],
+            ["beads", "Beads", <Boxes size={18} />],
+            ["goals", "Goals", <Target size={18} />],
+            ["schedule", "Schedule", <CalendarClock size={18} />],
+          ] as const).map(([key, label, icon]) => (
+            <RailButton
+              key={key}
+              active={rightPanel === key && !rightCollapsed}
+              label={label}
+              icon={icon}
+              onClick={() => { setRightPanel(key); setRightCollapsed(false); }}
+            />
+          ))}
+          {pluginRightPanels.map((v) => (
+            <RailButton
+              key={v.key}
+              active={rightPanel === v.key && !rightCollapsed}
+              label={v.label}
+              icon={pluginViewIcon(v.icon)}
+              onClick={() => { setRightPanel(v.key); setRightCollapsed(false); }}
+            />
+          ))}
         </aside>
       </div>
 

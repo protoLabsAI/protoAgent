@@ -80,10 +80,10 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
 
   // Move off the defaults: a left surface (Agent) + a right-panel tab (Beads).
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".segmented").getByRole("button", { name: "Beads", exact: true }).click();
+  await page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true }).click();
 
   // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
   await page.reload({ waitUntil: "load" });
   await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".segmented").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });

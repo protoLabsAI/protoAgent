@@ -63,7 +63,7 @@ test("a plugin view with placement:right becomes a right-sidebar panel", async (
   await page.goto("/app/", { waitUntil: "load" });
 
   // The right-placed view is a right-rail tab (not a left-rail surface icon).
-  const tab = page.locator(".segmented").getByRole("button", { name: "Scratch", exact: true });
+  const tab = page.locator(".rail-right").getByRole("button", { name: "Scratch", exact: true });
   await expect(tab).toBeVisible();
   await tab.click();
 
@@ -77,7 +77,7 @@ test("a ui:react view mounts a federated React remote (ADR 0034), not an iframe"
   await page.goto("/app/", { waitUntil: "load" });
 
   // Right-panel tab for the React view.
-  await page.locator(".segmented").getByRole("button", { name: "React Panel", exact: true }).click();
+  await page.locator(".rail-right").getByRole("button", { name: "React Panel", exact: true }).click();
 
   // The federated remote mounts into the host React tree — its content renders directly
   // (no iframe). If React were dual-loaded, the remote's hook would throw on render.
