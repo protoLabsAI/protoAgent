@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Design-system foundation (ADR 0037 slice 1)** — the console adopts **Tailwind + the
+  `@protolabsai/design` preset/tokens + shadcn/Radix**. Tailwind runs with preflight off so it
+  coexists with the legacy `theme.css` (incremental migration); a shadcn→token bridge maps the
+  component theme onto the `--pl-*` brand tokens (one dark-first theme); ships the `cn` util + a
+  pilot `Button` (first owned-source component, swapped into Settings). The base the context menu
+  + future components build on.
 - **Swap surfaces between rails (ADR 0035 slice 3)** — one `renderSurface(id)` now mounts any
   surface in either rail, and a hover affordance on a rail icon moves it to the other side
   (persisted). A surface lives on exactly one side. Chat stays pinned left (it mounts

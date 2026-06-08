@@ -12,13 +12,18 @@
     "build:remotes": "vite build -c remotes/hello-react/vite.config.ts"
   },
   "dependencies": {
+    "@protolabsai/design": "^0.3.0",
     "@tanstack/react-query": "^5.100.14",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.0",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss-animate": "^1.0.7",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -27,6 +32,9 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
     "typescript": "^5.6.3",
     "vite": "^5.4.21"
   }

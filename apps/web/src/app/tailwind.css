@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn color convention → @protolabsai/design tokens (ADR 0037 D3). The console is dark-first,
+   so :root carries the dark values; shadcn components + new Tailwind markup + legacy theme.css all
+   resolve to the same brand tokens. Theme changes happen in @protolabsai/design, once. */
+:root {
+  --background: var(--pl-color-bg);
+  --foreground: var(--pl-color-fg);
+  --card: var(--pl-color-bg-raised);
+  --card-foreground: var(--pl-color-fg);
+  --popover: var(--pl-color-bg-raised);
+  --popover-foreground: var(--pl-color-fg);
+  --primary: var(--pl-color-brand-lavender);
+  --primary-foreground: var(--pl-color-bg);
+  --secondary: var(--pl-color-bg-raised);
+  --secondary-foreground: var(--pl-color-fg);
+  --muted: var(--pl-color-bg-raised);
+  --muted-foreground: var(--pl-color-fg-muted);
+  --accent: var(--pl-color-brand-lavender-light);
+  --accent-foreground: var(--pl-color-bg);
+  --destructive: var(--pl-color-status-error);
+  --destructive-foreground: var(--pl-color-fg);
+  --border: var(--pl-color-border);
+  --input: var(--pl-color-border);
+  --ring: var(--pl-color-brand-lavender);
+  --radius: 8px;
+}
