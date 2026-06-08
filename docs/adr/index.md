@@ -32,7 +32,7 @@ decision, numbered, never deleted (supersede instead).
 | [0021](./0021-agent-memory-architecture.md) | Agent memory: extract, don't dump | Accepted |
 | [0022](./0022-activity-provenance-feed.md) | Activity is a provenance feed, not a second chat | Accepted |
 | [0023](./0023-server-decomposition.md) | Decompose server.py: AppState + composition root | Accepted |
-| [0024](./0024-spawn-cli-coding-agents-acp.md) | Spawn CLI coding agents over ACP (`code_with`) | Accepted (PR1 + PR3) |
+| [0024](./0024-spawn-cli-coding-agents-acp.md) | Spawn CLI coding agents over ACP (`code_with`) | Superseded by [0025](./0025-unified-delegate-registry-and-panel.md) (`code_with` removed; ACP lives on as an `acp` delegate) |
 | [0025](./0025-unified-delegate-registry-and-panel.md) | Unified delegate registry + hot-swappable panel (`delegate_to`) | Accepted (complete; PR1–PR4) |
 | [0026](./0026-plugin-contributed-console-surfaces.md) | Plugin-contributed console surfaces (rail views + tabs) | Accepted (complete; PR1–PR3) |
 | [0027](./0027-install-plugins-from-git-url.md) | Install plugins from a git URL (shareable plugin repos) | Accepted (sliced) |

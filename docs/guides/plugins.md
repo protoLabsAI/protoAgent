@@ -10,9 +10,9 @@ default** and you opt in explicitly — only enable plugins you trust.
 > The first-party **Discord**, **Google**, and **GitHub** integrations ship as
 > plugins (`plugins/discord/`, `plugins/google/`, `plugins/github/`) — Discord/Google
 > are on by default (disable with `plugins: { disabled: [discord] }`); GitHub is
-> opt-in (`plugins: { enabled: [github] }`). The opt-in
-> **coding_agent** plugin (`plugins/coding_agent/`) adds `code_with` to spawn a
-> CLI coding agent over ACP — see [Spawn CLI coding agents](/guides/coding-agents).
+> opt-in (`plugins: { enabled: [github] }`). To drive a **CLI coding agent over
+> ACP**, enable the **delegates** plugin and declare an `acp` delegate — see
+> [CLI coding agents over ACP](/guides/coding-agents).
 
 > **Trust model.** This is the in-process / trusted model (matching Hermes): an
 > enabled plugin's `register()` runs as the agent. Don't enable code you
