@@ -110,6 +110,7 @@ The bundled scheduler is enabled by default. See [Schedule future work](/guides/
 | `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
 | `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
+| `SCHEDULER_FIRE_TIMEOUT_S` | `600` | Local backend: how long a fire waits for the turn (`message/send` blocks until the turn is terminal). Must exceed a real turn — too low false-fails long turns. Fires run off the poll loop, so this doesn't stall the cadence. |
 | `SCHEDULER_DISABLED` | (unset) | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |
 
 > **protoLabs operators**: the fleet's Workstacean lives on the `ava` node. `WORKSTACEAN_API_KEY` is in the org's secrets manager under `secret-management → workstacean`.

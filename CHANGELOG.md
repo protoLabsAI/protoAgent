@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Scheduler: fix duplicate/runaway scheduled fires** — `message/send` blocks until the
+  turn is terminal, so the old 30s fire timeout false-failed any longer turn and re-fired it
+  every tick (~30s) — duplicate scheduled turns + Activity spam. Fires now run off the poll
+  loop with an in-flight guard (a slow turn fires once, never re-claimed mid-turn), cron rolls
+  forward at claim time, and the timeout is generous + configurable (`SCHEDULER_FIRE_TIMEOUT_S`,
+  default 600s).
+
 ### Changed
 - **Plugin view icons: any lucide icon, no allowlist** — a plugin view can name any
   [lucide](https://lucide.dev) icon (PascalCase or kebab-case). A curated common set renders
