@@ -33,4 +33,5 @@ def test_github_plugin_registers_the_read_tools():
     names = {t.name for t in reg.tools}
     assert names == {
         "github_get_pr", "github_get_issue", "github_list_issues", "github_get_commit_diff",
+        "github_ci_runs", "github_run_failure",
     }
