@@ -20,6 +20,7 @@ protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0
 # (--ui none/console) drop Gradio (requirements-ui.txt), so the lean image had
 # no FastAPI and couldn't serve. Declared here as the core runtime dep it is.
 fastapi>=0.115
+python-multipart>=0.0.9   # FastAPI form/multipart parsing (fs/image routes + A2A parts)
 uvicorn>=0.30
 langfuse>=3.0
 prometheus-client>=0.20
