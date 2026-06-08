@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Chat tabs open to the right** — a new chat tab is appended (right) instead of prepended.
+- **Favicon renders in the browser tab** — the console favicon link was missing
+  `type="image/svg+xml"` and used a base-relative href that 404'd at `/app` (no trailing
+  slash); now an absolute `%BASE_URL%` path + the type, with the type added to the docs link
+  too. Art unchanged (the protoLabs outline mark).
 - **Goals no longer leak between agents** — the goal store wasn't instance-scoped, so two
   agents on one machine shared `/sandbox/goals` and collided on shared session ids (e.g. the
   `system:activity` thread used by scheduled turns). Now namespaced by `PROTOAGENT_INSTANCE`

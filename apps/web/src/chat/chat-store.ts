@@ -126,7 +126,8 @@ export const chatStore = {
   createSession() {
     const session = createSession();
     setState((current) => {
-      const sessions = [session, ...current.sessions].slice(0, MAX_SESSIONS);
+      // New tabs append to the RIGHT; cap at MAX_SESSIONS by dropping the oldest (left).
+      const sessions = [...current.sessions, session].slice(-MAX_SESSIONS);
       return {
         ...current,
         sessions,

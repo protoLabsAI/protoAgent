@@ -23,7 +23,7 @@ export default defineConfig({
   srcExclude: ["dev/**"],
 
   head: [
-    ["link", { rel: "icon", href: `${base}favicon.svg` }],
+    ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
     // Social cards — canonical absolute image (the dark protoAgent banner) so it
     // resolves regardless of which base the build serves under.
     ["meta", { property: "og:type", content: "website" }],
