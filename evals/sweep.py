@@ -19,7 +19,7 @@ Usage::
 
     python -m evals.sweep --models protolabs/reasoning,protolabs/smart
     python -m evals.sweep --models a,b,c --category tool
-    python -m evals.sweep --models a,b --tasks current_time,daily_log --keep
+    python -m evals.sweep --models a,b --tasks current_time,memory_ingest --keep
     python -m evals.sweep --models a,b,c --category tool --repeat 3   # best-of-3
 
 ``--repeat N`` runs the suite N times per model (against the same booted agent)

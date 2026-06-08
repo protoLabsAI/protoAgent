@@ -19,7 +19,6 @@ Plus memory tools that bind to a ``KnowledgeStore`` (constructed in
 - ``memory_recall`` — search the store for relevant chunks
 - ``memory_list``   — list recent chunks (optionally per domain)
 - ``memory_stats``  — per-domain counts
-- ``daily_log``     — convenience: write a daily-log chunk
 
 Replace or extend this file with your agent's real tools and update
 ``get_all_tools()`` to return the full list.
@@ -377,7 +376,7 @@ SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
     "schedule_task", "list_schedules", "cancel_schedule",
 )
 MEMORY_TOOL_NAMES: tuple[str, ...] = (
-    "memory_ingest", "memory_recall", "memory_list", "memory_stats", "daily_log",
+    "memory_ingest", "memory_recall", "memory_list", "memory_stats",
 )
 INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox",)
 
@@ -419,7 +418,6 @@ def _build_inbox_tools(inbox_store) -> list:
 
 def _build_memory_tools(knowledge_store) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list."""
-    from datetime import datetime, timezone
 
     @tool
     async def memory_ingest(
@@ -500,23 +498,7 @@ def _build_memory_tools(knowledge_store) -> list:
             lines.append(f"  {k}: {v}")
         return "\n".join(lines)
 
-    @tool
-    async def daily_log(content: str) -> str:
-        """Append a daily-log entry for today.
-
-        Stored under ``domain='daily-log'`` with today's UTC date as
-        the heading, so the same day's entries cluster together for
-        ``memory_list(domain='daily-log')`` queries.
-        """
-        today = datetime.now(timezone.utc).date().isoformat()
-        chunk_id = knowledge_store.add_chunk(
-            content, domain="daily-log", heading=today,
-        )
-        if chunk_id is None:
-            return "Error: failed to write daily log entry."
-        return f"Logged ({today}): {content[:120]}"
-
-    return [memory_ingest, memory_recall, memory_list, memory_stats, daily_log]
+    return [memory_ingest, memory_recall, memory_list, memory_stats]
 
 
 # ── scheduler tools ──────────────────────────────────────────────────────────
@@ -745,7 +727,7 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     Optional dependencies:
 
     - ``knowledge_store`` enables the memory tools (memory_ingest,
-      memory_recall, memory_list, memory_stats, daily_log).
+      memory_recall, memory_list, memory_stats).
     - ``scheduler`` enables the scheduler tools (schedule_task,
       list_schedules, cancel_schedule). Accepts any backend that
       implements ``scheduler.interface.SchedulerBackend``.

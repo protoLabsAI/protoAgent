@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **`daily_log` tool removed from core** — it was roxy-specific (roxy ships it as a plugin
+  now). Logging an event is `memory_ingest` with a domain; eval cases repointed accordingly.
+
 ### Changed
 - **Tools tab grouped by subsystem** — the Agent → Tools inventory is sectioned
   (General · GitHub · Notes · Memory · Scheduler · Inbox · Beads · Goals · Delegation ·

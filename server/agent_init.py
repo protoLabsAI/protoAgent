@@ -119,7 +119,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     from tools.lg_tools import get_all_tools
 
     # Construct the default KnowledgeStore so memory tools (memory_ingest,
-    # memory_recall, daily_log) and KnowledgeMiddleware have something to
+    # memory_recall, memory_list, memory_stats) and KnowledgeMiddleware have something to
     # bind to. Forks that don't want a store can set
     # ``middleware.knowledge: false`` and remove the memory tools from
     # the worker subagent — the store is still cheap to construct.
