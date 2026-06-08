@@ -430,20 +430,36 @@ h2 {
 }
 
 /* Drag handle on the boundary between the stage and the right panel. */
+/* A real grab target (ADR 0035 S3): a 14px hit area centered on the divider, with a
+   thin always-visible grip line that thickens on hover/focus/active. */
 .resize-handle {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 7px;
-  margin-left: -4px;
+  width: 14px;
+  margin-left: -7px;
   cursor: col-resize;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-
-.resize-handle:hover,
-.resize-handle:active {
-  background: color-mix(in srgb, var(--accent, #7c8cff) 45%, transparent);
+.resize-handle::before {
+  content: "";
+  width: 2px;
+  height: 100%;
+  background: var(--border);
+  transition: background 120ms ease, width 120ms ease;
+}
+.resize-handle:hover::before,
+.resize-handle:focus-visible::before,
+.resize-handle:active::before {
+  width: 4px;
+  background: color-mix(in srgb, var(--accent, #7c8cff) 60%, transparent);
+}
+.resize-handle:focus-visible {
+  outline: none;
 }
 
 /* Dim a collapse toggle when its panel is hidden. */

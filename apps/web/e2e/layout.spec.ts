@@ -38,3 +38,21 @@ test("right panel resizes by dragging its handle and the width persists", async 
   const reloaded = (await page.locator(".right-panel").boundingBox())!.width;
   expect(Math.abs(reloaded - after)).toBeLessThan(8);
 });
+
+test("right panel is keyboard-resizable + double-click resets (ADR 0035 S3)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const right = page.locator(".right-panel");
+  const handle = page.getByTestId("right-resize");
+  const before = (await right.boundingBox())!.width;
+
+  // ArrowLeft widens the panel (handle is on its left edge).
+  await handle.focus();
+  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowLeft");
+  const wider = (await right.boundingBox())!.width;
+  expect(wider).toBeGreaterThan(before);
+
+  // Double-click resets toward the default width.
+  await handle.dblclick();
+  const reset = (await right.boundingBox())!.width;
+  expect(reset).toBeLessThan(wider);
+});
