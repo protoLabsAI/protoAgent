@@ -24,8 +24,8 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await expect(page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true })).toHaveCount(0);
 });
 
-test("schedule moved to Activity → Schedule lists scheduled jobs", async ({ page }) => {
-  await openSub(page, "Activity", "Schedule");
+test("schedule is a right-rail panel that lists scheduled jobs", async ({ page }) => {
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });

@@ -123,13 +123,13 @@ function pluginViewIcon(name?: string): ReactNode {
 type SystemTab = "runtime" | "telemetry";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
-type ActivityTab = "thread" | "inbox" | "schedule";
+type ActivityTab = "thread" | "inbox";
 // Knowledge = what the agent knows (ADR 0020): the searchable knowledge Store
 // (factual memory) + Playbooks (procedural memory). Store leads.
 type KnowledgeTab = "store" | "playbooks";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
-type RightPanel = "notes" | "beads" | "goals";
+type RightPanel = "notes" | "beads" | "goals" | "schedule";
 
 function createNoteTab() {
   const now = Date.now();
@@ -682,7 +682,6 @@ export function App() {
                     <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>
                   ) : null,
                 },
-                { id: "schedule", label: "Schedule", icon: CalendarClock },
               ]}
             />
           ) : null}
@@ -718,7 +717,6 @@ export function App() {
           {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
 
-          {surface === "activity" && activityTab === "schedule" ? <SchedulePanel /> : null}
 
           {surface === "system" && systemTab === "runtime" ? <RuntimePanel /> : null}
 
@@ -759,6 +757,10 @@ export function App() {
             <button type="button" className={rightPanel === "goals" ? "active" : ""} onClick={() => setRightPanel("goals")}>
               <Target size={15} />
               Goals
+            </button>
+            <button type="button" className={rightPanel === "schedule" ? "active" : ""} onClick={() => setRightPanel("schedule")}>
+              <CalendarClock size={15} />
+              Schedule
             </button>
           </div>
 
@@ -837,6 +839,7 @@ export function App() {
           {rightPanel === "beads" ? <BeadsPanel confirm={setConfirmState} /> : null}
 
           {rightPanel === "goals" ? <GoalsPanel /> : null}
+          {rightPanel === "schedule" ? <SchedulePanel /> : null}
         </aside>
       </div>
 
