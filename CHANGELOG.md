@@ -17,10 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub topic) → **Install from a git URL**.
 
 ### Fixed
-- **Marketing changelog stays in sync** — `sites/marketing/data/changelog.json` is now
-  derived from CHANGELOG.md (`scripts/changelog.py json`, run in prepare-release) instead of
-  hand-maintained. It had silently gone stale at v0.21 (0.22–0.24 missing); backfilled through
-  v0.25 with a test that fails if it drifts again.
+- **Marketing changelog: clean entries + no staleness** — the marketing changelog had gone
+  stale at v0.21 (0.22–0.24 missing). It's now backfilled through v0.25 with **curated,
+  user-facing** entries (kept separate from CHANGELOG.md's detailed dev notes). On release,
+  `scripts/changelog.py scaffold` drafts a *concise* entry (bullet titles) for a human to
+  polish — never the verbose dev bullets — and a CI guard fails if a released version is
+  missing from the marketing changelog.
 
 ## [0.25.0] - 2026-06-08
 

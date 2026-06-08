@@ -72,8 +72,8 @@ jobs:
       - name: Roll changelog
         run: python scripts/changelog.py roll "${{ steps.version.outputs.version }}"
 
-      - name: Regenerate marketing changelog.json (derived from CHANGELOG.md)
-        run: python scripts/changelog.py json
+      - name: Scaffold a draft marketing changelog entry (curated content preserved)
+        run: python scripts/changelog.py scaffold "${{ steps.version.outputs.version }}"
 
       - name: Preview (dry run)
         if: inputs.dry_run == true
