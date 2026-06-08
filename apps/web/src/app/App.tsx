@@ -17,6 +17,8 @@ import {
   PanelRight,
   Plus,
   Puzzle,
+  Download,
+  Store,
   Save,
   Settings2,
   Sparkles,
@@ -162,6 +164,8 @@ function pluginViewIcon(name?: string): ReactNode {
 // servers, subagents, skills, and middleware. (Runtime status + telemetry moved
 // to Settings → Overview.)
 type AgentTab = "identity" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
+// Plugins = installed (local), discover (market), and install-from-git (download).
+type PluginsTab = "local" | "market" | "download";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox";
@@ -212,6 +216,7 @@ export function App() {
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
   const [agentTab, setAgentTab] = useState<AgentTab>("identity");
+  const [pluginsTab, setPluginsTab] = useState<PluginsTab>("local");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   // Collapsible/resizable right panel (persisted). Flag is "1"/"" string; width
@@ -748,6 +753,18 @@ export function App() {
             />
           ) : null}
 
+          {surface === "plugins" ? (
+            <StageSubnav
+              active={pluginsTab}
+              onSelect={(id) => setPluginsTab(id as PluginsTab)}
+              tabs={[
+                { id: "local", label: "Local", icon: Boxes },
+                { id: "market", label: "Market", icon: Store },
+                { id: "download", label: "Download", icon: Download },
+              ]}
+            />
+          ) : null}
+
           {/* ChatSurface is rendered UNCONDITIONALLY and hidden via `active` when
               off-tab — so an in-flight turn keeps streaming in the background and
               the chat is progressing when you navigate back (not torn down). */}
@@ -765,7 +782,7 @@ export function App() {
           {surface === "agent" && agentTab === "subagents" ? <SubagentsPanel /> : null}
           {surface === "agent" && agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "agent" && agentTab === "middleware" ? <MiddlewarePanel /> : null}
-          {surface === "plugins" ? <PluginsSurface /> : null}
+          {surface === "plugins" ? <PluginsSurface tab={pluginsTab} /> : null}
           {surface === "knowledge" ? <KnowledgeStore onError={setError} /> : null}
           {surface === "settings" ? <SettingsSurface /> : null}
 

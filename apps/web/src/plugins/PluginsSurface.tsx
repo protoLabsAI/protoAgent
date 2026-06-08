@@ -56,7 +56,10 @@ function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: 
   );
 }
 
-function PluginsBody() {
+type PluginsTab = "local" | "market" | "download";
+
+// Local — installed plugins, grouped Loaded → Disabled (alpha), with enable/disable.
+function LocalTab() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
@@ -77,19 +80,14 @@ function PluginsBody() {
 
   const plugins = runtime.plugins ?? [];
   const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
-  // Installed, grouped by status: loaded first, then disabled — alpha within each.
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
   const disabled = plugins.filter((p) => !p.loaded).sort(byName);
 
   return (
     <>
-      <PanelHeader
-        title="Plugins"
-        kicker={`${plugins.length} installed · ${loaded.length} loaded`}
-      />
+      <PanelHeader title="Installed" kicker={`${plugins.length} installed · ${loaded.length} loaded`} />
       <div className="stage-body">
         {hint ? <p className="plugin-hint">{hint}</p> : null}
-        {/* 1 — Installed (loaded → disabled, alphabetical) */}
         {plugins.length ? (
           <>
             {loaded.length ? (
@@ -108,14 +106,22 @@ function PluginsBody() {
         ) : (
           <div className="table-list">
             <div className="table-row">
-              <span>no plugins installed — browse the marketplace or install from a git URL below</span>
+              <span>no plugins installed — see the Market or Download tabs</span>
               <StatusPill label="none" tone="muted" />
             </div>
           </div>
         )}
+      </div>
+    </>
+  );
+}
 
-        {/* 2 — Marketplace (discover) */}
-        <p className="panel-kicker">Marketplace</p>
+// Market — discover plugins (directory + GitHub topic).
+function MarketTab() {
+  return (
+    <>
+      <PanelHeader title="Market" kicker="discover plugins" />
+      <div className="stage-body">
         <div className="plugin-market">
           <a className="plugin-market-link" href={DIRECTORY_URL} target="_blank" rel="noopener noreferrer">
             <Store size={16} />
@@ -128,22 +134,41 @@ function PluginsBody() {
             <ExternalLink size={14} />
           </a>
         </div>
+        <p className="muted" style={{ marginTop: 10 }}>
+          Found one? Copy its git URL and install it from the <strong>Download</strong> tab.
+        </p>
+      </div>
+    </>
+  );
+}
 
-        {/* 3 — Install (the PluginsSection ships its own "Install from a git URL" header) */}
+// Download — install from a git URL (PluginsSection ships its own header + form).
+function DownloadTab() {
+  return (
+    <>
+      <PanelHeader title="Download" kicker="install from a git URL" />
+      <div className="stage-body">
         <PluginsSection />
       </div>
     </>
   );
 }
 
-export function PluginsSurface() {
+const TABS: Record<PluginsTab, () => JSX.Element> = {
+  local: LocalTab,
+  market: MarketTab,
+  download: DownloadTab,
+};
+
+export function PluginsSurface({ tab = "local" }: { tab?: PluginsTab }) {
+  const Body = TABS[tab] ?? LocalTab;
   return (
     <section className="panel stage-panel">
       <QueryErrorResetBoundary>
         {({ reset }) => (
           <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="plugins" />}>
             <Suspense fallback={<PanelSkeleton label="Loading plugins…" />}>
-              <PluginsBody />
+              <Body />
             </Suspense>
           </ErrorBoundary>
         )}

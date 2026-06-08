@@ -56,19 +56,21 @@ test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) 
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
-test("plugins section: Loaded/Disabled groups, marketplace, and install", async ({ page }) => {
+test("plugins section: Local / Market / Download tabs", async ({ page }) => {
   await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Plugins" })).toBeVisible();
-  // Installed shows both a loaded and a disabled plugin (the two status groups).
+
+  // Local (default tab) — both status groups + the enable toggle.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
   await expect(page.getByText("Zzz Disabled", { exact: false })).toBeVisible();
-  await expect(page.locator(".panel-kicker", { hasText: "Marketplace" })).toBeVisible();
-  // Marketplace discovery + install-from-git section both present.
-  await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
-
-  // Direct enable: the disabled plugin's row has an Enable button → hot-toggle hint.
   await page.locator(".subagent-row", { hasText: "Zzz Disabled" })
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
+
+  // Market tab — discovery links.
+  await page.locator(".stage-subnav").getByRole("button", { name: "Market", exact: true }).click();
+  await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
+
+  // Download tab — install from a git URL.
+  await page.locator(".stage-subnav").getByRole("button", { name: "Download", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });

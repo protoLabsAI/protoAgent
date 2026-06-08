@@ -23,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   immediately (a console view or background surface needs a restart, and the toggle says so).
 
 ### Changed
-- **Plugins view reorganized** — three sections: **Installed** (grouped Loaded → Disabled,
-  alphabetical within each) → **Marketplace** (browse the directory + the `protoagent-plugin`
-  GitHub topic) → **Install from a git URL**.
+- **Plugins view reorganized into tabs** — **Local** (installed plugins, grouped Loaded →
+  Disabled with enable/disable), **Market** (browse the directory + the `protoagent-plugin`
+  GitHub topic), and **Download** (install from a git URL).
 
 ### Fixed
 - **Marketing changelog: clean entries + no staleness** — the marketing changelog had gone
