@@ -88,3 +88,18 @@ test("a ui:react view mounts a federated React remote (ADR 0034), not an iframe"
   await page.getByRole("button", { name: /clicked 0×/ }).click();
   await expect(page.getByRole("button", { name: /clicked 1×/ })).toBeVisible();
 });
+
+test("a ui:react remote contributes a context-menu item via the SDK (ADR 0034 S2 / 0036)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Open the React view → the remote mounts and registers a menu item through @protoagent/plugin-ui.
+  await page.locator(".rail-right").getByRole("button", { name: "React Panel", exact: true }).click();
+  await expect(page.getByText("Hello from a React plugin remote", { exact: false })).toBeVisible();
+
+  // Right-click a rail surface → the HOST's menu now includes the PLUGIN's item, proving a remote
+  // registers into the host's shared registry across the federation boundary.
+  await page.locator(".rail-right").getByRole("button", { name: "Notes", exact: true }).click({ button: "right" });
+  await expect(
+    page.getByTestId("context-menu").getByText("Hello from the React plugin", { exact: false }),
+  ).toBeVisible();
+});
