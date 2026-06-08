@@ -32,6 +32,21 @@ from typing import Awaitable, Callable
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
+
+
+def _tool_output_preview(update: dict, limit: int = 300) -> str:
+    """Best-effort short text from a tool_call_update's content blocks (for the end card)."""
+    out: list[str] = []
+    for block in (update.get("content") or []):
+        if not isinstance(block, dict):
+            continue
+        inner = block.get("content")
+        if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+            out.append(inner["text"])
+        elif isinstance(block.get("text"), str):
+            out.append(block["text"])
+    return " ".join(o for o in out if o).strip()[:limit]
 
 # ACP protocol version protoAgent speaks. Negotiated in `initialize`.
 PROTOCOL_VERSION = 1
@@ -83,6 +98,7 @@ class AcpClient:
         # Per-turn state (one turn at a time).
         self._answer = ""
         self._progress: ProgressCallback | None = None
+        self._on_tool: ToolCallback | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -191,10 +207,27 @@ class AcpClient:
             if text:
                 self._answer += text
         elif kind == "tool_call":
-            # Narrate the tool's human title ("Editing app.py", "Running pytest")
-            # — this is progress, not the answer text.
+            # A tool call STARTED — narrate its title + emit a structured start event so the
+            # UI can render a card (parity with the native runtime's tool_start).
             title = update.get("title") or update.get("kind") or "working"
             await self._narrate(str(title))
+            await self._emit_tool({
+                "phase": "start",
+                "id": str(update.get("toolCallId") or title),
+                "name": str(title),
+                "input": str(update.get("kind") or ""),
+            })
+        elif kind == "tool_call_update":
+            # Status transition — emit an end event when it finishes (tool_end card).
+            status = str(update.get("status") or "")
+            if status in ("completed", "failed"):
+                await self._emit_tool({
+                    "phase": "end",
+                    "id": str(update.get("toolCallId") or ""),
+                    "name": str(update.get("title") or ""),
+                    "output": _tool_output_preview(update),
+                    "status": status,
+                })
 
     async def _handle_request(self, msg: dict) -> None:
         method = msg.get("method")
@@ -229,6 +262,13 @@ class AcpClient:
                 await self._progress(text)
             except Exception as exc:  # progress is best-effort
                 logger.warning("[acp/%s] progress_callback raised: %s", self.name, exc)
+
+    async def _emit_tool(self, event: dict) -> None:
+        if self._on_tool:
+            try:
+                await self._on_tool(event)
+            except Exception as exc:  # best-effort — tool cards never break a turn
+                logger.warning("[acp/%s] tool_callback raised: %s", self.name, exc)
 
     # -- JSON-RPC primitives -------------------------------------------------
 
@@ -288,16 +328,19 @@ class AcpClient:
         text: str,
         *,
         progress_callback: ProgressCallback | None = None,
+        tool_callback: ToolCallback | None = None,
         timeout: float = 600.0,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
 
-        Streams ``tool_call`` titles to ``progress_callback`` for narration while
-        the agent works. Raises ``AcpError`` on transport/protocol failure.
+        Streams ``tool_call`` titles to ``progress_callback`` (text narration) and
+        structured start/end events to ``tool_callback`` (for UI tool cards) while the
+        agent works. Raises ``AcpError`` on transport/protocol failure.
         """
         await self._ensure_started()
         self._answer = ""
         self._progress = progress_callback
+        self._on_tool = tool_callback
         try:
             result = await self._request(
                 "session/prompt",
@@ -309,6 +352,7 @@ class AcpClient:
             )
         finally:
             self._progress = None
+            self._on_tool = None
         stop = (result or {}).get("stopReason")
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, stop)
         return self._answer.strip()
