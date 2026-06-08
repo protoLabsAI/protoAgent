@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-06-08
+
 ### Added
 - **Marketing: a /features page** — differentiators deep-dive + a comparison table vs
   Hermes & OpenClaw (bare-bones+extensible+A2A-orchestration vs batteries-included),
