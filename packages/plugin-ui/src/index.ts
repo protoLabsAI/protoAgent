@@ -5,6 +5,8 @@
 // host and every remote — that's what makes cross-boundary registerContextMenu work.
 export { registerContextMenu, resolveMenu } from "./registry";
 export { openContextMenu, useContextMenuStore } from "./store";
+export { setHostBridge, getHostBridge } from "./host";
+export type { HostBridge } from "./host";
 export type {
   ContextType,
   MenuItem,
