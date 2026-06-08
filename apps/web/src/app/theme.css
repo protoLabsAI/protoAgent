@@ -347,7 +347,10 @@ h2 {
      from the persisted/resized panel width; 0px when collapsed). Keeping the
      template in CSS — not inline — lets the media query below collapse to two
      columns instead of leaving a blank reserved column. */
-  grid-template-columns: 72px minmax(0, 1fr) var(--right-width, 360px);
+  /* ADR 0035 — symmetric dual rails: [left rail | left surface | right surface | right rail].
+     The right rail mirrors the left on the far edge; the right surface (content) track collapses
+     to 0 via --right-width while the right rail stays put. */
+  grid-template-columns: 72px minmax(0, 1fr) var(--right-width, 360px) 72px;
 }
 
 .rail {
@@ -356,6 +359,12 @@ h2 {
   gap: 6px;
   padding: 10px 8px;
   border-right: 1px solid var(--border);
+}
+
+/* Right rail mirrors the left, bordered on its left edge (ADR 0035 D1). */
+.rail-right {
+  border-right: none;
+  border-left: 1px solid var(--border);
 }
 
 .rail button {
