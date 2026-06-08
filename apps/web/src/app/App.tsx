@@ -241,7 +241,6 @@ export function App() {
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
   const railOf = useUI((s) => s.railOf);
-  const moveSurface = useUI((s) => s.moveSurface);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -843,13 +842,6 @@ export function App() {
               onClick={() => setSurface(s.id)}
               badge={s.id === "activity" ? activityUnread + inboxUnread : undefined}
               dot={s.id === "chat" ? chatStreaming && surface !== "chat" : undefined}
-              onMove={s.id === "chat" || s.id.startsWith("plugin:") ? undefined : () => {
-                moveSurface(s.id, "right");
-                setRightPanel(s.id);
-                setRightCollapsed(false);
-                if (surface === s.id) setSurface("chat");
-              }}
-              moveLabel="Move to right rail"
             />
           ))}
         </aside>
@@ -901,12 +893,6 @@ export function App() {
               label={s.label}
               icon={s.icon}
               onClick={() => { setRightPanel(s.id); setRightCollapsed(false); }}
-              onMove={s.id.startsWith("plugin:") ? undefined : () => {
-                moveSurface(s.id, "left");
-                setSurface(s.id);
-                if (rightPanel === s.id) setRightPanel(rightMembers.find((m) => m !== s.id) ?? "notes");
-              }}
-              moveLabel="Move to left rail"
             />
           ))}
         </aside>
@@ -978,8 +964,7 @@ function RailButton({
   onClick,
   badge,
   dot,
-  onMove,
-  moveLabel,
+  onContextMenu,
 }: {
   active: boolean;
   label: string;
@@ -989,35 +974,21 @@ function RailButton({
   // A small pulsing indicator (no count) — e.g. a chat turn streaming in the
   // background while you're on another tab.
   dot?: boolean;
-  // ADR 0035 S3 — when set, a hover "move to other rail" affordance appears.
-  onMove?: () => void;
-  moveLabel?: string;
+  // Right-click hook (ADR 0036) — opens the rail-surface context menu.
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
-    <div className={`rail-item${active ? " active" : ""}`}>
-      <button className={active ? "active" : ""} type="button" onClick={onClick} title={label} aria-label={label}>
-        {icon}
-        <span>{label}</span>
-        {badge ? (
-          <span className="rail-badge" data-testid="activity-badge">
-            {badge > 9 ? "9+" : badge}
-          </span>
-        ) : dot ? (
-          <span className="rail-dot" data-testid="chat-streaming-dot" aria-label="streaming" />
-        ) : null}
-      </button>
-      {onMove ? (
-        <button
-          className="rail-move"
-          type="button"
-          title={moveLabel}
-          aria-label={moveLabel}
-          onClick={(e) => { e.stopPropagation(); onMove(); }}
-        >
-          <PanelRight size={11} />
-        </button>
+    <button className={active ? "active" : ""} type="button" onClick={onClick} onContextMenu={onContextMenu} title={label} aria-label={label}>
+      {icon}
+      <span>{label}</span>
+      {badge ? (
+        <span className="rail-badge" data-testid="activity-badge">
+          {badge > 9 ? "9+" : badge}
+        </span>
+      ) : dot ? (
+        <span className="rail-dot" data-testid="chat-streaming-dot" aria-label="streaming" />
       ) : null}
-    </div>
+    </button>
   );
 }
 
