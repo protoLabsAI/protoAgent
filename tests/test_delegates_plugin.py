@@ -188,6 +188,31 @@ async def test_acp_dispatch_reuses_client(monkeypatch):
     assert await ADAPTERS["acp"].dispatch(d, "fix the bug") == "coding done"
 
 
+async def test_acp_teardown_evicts_the_workdir_scoped_client():
+    """teardown reaps the exact cached client dispatch created — proving the
+    spec/cache-key (incl. workdir) line up, so a per-call scoped workdir tears
+    down its own subprocess."""
+    import plugins.coding_agent as CA
+
+    d = ADAPTERS["acp"].parse({"name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp/wt-x"})
+    spec = ADAPTERS["acp"]._spec(d)
+
+    class _FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    fake = _FakeClient()
+    CA._CLIENTS[CA._cache_key(spec)] = fake
+
+    assert await ADAPTERS["acp"].teardown(d) is True
+    assert fake.closed is True
+    assert CA._cache_key(spec) not in CA._CLIENTS
+    assert await ADAPTERS["acp"].teardown(d) is False   # idempotent
+
+
 # ── health prober (PR4) ───────────────────────────────────────────────────────
 
 import plugins.delegates.health as H  # noqa: E402

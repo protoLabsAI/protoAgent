@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ACP delegate teardown** — `coding_agent.evict_client(spec)` + `AcpAdapter.teardown(delegate)`
+  evict the cached `AcpClient` for a spec **and** terminate its subprocess (a plain cache `pop`
+  forgot the handle but left the child running). Completes the delegate lifecycle for callers that
+  dispatch into a transient, per-call `workdir` (e.g. a disposable git worktree, scoped via
+  `dataclasses.replace`): call `teardown` in a `finally` so each scoped `workdir` reaps its own
+  process instead of leaking one. Best-effort + idempotent; no change to existing callers (the
+  ACP runtime owns its own client separately and is unaffected).
+
 ## [0.27.0] - 2026-06-08
 
 ### Added
