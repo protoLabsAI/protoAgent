@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.26.0",
+    "date": "2026-06-08",
+    "changes": [
+      "Settings now live where they belong — agent settings in the Agent view, memory settings in Knowledge, and a leaner central Settings (Overview, Telemetry, Plugins, System).",
+      "The Plugins page is tabbed (Local, Market, Download) with one-click enable/disable — no config editing or restart for most plugins.",
+      "Add MCP servers right from the console — fill a quick form or paste a standard JSON config blob, and they connect live."
+    ]
+  },
+  {
     "version": "v0.25.0",
     "date": "2026-06-08",
     "changes": [
