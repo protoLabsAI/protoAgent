@@ -30,6 +30,9 @@ export default defineConfig(({ mode }) => {
           react: { requiredVersion: false },
           "react-dom": { requiredVersion: false },
           "@tanstack/react-query": { requiredVersion: false },
+          // The plugin-UI SDK is a singleton so the context-menu registry is ONE instance
+          // across the host and every remote (ADR 0034 D3 / 0036).
+          "@protoagent/plugin-ui": { requiredVersion: false },
         },
       }),
     ],
