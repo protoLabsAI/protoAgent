@@ -6,11 +6,17 @@ const topic = 'https://github.com/topics/protoagent-plugin';
 const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json';
 const publishDocs = '/docs/guides/plugin-registry';
 const lavender = 'var(--pl-color-brand-lavender)';
+
+// Category chips (built from the data, with counts) for quick navigation.
+const categories = [...new Set(plugins.map((p) => p.category || 'Other'))].sort();
+const counts = Object.fromEntries(
+  categories.map((c) => [c, plugins.filter((p) => (p.category || 'Other') === c).length]),
+);
 ---
 
 <BaseLayout
   title="Plugins — protoAgent"
-  description="Plugins for protoAgent — drop-in packages that add tools, skills, subagents, workflows, console views, and more. Install from a git URL."
+  description="Plugins for protoAgent — drop-in packages that add tools, skills, subagents, workflows, console views, and more. Filter by category, search, and install from a git URL."
 >
   <div class="max-w-5xl mx-auto px-6 py-24">
     <h1 class="text-4xl font-bold mb-2">Plugins</h1>
@@ -19,16 +25,52 @@ const lavender = 'var(--pl-color-brand-lavender)';
       subagents, workflows, FastAPI routes, console dashboards, managed MCP servers, memory
       backends, and their own config + secrets.
     </p>
-    <p class="text-zinc-500 mb-14 text-sm max-w-2xl">
+    <p class="text-zinc-500 mb-10 text-sm max-w-2xl">
       A plugin is just a repo — install one with
       <code class="px-1.5 py-0.5 rounded bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] font-mono text-zinc-300">python -m server plugin install &lt;git-url&gt;</code>
       (pinned in <code class="font-mono text-zinc-400">plugins.lock</code>). The first-party ones below ship with protoAgent.
     </p>
 
-    <div class="grid sm:grid-cols-2 gap-5">
-      {plugins.map((p) => (
-        <div class="card p-6 flex flex-col gap-3">
-          <div class="flex items-center gap-2.5">
+    <!-- Toolbar: search + sort -->
+    <div class="flex flex-col sm:flex-row gap-3 sm:items-center mb-4">
+      <input
+        id="plugin-search"
+        type="search"
+        placeholder="Search plugins…"
+        autocomplete="off"
+        class="flex-1 rounded-lg bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] px-3.5 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-[color:var(--pl-color-brand-lavender)]"
+      />
+      <div class="flex items-center gap-2 text-sm text-zinc-400">
+        <label for="plugin-sort">Sort</label>
+        <select id="plugin-sort"
+          class="rounded-lg bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] px-2.5 py-2 text-sm text-zinc-200 focus:outline-none focus:border-[color:var(--pl-color-brand-lavender)]">
+          <option value="featured">Featured</option>
+          <option value="name">Name A–Z</option>
+          <option value="category">Category</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Category chips -->
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button class="chip" data-cat-chip="all" data-active="true" type="button">All <span class="opacity-50">{plugins.length}</span></button>
+      {categories.map((c) => (
+        <button class="chip" data-cat-chip={c} data-active="false" type="button">{c} <span class="opacity-50">{counts[c]}</span></button>
+      ))}
+    </div>
+
+    <p id="plugin-count" class="text-xs text-zinc-500 mb-6">{plugins.length} plugins</p>
+
+    <div id="plugin-grid" class="grid sm:grid-cols-2 gap-5">
+      {plugins.map((p, i) => (
+        <div class="card p-6 flex flex-col gap-3" data-plugin
+             data-order={i}
+             data-name={p.name}
+             data-tagline={p.tagline}
+             data-category={p.category || 'Other'}
+             data-adds={(p.adds || []).join(' ')}
+             data-official={String(!!p.official)}>
+          <div class="flex items-center gap-2.5 flex-wrap">
             <h2 class="font-semibold text-zinc-100">{p.name}</h2>
             {p.official && (
               <span class="px-1.5 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider"
@@ -36,6 +78,7 @@ const lavender = 'var(--pl-color-brand-lavender)';
                 Official
               </span>
             )}
+            <span class="ml-auto text-[11px] font-mono text-zinc-500">{p.category}</span>
           </div>
           <p class="text-sm text-zinc-400 flex-1">{p.tagline}</p>
           <div class="flex flex-wrap gap-1.5">
@@ -56,6 +99,10 @@ const lavender = 'var(--pl-color-brand-lavender)';
       ))}
     </div>
 
+    <p id="plugin-empty" class="text-zinc-500 text-sm py-12 text-center" style="display:none">
+      No plugins match — try a different category or search.
+    </p>
+
     <!-- Publish your own -->
     <div class="mt-16 card p-8">
       <h2 class="text-2xl font-semibold mb-2">Publish your own</h2>
@@ -67,7 +114,7 @@ const lavender = 'var(--pl-color-brand-lavender)';
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">1.</span>
           <span>Tag your repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> GitHub topic — that makes it discoverable across GitHub.</span></li>
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">2.</span>
-          <span>Open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> to feature it on this page.</span></li>
+          <span>Open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> (with a <code class="font-mono">category</code>) to feature it on this page.</span></li>
       </ol>
       <div class="flex flex-wrap items-center gap-4">
         <a href={publishDocs} target="_blank" rel="noopener noreferrer"
@@ -77,4 +124,75 @@ const lavender = 'var(--pl-color-brand-lavender)';
       </div>
     </div>
   </div>
+
+  <style>
+    .chip {
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      color: var(--pl-color-text-muted, #a1a1aa);
+      background: var(--pl-color-bg-raised);
+      border: 1px solid var(--pl-color-border);
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      cursor: pointer;
+    }
+    .chip:hover { color: #fff; }
+    .chip[data-active="true"] {
+      color: var(--pl-color-brand-lavender);
+      border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 50%, transparent);
+      background: color-mix(in srgb, var(--pl-color-brand-lavender) 12%, transparent);
+    }
+  </style>
+
+  <script>
+    const grid = document.getElementById('plugin-grid');
+    const cards = Array.from(document.querySelectorAll('[data-plugin]'));
+    const search = document.getElementById('plugin-search') as HTMLInputElement;
+    const sortSel = document.getElementById('plugin-sort') as HTMLSelectElement;
+    const chips = Array.from(document.querySelectorAll('[data-cat-chip]')) as HTMLElement[];
+    const countEl = document.getElementById('plugin-count');
+    const emptyEl = document.getElementById('plugin-empty');
+    let activeCat = 'all';
+
+    function apply() {
+      const q = (search?.value || '').trim().toLowerCase();
+      let shown = 0;
+      for (const c of cards) {
+        const el = c as HTMLElement;
+        const matchCat = activeCat === 'all' || el.dataset.category === activeCat;
+        const hay = `${el.dataset.name} ${el.dataset.tagline} ${el.dataset.adds} ${el.dataset.category}`.toLowerCase();
+        const matchQ = !q || hay.includes(q);
+        const show = matchCat && matchQ;
+        el.style.display = show ? '' : 'none';
+        if (show) shown++;
+      }
+      if (countEl) countEl.textContent = `${shown} ${shown === 1 ? 'plugin' : 'plugins'}`;
+      if (emptyEl) emptyEl.style.display = shown ? 'none' : '';
+    }
+
+    function sortCards() {
+      const mode = sortSel?.value || 'featured';
+      const arr = [...cards] as HTMLElement[];
+      arr.sort((a, b) => {
+        if (mode === 'name') return (a.dataset.name || '').localeCompare(b.dataset.name || '');
+        if (mode === 'category')
+          return (a.dataset.category || '').localeCompare(b.dataset.category || '') ||
+                 (a.dataset.name || '').localeCompare(b.dataset.name || '');
+        return Number(a.dataset.order) - Number(b.dataset.order);
+      });
+      for (const c of arr) grid?.appendChild(c);
+    }
+
+    for (const ch of chips) {
+      ch.addEventListener('click', () => {
+        activeCat = ch.dataset.catChip || 'all';
+        for (const x of chips) x.dataset.active = String(x === ch);
+        apply();
+      });
+    }
+    search?.addEventListener('input', apply);
+    sortSel?.addEventListener('change', () => { sortCards(); apply(); });
+    sortCards();
+    apply();
+  </script>
 </BaseLayout>
