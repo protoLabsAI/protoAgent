@@ -19,10 +19,13 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 
 from runtime.context import ContextAssembler
 
 log = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where the `server` pkg lives)
 
 # Best-effort launch commands per agent — ACP servers drift, so these are *defaults*
 # the operator can override in config (``acp.agents.<name>: {command, args}``).
@@ -71,10 +74,19 @@ def operator_mcp_server_spec(config) -> dict | None:
     tools are allowlisted (nothing to expose)."""
     if not (getattr(config, "operator_mcp_tools", None) or []):
         return None
-    env: dict[str, str] = {}
+    # ACP's stdio MCP-server schema wants env as an array of {name, value} (not a dict).
+    # The agent spawns this command in its OWN cwd, so put the repo on PYTHONPATH — else
+    # `-m server.operator_mcp` can't import (unless protoagent is pip-installed).
+    repo_root = str(_REPO_ROOT)
+    pythonpath = repo_root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
+    env: list[dict] = [{"name": "PYTHONPATH", "value": pythonpath}]
     inst = os.environ.get("PROTOAGENT_INSTANCE")
     if inst:
-        env["PROTOAGENT_INSTANCE"] = inst  # the sidecar shares this instance's data
+        env.append({"name": "PROTOAGENT_INSTANCE", "value": inst})  # share this instance's data
+    # Pass the runtime's allowlist to the child explicitly — the spawned server otherwise
+    # reads operator_mcp.tools from YAML, which may not match this runtime's intent.
+    tools = ",".join(getattr(config, "operator_mcp_tools", []) or [])
+    env.append({"name": "OPERATOR_MCP_TOOLS", "value": tools})
     return {
         "name": "protoagent-operator",
         "command": sys.executable,

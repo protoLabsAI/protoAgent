@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 from runtime.state import STATE
 
@@ -120,6 +121,11 @@ def main(argv: list[str] | None = None) -> None:
     from graph.config_io import CONFIG_YAML_PATH
 
     config = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
+    # An explicit allowlist from the caller (e.g. the ACP runtime spawning this) overrides
+    # the YAML — so the exposed set matches the runtime's intent, not whatever's on disk.
+    env_tools = os.environ.get("OPERATOR_MCP_TOOLS")
+    if env_tools is not None:
+        config.operator_mcp_tools = [t.strip() for t in env_tools.split(",") if t.strip()]
     _boot_stores_only(config)
     server, exposed = build_server(config)
     if not exposed:
