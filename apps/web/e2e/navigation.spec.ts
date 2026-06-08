@@ -121,3 +121,23 @@ test("Chat is movable too — right-click → move to the right rail (ADR 0036)"
   await expect(rightRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
 });
+
+test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Below the breakpoint: the desktop rails are gone; a bottom quick-bar appears.
+  await expect(page.locator(".rail")).toHaveCount(0);
+  const bar = page.locator(".mobile-bar");
+  await expect(bar).toBeVisible();
+
+  // A default quick-bar surface switches the single active surface.
+  await bar.getByRole("button", { name: "Knowledge", exact: true }).click();
+
+  // The hamburger opens a drawer with the full surface list.
+  await bar.getByRole("button", { name: "All surfaces" }).click();
+  const drawer = page.getByRole("dialog", { name: "Surfaces" });
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: "Beads", exact: true }).click();
+  await expect(drawer).toHaveCount(0); // picking closes it
+});

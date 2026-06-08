@@ -48,6 +48,11 @@ type UIState = {
   // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
   // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
   reconcilePluginViews: (views: { id: string; side: "left" | "right" }[]) => void;
+  // Mobile shell (ADR 0035 S4): one active surface + a configurable bottom quick-bar.
+  mobileActive: string;
+  setMobileActive: (id: string) => void;
+  quickBar: string[]; // surfaces pinned to the mobile bottom bar (cap 5)
+  toggleQuickBar: (id: string) => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setAgentTab: (t: AgentTab) => void;
@@ -93,6 +98,15 @@ export const useUI = create<UIState>()(
             return next;
           };
           return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right) } };
+        }),
+      mobileActive: "chat",
+      setMobileActive: (mobileActive) => set({ mobileActive }),
+      quickBar: ["chat", "activity", "knowledge", "plugins"],
+      toggleQuickBar: (id) =>
+        set((s) => {
+          if (s.quickBar.includes(id)) return { quickBar: s.quickBar.filter((x) => x !== id) };
+          if (s.quickBar.length >= 5) return s; // cap the bottom bar
+          return { quickBar: [...s.quickBar, id] };
         }),
       reconcilePluginViews: (views) =>
         set((s) => {

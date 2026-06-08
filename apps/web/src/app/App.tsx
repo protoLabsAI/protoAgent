@@ -86,6 +86,8 @@ import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { SurfaceRail } from "../components/SurfaceRail";
+import { MobileNav } from "../components/MobileNav";
+import { useIsMobile } from "../lib/useIsMobile";
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
@@ -244,6 +246,10 @@ export function App() {
   const setRightWidth = useUI((s) => s.setRightWidth);
   const railOrder = useUI((s) => s.railOrder);
   const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
+  const isMobile = useIsMobile();
+  const mobileActive = useUI((s) => s.mobileActive);
+  const setMobileActive = useUI((s) => s.setMobileActive);
+  const quickBar = useUI((s) => s.quickBar);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -854,6 +860,22 @@ export function App() {
         </div>
       </header>
 
+      {isMobile ? (
+        /* Mobile shell (ADR 0035 S4): one surface at a time + a bottom quick-bar + hamburger; no
+           rails, no split. Chat mounts unconditionally for streaming continuity. */
+        <div className="workspace mobile">
+          <main className="stage">
+            <ChatSurface onError={setError} active={mobileActive === "chat"} />
+            {mobileActive !== "chat" ? renderSurface(mobileActive) : null}
+          </main>
+          <MobileNav
+            items={[...railSurfaces("left"), ...railSurfaces("right")]}
+            activeId={mobileActive}
+            onSelect={setMobileActive}
+            quickBarIds={quickBar}
+          />
+        </div>
+      ) : (
       <div
         className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
         style={{ "--right-width": rightCol } as CSSProperties}
@@ -921,6 +943,7 @@ export function App() {
           onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "right" })}
         />
       </div>
+      )}
 
       <footer className="utility-bar">
         <a
