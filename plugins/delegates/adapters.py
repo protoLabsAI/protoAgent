@@ -12,6 +12,7 @@ ADR 0024 ``AcpClient``; the a2a adapter reuses the ``peer_tools`` JSON-RPC path)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -162,8 +163,6 @@ class A2aAdapter(Adapter):
         return d
 
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
-        import asyncio
-
         import httpx
 
         import security
