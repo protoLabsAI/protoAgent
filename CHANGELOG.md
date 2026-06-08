@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Console IA: "Agent" section + editable identity; Knowledge simplified; Settings→Overview**
+  — renamed Runtime→**Agent** with tabs **Identity** (edit name + SOUL.md inline, save = hot
+  reload) · Tools · MCP · Subagents · **Skills** (moved from Knowledge) · **Middleware**. Knowledge
+  is now a single Store panel. The read-only status snapshot + Telemetry moved to a new
+  **Settings → Overview** tab.
+
 ### Added
 - **Scheduler: per-job timezone** — cron jobs can name an IANA timezone (e.g.
   `America/Chicago`); `"0 9 * * *"` then means 9am local, DST-aware, stored as UTC.

@@ -44,10 +44,10 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
 
-test("runtime surface: overview, tools, and MCP tabs", async ({ page }) => {
-  await page.getByRole("button", { name: "Runtime", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Runtime" })).toBeVisible();
-  await expect(page.getByText("SKILL.md skills loaded")).toBeVisible(); // overview
+test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) => {
+  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing tab
+  await expect(page.getByTestId("identity-name")).toBeVisible();
 
   await page.locator(".stage-subnav").getByRole("button", { name: "Tools", exact: true }).click();
   await expect(page.getByText("web_search")).toBeVisible();

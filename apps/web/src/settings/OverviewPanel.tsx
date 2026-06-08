@@ -3,19 +3,14 @@ import { Bot, Database, HardDrive, Settings2, Sparkles } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "../app/PanelHeader";
 import { runtimeStatusQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { StatusPill } from "./StatusPill";
+import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 
-// Runtime → Overview: the agent's configured surface at a glance (model,
-// middleware, storage, skills). Tools / MCP / Subagents are their own tabs.
-// On the TanStack Query data layer (ADR 0013) via useSuspenseQuery on the same
-// `runtime` key the shell reads non-suspense.
-
-function formatBool(value: boolean) {
-  return value ? "on" : "off";
-}
+// Settings → Overview: the agent's read-only status at a glance (model, knowledge,
+// goal, on-disk store sizes) plus the cost/latency telemetry dashboard. The editable
+// bits (name, persona, middleware, tools) live under the Agent section.
 
 function fmtBytes(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -40,23 +35,17 @@ function Metric({ icon, label, value }: { icon: ReactNode; label: string; value:
   );
 }
 
-function RuntimeBody() {
+function StatusBody() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
-  const middleware = Object.entries(runtime.middleware).sort(([a], [b]) => a.localeCompare(b));
-
   return (
     <>
-      <PanelHeader
-        title="Runtime"
-        kicker={runtime.model?.name || "model not configured"}
-        actions={<StatusPill label={runtime.scheduler.backend || "scheduler"} tone="muted" />}
-      />
+      <PanelHeader title="Overview" kicker={runtime.model?.name || "model not configured"} />
       <div className="stage-body">
         <div className="metric-grid">
           <Metric icon={<Bot size={16} />} label="Agent" value={brandName(runtime.identity?.name)} />
           <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime.model?.provider || "none"} />
           <Metric icon={<Database size={16} />} label="Knowledge" value={runtime.knowledge.resolved_path || runtime.knowledge.configured_path || "disabled"} />
-          <Metric icon={<Sparkles size={16} />} label="Goal mode" value={formatBool(Boolean(runtime.goal.enabled))} />
+          <Metric icon={<Sparkles size={16} />} label="Goal mode" value={runtime.goal.enabled ? "on" : "off"} />
         </div>
         {runtime.storage ? (
           <>
@@ -71,43 +60,26 @@ function RuntimeBody() {
             </div>
           </>
         ) : null}
-        <p className="panel-kicker">Middleware</p>
-        <div className="table-list">
-          {middleware.map(([name, enabled]) => (
-            <div className="table-row" key={name}>
-              <span>{name}</span>
-              <StatusPill label={formatBool(enabled)} tone={enabled ? "success" : "muted"} />
-            </div>
-          ))}
-        </div>
-
-        <p className="panel-kicker">Skills</p>
-        <div className="table-list">
-          <div className="table-row">
-            <span>SKILL.md skills loaded</span>
-            <StatusPill
-              label={`${runtime.skills?.count ?? 0}`}
-              tone={(runtime.skills?.count ?? 0) > 0 ? "success" : "muted"}
-            />
-          </div>
-        </div>
       </div>
     </>
   );
 }
 
-export function RuntimePanel() {
+export function OverviewPanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="runtime" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading runtime…" />}>
-              <RuntimeBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <>
+      <section className="panel stage-panel">
+        <QueryErrorResetBoundary>
+          {({ reset }) => (
+            <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="overview" />}>
+              <Suspense fallback={<PanelSkeleton label="Loading overview…" />}>
+                <StatusBody />
+              </Suspense>
+            </ErrorBoundary>
+          )}
+        </QueryErrorResetBoundary>
+      </section>
+      <TelemetrySurface />
+    </>
   );
 }
