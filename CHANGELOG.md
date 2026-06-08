@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Symmetric dual rails (ADR 0035 slice 2)** — the right panel's horizontal segmented tab
+  strip becomes a vertical **right rail** mirroring the left (same `RailButton` component) on the
+  far edge: [left rail | left surface | right surface | right rail]. Picking a right surface
+  (Notes/Beads/Goals/Schedule + plugin right-views) expands it. First step toward swappable
+  surfaces (slice 3) + mobile (slice 4).
 - **Persisted UI state (ADR 0035 slice 1)** — the console's navigation/layout state (active
   surface, sub-tabs, right-panel width/collapse) now lives in a Zustand `persist` store, so a
   **refresh restores where you were** instead of snapping back to Chat/Notes. Pure state migration
