@@ -464,6 +464,16 @@ export const api = {
     });
   },
 
+  // Merge-apply a config patch (+ optional SOUL.md) on the live agent, then reload.
+  // Partial config is merged into the live YAML (not a replace), so passing just
+  // `{ identity: { name } }` is safe. Pass null to skip either.
+  applyConfig(config: Partial<AgentConfig> | null, soul: string | null) {
+    return request<{ ok: boolean; messages: string[] }>("/api/config", {
+      method: "POST",
+      body: { config, soul },
+    });
+  },
+
   subagents() {
     return request<{ subagents: Subagent[] }>("/api/subagents");
   },

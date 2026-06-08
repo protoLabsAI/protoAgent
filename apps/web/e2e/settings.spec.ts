@@ -15,17 +15,21 @@ async function category(page, name) {
   await page.locator(".stage-subnav").getByRole("button", { name, exact: true }).click();
 }
 
-test("groups are organized into a category sub-nav; Agent leads", async ({ page }) => {
+test("category sub-nav leads with Overview; Agent shows Model + Routing", async ({ page }) => {
   await openSettings(page);
-  // Category sub-nav from the mock schema: Agent · Behavior · System, plus
-  // Integrations (surfaced because the delegates plugin is reachable — ADR 0025).
+  // Overview leads (status + telemetry, moved from the old Runtime section), then
+  // the schema categories: Agent · Behavior · System, plus Integrations (delegates).
   expect(await page.locator(".stage-subnav button").allTextContents()).toEqual([
+    "Overview",
     "Agent",
     "Behavior",
     "System",
     "Integrations",
   ]);
-  // Agent is the default — only its sections show (Model + Routing), not System's.
+  // Overview is the default — the read-only status panel, not schema groups.
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  // Agent's sections (Model + Routing) appear when you switch to it.
+  await category(page, "Agent");
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);
   const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
   await expect(aux).toHaveValue("protolabs/fast");
@@ -48,7 +52,8 @@ test("editing enables save and round-trips", async ({ page }) => {
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled(); // nothing dirty yet
 
-  const aux = page.locator('.setting-row[data-key="routing.aux_model"] input'); // Agent (default)
+  await category(page, "Agent");  // Overview leads now; Model/Routing live under Agent
+  const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
   await aux.fill("protolabs/turbo");
   await expect(save).toBeEnabled();
   await save.click();

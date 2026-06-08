@@ -14,6 +14,7 @@ import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
 import { DelegatesSection } from "./DelegatesSection";
+import { OverviewPanel } from "./OverviewPanel";
 
 // Generic settings surface — renders whatever GET /api/settings/schema returns,
 // so it stays in sync as config grows. Saving POSTs the changed fields and the
@@ -62,7 +63,9 @@ function SettingsBody() {
   // Category sub-nav (ADR 0020): the server tags each group with a category and
   // orders them, so we derive the ordered category list by first appearance.
   const categories = useMemo(() => {
-    const seen: string[] = [];
+    // Overview leads — the read-only status snapshot + telemetry (moved here from
+    // the old Runtime section).
+    const seen: string[] = ["Overview"];
     for (const g of groups) {
       const c = g.category || "Integrations";
       if (!seen.includes(c)) seen.push(c);
@@ -303,6 +306,9 @@ function SettingsBody() {
           </section>
         ))}
 
+        {/* Overview (read-only status snapshot + telemetry) — moved here from the
+            old Runtime section; not part of the settings schema. */}
+        {category === "Overview" ? <OverviewPanel /> : null}
         {/* The delegate registry (ADR 0025) isn't part of the settings schema —
             it's a CRUD surface, rendered as a custom panel under Integrations. */}
         {category === "Integrations" ? <DelegatesSection /> : null}
