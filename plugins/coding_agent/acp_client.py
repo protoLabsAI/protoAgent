@@ -58,12 +58,16 @@ class AcpClient:
         env: dict[str, str] | None = None,
         name: str = "acp",
         permission: Callable[[dict], str | None] | None = None,
+        mcp_servers: list[dict] | None = None,
     ) -> None:
         self.command = command
         self.args = list(args or [])
         self.cwd = str(Path(cwd).expanduser())
         self.env = env
         self.name = name
+        # MCP servers mounted into the ACP session (ADR 0033) — how the coding agent
+        # gets protoAgent's operator tools (notes/beads/goals/…) over `session/new`.
+        self.mcp_servers = list(mcp_servers or [])
         # Permission resolver: ``(request_params) -> optionId | None`` (None ⇒
         # cancel/deny). Defaults to ``_auto_allow`` — the coding agent self-governs
         # within its workdir. The plugin injects a by-kind policy here (ADR 0024).
@@ -271,7 +275,7 @@ class AcpClient:
 
     async def _new_session(self) -> None:
         result = await self._request(
-            "session/new", {"cwd": self.cwd, "mcpServers": []}, timeout=30.0
+            "session/new", {"cwd": self.cwd, "mcpServers": self.mcp_servers}, timeout=30.0
         )
         self._session_id = (result or {}).get("sessionId")
         if not self._session_id:

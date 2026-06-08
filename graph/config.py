@@ -348,6 +348,11 @@ class LangGraphConfig:
     operator_mcp_enabled: bool = False
     operator_mcp_tools: list[str] = field(default_factory=list)
 
+    # Agent runtime (ADR 0033) — which brain executes a turn. "native" = the built-in
+    # LangGraph loop (default). "acp:<agent>" (e.g. "acp:codex", "acp:claude") = an
+    # external coding agent drives the turn over ACP, mounting the operator MCP bus.
+    agent_runtime: str = "native"
+
     # Plugins — drop-in packages (manifest + register()) that contribute tools
     # and bundled skills. Run IN-PROCESS with the agent's privileges, so a
     # plugin loads only when enabled: listed here, or ``enabled: true`` in its
@@ -587,6 +592,7 @@ class LangGraphConfig:
             mcp_denylist=list(mcp.get("denylist", []) or []),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
+            agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
