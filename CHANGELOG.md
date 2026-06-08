@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Scheduler: `schedule_task` dedupes identical jobs** — won't create a second active job
+  with the same prompt + schedule, so a self-rescheduling loop can't pile up duplicates that
+  all fire together (the cause of scheduled-task Activity spam).
+
 ### Changed
 - **Console IA: Runtime is top-level with tabs; Plugins is its own section** — the dense
   System panel is split into **Runtime → Overview · Tools · MCP · Subagents · Telemetry**

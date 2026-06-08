@@ -565,6 +565,24 @@ def _build_scheduler_tools(scheduler) -> list:
         Returns ``"Scheduled job <id> next at <iso>."`` on success,
         an error string on malformed ``when`` or backend failure.
         """
+        # Dedup guard: don't create a second job identical to an existing active
+        # one (same prompt + schedule). This is the common cause of scheduled-task
+        # spam — a loop that re-schedules itself on each run/restart accumulates
+        # duplicates that all fire together. (Remote backends may return [] here;
+        # then we skip the check and let the backend own dedup.)
+        try:
+            for j in await asyncio.to_thread(scheduler.list_jobs):
+                if (
+                    getattr(j, "enabled", True)
+                    and (j.prompt or "").strip() == prompt.strip()
+                    and j.schedule == when
+                ):
+                    return (
+                        f"Already scheduled as {j.id} (next at "
+                        f"{j.next_fire or 'managed remotely'}). Not creating a duplicate."
+                    )
+        except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
+            pass
         try:
             job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id)
         except ValueError as exc:
