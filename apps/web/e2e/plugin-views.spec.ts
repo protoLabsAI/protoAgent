@@ -98,7 +98,7 @@ test("a ui:react remote contributes a context-menu item via the SDK (ADR 0034 S2
 
   // Right-click a rail surface → the HOST's menu now includes the PLUGIN's item, proving a remote
   // registers into the host's shared registry across the federation boundary.
-  await page.locator(".rail-right").getByRole("button", { name: "Notes", exact: true }).click({ button: "right" });
+  await page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
   await expect(
     page.getByTestId("context-menu").getByText("Hello from the React plugin", { exact: false }),
   ).toBeVisible();

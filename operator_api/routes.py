@@ -12,7 +12,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from operator_api.beads import BeadsCommandError, BeadsService
-from operator_api.notes import NotesService
 
 
 class SubagentRunRequest(BaseModel):
@@ -26,11 +25,6 @@ class SubagentRunRequest(BaseModel):
 class SubagentBatchRequest(BaseModel):
     session_id: str = "manual-subagent"
     tasks: list[dict[str, Any]]
-
-
-class NotesSaveRequest(BaseModel):
-    workspace: dict[str, Any]
-    project_path: str = ""  # ignored — notes are agent-global; kept for back-compat
 
 
 class ScheduleAddRequest(BaseModel):
@@ -176,7 +170,6 @@ def register_operator_routes(
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
     beads_service: BeadsService | None = None,
     beads_store: Any | None = None,
-    notes_service: NotesService | None = None,
     allowed_dirs: Callable[[], list[str]] | None = None,
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -210,7 +203,6 @@ def register_operator_routes(
         if beads_store is not None
         else (beads_service or BeadsService(allowed_dirs=allowed_dirs))
     )
-    notes = notes_service or NotesService(allowed_dirs=allowed_dirs)
 
     @app.get("/api/runtime/status")
     async def _runtime_status():
@@ -237,22 +229,6 @@ def register_operator_routes(
         try:
             output = await subagent_batch(_model_payload(req))
             return {"ok": True, "session_id": req.session_id, "output": output}
-        except Exception as exc:
-            raise _http_error(exc) from exc
-
-    @app.get("/api/notes/workspace")
-    async def _notes_get():
-        try:
-            workspace = await asyncio.to_thread(notes.load_workspace)
-            return {"workspace": workspace}
-        except Exception as exc:
-            raise _http_error(exc) from exc
-
-    @app.post("/api/notes/workspace")
-    async def _notes_save(req: NotesSaveRequest):
-        try:
-            await asyncio.to_thread(notes.save_workspace, req.workspace)
-            return {"ok": True}
         except Exception as exc:
             raise _http_error(exc) from exc
 

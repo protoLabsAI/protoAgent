@@ -13,7 +13,6 @@ import type {
   InstalledPlugin,
   PluginInstallSummary,
   KnowledgeChunk,
-  NotesWorkspace,
   RuntimeStatus,
   ScheduledJob,
   SetupStatus,
@@ -768,19 +767,8 @@ export const api = {
     return { state, text: textFromTerminalTask(task) };
   },
 
-  // Notes + Beads are agent-global (one persistent store each) — no project
-  // scope. The project / allowed-dirs list is purely the filesystem fence.
-  getNotes() {
-    return request<{ workspace: NotesWorkspace }>("/api/notes/workspace");
-  },
-
-  saveNotes(workspace: NotesWorkspace) {
-    return request<{ ok: boolean }>("/api/notes/workspace", {
-      method: "POST",
-      body: { workspace },
-    });
-  },
-
+  // Beads are agent-global (one persistent store) — no project scope. (Notes moved
+  // to the first-party `notes` plugin, ADR 0034 S4 — it owns its own data route.)
   beadsStatus() {
     return request<{ initialized: boolean }>("/api/beads/status");
   },
