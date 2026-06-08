@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ACP agent runtime** (ADR 0033 slice 3) — `agent_runtime: acp:<agent>` lets an external
+  coding agent (proto/codex/claude/copilot/opencode) drive the turn over ACP: mounts the operator
+  MCP bus (slice 1) into `session/new`, builds the prompt via the context contract (slice 2) —
+  cacheable persona prefix sent once, then per-turn deltas — and writes back after. Opt-in
+  (default `native`, no behavior change); per-agent launch commands are config-overridable.
+  Request-path wiring (route live turns + stream to A2A) lands next.
 - **Runtime context contract** (ADR 0033 slice 2) — `runtime/context.py`: `assemble_context()`
   → `{stable_prefix, volatile_delta}` (a cacheable persona prefix + per-turn retrieved
   knowledge/skills/prior-sessions) + an `after_turn()` write-back hook, so any runtime (native
