@@ -45,7 +45,7 @@ export function PluginsSection() {
   return (
     <section className="settings-section">
       <header className="settings-section-head">
-        <h3><Package size={16} /> Plugins</h3>
+        <h3><Package size={16} /> Install from a git URL</h3>
         <p className="settings-section-sub">
           Install a plugin from a git URL. Fetching code never runs it — review, then{" "}
           <strong>enable</strong> it (add to <code>plugins.enabled</code> and restart). Untrusted code?

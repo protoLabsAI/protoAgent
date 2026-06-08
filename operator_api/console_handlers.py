@@ -71,6 +71,42 @@ def _operator_subagent_list():
     return _operator_list_subagents(STATE.graph_config)
 
 
+def _operator_tools_list():
+    """Live tool inventory grouped by source (core / plugin / mcp) for the
+    Runtime → Tools tab. Best-effort: degrades to an empty list pre-setup."""
+    cfg = STATE.graph_config
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(tool, source):
+        name = getattr(tool, "name", None)
+        if not name or name in seen:
+            return
+        seen.add(name)
+        desc = (getattr(tool, "description", "") or "").strip().split("\n")[0]
+        out.append({"name": name, "description": desc, "source": source})
+
+    try:
+        from tools.lg_tools import get_all_tools
+
+        core = get_all_tools(
+            STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            inbox_store=STATE.inbox_store,
+            beads_store=STATE.beads_store,
+            goal_enabled=bool(getattr(cfg, "goal_enabled", False)) if cfg else False,
+        )
+        for t in core:
+            add(t, "core")
+    except Exception:  # noqa: BLE001
+        log.exception("[tools] core enumeration failed")
+    for t in (getattr(STATE, "plugin_tools", None) or []):
+        add(t, "plugin")
+    for t in (getattr(STATE, "mcp_tools", None) or []):
+        add(t, "mcp")
+    return {"tools": out, "count": len(out)}
+
+
 async def _operator_subagent_run(req: dict):
     if STATE.graph is None:
         raise RuntimeError("agent graph is not loaded; finish setup first")

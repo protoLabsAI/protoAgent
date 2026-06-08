@@ -1,12 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-// Console Plugins panel (ADR 0027, PR2) — install a plugin from a git URL under
-// Settings → Integrations; the installed list round-trips install → uninstall.
+// Console Plugins section — install a plugin from a git URL in the dedicated
+// Plugins rail section; the installed list round-trips install → uninstall.
 
 async function openPluginsPanel(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Integrations", exact: true }).click();
+  await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Plugins" })).toBeVisible();
 }
 

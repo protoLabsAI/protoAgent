@@ -80,6 +80,14 @@ function handleApiGet(pathname) {
       return RUNTIME_STATUS;
     case "/api/subagents":
       return { subagents: SUBAGENTS };
+    case "/api/tools":
+      return {
+        tools: [
+          { name: "web_search", description: "Search the web.", source: "core" },
+          { name: "echo__ping", description: "Echo ping.", source: "mcp" },
+        ],
+        count: 2,
+      };
     case "/api/chat/commands":
       return { commands: SLASH_COMMANDS };
     case "/api/scheduler/jobs":

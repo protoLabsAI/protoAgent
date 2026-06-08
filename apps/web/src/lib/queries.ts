@@ -10,6 +10,7 @@ export const queryKeys = {
   beadsIssues: ["beads", "issues"] as const,
   workflows: ["workflows"] as const,
   subagents: ["subagents"] as const,
+  tools: ["tools"] as const,
   telemetry: ["telemetry"] as const,
   settings: ["settings", "schema"] as const,
   inbox: ["inbox"] as const,
@@ -51,6 +52,12 @@ export const subagentsQuery = () =>
   queryOptions({
     queryKey: queryKeys.subagents,
     queryFn: () => api.subagents(),
+  });
+
+export const toolsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.tools,
+    queryFn: () => api.tools(),
   });
 
 // Telemetry dashboard (ADR 0006) — the summary + recent turns + insights in one

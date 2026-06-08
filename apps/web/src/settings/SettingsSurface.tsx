@@ -14,7 +14,6 @@ import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
 import { DelegatesSection } from "./DelegatesSection";
-import { PluginsSection } from "./PluginsSection";
 
 // Generic settings surface — renders whatever GET /api/settings/schema returns,
 // so it stays in sync as config grows. Saving POSTs the changed fields and the
@@ -68,8 +67,8 @@ function SettingsBody() {
       const c = g.category || "Integrations";
       if (!seen.includes(c)) seen.push(c);
     }
-    // Integrations always shows — the Plugins panel (ADR 0027) is core, and the
-    // delegates panel appears there when its plugin is enabled.
+    // Integrations always shows — the delegate registry (ADR 0025) lives here as
+    // a custom CRUD panel (plugins moved to their own top-level section).
     if (!seen.includes("Integrations")) seen.push("Integrations");
     return seen;
   }, [groups]);
@@ -307,8 +306,7 @@ function SettingsBody() {
         {/* The delegate registry (ADR 0025) isn't part of the settings schema —
             it's a CRUD surface, rendered as a custom panel under Integrations. */}
         {category === "Integrations" ? <DelegatesSection /> : null}
-        {/* Git-installed plugins (ADR 0027) — install/manage from a URL, under Integrations. */}
-        {category === "Integrations" ? <PluginsSection /> : null}
+        {/* Plugin install/manage moved to its own top-level Plugins section. */}
       </div>
       </section>
     </>

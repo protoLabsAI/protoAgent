@@ -438,6 +438,7 @@ def _main():
         fastapi_app,
         runtime_status=_console._operator_runtime_status,
         subagent_list=_console._operator_subagent_list,
+        tools_list=_console._operator_tools_list,
         subagent_run=_console._operator_subagent_run,
         subagent_batch=_console._operator_subagent_batch,
         beads_store=STATE.beads_store,

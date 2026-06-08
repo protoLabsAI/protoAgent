@@ -4,13 +4,14 @@ import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
 import { PanelHeader } from "./PanelHeader";
-import { runtimeStatusQuery, subagentsQuery } from "../lib/queries";
+import { runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 
-// System → Runtime: the agent's configured surface (model, middleware, skills,
-// MCP servers, plugins, subagents). On the TanStack Query data layer (ADR 0013)
-// via useSuspenseQuery on the same `runtime` key the shell reads non-suspense.
+// Runtime → Overview: the agent's configured surface at a glance (model,
+// middleware, storage, skills). Tools / MCP / Subagents are their own tabs.
+// On the TanStack Query data layer (ADR 0013) via useSuspenseQuery on the same
+// `runtime` key the shell reads non-suspense.
 
 function formatBool(value: boolean) {
   return value ? "on" : "off";
@@ -41,8 +42,6 @@ function Metric({ icon, label, value }: { icon: ReactNode; label: string; value:
 
 function RuntimeBody() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
-  const { data: subData } = useSuspenseQuery(subagentsQuery());
-  const subagents = subData.subagents;
   const middleware = Object.entries(runtime.middleware).sort(([a], [b]) => a.localeCompare(b));
 
   return (
@@ -91,61 +90,6 @@ function RuntimeBody() {
               tone={(runtime.skills?.count ?? 0) > 0 ? "success" : "muted"}
             />
           </div>
-        </div>
-
-        <p className="panel-kicker">MCP servers</p>
-        <div className="table-list">
-          {runtime.mcp?.servers?.length ? (
-            runtime.mcp.servers.map((server) => (
-              <div className="table-row" key={server.name}>
-                <span>{server.name} · {server.transport}</span>
-                <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
-              </div>
-            ))
-          ) : (
-            <div className="table-row">
-              <span>no MCP servers</span>
-              <StatusPill label={runtime.mcp?.enabled ? "enabled" : "off"} tone="muted" />
-            </div>
-          )}
-        </div>
-
-        <p className="panel-kicker">Plugins</p>
-        <div className="table-list">
-          {runtime.plugins?.length ? (
-            runtime.plugins.map((plugin) => (
-              <div className="table-row" key={plugin.id}>
-                <span>
-                  {plugin.name}
-                  {plugin.loaded && plugin.tools.length ? ` · ${plugin.tools.length} tool${plugin.tools.length === 1 ? "" : "s"}` : ""}
-                  {plugin.loaded && plugin.skills ? ` · ${plugin.skills} skill${plugin.skills === 1 ? "" : "s"}` : ""}
-                  {plugin.error ? ` · ${plugin.error}` : ""}
-                </span>
-                <StatusPill
-                  label={plugin.loaded ? "loaded" : plugin.error ? "error" : plugin.enabled ? "enabled" : "disabled"}
-                  tone={plugin.loaded ? "success" : plugin.error ? "error" : "muted"}
-                />
-              </div>
-            ))
-          ) : (
-            <div className="table-row">
-              <span>no plugins</span>
-              <StatusPill label="none" tone="muted" />
-            </div>
-          )}
-        </div>
-
-        <p className="panel-kicker">Subagents</p>
-        <div className="subagent-list">
-          {subagents.map((subagent) => (
-            <div className="subagent-row" key={subagent.name}>
-              <div>
-                <strong>{subagent.name}</strong>
-                <span>{subagent.tools.join(", ") || "no tools"}</span>
-              </div>
-              <StatusPill label={`${subagent.max_turns} turns`} tone={subagent.enabled ? "success" : "muted"} />
-            </div>
-          ))}
         </div>
       </div>
     </>
