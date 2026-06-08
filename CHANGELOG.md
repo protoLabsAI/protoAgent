@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin trust gate (ADR 0034 slice 3)** — a `ui: react` plugin mounts **in-process only if
+  host-trusted** (a shipped first-party allowlist ∪ the operator's `plugins.trusted`); an untrusted
+  `ui: react` view **degrades to a sandboxed iframe**. Trust is **host-decided, never plugin-
+  declared** — deny-by-default. New `POST /api/plugins/{id}/trusted` + a **"Trust React"** toggle
+  in the Plugins surface so the operator can promote a plugin.
 - **Plugin-UI SDK: host bridge + reference remote (ADR 0034 slice 2)** — `@protoagent/plugin-ui`
   now exposes a **host bridge** (`setHostBridge`/`getHostBridge`: the authed API client, `authToken`,
   `apiUrl`, `brandName`) so a remote gets host context without importing host internals. The

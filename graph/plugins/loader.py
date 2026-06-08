@@ -137,6 +137,14 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
     raise RuntimeError(f"plugin {plugin_id!r} not found for --mcp-plugin")
 
 
+# First-party plugin ids we SHIP pre-trusted for in-process `ui: react` mounting (ADR 0034 D5).
+# A `ui: react` view runs in-process with the host's React/query/auth, so trust is host-decided
+# here — NEVER self-declared by a plugin manifest. Every plugin not in this set (and not in the
+# operator's ``plugins.trusted`` allowlist) defaults to the sandboxed iframe. Add an id only when
+# we ship + vet that plugin as first-party (e.g. ``notes`` once ADR 0034 S4 ports it).
+_SHIPPED_TRUSTED_PLUGINS: frozenset[str] = frozenset()
+
+
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
     """Load enabled plugins and collect their contributions.
 
@@ -147,23 +155,28 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     roots = _plugin_roots(config)
     enabled_ids = set(getattr(config, "plugins_enabled", []) or [])
     disabled_ids = set(getattr(config, "plugins_disabled", []) or [])
+    trusted_ids = set(getattr(config, "plugins_trusted", []) or [])
     seen_tool_names = set(core_tool_names or set())
 
     for manifest in discover_plugins(roots):
         # plugins.disabled wins — turn off a bundled plugin (e.g. a first-party
         # surface) without deleting it or editing core.
         enabled = (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
+        # Trust is HOST-decided (ADR 0034 D5): shipped first-party ids + the operator's allowlist.
+        # A plugin can NOT self-declare trust; an untrusted `ui: react` view degrades to iframe.
+        trusted = manifest.id in _SHIPPED_TRUSTED_PLUGINS or manifest.id in trusted_ids
         entry = {
             "id": manifest.id,
             "name": manifest.name,
             "version": manifest.version,
             "enabled": enabled,
+            "trusted": trusted,
             "loaded": False,
             "tools": [],
             "skills": 0,
-            # Console surfaces (ADR 0026) — the rail reads these from
-            # /api/runtime/status to render a dynamic icon + iframe per view.
-            "views": list(manifest.views) if enabled else [],
+            # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Each
+            # view carries the host-decided `trusted` flag; the renderer gates the React path on it.
+            "views": [{**v, "trusted": trusted} for v in manifest.views] if enabled else [],
         }
 
         if not enabled:

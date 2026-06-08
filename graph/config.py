@@ -364,6 +364,11 @@ class LangGraphConfig:
     # Lets a fork disable a bundled first-party plugin (e.g. the Discord surface)
     # without deleting its directory or editing core.
     plugins_disabled: list[str] = field(default_factory=list)
+    # Trust allowlist (ADR 0034 D5) — plugin ids the operator allows to mount as
+    # IN-PROCESS React (`ui: react`), sharing the host's React/query/auth. Shipped
+    # first-party ids are trusted automatically (loader ``_SHIPPED_TRUSTED_PLUGINS``);
+    # every other plugin defaults to the sandboxed iframe until added here.
+    plugins_trusted: list[str] = field(default_factory=list)
     plugins_dir: str = ""
     # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org globs
     # (e.g. ``github.com/protoLabsAI/*``); empty = any URL allowed (gated install).
@@ -595,6 +600,7 @@ class LangGraphConfig:
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
+            plugins_trusted=list(plugins.get("trusted", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),
             plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
             identity_name=identity.get("name", cls.identity_name),

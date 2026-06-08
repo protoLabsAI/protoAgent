@@ -26,8 +26,18 @@ function contributionsLabel(p: Plugin): string {
   );
 }
 
-function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: (p: Plugin) => void }) {
+function PluginRow({
+  p, busy, onToggle, onTrust, trustBusy,
+}: {
+  p: Plugin;
+  busy: boolean;
+  onToggle: (p: Plugin) => void;
+  onTrust: (p: Plugin) => void;
+  trustBusy: boolean;
+}) {
   const on = p.enabled;
+  // Trust only matters for plugins that ship an in-process React view (ADR 0034 D5).
+  const hasReactView = p.views?.some((v) => v.ui === "react") ?? false;
   return (
     <div className="subagent-row" key={p.id}>
       <div>
@@ -42,6 +52,21 @@ function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: 
           label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
           tone={p.loaded ? "success" : p.error ? "error" : "muted"}
         />
+        {hasReactView ? (
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={trustBusy}
+            onClick={() => onTrust(p)}
+            title={
+              p.trusted
+                ? `Revoke trust — ${p.name}'s React views fall back to a sandboxed iframe`
+                : `Trust ${p.name} to mount its React views in-process (shares the console's React/auth)`
+            }
+          >
+            {trustBusy ? <Loader2 size={14} className="spin" /> : p.trusted ? "Trusted ✓" : "Trust React"}
+          </button>
+        ) : null}
         <button
           type="button"
           className="ghost-button"
@@ -78,6 +103,22 @@ function LocalTab() {
   const onToggle = (p: Plugin) => { setHint(null); toggle.mutate(p); };
   const pendingId = toggle.isPending ? toggle.variables?.id : undefined;
 
+  // Trust opt-in (ADR 0034 D5) — promote a plugin's ui:react views to the in-process mount.
+  const trust = useMutation({
+    mutationFn: (p: Plugin) => api.setPluginTrusted(p.id, !p.trusted),
+    onSuccess: (res, p) => {
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      setHint(
+        res.trusted
+          ? `${p.name} trusted — its React views now mount in-process.`
+          : `${p.name} trust revoked — its React views fall back to a sandboxed iframe.`,
+      );
+    },
+    onError: (err: unknown, p) => setHint(`Couldn't change trust for ${p.name}: ${err instanceof Error ? err.message : String(err)}`),
+  });
+  const onTrust = (p: Plugin) => { setHint(null); trust.mutate(p); };
+  const trustPendingId = trust.isPending ? trust.variables?.id : undefined;
+
   const plugins = runtime.plugins ?? [];
   const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
@@ -93,13 +134,13 @@ function LocalTab() {
             {loaded.length ? (
               <>
                 <p className="panel-kicker">Loaded <span className="muted">· {loaded.length}</span></p>
-                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} />)}</div>
+                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} onTrust={onTrust} trustBusy={trustPendingId === p.id} />)}</div>
               </>
             ) : null}
             {disabled.length ? (
               <>
                 <p className="panel-kicker">Disabled <span className="muted">· {disabled.length}</span></p>
-                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} />)}</div>
+                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} onTrust={onTrust} trustBusy={trustPendingId === p.id} />)}</div>
               </>
             ) : null}
           </>

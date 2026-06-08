@@ -103,3 +103,11 @@ test("a ui:react remote contributes a context-menu item via the SDK (ADR 0034 S2
     page.getByTestId("context-menu").getByText("Hello from the React plugin", { exact: false }),
   ).toBeVisible();
 });
+
+test("the trust gate degrades an untrusted ui:react view to an iframe (ADR 0034 D5)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".rail-right").getByRole("button", { name: "React Untrusted", exact: true }).click();
+  // Untrusted ui:react → the sandboxed iframe of its path, NOT the in-process federated remote.
+  await expect(page.locator(".plugin-view-frame")).toBeVisible();
+  await expect(page.getByText("Hello from a React plugin remote", { exact: false })).toHaveCount(0);
+});
