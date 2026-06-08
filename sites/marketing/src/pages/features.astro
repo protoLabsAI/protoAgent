@@ -21,61 +21,63 @@ const pillars = [
   },
 ];
 
+// The honest edges. Hermes & OpenClaw are extensible, OpenAI-compatible, local-first
+// agents too — these are the places protoAgent's design genuinely differs, not claims
+// of exclusivity.
 const differentiators = [
   {
-    title: 'Extend without forking',
-    body: 'Plugins are repos: install from a git URL, pinned in a lockfile, removed cleanly. A plugin can add tools, SKILL.md skills, subagents, workflows, FastAPI routes, managed MCP servers, console rail views, and its own config/secrets — without touching core. Share one as a repo; the agent can even scaffold its own.',
+    title: 'A2A 1.0 as the native interface',
+    body: "protoAgent IS a spec-compliant A2A 1.0 server (HTTP/JSON-RPC, agent card, extensions) — shipped, not proposed. A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints. The whole design assumes a fleet: agents discovering and delegating to each other over the open standard.",
   },
   {
-    title: 'Multi-agent orchestration over A2A',
-    body: 'A unified, hot-swappable delegate registry routes a sub-task to another agent or endpoint over a2a / openai / acp, with a health prober. Your agent becomes a hub: an A2A endpoint that coordinates a fleet — and is itself reachable by ORBIS, other agents, or your own tools.',
+    title: 'Built on LangGraph',
+    body: "The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You're extending a graph, not a bespoke loop, so what you learn here transfers.",
   },
   {
-    title: 'Headless + OpenAI-compatible',
-    body: "Run it with no UI (--ui none): API + A2A + /metrics. Drive it via /v1/chat/completions (point any OpenAI client at it) or the A2A protocol. Same agent, tools, memory, and goals — no browser required.",
+    title: 'A lean core, not a bundle',
+    body: "Hermes and OpenClaw ship rich built-ins (browser automation, voice, 50+ chat channels). protoAgent ships a small legible core and you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. You opt in to surface area instead of opting out of it.",
   },
   {
-    title: 'First-class observability',
-    body: 'Langfuse tracing (distributed across A2A hops) + Prometheus /metrics + a built-in per-turn telemetry store (cost, latency p50/p95, tokens, cache-hit, by-model) with CSV export and a retention guardrail — out of the box, not a bolt-on.',
+    title: 'An operator console, not just chat apps',
+    body: "Where the others live inside your chat apps, protoAgent centers on a dedicated React console (+ a native desktop app) where a plugin can add its own left-rail dashboard — the SpaceTraders Fleet view, a Quant Desk — without a rebuild. Manage a fleet from one surface.",
   },
   {
-    title: 'Pluggable memory & embeddings',
-    body: 'Ships with a SQLite + FTS5 knowledge store (hybrid semantic search via the gateway). Swap in pgvector / Qdrant / Chroma — or an in-process embedder — as a plugin (register_knowledge_store / register_embedder). The store is a seam, not a hard dependency.',
+    title: 'Built-in cost & latency telemetry',
+    body: "A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Some agents deliberately keep zero telemetry; protoAgent treats cost/latency visibility as core.",
   },
   {
-    title: 'Real autonomy',
-    body: 'Goal mode with pluggable verifiers + monitor goals for long-horizon, externally-driven targets; a scheduler; and a reactive inbox for webhooks/cron/sister-agents. Compose an OODA loop: observe on a cadence, adjust, escalate to a strategist subagent, all toward a standing goal.',
+    title: 'Goals with testable outcomes',
+    body: "Beyond a scheduler: goal mode with pluggable verifiers (a goal is met when a check passes, not when the model says so) and monitor goals for long-horizon, externally-driven targets — e.g. a background loop grinding toward 1M credits, evaluated out-of-band.",
   },
   {
     title: 'Drive any coding agent (ACP)',
-    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol. protoAgent doesn't compete as a coding agent — it manages them.",
+    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol. protoAgent orchestrates coding agents rather than competing as one.",
   },
   {
-    title: 'Custom UI that slots in',
-    body: 'A plugin can add a left-rail icon and a full console view (its own dashboard) — like the SpaceTraders Fleet view or the Quant Desk — without a console rebuild. Plus a native desktop app (Tauri).',
-  },
-  {
-    title: 'Sandboxing & egress fences',
-    body: 'A fenced filesystem toolset, an egress allowlist, and NVIDIA OpenShell support out of the box — the safety rails for running agents that touch your machine and the network.',
+    title: 'Headless, API-first',
+    body: "Run it with no UI (--ui none): A2A + an OpenAI-compatible /v1 endpoint + /metrics. Point any OpenAI client or agent fleet at it. The console is optional, not the product.",
   },
 ];
 
-// Comparison rows. ✓ = yes · ~ = partial/via add-ons · — = not a focus / verify.
+// Honest comparison — these are all capable, MIT-licensed, local-first agents. The
+// point isn't a feature-count win; it's a different center of gravity. ✓ = yes ·
+// ~ = partial / different flavor / via add-on · — = not a focus.
 const cmp = [
-  ['Core philosophy', 'Bare-bones + opt-in plugins', 'Batteries-included', 'Batteries-included'],
-  ['Extend without forking (git-URL plugins)', '✓', '~', '~'],
-  ['A2A 1.0 server + fleet delegation', '✓', '—', '—'],
-  ['Headless + OpenAI-compatible endpoint', '✓ both', '~', '~'],
-  ['Built-in telemetry (cost/latency) + export', '✓', '—', '—'],
-  ['First-class Langfuse + Prometheus', '✓', '~', '~'],
-  ['Pluggable memory / vector store', '✓', '~', '~'],
-  ['Goal mode + monitor goals + scheduler', '✓', '~', '~'],
-  ['Reactive inbox (webhooks / cron / agents)', '✓', '—', '—'],
-  ['Delegate to coding agents over ACP', '✓', '—', '—'],
-  ['Custom console views + native desktop', '✓', '~', '—'],
-  ['Sandboxing + egress allowlist', '✓', '~', '~'],
-  ['Local-model-first', '✓', '✓', '✓'],
-  ['Open source, fork-to-ship', '✓', '✓', '✓'],
+  ['Foundation', 'LangGraph + A2A 1.0', 'own runtime', 'own gateway'],
+  ['Center of gravity', 'A2A orchestration substrate', 'self-improving personal agent', 'multi-channel chat gateway'],
+  ['Core stance', 'minimal core, opt-in plugins', 'feature-rich built-ins', 'feature-rich built-ins'],
+  ['Extend without forking', '✓ git-URL plugins', '✓ plugins', '✓ skills/plugins'],
+  ['Agent-to-agent', '✓ A2A 1.0 (HTTP/JSON-RPC), shipped', '~ proposed (#514)', '~ encrypted relay'],
+  ['OpenAI-compatible endpoint', '✓', '✓', '~'],
+  ['Pluggable memory / vector store', '✓', '✓ providers', '~ markdown'],
+  ['Built-in cost/latency telemetry + CSV export', '✓', '— (local-only by design)', '—'],
+  ['Langfuse tracing', '✓ first-class', '✓ plugin', '~'],
+  ['Operator console + custom plugin dashboards', '✓ (+ native desktop)', '~', '~'],
+  ['Chat-channel breadth', '~ Discord/Telegram/Slack', '✓ broad', '✓ 50+ (widest)'],
+  ['Delegate to coding agents', '✓ ACP', '~', '✓'],
+  ['Autonomy (scheduler / heartbeat)', '✓ + goal mode & verifiers', '✓', '✓ heartbeat'],
+  ['Sandboxing / NVIDIA', '✓ OpenShell + egress fence', '~', '✓ NemoClaw'],
+  ['License', 'MIT / fork-to-ship', 'MIT', 'MIT'],
 ];
 ---
 
@@ -124,8 +126,10 @@ const cmp = [
       </table>
     </div>
     <p class="text-xs text-zinc-600 mb-20">
-      Reflects protoAgent's design priorities and our reading of the alternatives at time of
-      writing; these tools evolve fast — corrections welcome.
+      Hermes (NousResearch) and OpenClaw are capable, MIT-licensed, local-first agents too —
+      this maps where protoAgent's design priorities <em>differ</em>, not a claim that it does
+      more. They each lead in places (OpenClaw's 50+ chat channels, Hermes's self-improving
+      memory). Researched June 2026; these tools move fast — corrections welcome.
     </p>
 
     <!-- Deep dive -->
