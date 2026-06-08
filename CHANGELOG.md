@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verification, fact extraction) fall back to the same coding agent via an `AcpChatModel`
   adapter, and headless validation no longer requires a gateway. (Embeddings still need an
   embed endpoint, else semantic recall degrades to keyword — unchanged.)
+- **Agent runtime selectable in the console** — Agent → Settings has an **Agent runtime** group:
+  a dropdown (native | acp:proto | acp:codex | acp:claude | acp:copilot | acp:opencode) + a
+  **tools allowlist** for the ACP brain. The allowlist accepts `*` to expose everything (minus
+  `execute_code`, which a coding agent already has) — no need to enumerate every tool.
+- **ACP delegate teardown** — `coding_agent.evict_client(spec)` + `AcpAdapter.teardown(delegate)`
+  evict the cached `AcpClient` for a spec **and** terminate its subprocess (a plain cache `pop`
+  forgot the handle but left the child running). Completes the delegate lifecycle for callers that
+  dispatch into a transient, per-call `workdir` (e.g. a disposable git worktree, scoped via
+  `dataclasses.replace`): call `teardown` in a `finally` so each scoped `workdir` reaps its own
+  process instead of leaking one. Best-effort + idempotent; no change to existing callers (the
+  ACP runtime owns its own client separately and is unaffected).
 
 ### Fixed
 - **ACP runtime: agent now uses protoAgent's operator tools, not its own** — the persona file
@@ -46,19 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Instance-scoped config** (ADR 0004) — with `PROTOAGENT_INSTANCE` set, the live config +
   secrets + setup-marker are now per-instance (seeded from the default's on first boot), so a
   scoped instance's saves no longer mutate the shared config. No-op for the default instance.
-
-### Added
-- **Agent runtime selectable in the console** — Agent → Settings has an **Agent runtime** group:
-  a dropdown (native | acp:proto | acp:codex | acp:claude | acp:copilot | acp:opencode) + a
-  **tools allowlist** for the ACP brain. The allowlist accepts `*` to expose everything (minus
-  `execute_code`, which a coding agent already has) — no need to enumerate every tool.
-- **ACP delegate teardown** — `coding_agent.evict_client(spec)` + `AcpAdapter.teardown(delegate)`
-  evict the cached `AcpClient` for a spec **and** terminate its subprocess (a plain cache `pop`
-  forgot the handle but left the child running). Completes the delegate lifecycle for callers that
-  dispatch into a transient, per-call `workdir` (e.g. a disposable git worktree, scoped via
-  `dataclasses.replace`): call `teardown` in a `finally` so each scoped `workdir` reaps its own
-  process instead of leaking one. Best-effort + idempotent; no change to existing callers (the
-  ACP runtime owns its own client separately and is unaffected).
 
 ### Removed
 - **`code_with` tool + the `coding_agent` plugin** (breaking) — retired in favour of `delegate_to`

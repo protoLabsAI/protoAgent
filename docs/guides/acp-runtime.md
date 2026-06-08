@@ -53,11 +53,26 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
 3. **Tools** — protoAgent's operator tools are published as an MCP server (see
    [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server)) and **mounted into
    the ACP session** (`session/new` `mcpServers`). The coding agent calls `beads_create`,
-   `memory_recall`, `run_workflow`, … alongside its own tools.
+   `memory_recall`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
+   to the chat as **tool cards** (`tool_start`/`tool_end`), the same as the native runtime.
 4. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
 5. **Write back** — durable facts persist to the knowledge store after the turn.
 
 One stateful ACP session is kept **per conversation thread** and reused across turns.
+
+> **Prefer protoAgent's tools for state.** A coding agent has its *own* todo/memory tools
+> (e.g. proto's `TaskCreate`) and will reach for them by default — state that then vanishes
+> with its session. The persona file steers it to use the `protoagent-operator` tools
+> (`beads_create`, `memory_ingest`, `set_goal`, …) for anything that must **persist** in
+> protoAgent. Set `operator_mcp.tools: ['*']` (or list them) so they're actually available.
+
+## No gateway? ACP-only works
+
+If your runtime is `acp:<agent>` and you have **no** OpenAI-compatible gateway key configured,
+protoAgent's own auxiliary LLM calls (compaction, goal verification, fact extraction) **fall
+back to the same coding agent** — so you can run entirely on e.g. your Claude/Codex login with
+no separate model endpoint. (Embeddings are a separate axis: without an embed endpoint, semantic
+recall degrades to keyword search.)
 
 ## What reaches the coding agent
 
@@ -78,5 +93,8 @@ to. The agent runs with its own permissions on the host (its CLI's auth + sandbo
 ## Limits
 
 - The native and ACP runtimes don't run in the same turn — `agent_runtime` picks one.
-- Token-by-token streaming of the agent's output isn't wired yet (the turn returns when complete).
+- Tool calls stream as cards, but the agent's **answer text** isn't token-streamed yet — the
+  final message lands when the turn completes.
+- Instances run from the **same directory** share a derived workspace; give each an explicit
+  `PROTOAGENT_INSTANCE` if you run several on one box (see [Run multiple instances](/guides/multi-instance)).
 - Validate live — a real coding agent's behavior (and ACP version) is the true test; CI mocks it.
