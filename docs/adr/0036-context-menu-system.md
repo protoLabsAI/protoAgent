@@ -58,11 +58,14 @@ trust gate as `ui: react`** (ADR 0034 D5 — trusted/first-party; untrusted thir
 in-process menu items). A manifest-declared *static* item path (label + a tool/route to invoke)
 is a later, lower-trust option for iframe plugins.
 
-### D5 — Lean, custom renderer (no heavy dep)
+### D5 — Renderer → shadcn Radix `DropdownMenu` (superseded by ADR 0037)
 
-Build a small custom menu component to match our design system (positioned popover, viewport-flip,
-keyboard nav, Escape + click-away) rather than pull in Radix — consistent with lean-core. (Radix's
-DropdownMenu is the fallback if a11y proves fiddly; the registry/store is library-agnostic.)
+> **Updated by [ADR 0037](./0037-design-system-foundation.md).** We adopt Radix + shadcn as the
+> component foundation, so the renderer is shadcn's Radix `DropdownMenu` (imperative open-at-coords)
+> themed by the `@protolabsai/design` tokens — accessibility (focus, keyboard, dismissal) for free,
+> closing the a11y gap Quinn flagged. The registry / `ContextType` / store design (D1–D4) is
+> **unchanged**; only the renderer implementation. (The original "lean custom renderer, no Radix"
+> intent is reversed.)
 
 ### D6 — First customers
 
