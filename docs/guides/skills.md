@@ -7,7 +7,7 @@ recurring task. Relevant skills are retrieved and injected into the system
 prompt at inference time (the `<learned_skills>` block), so the agent picks the
 right approach without you re-explaining it each turn.
 
-> The console surfaces the skill index under **Knowledge → Skills**. A skill
+> The console surfaces the skill index under **Agent → Skills**. A skill
 > **advises** (retrieved guidance the model may adapt); it does **not** execute. For
 > deterministic, run-the-same-steps orchestration across subagents, that's a
 > [Workflow](/guides/workflows#skills-vs-workflows) — different tool, different altitude.

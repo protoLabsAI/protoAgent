@@ -104,7 +104,7 @@ curl 'localhost:7870/api/telemetry/recent?limit=20'
 curl localhost:7870/api/telemetry/insights
 ```
 
-`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× the rolling-median cost/latency and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. The operator console surfaces all of this under **System ▸ Telemetry** (Slices 3–4). History isn't auto-expired (it's the analysis substrate); `TelemetryStore.prune(keep_days=…)` is available for hosts that want bounded retention.
+`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× the rolling-median cost/latency and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. The operator console surfaces all of this under **Settings ▸ Overview** (Slices 3–4). History is pruned by `telemetry.retention_days` (default 90; `TelemetryStore.prune` runs on the maintenance loop), and `/api/telemetry/export` downloads it as CSV.
 
 ## Audit log
 
