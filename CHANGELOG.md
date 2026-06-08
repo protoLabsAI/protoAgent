@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin-UI SDK foundation (ADR 0034 slice 2)** — a new versioned **`@protoagent/plugin-ui`**
+  package now holds the context-menu registry/store/types, and the host shares it as a **Module
+  Federation singleton** — so a `ui: react` remote gets the *same* registry instance and a plugin
+  can **`registerContextMenu`** into the host's menus (ADR 0036's extension point, cross-boundary).
+  The host re-exports it (no behaviour change). The host bridge (API/auth, QueryClient, theme,
+  shell pieces) + the reference remote consuming it land next. (No `@protolabsai/ui` dependency —
+  unblocked from its publish.)
 - **Mobile shell (ADR 0035 slice 4)** — below 768px the console drops the dual-rail split for a
   single-surface view with a **bottom quick-bar** (configurable, default Chat/Activity/Knowledge/
   Plugins) + a **hamburger drawer** listing every surface. Chat stays mounted (streaming
