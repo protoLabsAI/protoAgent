@@ -85,6 +85,7 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
+import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
@@ -777,6 +778,8 @@ export function App() {
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
+      {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry. */}
+      <ContextMenuRenderer />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}
@@ -840,6 +843,7 @@ export function App() {
               label={s.label}
               icon={s.icon}
               onClick={() => setSurface(s.id)}
+              onContextMenu={(e) => openContextMenu("rail-surface", e, { id: s.id, side: "left" })}
               badge={s.id === "activity" ? activityUnread + inboxUnread : undefined}
               dot={s.id === "chat" ? chatStreaming && surface !== "chat" : undefined}
             />
@@ -893,6 +897,7 @@ export function App() {
               label={s.label}
               icon={s.icon}
               onClick={() => { setRightPanel(s.id); setRightCollapsed(false); }}
+              onContextMenu={(e) => openContextMenu("rail-surface", e, { id: s.id, side: "right" })}
             />
           ))}
         </aside>

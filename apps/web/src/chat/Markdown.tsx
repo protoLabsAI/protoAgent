@@ -1,5 +1,5 @@
 import type { ComponentPropsWithoutRef } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
@@ -9,10 +9,11 @@ import remarkGfm from "remark-gfm";
 const REMARK = [remarkGfm];
 const REHYPE = [rehypeHighlight];
 
-const components = {
-  // External links open in a new tab; never let markdown navigate the app.
-  a: (props: ComponentPropsWithoutRef<"a">) => (
-    <a {...props} target="_blank" rel="noreferrer noopener" />
+const components: Components = {
+  // External links open in a new tab; never let markdown navigate the app. Strip react-markdown's
+  // `node` prop before spreading so it doesn't reach the DOM <a>.
+  a: ({ node: _node, ...props }) => (
+    <a {...(props as ComponentPropsWithoutRef<"a">)} target="_blank" rel="noreferrer noopener" />
   ),
 };
 
