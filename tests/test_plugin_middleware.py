@@ -66,3 +66,14 @@ def test_request_metadata_scope_sets_and_resets():
     with request_metadata_scope({"project": "alpha", "origin": "scheduler"}):
         assert current_request_metadata()["project"] == "alpha"
     assert current_request_metadata() == {}
+
+
+def test_request_metadata_scope_survives_cross_context_exit():
+    # Token created in one Context, exited in another (e.g. the ACP runtime awaiting across
+    # its reader-loop tasks) → reset() would ValueError; __exit__ must swallow it, not crash.
+    import contextvars
+
+    scope = request_metadata_scope({"project": "x"})
+    contextvars.copy_context().run(scope.__enter__)  # token born in a different Context
+    scope.__exit__(None, None, None)                 # must not raise
+    assert current_request_metadata() == {}

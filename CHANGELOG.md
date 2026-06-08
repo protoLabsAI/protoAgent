@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Runtime selector leads the Agent settings** — the Agent runtime group is now first in
+  Agent → Settings, with an active-runtime badge in the header and a banner (when an ACP
+  runtime is active) explaining the model settings still power protoAgent's own aux calls.
 - **Auto-scoping for co-located instances** (#706) — set `PROTOAGENT_AUTO_SCOPE=1` and an
   instance with no explicit `PROTOAGENT_INSTANCE` derives a stable per-working-directory id, so
   instances on one machine never silently share `~/.protoagent` and clobber each other's goals/
@@ -24,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embed endpoint, else semantic recall degrades to keyword — unchanged.)
 
 ### Fixed
+- **ACP runtime: request-metadata scope cross-context reset** — an ACP turn awaits across
+  context boundaries (the client's reader-loop tasks), so the ADR-0032 `request_metadata_scope`
+  token could be reset in a different Context (`ValueError`). The scope now swallows that and
+  clears the value instead — no traceback on ACP turns.
 - **Instance-scoped config** (ADR 0004) — with `PROTOAGENT_INSTANCE` set, the live config +
   secrets + setup-marker are now per-instance (seeded from the default's on first boot), so a
   scoped instance's saves no longer mutate the shared config. No-op for the default instance.
