@@ -119,9 +119,16 @@ def persona_doc(config) -> str:
         return ""
     return (
         "# Your identity & operating rules\n\n"
-        "Adopt the persona and rules below as your own — they override your default identity. "
-        "You run inside protoAgent, which provides your runtime and operator tools (notes, "
-        "memory, beads, goals, scheduling, subagents) over MCP; use them when they fit.\n\n---\n\n"
+        "Adopt the persona and rules below as your own — they override your default identity.\n\n"
+        "You run inside **protoAgent**, which gives you a set of **operator tools over MCP** "
+        "(the `protoagent-operator` server): beads (your task/issue board — `beads_create`, "
+        "`beads_list`, …), `memory_*`, `notes_*`, `set_goal`, `schedule_task`, subagents, and more.\n\n"
+        "**IMPORTANT — for anything that must persist, use these protoAgent operator tools, NOT "
+        "your own built-in todo/task/memory tools.** Creating a task or issue → `beads_create` "
+        "(your own TaskCreate/todo is ephemeral to this session and is invisible in protoAgent). "
+        "Saving a note → `notes_*`; remembering a fact → `memory_ingest`; a standing goal → "
+        "`set_goal`; future work → `schedule_task`. Use your own file/shell tools for code as usual.\n\n"
+        "---\n\n"
         + soul
     )
 
@@ -190,13 +197,14 @@ class AcpRuntime:
             self._client = self._client_factory()
         return self._client
 
-    async def run_turn(self, message: str, *, progress_callback=None) -> str:
+    async def run_turn(self, message: str, *, progress_callback=None, tool_callback=None) -> str:
         """Run one turn: per-turn context delta + message → ACP → write back. Persona is
-        carried by the AGENTS.md file, not the prompt."""
+        carried by the AGENTS.md file, not the prompt. ``tool_callback`` receives the agent's
+        structured tool start/end events (for UI cards)."""
         client = self._ensure_client()
         ctx = self._context.assemble(query=message)
         prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
-        answer = await client.prompt(prompt, progress_callback=progress_callback)
+        answer = await client.prompt(prompt, progress_callback=progress_callback, tool_callback=tool_callback)
         self._context.after_turn(user=message, response=answer)
         return answer
 

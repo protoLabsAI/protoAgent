@@ -54,7 +54,7 @@ class _FakeClient:
         self.prompts = []
         self.closed = False
 
-    async def prompt(self, text, progress_callback=None):
+    async def prompt(self, text, progress_callback=None, tool_callback=None):
         self.prompts.append(text)
         return "ANSWER"
 
@@ -184,3 +184,23 @@ def test_validate_headless_allows_acp_only():
     # native still requires a gateway.
     ok2, _ = validate_for_headless(_t.SimpleNamespace(agent_runtime="native", api_base="", api_key=""))
     assert ok2 is False
+
+
+async def test_acp_client_emits_structured_tool_events():
+    from plugins.coding_agent.acp_client import AcpClient
+
+    client = AcpClient("noop", cwd="/tmp", name="t")
+    captured = []
+
+    async def cap(ev):
+        captured.append(ev)
+
+    client._on_tool = cap
+    await client._handle_update({"update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Editing app.py"}})
+    await client._handle_update({"update": {
+        "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+        "title": "Editing app.py", "content": [{"content": {"type": "text", "text": "wrote 3 lines"}}],
+    }})
+    assert captured[0] == {"phase": "start", "id": "t1", "name": "Editing app.py", "input": ""}
+    assert captured[1]["phase"] == "end" and captured[1]["id"] == "t1"
+    assert "wrote 3 lines" in captured[1]["output"]
