@@ -10,12 +10,15 @@ import type { MenuEntry } from "./types";
 registerContextMenu({
   type: "rail-surface",
   items: (ctx: { id: string; side: "left" | "right" }): MenuEntry[] => {
-    if (!ctx || String(ctx.id).startsWith("plugin:")) return [];
+    if (!ctx) return [];
     const ui = useUI.getState();
     const list = ui.railOrder[ctx.side] ?? [];
     const i = list.indexOf(ctx.id);
-    if (i < 0) return [];
-    const entries: MenuEntry[] = [
+    if (i < 0) return []; // not yet tracked (a freshly-appeared plugin, pre-reconcile)
+    const to = ctx.side === "left" ? "right" : "left";
+    // Any surface — core, plugin, or chat — reorders within its rail and moves across. (Moving
+    // chat across rails remounts it: a brief blip on an in-flight stream; a deliberate action.)
+    return [
       {
         id: "move-up",
         label: "Move up",
@@ -30,11 +33,8 @@ registerContextMenu({
         disabled: i >= list.length - 1,
         run: () => useUI.getState().reorderSurface(ctx.id, 1),
       },
-    ];
-    if (ctx.id !== "chat") {
-      const to = ctx.side === "left" ? "right" : "left";
-      entries.push({ id: "rail-div", divider: true });
-      entries.push({
+      { id: "rail-div", divider: true },
+      {
         id: "move-rail",
         label: `Move to ${to} rail`,
         icon: <ArrowLeftRight size={14} />,
@@ -43,15 +43,14 @@ registerContextMenu({
           u.moveSurface(ctx.id, to);
           if (to === "left") {
             u.setSurface(ctx.id);
-            if (u.rightPanel === ctx.id) u.setRightPanel("notes");
+            if (u.rightPanel === ctx.id) u.setRightPanel(u.railOrder.right[0] ?? "notes");
           } else {
             u.setRightPanel(ctx.id);
             u.setRightCollapsed(false);
-            if (u.surface === ctx.id) u.setSurface("chat");
+            if (u.surface === ctx.id) u.setSurface(u.railOrder.left[0] ?? "chat");
           }
         },
-      });
-    }
-    return entries;
+      },
+    ];
   },
 });

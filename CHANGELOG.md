@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Everything-swappable rails (ADR 0036)** — plugin views are now first-class `railOrder`
+  members (reconciled in/out as plugins come and go), and **Chat is movable too** (it mounts on
+  whichever rail holds it, preserving streaming continuity). Right-click any surface → **Move up /
+  Move down / Move to other rail**. The rail is now an extraction-ready `<SurfaceRail>` component.
 - **Right-click context menus (ADR 0036 slice 1)** — an app-wide context-menu system on shadcn
   Radix `DropdownMenu`: a registry keyed by `ContextType` (core *and* plugins register items,
   merged by priority + deduped), an imperative `openContextMenu(type, e, ctx)`, and one

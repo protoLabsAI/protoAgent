@@ -45,6 +45,9 @@ type UIState = {
   railOrder: { left: string[]; right: string[] };
   moveSurface: (id: string, side: "left" | "right") => void; // splice out → append to side's bottom
   reorderSurface: (id: string, dir: -1 | 1) => void; // swap with the neighbour within its rail
+  // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
+  // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
+  reconcilePluginViews: (views: { id: string; side: "left" | "right" }[]) => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setAgentTab: (t: AgentTab) => void;
@@ -90,6 +93,17 @@ export const useUI = create<UIState>()(
             return next;
           };
           return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right) } };
+        }),
+      reconcilePluginViews: (views) =>
+        set((s) => {
+          const ids = new Set(views.map((v) => v.id));
+          const keep = (arr: string[]) => arr.filter((x) => !x.startsWith("plugin:") || ids.has(x));
+          const left = keep(s.railOrder.left);
+          const right = keep(s.railOrder.right);
+          for (const v of views) {
+            if (!left.includes(v.id) && !right.includes(v.id)) (v.side === "left" ? left : right).push(v.id);
+          }
+          return { railOrder: { left, right } };
         }),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
