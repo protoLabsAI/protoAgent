@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **GitHub read tools → the opt-in `github` plugin** — removed from the default tool set
+  (not every agent needs GitHub). Ships disabled; enable with `plugins.enabled: [github]`.
+  Tools group under "GitHub" in the Tools tab regardless of source.
+
 ### Removed
 - **`daily_log` tool removed from core** — it was roxy-specific (roxy ships it as a plugin
   now). Logging an event is `memory_ingest` with a domain; eval cases repointed accordingly.
