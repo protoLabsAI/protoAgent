@@ -2,25 +2,25 @@
 layout: home
 hero:
   name: protoAgent
-  text: LangGraph + A2A template for protoLabs agents
-  tagline: Clone. Run. Walk the wizard. Chat. Fork when you're ready to ship.
+  text: A lean, A2A-native agent you own
+  tagline: A small core on LangGraph that grows with git-URL plugins. Run one agent or orchestrate a fleet — from a console, the OpenAI API, or A2A. Local-first, yours to fork.
   actions:
     - theme: brand
       text: Spin up your first agent
       link: /tutorials/first-agent
     - theme: alt
-      text: Customize & deploy
-      link: /guides/customize-and-deploy
+      text: Run headless
+      link: /guides/headless
 
 features:
-  - title: A2A out of the box
-    details: JSON-RPC 2.0 over /a2a, SSE streaming, tasks/* lifecycle, push notifications, dual token-shape parsing — all spec-compliant, all already tested.
+  - title: A2A-native, built for fleets
+    details: Every agent is a spec-compliant A2A 1.0 server — agent card, JSON-RPC over /a2a, SSE streaming, tasks/* lifecycle, push. Delegate to other a2a / openai / acp endpoints; run one or orchestrate many.
   - title: cost-v1 + trace propagation
     details: Every terminal task emits a cost-v1 DataPart with token usage and wall time. a2a.trace metadata nests this agent's Langfuse trace under the caller's.
   - title: Free starter tools
     details: DuckDuckGo web search, URL fetch, safe calculator, and IANA-timezone clock — zero API keys, enough to demo a real research loop on a fresh clone.
-  - title: Plugin system
-    details: Drop-in packages add tools, skills, subagents, workflows, FastAPI routes, console rail views, and managed MCP servers without forking — and install from a git URL (python -m server plugin install, pinned in plugins.lock). Discord, Google (Gmail+Calendar), and the plugin-devkit ship first-party.
+  - title: A lean core, opt-in plugins
+    details: Start small; add tools, skills, subagents, workflows, FastAPI routes, console dashboards, memory backends, and managed MCP servers as git-URL plugins (python -m server plugin install, pinned in plugins.lock) — without touching core. Discord, Google (Gmail+Calendar), and the plugin-devkit ship first-party.
   - title: Release pipeline
     details: Dispatch prepare-release → semver bump PR → merge → tag → GHCR image → GitHub release → Discord embed. Flip the RELEASE_ENABLED repo variable to enable it on a fork.
 ---
