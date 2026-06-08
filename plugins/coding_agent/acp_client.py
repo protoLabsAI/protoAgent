@@ -160,6 +160,12 @@ class AcpClient:
                     pass
             except ProcessLookupError:
                 pass
+        # Close the subprocess transport too, so its pipe transports don't linger to
+        # a post-loop-close GC — reaping the process (above) leaves the stdin write-
+        # pipe transport open, whose __del__ then fires "Event loop is closed".
+        transport = getattr(proc, "_transport", None) if proc else None
+        if transport is not None:
+            transport.close()
 
     # -- I/O loops -----------------------------------------------------------
 
