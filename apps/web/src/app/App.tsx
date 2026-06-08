@@ -72,6 +72,15 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface, SETTINGS_TABS, type SettingsTab } from "../settings/SettingsSurface";
+import {
+  useUI,
+  type ActivityTab,
+  type AgentTab,
+  type KnowledgeTab,
+  type PluginsTab,
+  type RightPanel,
+  type Surface,
+} from "../state/uiStore";
 import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
@@ -99,7 +108,6 @@ import { runtimeStatusQuery } from "../lib/queries";
 // Core surfaces are the fixed literals; plugin views (ADR 0026) add dynamic
 // surfaces keyed `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal
 // autocomplete while allowing those runtime keys.
-type Surface = "chat" | "activity" | "studio" | "knowledge" | "agent" | "plugins" | "settings" | (string & {});
 
 // A plugin view names its rail glyph by lucide icon name. The curated set below
 // is the common-case fast path (already bundled); anything else falls back to the
@@ -164,17 +172,12 @@ function pluginViewIcon(name?: string): ReactNode {
 // Agent = the agent's own makeup: its identity (name + SOUL.md), tools, MCP
 // servers, subagents, skills, and middleware. (Runtime status + telemetry moved
 // to Settings → Overview.)
-type AgentTab = "identity" | "settings" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
 // Plugins = installed (local), discover (market), and install-from-git (download).
-type PluginsTab = "local" | "market" | "download";
 // Knowledge = the store + its settings (memory/knowledge config).
-type KnowledgeTab = "store" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
-type ActivityTab = "thread" | "inbox";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
-type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {});  // + plugin:<id>:<viewId> (ADR 0026)
 
 function createNoteTab() {
   const now = Date.now();
@@ -214,21 +217,29 @@ function useLocalStorageState(key: string, fallback: string) {
 }
 
 export function App() {
-  const [surface, setSurface] = useState<Surface>("chat");
+  // Navigation/layout state lives in the persisted UI store (ADR 0035 D5) — a refresh
+  // restores the active surface, sub-tabs, and right-panel width/collapse.
+  const surface = useUI((s) => s.surface);
+  const setSurface = useUI((s) => s.setSurface);
   // Background-streaming indicator for the Chat rail (narrow selector → only
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
-  const [agentTab, setAgentTab] = useState<AgentTab>("identity");
-  const [pluginsTab, setPluginsTab] = useState<PluginsTab>("local");
-  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("overview");
-  const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
-  const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
-  // Collapsible/resizable right panel (persisted). Flag is "1"/"" string; width
-  // is a px string clamped on read.
-  const [rightCollapsed, setRightCollapsed] = useLocalStorageState("protoagent.rightCollapsed", "");
-  const [rightWidthStr, setRightWidthStr] = useLocalStorageState("protoagent.rightWidth", "360");
-  const rightWidth = Math.min(720, Math.max(280, parseInt(rightWidthStr, 10) || 360));
+  const agentTab = useUI((s) => s.agentTab);
+  const setAgentTab = useUI((s) => s.setAgentTab);
+  const pluginsTab = useUI((s) => s.pluginsTab);
+  const setPluginsTab = useUI((s) => s.setPluginsTab);
+  const knowledgeTab = useUI((s) => s.knowledgeTab);
+  const setKnowledgeTab = useUI((s) => s.setKnowledgeTab);
+  const settingsTab = useUI((s) => s.settingsTab);
+  const setSettingsTab = useUI((s) => s.setSettingsTab);
+  const activityTab = useUI((s) => s.activityTab);
+  const setActivityTab = useUI((s) => s.setActivityTab);
+  const rightPanel = useUI((s) => s.rightPanel);
+  const setRightPanel = useUI((s) => s.setRightPanel);
+  const rightCollapsed = useUI((s) => s.rightCollapsed);
+  const setRightCollapsed = useUI((s) => s.setRightCollapsed);
+  const rightWidth = useUI((s) => s.rightWidth);
+  const setRightWidth = useUI((s) => s.setRightWidth);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -557,7 +568,7 @@ export function App() {
     const startW = rightWidth;
     const onMove = (ev: MouseEvent) => {
       const next = Math.min(720, Math.max(280, startW + (startX - ev.clientX)));
-      setRightWidthStr(String(Math.round(next)));
+      setRightWidth(next);
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
@@ -967,7 +978,7 @@ export function App() {
         <button
           type="button"
           className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
-          onClick={() => setRightCollapsed(rightCollapsed ? "" : "1")}
+          onClick={() => setRightCollapsed(!rightCollapsed)}
           title={rightCollapsed ? "Show side panel" : "Hide side panel"}
           aria-label="Toggle side panel"
           data-testid="toggle-right"
