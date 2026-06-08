@@ -214,9 +214,18 @@ _PLUGIN_VERIFIERS: dict = {}
 
 
 def set_plugin_verifiers(mapping: dict | None) -> None:
-    """Replace the registered plugin verifier set (called at build + reload)."""
-    _PLUGIN_VERIFIERS.clear()
-    _PLUGIN_VERIFIERS.update(mapping or {})
+    """Replace the registered plugin verifier set (called at build + reload).
+
+    Rebinds the module global in ONE atomic step rather than ``clear()`` then
+    ``update()``. The old two-step left a window where the dict was momentarily
+    empty, so a concurrent monitor-goal tick's ``_verify_plugin`` lookup could land
+    mid-swap and return a spurious ``unknown plugin verifier`` — which surfaced as
+    goals intermittently flashing "unknown" after a reload, then recovering on the
+    next tick. A single name rebind is GIL-atomic; readers see the old or new map,
+    never an empty one. (``_PLUGIN_VERIFIERS`` is referenced only within this module,
+    so reassigning the global is safe.)"""
+    global _PLUGIN_VERIFIERS
+    _PLUGIN_VERIFIERS = dict(mapping or {})
 
 
 async def _verify_plugin(spec: dict, ctx: VerifyContext) -> VerifyResult:
