@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Tools tab grouped by subsystem** — the Agent → Tools inventory is sectioned
+  (General · GitHub · Notes · Memory · Scheduler · Inbox · Beads · Goals · Delegation ·
+  Workflows · Plugin · MCP) with per-group counts, instead of a flat wall of ~30; search
+  filters across. `/api/tools` returns a `category` per tool.
+
 ### Added
 - **Pluggable middleware** (ADR 0032) — plugins contribute LangGraph `AgentMiddleware` via
   `register_middleware(factory)` (appended just before message-capture), and per-request A2A

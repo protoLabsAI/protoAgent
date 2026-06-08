@@ -223,11 +223,13 @@ export type Subagent = {
   allow_skill_emission: boolean;
 };
 
-// A live wired tool (Runtime → Tools), grouped by where it comes from.
+// A live wired tool (Agent → Tools): its source (core/plugin/mcp) + the subsystem
+// category it's grouped under in the console.
 export type ToolInfo = {
   name: string;
   description: string;
   source: "core" | "plugin" | "mcp";
+  category?: string;
 };
 
 export type ToolCall = {
