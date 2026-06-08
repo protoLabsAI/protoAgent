@@ -21,12 +21,54 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import re
 from pathlib import Path
 
 CHANGELOG = Path(__file__).parent.parent / "CHANGELOG.md"
+# The marketing site's /changelog page reads this — DERIVED from CHANGELOG.md so it
+# can't drift (it used to be hand-maintained and went stale at v0.21).
+MARKETING_JSON = (
+    Path(__file__).parent.parent / "sites" / "marketing" / "data" / "changelog.json"
+)
 
 _UNRELEASED_HEADING = "## [Unreleased]"
+
+
+def _strip_md(s: str) -> str:
+    """Bullet text → plain text (the marketing page renders it as plain text)."""
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)            # **bold** → bold
+    s = re.sub(r"`([^`]+)`", r"\1", s)                # `code` → code
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)    # [text](url) → text
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def to_entries(text: str) -> list[dict]:
+    """Parse dated ``## [X.Y.Z] - DATE`` sections into marketing-changelog entries
+    (newest-first, matching CHANGELOG.md order). Skips ``[Unreleased]``."""
+    entries: list[dict] = []
+    for m in re.finditer(r"^## \[(\d+\.\d+\.\d+)\] - (\S+)[ \t]*$", text, re.MULTILINE):
+        version, date = m.group(1), m.group(2)
+        start = m.end()
+        nxt = re.search(r"^## \[", text[start:], re.MULTILINE)
+        body = text[start: start + nxt.start()] if nxt else text[start:]
+        changes: list[str] = []
+        cur: str | None = None
+        for line in body.splitlines():
+            if re.match(r"^\s*-\s+", line):
+                if cur:
+                    changes.append(_strip_md(cur))
+                cur = re.sub(r"^\s*-\s+", "", line)
+            elif line.lstrip().startswith("#"):
+                if cur:
+                    changes.append(_strip_md(cur))
+                cur = None
+            elif cur is not None and line.strip():
+                cur += " " + line.strip()  # continuation of the current bullet
+        if cur:
+            changes.append(_strip_md(cur))
+        entries.append({"version": f"v{version}", "date": date, "changes": changes})
+    return entries
 
 
 def roll(text: str, version: str, date: str) -> str:
@@ -65,12 +107,17 @@ def main() -> None:
         default=datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
         help="release date (YYYY-MM-DD); defaults to today (UTC)",
     )
+    sub.add_parser("json", help="regenerate the marketing changelog.json from CHANGELOG.md")
     args = parser.parse_args()
 
     if args.cmd == "roll":
         text = CHANGELOG.read_text(encoding="utf-8")
         CHANGELOG.write_text(roll(text, args.version, args.date), encoding="utf-8")
         print(f"changelog: rolled Unreleased → [{args.version}] - {args.date}")
+    elif args.cmd == "json":
+        entries = to_entries(CHANGELOG.read_text(encoding="utf-8"))
+        MARKETING_JSON.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"changelog: wrote {len(entries)} entries → {MARKETING_JSON}")
 
 
 if __name__ == "__main__":

@@ -72,11 +72,14 @@ jobs:
       - name: Roll changelog
         run: python scripts/changelog.py roll "${{ steps.version.outputs.version }}"
 
+      - name: Regenerate marketing changelog.json (derived from CHANGELOG.md)
+        run: python scripts/changelog.py json
+
       - name: Preview (dry run)
         if: inputs.dry_run == true
         run: |
           echo "New version: v${{ steps.version.outputs.version }}"
-          git --no-pager diff pyproject.toml CHANGELOG.md
+          git --no-pager diff pyproject.toml CHANGELOG.md sites/marketing/data/changelog.json
 
       - name: Create release branch + PR
         if: inputs.dry_run != true
@@ -90,7 +93,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "${BRANCH}"
-          git add pyproject.toml CHANGELOG.md
+          git add pyproject.toml CHANGELOG.md sites/marketing/data/changelog.json
           git commit -m "chore: release v${VERSION}"
           git push origin "${BRANCH}"
 

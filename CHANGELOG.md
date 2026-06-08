@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Marketing changelog stays in sync** — `sites/marketing/data/changelog.json` is now
+  derived from CHANGELOG.md (`scripts/changelog.py json`, run in prepare-release) instead of
+  hand-maintained. It had silently gone stale at v0.21 (0.22–0.24 missing); backfilled through
+  v0.25 with a test that fails if it drifts again.
+
 ## [0.25.0] - 2026-06-08
 
 ### Added
