@@ -41,3 +41,4 @@ decision, numbered, never deleted (supersede instead).
 | [0030](./0030-monitor-goals.md) | Monitor goals — cadence-evaluated, hook-reactive objectives (closes 0028 D6) | Accepted (sliced) |
 | [0031](./0031-pluggable-knowledge-backend.md) | Pluggable knowledge backend (register_knowledge_store + Protocol + selector) | Accepted |
 | [0032](./0032-pluggable-middleware.md) | Pluggable middleware (register_middleware + per-request metadata contextvar) | Accepted |
+| [0033](./0033-pluggable-agent-runtime-acp.md) | Pluggable agent runtime (ACP executor) — runtime≠model axis, operator-tools MCP bus, context contract + caching | Proposed |
