@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Swap surfaces between rails (ADR 0035 slice 3)** — one `renderSurface(id)` now mounts any
+  surface in either rail, and a hover affordance on a rail icon moves it to the other side
+  (persisted). A surface lives on exactly one side. Chat stays pinned left (it mounts
+  unconditionally for streaming continuity).
 - **Resizable right panel — real handle (ADR 0035 slice 3)** — the divider is now a proper
   grab target (14px hit area, visible grip that thickens on hover/focus) and **keyboard-resizable**
   (←/→ nudge, Shift = bigger step, Home/End = max/min) with **double-click to reset**. Width still

@@ -87,3 +87,25 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
   await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
   await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });
+
+test("a surface moves between rails + persists (ADR 0035 S3 swap)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const leftRail = page.locator(".rail:not(.rail-right)");
+  const rightRail = page.locator(".rail-right");
+
+  // Notes starts on the right rail.
+  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+
+  // Hover its rail item → click the move-to-left affordance.
+  const item = rightRail.locator(".rail-item", { hasText: "Notes" });
+  await item.hover();
+  await item.getByRole("button", { name: "Move to left rail" }).click();
+
+  // Notes now lives on the LEFT rail and is gone from the right.
+  await expect(leftRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toHaveCount(0);
+
+  // Store-backed → survives a reload.
+  await page.reload({ waitUntil: "load" });
+  await expect(leftRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+});

@@ -3326,3 +3326,23 @@ textarea {
   color: var(--fg-muted);
   word-break: break-word;
 }
+
+/* Rail item wrapper + hover "move to other rail" affordance (ADR 0035 S3). */
+.rail-item { position: relative; }
+.rail .rail-move {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-height: 0;
+  width: auto;
+  gap: 0;
+  display: none;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.rail .rail-item:hover .rail-move { display: inline-flex; }
+.rail .rail-move:hover { color: var(--fg); border-color: var(--accent, #7c8cff); }

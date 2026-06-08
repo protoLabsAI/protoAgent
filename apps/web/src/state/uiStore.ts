@@ -39,6 +39,11 @@ type UIState = {
   activityTab: ActivityTab;
   rightCollapsed: boolean;
   rightWidth: number;
+  // Which rail each surface lives on (ADR 0035 D2) — a surface is on exactly one side.
+  // Core surfaces seeded below; plugin views default by their manifest `placement`. Chat is
+  // pinned left (it mounts unconditionally for streaming continuity), so it isn't moved.
+  railOf: Record<string, "left" | "right">;
+  moveSurface: (id: string, side: "left" | "right") => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setAgentTab: (t: AgentTab) => void;
@@ -62,6 +67,12 @@ export const useUI = create<UIState>()(
       activityTab: "thread",
       rightCollapsed: false,
       rightWidth: 360,
+      railOf: {
+        chat: "left", activity: "left", studio: "left", knowledge: "left",
+        agent: "left", plugins: "left", settings: "left",
+        notes: "right", beads: "right", goals: "right", schedule: "right",
+      },
+      moveSurface: (id, side) => set((s) => ({ railOf: { ...s.railOf, [id]: side } })),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setAgentTab: (agentTab) => set({ agentTab }),
