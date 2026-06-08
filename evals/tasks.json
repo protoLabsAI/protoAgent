@@ -110,16 +110,15 @@
     ]
   },
   {
-    "id": "daily_log_intent",
+    "id": "memory_ingest_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks to log an event → daily_log writes today's chunk",
-    "prompt": "Log this for today: my standup just ended, team is unblocked on the auth migration.",
-    "expected_tools": ["daily_log"],
+    "name": "Asks to log an event → memory_ingest writes the chunk",
+    "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
+    "expected_tools": ["memory_ingest"],
     "expected_patterns": [],
     "verify_kb": {
-      "find_chunk_containing": "auth migration",
-      "domain": "daily-log"
+      "find_chunk_containing": "auth migration"
     },
     "teardown": [
       {"kb_delete_by_content": {"contains": "auth migration"}}
@@ -175,9 +174,9 @@
     "id": "log_then_recall_chain",
     "category": "chained",
     "kind": "ask",
-    "name": "Log an event, then recall it later in the same turn",
-    "prompt": "Log this for today: 'eval-chain-flag-q9: chained log+recall test'. After logging, search memory for that flag and quote it back.",
-    "expected_tools": ["daily_log", "memory_recall"],
+    "name": "Note an event, then recall it later in the same turn",
+    "prompt": "Note this for me: 'eval-chain-flag-q9: chained log+recall test'. After saving it, search memory for that flag and quote it back.",
+    "expected_tools": ["memory_ingest", "memory_recall"],
     "expected_patterns": ["eval-chain-flag-q9"],
     "teardown": [
       {"kb_delete_by_content": {"contains": "eval-chain-flag-q9"}}

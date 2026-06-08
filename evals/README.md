@@ -22,7 +22,7 @@ A case passes only when every configured assertion holds.
 
 python -m evals.runner                                 # all cases
 python -m evals.runner --category tool                 # one category
-python -m evals.runner --tasks current_time,daily_log
+python -m evals.runner --tasks current_time,memory_ingest
 python -m evals.runner --base-url http://host:7870
 ```
 
@@ -137,7 +137,7 @@ against `GET /api/goal/{session}`; `expected_patterns` against the reply.
 ## Why side-effect verification
 
 When the model hallucinates a tool result (e.g. "Logged: ..." without
-actually calling `daily_log`), text-only checks pass while the DB
+actually calling `memory_ingest`), text-only checks pass while the DB
 stays empty. The audit-log + KB queries here catch it.
 
 ## Prompt rule

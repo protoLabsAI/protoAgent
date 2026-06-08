@@ -81,7 +81,7 @@ _TOOL_CATEGORY = {
     "github_list_issues": "GitHub", "github_get_commit_diff": "GitHub",
     "notes_list": "Notes", "notes_read": "Notes", "notes_write": "Notes", "notes_revert": "Notes",
     "memory_ingest": "Memory", "memory_recall": "Memory", "memory_list": "Memory",
-    "memory_stats": "Memory", "daily_log": "Memory",
+    "memory_stats": "Memory",
     "schedule_task": "Scheduler", "list_schedules": "Scheduler", "cancel_schedule": "Scheduler",
     "check_inbox": "Inbox",
     "beads_create": "Beads", "beads_list": "Beads", "beads_update": "Beads", "beads_close": "Beads",
