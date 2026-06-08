@@ -866,6 +866,18 @@ export const api = {
       { method: "POST", body: { enabled } },
     );
   },
+  addMcpServer(entry: Record<string, unknown>) {
+    return request<{ ok: boolean; name: string; servers: string[] }>(
+      "/api/mcp/servers",
+      { method: "POST", body: entry },
+    );
+  },
+  removeMcpServer(name: string) {
+    return request<{ ok: boolean; servers: string[] }>(
+      `/api/mcp/servers/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+  },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
       method: "POST",
