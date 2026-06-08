@@ -14,13 +14,13 @@ This unifies what used to be three separate things — `peer_consult` (a2a),
 `code_with` (acp), and "no way to ask another model" — into one hot-swappable
 roster.
 
-Manage delegates three ways: the **console panel** (Settings → Integrations →
+Manage delegates three ways: the **console panel** (Settings → Plugins →
 Delegates), a **REST API**, or **config** — all hot-swappable (changes apply on
 the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
 
 ## Manage in the console (panel)
 
-With the plugin enabled, open **Settings → Integrations → Delegates**. The panel:
+With the plugin enabled, open **Settings → Plugins → Delegates**. The panel:
 
 - **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
   marker, a **live health dot** (a background prober probes each delegate

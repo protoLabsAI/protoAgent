@@ -6,10 +6,9 @@ import { brandName } from "../lib/brand";
 import { PanelHeader } from "../app/PanelHeader";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 
 // Settings → Overview: the agent's read-only status at a glance (model, knowledge,
-// goal, on-disk store sizes) plus the cost/latency telemetry dashboard. The editable
+// goal, on-disk store sizes). Telemetry is its own tab now. The editable
 // bits (name, persona, middleware, tools) live under the Agent section.
 
 function fmtBytes(n: number | null | undefined): string {
@@ -67,19 +66,16 @@ function StatusBody() {
 
 export function OverviewPanel() {
   return (
-    <>
-      <section className="panel stage-panel">
-        <QueryErrorResetBoundary>
-          {({ reset }) => (
-            <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="overview" />}>
-              <Suspense fallback={<PanelSkeleton label="Loading overview…" />}>
-                <StatusBody />
-              </Suspense>
-            </ErrorBoundary>
-          )}
-        </QueryErrorResetBoundary>
-      </section>
-      <TelemetrySurface />
-    </>
+    <section className="panel stage-panel">
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="overview" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading overview…" />}>
+              <StatusBody />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
+    </section>
   );
 }

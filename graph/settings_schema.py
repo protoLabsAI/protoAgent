@@ -171,26 +171,31 @@ def _plugin_group(sch, spec) -> str:
 
 # Settings categories (ADR 0020) — fold the flat sections into a small,
 # navigable taxonomy so the surface isn't one long scroll. Order here is the
-# order the console renders the category sub-nav. Unknown sections (notably
-# plugin-contributed ones, ADR 0019) default to "Integrations".
-_CATEGORY_ORDER = ["Agent", "Behavior", "Memory", "Integrations", "System"]
+# category the console routes each section to. Settings are decentralized: Agent +
+# Memory render in their home views (Agent → Settings, Knowledge → Settings), while
+# Plugins + System stay in the central Settings surface. Unknown sections (notably
+# plugin-contributed ones, ADR 0019) default to "Plugins".
+_CATEGORY_ORDER = ["Agent", "Memory", "Plugins", "System"]
 _SECTION_CATEGORY = {
+    # Agent — who it is + how it behaves (rendered in the Agent view's Settings tab).
     "Identity": "Agent",
     "Model": "Agent",
     "Routing": "Agent",
-    "Compaction": "Behavior",
-    "Caching": "Behavior",
-    "Goal mode": "Behavior",
-    "Tools": "Behavior",
+    "Goal mode": "Agent",
+    "Tools": "Agent",
+    # Memory — knowledge/recall config (rendered in the Knowledge view's Settings tab).
     "Knowledge": "Memory",
+    # System — runtime + performance knobs (central Settings → System).
+    "Compaction": "System",
+    "Caching": "System",
     "Middleware": "System",
     "Runtime": "System",
-    # Discord / Google / other plugin sections → "Integrations" (the default).
+    # Discord / Google / other plugin sections → "Plugins" (the default).
 }
 
 
 def _category_for(section: str) -> str:
-    return _SECTION_CATEGORY.get(section, "Integrations")
+    return _SECTION_CATEGORY.get(section, "Plugins")
 
 
 def build_schema(config, *, model_options: list[str] | None = None) -> list[dict[str, Any]]:
