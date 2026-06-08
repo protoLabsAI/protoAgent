@@ -860,6 +860,12 @@ export const api = {
   uninstallPlugin(id: string) {
     return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
+  setPluginEnabled(id: string, enabled: boolean) {
+    return request<{ ok: boolean; enabled: boolean; reloaded: boolean; restart_recommended: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}/enabled`,
+      { method: "POST", body: { enabled } },
+    );
+  },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
       method: "POST",

@@ -1,8 +1,10 @@
 """Operator API for git-installed plugins (ADR 0027, PR2).
 
 Backs the console Plugins panel: list installed plugins (with their manifest +
-declared capabilities for review), install from a git URL, and uninstall. Install
-fetches code only — enabling stays a config + restart decision (install ≠ enable).
+declared capabilities for review), install from a git URL, uninstall, and
+enable/disable. Install fetches code only (install ≠ enable). Enable/disable edits
+``plugins.enabled`` and hot-reloads — tools/middleware/MCP apply live; a console
+view or background surface (its router mounts at init) needs a restart.
 """
 
 from __future__ import annotations
@@ -67,6 +69,37 @@ def register_plugin_routes(app) -> None:
         # install ≠ enable: the new plugin's routes/surfaces mount at init, so it
         # needs a restart + plugins.enabled to take effect.
         return {"installed": summary, "restart_required": True}
+
+    @app.post("/api/plugins/{plugin_id}/enabled")
+    async def _set_enabled(plugin_id: str, body: dict | None = None):
+        """Enable/disable a plugin by editing `plugins.enabled`/`disabled` + hot-reloading.
+
+        Tools / subagents / middleware / MCP servers take effect immediately (the graph
+        rebuilds). A plugin that serves a **console view** or runs a **background surface**
+        (its router/gateway mounts once at init) needs a restart to finish — flagged via
+        ``restart_recommended`` so the UI can say so.
+        """
+        want = bool((body or {}).get("enabled"))
+        cfg = STATE.graph_config
+        enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
+        disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id]
+        if want:
+            enabled.append(plugin_id)
+        else:
+            disabled.append(plugin_id)
+
+        from server.agent_init import _apply_settings_changes
+
+        ok, messages = _apply_settings_changes(
+            config={"plugins": {"enabled": enabled, "disabled": disabled}},
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+
+        # A view (router) only mounts at init, so enabling a view plugin needs a restart.
+        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+        restart = bool(want and meta and meta.get("views"))
+        return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
     @app.delete("/api/plugins/{plugin_id}")
     async def _uninstall(plugin_id: str, purge: bool = False):

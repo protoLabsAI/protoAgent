@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **One-click plugin enable/disable** — toggle a plugin straight from the console Plugins
+  panel; it edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
+  immediately (a console view or background surface needs a restart, and the toggle says so).
+
 ### Changed
 - **Plugins view reorganized** — three sections: **Installed** (grouped Loaded → Disabled,
   alphabetical within each) → **Marketplace** (browse the directory + the `protoagent-plugin`

@@ -266,6 +266,16 @@ const server = createServer(async (req, res) => {
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
       return sendJson(res, { enabled: true, deleted: true });
     }
+    {
+      const m = pathname.match(/^\/api\/plugins\/([^/]+)\/enabled$/);
+      if (m) {
+        return sendJson(res, {
+          ok: true, enabled: !!body.enabled, reloaded: true,
+          // a view plugin (boardy) recommends a restart; others don't
+          restart_recommended: !!body.enabled && m[1] === "boardy",
+        });
+      }
+    }
     if (pathname === "/api/plugins/install") {
       const id = (String(body.url || "").replace(/\.git$/, "").split("/").pop()) || "ext_plugin";
       const sha = "abc1234567def8900000000000000000000abcd";

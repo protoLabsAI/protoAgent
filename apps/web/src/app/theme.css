@@ -807,6 +807,41 @@ select:disabled {
   font-size: 12px;
 }
 
+/* Plugins → Installed: per-row enable/disable + the result hint. */
+.plugin-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ghost-button {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--pl-color-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ghost-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
+}
+.ghost-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.plugin-hint {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
+}
+
 .scroll-area {
   min-width: 0;
   min-height: 0;

@@ -211,6 +211,11 @@ or `enabled: true` in the plugin's own manifest (author opt-in for plugins you
 wrote/dropped in). Discovered-but-disabled plugins still appear in runtime
 status so you can see what's available.
 
+From the console, the **Plugins** panel has a one-click **Enable / Disable** toggle per
+plugin — it edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers
+apply immediately. A plugin that serves a **console view** or runs a **background surface**
+(its router mounts at startup) needs a restart to finish — the toggle says so.
+
 Plugin tools that would shadow a core or MCP tool name are skipped (logged).
 Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.
 
