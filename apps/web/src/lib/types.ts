@@ -78,6 +78,9 @@ export type PluginView = {
   icon?: string; // a lucide-react icon name
   path: string;
   tabs?: { id: string; label: string; path: string }[];
+  // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
+  // alongside Notes/Beads/Goals/Schedule (ADR 0026).
+  placement?: "rail" | "right";
 };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its

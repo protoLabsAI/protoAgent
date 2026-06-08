@@ -58,3 +58,17 @@ test("console hands the plugin view a bearer + theme via postMessage", async ({ 
   const body = page.frameLocator(".plugin-view-frame").locator("body");
   await expect(body).toHaveAttribute("data-bridge", "authed");
 });
+
+test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // The right-placed view is a right-rail tab (not a left-rail surface icon).
+  const tab = page.locator(".segmented").getByRole("button", { name: "Scratch", exact: true });
+  await expect(tab).toBeVisible();
+  await tab.click();
+
+  // It hosts the plugin page in the same iframe host, at the declared path.
+  const frame = page.locator(".plugin-view-frame");
+  await expect(frame).toBeVisible();
+  await expect(frame).toHaveAttribute("src", /\/plugins\/boardy\/scratch/);
+});

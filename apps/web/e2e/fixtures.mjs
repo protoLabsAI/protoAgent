@@ -47,6 +47,8 @@ export const RUNTIME_STATUS = {
           ],
         },
         { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
+        // A right-rail panel (ADR 0026 placement:"right") — sits with Notes/Beads/Goals.
+        { id: "scratch", label: "Scratch", icon: "FileText", path: "/plugins/boardy/scratch", placement: "right" },
       ],
     },
   ],
