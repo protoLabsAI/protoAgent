@@ -202,6 +202,18 @@ class LocalScheduler:
         self._task: asyncio.Task | None = None
         self._stopping = False
         self._lock_fd = None  # owner-lock fd (ADR 0004) held while polling
+        # In-flight fires (job ids) + their background tasks. message/send blocks
+        # until the agent turn reaches a terminal state, so a fire can take as long
+        # as the turn — we run it off the poll loop and guard against re-claiming a
+        # job that's still firing (the cause of duplicate scheduled turns).
+        self._inflight_ids: set[str] = set()
+        self._fire_tasks: set[asyncio.Task] = set()
+        # Fire timeout must comfortably exceed a real turn (web research + subagents
+        # can run minutes); too-short here false-fails long turns into a re-fire loop.
+        try:
+            self._fire_timeout_s = float(os.environ.get("SCHEDULER_FIRE_TIMEOUT_S", "600"))
+        except ValueError:
+            self._fire_timeout_s = 600.0
         self._init_db()
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
@@ -322,6 +334,13 @@ class LocalScheduler:
                 log.exception("[scheduler] polling task raised during stop")
             self._task = None
             log.info("[scheduler] local backend stopped")
+        # Let in-flight fires finish briefly, then cancel any stragglers (the turn
+        # continues server-side; we just stop awaiting it on shutdown).
+        if self._fire_tasks:
+            pending = list(self._fire_tasks)
+            done, still = await asyncio.wait(pending, timeout=5)
+            for t in still:
+                t.cancel()
         # Release the owner-lock (ADR 0004) so another instance can take over.
         if self._lock_fd is not None:
             _release_jobs_lock(self.path, self._lock_fd)
@@ -344,18 +363,53 @@ class LocalScheduler:
         now = datetime.now(UTC)
         due = self._claim_due_jobs(now)
         for job in due:
-            # Reschedule (or delete) only when delivery actually
-            # succeeded. A transient HTTP failure leaves the row in
-            # place so the next tick retries; a one-shot stays alive
-            # until it lands rather than vanishing on the first
-            # network blip.
-            if await self._fire(job):
+            # Fire OFF the poll loop: message/send blocks until the turn finishes,
+            # which can be minutes — awaiting it here would stall the cadence and
+            # (on the old 30s timeout) false-fail long turns into a re-fire storm.
+            # Mark in-flight so the next tick won't re-claim a still-firing job.
+            self._inflight_ids.add(job.id)
+            cron = is_cron(job.schedule)
+            # Advance cron NOW so it rolls to its next slot regardless of how long
+            # this turn runs (no duplicate fire mid-turn). One-shots are resolved
+            # when the fire settles (deleted on success, kept for retry on failure).
+            if cron:
                 self._reschedule_or_delete(job, fired_at=now)
-            else:
+            t = asyncio.create_task(self._fire_and_settle(job, cron), name=f"scheduler.fire.{job.id}")
+            self._fire_tasks.add(t)
+            t.add_done_callback(self._fire_tasks.discard)
+
+    async def _fire_and_settle(self, job: Job, cron: bool) -> None:
+        """Run a fire off the poll loop and settle the row when it lands.
+
+        Cron jobs were already advanced at claim time; here we only resolve
+        one-shots (delete on success, leave for retry on failure) and always clear
+        the in-flight guard so the job can be claimed again on its next due slot."""
+        try:
+            ok = await self._fire(job)
+            if not cron:
+                if ok:
+                    self._delete_job(job.id)
+                else:
+                    log.warning(
+                        "[scheduler] one-shot fire failed for job %s; leaving for retry",
+                        job.id,
+                    )
+            elif not ok:
                 log.warning(
-                    "[scheduler] fire failed for job %s; leaving in place for retry",
-                    job.id,
+                    "[scheduler] cron fire failed for job %s; will fire next slot", job.id,
                 )
+        finally:
+            self._inflight_ids.discard(job.id)
+
+    def _delete_job(self, job_id: str) -> None:
+        db = self._connect()
+        try:
+            db.execute("DELETE FROM jobs WHERE id = ? AND agent_name = ?", (job_id, self.agent_name))
+            db.commit()
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] delete failed for job %s", job_id)
+        finally:
+            db.close()
 
     def _claim_due_jobs(self, now: datetime) -> list[Job]:
         db = self._connect()
@@ -370,7 +424,9 @@ class LocalScheduler:
             return []
         finally:
             db.close()
-        return [_row_to_job(r) for r in rows]
+        # Skip jobs already firing — message/send blocks for the whole turn, so a
+        # slow turn would otherwise be re-claimed every tick and fire repeatedly.
+        return [j for j in (_row_to_job(r) for r in rows) if j.id not in self._inflight_ids]
 
     def _reschedule_or_delete(self, job: Job, *, fired_at: datetime) -> None:
         """Cron jobs roll forward; one-shot jobs are deleted."""
@@ -478,7 +534,7 @@ class LocalScheduler:
             },
         }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
                 r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
             if r.status_code >= 400:
                 log.error(

@@ -486,3 +486,48 @@ async def test_schedule_task_dedupes_identical_jobs(tmp_path):
     r3 = await schedule.ainvoke({"prompt": "summarize logs", "when": "0 9 * * *"})
     assert "Scheduled job" in r3
     assert len(sched.list_jobs()) == 2
+
+
+@pytest.mark.asyncio
+async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
+    """A scheduled turn that runs longer than the poll interval must fire ONCE.
+
+    message/send blocks until the turn is terminal, so a multi-tick turn would
+    otherwise be re-claimed every second and fire repeatedly (the duplicate
+    scheduled-turn / spam bug). The in-flight guard prevents re-claiming.
+    """
+    s = _make_scheduler(tmp_path)
+    past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    s.add_job("SLOW", past, job_id="slow")  # one-shot, already due
+
+    calls: list[int] = []
+
+    class _SlowClient:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append(1)
+            await asyncio.sleep(2.2)  # turn spans multiple 1s poll ticks
+
+            class _R:
+                status_code = 200
+                text = "ok"
+
+            return _R()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _SlowClient)
+
+    await s.start()
+    await asyncio.sleep(2.8)  # several ticks elapse during the single slow turn
+    await s.stop()
+
+    assert len(calls) == 1          # fired once, not once-per-tick
+    assert s.list_jobs() == []      # one-shot deleted after the turn finally landed
