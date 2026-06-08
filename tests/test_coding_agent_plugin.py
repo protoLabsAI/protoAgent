@@ -93,6 +93,18 @@ async def test_acp_client_drives_a_turn(fake_agent, tmp_path):
     assert "Editing app.py" in narrations
 
 
+async def test_close_reaps_the_subprocess(fake_agent, tmp_path):
+    """close() must terminate AND await the child so it's reaped while the loop is
+    still alive — otherwise the subprocess transport's __del__ fires after the loop
+    closes ('Event loop is closed') and the stderr-drain task leaks."""
+    client = AcpClient(sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="reap")
+    await client.prompt("go", timeout=30.0)
+    assert client._proc is not None and client._proc.returncode is None  # alive after the turn
+    await client.close()
+    assert client._proc.returncode is not None      # reaped during close (the fix)
+    assert client._stderr_task is not None and client._stderr_task.done()  # not leaked
+
+
 async def test_acp_client_readonly_policy_denies_edit(fake_agent, tmp_path):
     # A readonly policy must reject the fake's `edit` permission request — the
     # client picks the reject_once option, which the fake echoes back.

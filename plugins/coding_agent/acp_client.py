@@ -93,6 +93,7 @@ class AcpClient:
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
 
         # Per-turn state (one turn at a time).
@@ -127,7 +128,7 @@ class AcpClient:
             ) from exc
 
         self._reader_task = asyncio.create_task(self._read_loop())
-        asyncio.create_task(self._drain_stderr())
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
         await self._initialize()
         await self._new_session()
         logger.info(
@@ -139,11 +140,24 @@ class AcpClient:
         )
 
     async def close(self) -> None:
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-        if self._proc and self._proc.returncode is None:
+        """Cancel the I/O tasks and reap the subprocess. Crucially this ``await``s
+        ``proc.wait()`` so the child is reaped *while the loop is alive* — without
+        it the subprocess transport lingers and its ``__del__`` fires after the loop
+        closes ("Event loop is closed"), and the stderr-drain task leaks."""
+        for task in (self._reader_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+        proc = self._proc
+        if proc and proc.returncode is None:
             try:
-                self._proc.terminate()
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
             except ProcessLookupError:
                 pass
 
