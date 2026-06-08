@@ -87,3 +87,4 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
   await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
   await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });
+

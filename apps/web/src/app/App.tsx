@@ -240,6 +240,7 @@ export function App() {
   const setRightCollapsed = useUI((s) => s.setRightCollapsed);
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
+  const railOf = useUI((s) => s.railOf);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -274,7 +275,6 @@ export function App() {
   const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right");
   const pluginRightPanels = allPluginViews.filter((v) => v.placement === "right");
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
-  const activeRightPluginPanel = pluginRightPanels.find((v) => v.key === rightPanel) ?? null;
 
   // Stale-surface fallback: if we're on a plugin view that no longer exists (its
   // plugin was disabled/removed, or a config reload dropped it) — once runtime is
@@ -626,6 +626,154 @@ export function App() {
       Boolean((window as unknown as { __PROTOAGENT_API_BASE__?: string }).__PROTOAGENT_API_BASE__)) &&
     /Mac/i.test(navigator.userAgent);
 
+  // ADR 0035 S3 — surface metadata + one renderer, so any surface mounts in either rail.
+  // Chat is excluded here: it mounts unconditionally in its rail's area (streaming continuity)
+  // and is pinned left (railOf.chat is never moved).
+  const CORE_SURFACES: { id: string; label: string; icon: ReactNode }[] = [
+    { id: "chat", label: "Chat", icon: <MessageSquare size={18} /> },
+    { id: "activity", label: "Activity", icon: <Activity size={18} /> },
+    { id: "studio", label: "Studio", icon: <Boxes size={18} /> },
+    { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
+    { id: "agent", label: "Agent", icon: <Bot size={18} /> },
+    { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
+    { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
+    { id: "notes", label: "Notes", icon: <FileText size={18} /> },
+    { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
+    { id: "goals", label: "Goals", icon: <Target size={18} /> },
+    { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
+  ];
+  // Surfaces (+ plugin views) assigned to a rail side. Plugin views follow their manifest
+  // placement (rail→left, right→right); core surfaces follow railOf. Chat is always left.
+  function railSurfaces(side: "left" | "right"): { id: string; label: string; icon: ReactNode }[] {
+    const core = CORE_SURFACES.filter((s) => (s.id === "chat" ? side === "left" : (railOf[s.id] ?? "left") === side));
+    const plugins = (side === "left" ? pluginRail : pluginRightPanels).map((v) => ({
+      id: v.key, label: v.label, icon: pluginViewIcon(v.icon),
+    }));
+    return [...core, ...plugins];
+  }
+
+  function renderSurface(id: string): ReactNode {
+    switch (id) {
+      case "activity":
+        return (
+          <>
+            <StageSubnav active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} tabs={[
+              { id: "thread", label: "Thread", icon: Activity },
+              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
+            ]} />
+            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
+          </>
+        );
+      case "studio":
+        return <WorkflowsSurface />;
+      case "agent":
+        return (
+          <>
+            <StageSubnav active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} tabs={[
+              { id: "identity", label: "Identity", icon: Sparkles },
+              { id: "settings", label: "Settings", icon: Settings2 },
+              { id: "tools", label: "Tools", icon: Wrench },
+              { id: "mcp", label: "MCP", icon: Plug },
+              { id: "subagents", label: "Subagents", icon: Bot },
+              { id: "skills", label: "Skills", icon: BookMarked },
+              { id: "middleware", label: "Middleware", icon: Layers },
+            ]} />
+            {agentTab === "identity" ? <IdentityPanel /> : null}
+            {agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
+            {agentTab === "tools" ? <ToolsPanel /> : null}
+            {agentTab === "mcp" ? <McpPanel /> : null}
+            {agentTab === "subagents" ? <SubagentsPanel /> : null}
+            {agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
+            {agentTab === "middleware" ? <MiddlewarePanel /> : null}
+          </>
+        );
+      case "plugins":
+        return (
+          <>
+            <StageSubnav active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} tabs={[
+              { id: "local", label: "Local", icon: Boxes },
+              { id: "market", label: "Market", icon: Store },
+              { id: "download", label: "Download", icon: Download },
+            ]} />
+            <PluginsSurface tab={pluginsTab} />
+          </>
+        );
+      case "knowledge":
+        return (
+          <>
+            <StageSubnav active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} tabs={[
+              { id: "store", label: "Store", icon: Database },
+              { id: "settings", label: "Settings", icon: Settings2 },
+            ]} />
+            {knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : <SettingsCategoryPanel category="Memory" title="Settings" />}
+          </>
+        );
+      case "settings":
+        return (
+          <>
+            <StageSubnav active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} tabs={SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))} />
+            <SettingsSurface tab={settingsTab} />
+          </>
+        );
+      case "notes":
+        return (
+          <section className="panel side-panel notes-panel">
+            <PanelHeader
+              compact
+              title={activeTab?.name || "Notes"}
+              kicker={workspace ? `${workspace.tabOrder.length} tab${workspace.tabOrder.length === 1 ? "" : "s"}${notesDirty ? " • unsaved" : ""}` : "not loaded"}
+              actions={
+                <>
+                  <button className="icon-button" type="button" onClick={createNote} disabled={!workspace} title="New note"><Plus size={16} /></button>
+                  <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note"><Trash2 size={16} /></button>
+                  <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change"><Undo2 size={16} /></button>
+                  <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">{notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}</button>
+                </>
+              }
+            />
+            {workspace ? (
+              <div className="notes-tabbar">
+                {workspace.tabOrder.map((tabId) => {
+                  const tab = workspace.tabs[tabId];
+                  if (!tab) return null;
+                  return (
+                    <button className={tab.id === workspace.activeTabId ? "active" : ""} type="button" key={tab.id} onClick={() => updateWorkspace({ ...workspace, activeTabId: tab.id })}>
+                      {tab.name || "Notes"}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {activeTab ? (
+              <div className="notes-meta">
+                <input value={activeTab.name} onChange={(e) => renameActiveNote(e.target.value)} aria-label="Note name" />
+                <label className="checkbox-field"><input type="checkbox" checked={activeTab.permissions.agentRead} onChange={(e) => toggleActiveNotePermission("agentRead", e.target.checked)} /><span>Agent read</span></label>
+                <label className="checkbox-field"><input type="checkbox" checked={activeTab.permissions.agentWrite} onChange={(e) => toggleActiveNotePermission("agentWrite", e.target.checked)} /><span>Agent write</span></label>
+              </div>
+            ) : null}
+            <textarea className="notes-editor" value={activeTab?.content || ""} onChange={(e) => saveActiveNote(e.target.value)} placeholder="Project notes" disabled={!workspace} />
+          </section>
+        );
+      case "beads":
+        return <BeadsPanel confirm={setConfirmState} />;
+      case "goals":
+        return <GoalsPanel />;
+      case "schedule":
+        return <SchedulePanel />;
+      default: {
+        const v = allPluginViews.find((x) => x.key === id);
+        return v ? <PluginView key={v.key} view={v} /> : null;
+      }
+    }
+  }
+
+  // Active surface per rail, clamped to a member of that rail (so a moved surface doesn't
+  // leave a stale active). Chat is the left fallback; the first right member is the right one.
+  const leftMembers = railSurfaces("left").map((s) => s.id);
+  const rightMembers = railSurfaces("right").map((s) => s.id);
+  const leftActive = leftMembers.includes(surface) ? surface : "chat";
+  const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "notes");
+
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
@@ -682,59 +830,18 @@ export function App() {
         className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
         style={{ "--right-width": rightCol } as CSSProperties}
       >
+        {/* Left rail (ADR 0035) — members from railOf; hover a (non-Chat, non-plugin) icon to
+            send it to the right rail. Chat is pinned left. */}
         <aside className="rail" aria-label="Workspace surfaces">
-          <RailButton
-            active={surface === "chat"}
-            label="Chat"
-            icon={<MessageSquare size={18} />}
-            onClick={() => setSurface("chat")}
-            dot={chatStreaming && surface !== "chat"}
-          />
-          <RailButton
-            active={surface === "activity"}
-            label="Activity"
-            icon={<Activity size={18} />}
-            onClick={() => setSurface("activity")}
-            badge={activityUnread + inboxUnread}
-          />
-          <RailButton
-            active={surface === "studio"}
-            label="Studio"
-            icon={<Boxes size={18} />}
-            onClick={() => setSurface("studio")}
-          />
-          <RailButton
-            active={surface === "knowledge"}
-            label="Knowledge"
-            icon={<BookMarked size={18} />}
-            onClick={() => setSurface("knowledge")}
-          />
-          <RailButton
-            active={surface === "agent"}
-            label="Agent"
-            icon={<Bot size={18} />}
-            onClick={() => setSurface("agent")}
-          />
-          <RailButton
-            active={surface === "plugins"}
-            label="Plugins"
-            icon={<Puzzle size={18} />}
-            onClick={() => setSurface("plugins")}
-          />
-          <RailButton
-            active={surface === "settings"}
-            label="Settings"
-            icon={<Settings2 size={18} />}
-            onClick={() => setSurface("settings")}
-          />
-          {/* Plugin-contributed rail surfaces (ADR 0026) — dynamic, from runtime-status. */}
-          {pluginRail.map((v) => (
+          {railSurfaces("left").map((s) => (
             <RailButton
-              key={v.key}
-              active={surface === v.key}
-              label={v.label}
-              icon={pluginViewIcon(v.icon)}
-              onClick={() => setSurface(v.key)}
+              key={s.id}
+              active={leftActive === s.id}
+              label={s.label}
+              icon={s.icon}
+              onClick={() => setSurface(s.id)}
+              badge={s.id === "activity" ? activityUnread + inboxUnread : undefined}
+              dot={s.id === "chat" ? chatStreaming && surface !== "chat" : undefined}
             />
           ))}
         </aside>
@@ -747,101 +854,11 @@ export function App() {
             </div>
           ) : null}
 
-          {/* Sub-nav for the grouped rail surfaces — the canonical strip above the
-              panel card (StageSubnav: single source of truth, shared with Settings +
-              plugin views). */}
-          {surface === "activity" ? (
-            <StageSubnav
-              active={activityTab}
-              onSelect={(id) => setActivityTab(id as typeof activityTab)}
-              tabs={[
-                { id: "thread", label: "Thread", icon: Activity },
-                {
-                  id: "inbox", label: "Inbox", icon: Inbox,
-                  badge: inboxUnread ? (
-                    <span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>
-                  ) : null,
-                },
-              ]}
-            />
-          ) : null}
-          {surface === "agent" ? (
-            <StageSubnav
-              active={agentTab}
-              onSelect={(id) => setAgentTab(id as typeof agentTab)}
-              tabs={[
-                { id: "identity", label: "Identity", icon: Sparkles },
-                { id: "settings", label: "Settings", icon: Settings2 },
-                { id: "tools", label: "Tools", icon: Wrench },
-                { id: "mcp", label: "MCP", icon: Plug },
-                { id: "subagents", label: "Subagents", icon: Bot },
-                { id: "skills", label: "Skills", icon: BookMarked },
-                { id: "middleware", label: "Middleware", icon: Layers },
-              ]}
-            />
-          ) : null}
-
-          {surface === "plugins" ? (
-            <StageSubnav
-              active={pluginsTab}
-              onSelect={(id) => setPluginsTab(id as PluginsTab)}
-              tabs={[
-                { id: "local", label: "Local", icon: Boxes },
-                { id: "market", label: "Market", icon: Store },
-                { id: "download", label: "Download", icon: Download },
-              ]}
-            />
-          ) : null}
-
-          {surface === "knowledge" ? (
-            <StageSubnav
-              active={knowledgeTab}
-              onSelect={(id) => setKnowledgeTab(id as KnowledgeTab)}
-              tabs={[
-                { id: "store", label: "Store", icon: Database },
-                { id: "settings", label: "Settings", icon: Settings2 },
-              ]}
-            />
-          ) : null}
-
-          {surface === "settings" ? (
-            <StageSubnav
-              active={settingsTab}
-              onSelect={(id) => setSettingsTab(id as SettingsTab)}
-              tabs={SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
-            />
-          ) : null}
-
-          {/* ChatSurface is rendered UNCONDITIONALLY and hidden via `active` when
-              off-tab — so an in-flight turn keeps streaming in the background and
-              the chat is progressing when you navigate back (not torn down). */}
-          <ChatSurface onError={setError} active={surface === "chat"} />
-
-          {surface === "studio" ? <WorkflowsSurface /> : null}
-
-          {surface === "activity" && activityTab === "thread" ? <ActivitySurface onError={setError} /> : null}
-          {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
-
-
-          {surface === "agent" && agentTab === "identity" ? <IdentityPanel /> : null}
-          {surface === "agent" && agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
-          {surface === "agent" && agentTab === "tools" ? <ToolsPanel /> : null}
-          {surface === "agent" && agentTab === "mcp" ? <McpPanel /> : null}
-          {surface === "agent" && agentTab === "subagents" ? <SubagentsPanel /> : null}
-          {surface === "agent" && agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
-          {surface === "agent" && agentTab === "middleware" ? <MiddlewarePanel /> : null}
-          {surface === "plugins" ? <PluginsSurface tab={pluginsTab} /> : null}
-          {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
-          {surface === "knowledge" && knowledgeTab === "settings" ? <SettingsCategoryPanel category="Memory" title="Settings" /> : null}
-          {surface === "settings" ? <SettingsSurface tab={settingsTab} /> : null}
-
-          {/* Plugin view (ADR 0026) — the plugin serves the page; PluginView hosts
-              it in a same-origin iframe. ChatSurface stays mounted above (hidden)
-              so chat continuity holds while a plugin view is open. Keyed so
-              switching views resets the iframe's load state. */}
-          {activePluginView ? (
-            <PluginView key={activePluginView.key} view={activePluginView} />
-          ) : null}
+          {/* Chat mounts UNCONDITIONALLY + hidden via `active` (streaming continuity, #613);
+              it's pinned to the left rail. Every other left-rail surface renders through the
+              shared renderSurface (ADR 0035 S3) — so it can live on either rail. */}
+          <ChatSurface onError={setError} active={leftActive === "chat"} />
+          {leftActive !== "chat" ? renderSurface(leftActive) : null}
         </main>
 
         <aside className="right-panel">
@@ -861,113 +878,21 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          {activeRightPluginPanel ? (
-            <PluginView key={activeRightPluginPanel.key} view={activeRightPluginPanel} />
-          ) : null}
-
-          {rightPanel === "notes" ? (
-            <section className="panel side-panel notes-panel">
-              <PanelHeader
-                compact
-                title={activeTab?.name || "Notes"}
-                kicker={workspace ? `${workspace.tabOrder.length} tab${workspace.tabOrder.length === 1 ? "" : "s"}${notesDirty ? " • unsaved" : ""}` : "not loaded"}
-                actions={
-                  <>
-                    <button className="icon-button" type="button" onClick={createNote} disabled={!workspace} title="New note">
-                      <Plus size={16} />
-                    </button>
-                    <button className="icon-button" type="button" onClick={deleteActiveNote} disabled={!workspace || workspace.tabOrder.length <= 1} title="Delete note">
-                      <Trash2 size={16} />
-                    </button>
-                    <button className="icon-button" type="button" onClick={undoActiveNote} disabled={!canUndoNote} title="Undo last change">
-                      <Undo2 size={16} />
-                    </button>
-                    <button className="icon-button" type="button" onClick={() => void persistNotes()} disabled={!workspace || notesBusy} title="Save notes">
-                      {notesBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-                    </button>
-                  </>
-                }
-              />
-              {workspace ? (
-                <div className="notes-tabbar">
-                  {workspace.tabOrder.map((tabId) => {
-                    const tab = workspace.tabs[tabId];
-                    if (!tab) return null;
-                    const active = tab.id === workspace.activeTabId;
-                    return (
-                      <button className={active ? "active" : ""} type="button" key={tab.id} onClick={() => updateWorkspace({ ...workspace, activeTabId: tab.id })}>
-                        {tab.name || "Notes"}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {activeTab ? (
-                <div className="notes-meta">
-                  <input
-                    value={activeTab.name}
-                    onChange={(event) => renameActiveNote(event.target.value)}
-                    aria-label="Note name"
-                  />
-                  <label className="checkbox-field">
-                    <input
-                      type="checkbox"
-                      checked={activeTab.permissions.agentRead}
-                      onChange={(event) => toggleActiveNotePermission("agentRead", event.target.checked)}
-                    />
-                    <span>Agent read</span>
-                  </label>
-                  <label className="checkbox-field">
-                    <input
-                      type="checkbox"
-                      checked={activeTab.permissions.agentWrite}
-                      onChange={(event) => toggleActiveNotePermission("agentWrite", event.target.checked)}
-                    />
-                    <span>Agent write</span>
-                  </label>
-                </div>
-              ) : null}
-              <textarea
-                className="notes-editor"
-                value={activeTab?.content || ""}
-                onChange={(event) => saveActiveNote(event.target.value)}
-                placeholder="Project notes"
-                disabled={!workspace}
-              />
-            </section>
-          ) : null}
-
-          {rightPanel === "beads" ? <BeadsPanel confirm={setConfirmState} /> : null}
-
-          {rightPanel === "goals" ? <GoalsPanel /> : null}
-          {rightPanel === "schedule" ? <SchedulePanel /> : null}
+          {/* The right surface renders through the same renderSurface as the left (ADR 0035
+              S3) — so notes/beads/goals/schedule (or anything moved here) mount identically. */}
+          {!rightCollapsed ? renderSurface(rightActive) : null}
         </aside>
 
-        {/* Right rail (ADR 0035 D1) — mirrors the left rail on the far edge; its surfaces
-            (Notes/Beads/Goals/Schedule + plugin right-views) replace the old segmented strip.
-            Picking one ensures the right surface is expanded. */}
+        {/* Right rail (ADR 0035 D1/D2) — mirrors the left on the far edge; members from railOf.
+            Hover a (non-plugin) icon to send it to the left rail. */}
         <aside className="rail rail-right" aria-label="Context surfaces">
-          {([
-            ["notes", "Notes", <FileText size={18} />],
-            ["beads", "Beads", <Boxes size={18} />],
-            ["goals", "Goals", <Target size={18} />],
-            ["schedule", "Schedule", <CalendarClock size={18} />],
-          ] as const).map(([key, label, icon]) => (
+          {railSurfaces("right").map((s) => (
             <RailButton
-              key={key}
-              active={rightPanel === key && !rightCollapsed}
-              label={label}
-              icon={icon}
-              onClick={() => { setRightPanel(key); setRightCollapsed(false); }}
-            />
-          ))}
-          {pluginRightPanels.map((v) => (
-            <RailButton
-              key={v.key}
-              active={rightPanel === v.key && !rightCollapsed}
-              label={v.label}
-              icon={pluginViewIcon(v.icon)}
-              onClick={() => { setRightPanel(v.key); setRightCollapsed(false); }}
+              key={s.id}
+              active={rightActive === s.id && !rightCollapsed}
+              label={s.label}
+              icon={s.icon}
+              onClick={() => { setRightPanel(s.id); setRightCollapsed(false); }}
             />
           ))}
         </aside>
@@ -1039,6 +964,7 @@ function RailButton({
   onClick,
   badge,
   dot,
+  onContextMenu,
 }: {
   active: boolean;
   label: string;
@@ -1048,9 +974,11 @@ function RailButton({
   // A small pulsing indicator (no count) — e.g. a chat turn streaming in the
   // background while you're on another tab.
   dot?: boolean;
+  // Right-click hook (ADR 0036) — opens the rail-surface context menu.
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
-    <button className={active ? "active" : ""} type="button" onClick={onClick} title={label} aria-label={label}>
+    <button className={active ? "active" : ""} type="button" onClick={onClick} onContextMenu={onContextMenu} title={label} aria-label={label}>
       {icon}
       <span>{label}</span>
       {badge ? (
