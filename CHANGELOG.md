@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Plugin view icons: any lucide icon, no allowlist** — a plugin view can name any
+  [lucide](https://lucide.dev) icon (PascalCase or kebab-case). A curated common set renders
+  instantly; anything else lazy-loads in a separate on-demand chunk, so authors aren't limited
+  to a hardcoded list and the main console bundle stays lean.
+
 ### Fixed
 - **Scheduler: `schedule_task` dedupes identical jobs** — won't create a second active job
   with the same prompt + schedule, so a self-rescheduling loop can't pile up duplicates that
