@@ -42,3 +42,4 @@ decision, numbered, never deleted (supersede instead).
 | [0031](./0031-pluggable-knowledge-backend.md) | Pluggable knowledge backend (register_knowledge_store + Protocol + selector) | Accepted |
 | [0032](./0032-pluggable-middleware.md) | Pluggable middleware (register_middleware + per-request metadata contextvar) | Accepted |
 | [0033](./0033-pluggable-agent-runtime-acp.md) | Pluggable agent runtime (ACP executor) — runtime≠model axis, operator-tools MCP bus, context contract + caching | Proposed |
+| [0034](./0034-plugin-ui-first-class-react.md) | Plugin UI as first-class React (Module Federation) — `ui: react` remotes + shared singletons + plugin-ui SDK + trust gate; Notes is the reference port | Proposed |
