@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Headless-mode docs + advertising** — a [Run headless](docs/guides/headless.md) guide
+  (UI tiers, the OpenAI-compatible `/v1/chat/completions` API, the A2A endpoint, auth,
+  headless `--setup`), a README "Run headless" section, and a marketing feature card —
+  surfacing that protoAgent runs API-first (no UI) drivable via OpenAI or A2A.
+
 ### Fixed
 - **Subagent YAML override now actually applies at runtime** — `subagents.<name>.{enabled,
   tools,max_turns}` was parsed into config but never reached the runtime registry (only the

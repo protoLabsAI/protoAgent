@@ -55,6 +55,7 @@ export default defineConfig({
             { text: "Fork checklist (fast path)", link: "/guides/fork-the-template" },
             { text: "Add a custom skill", link: "/guides/add-a-skill" },
             { text: "Configure subagents", link: "/guides/subagents" },
+            { text: "Run headless (API + A2A)", link: "/guides/headless" },
             { text: "Reusable workflows", link: "/guides/workflows" },
             { text: "Skills (SKILL.md)", link: "/guides/skills" },
             { text: "MCP servers", link: "/guides/mcp" },

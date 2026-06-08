@@ -73,6 +73,26 @@ through every wizard step with screenshots.
 Once you're happy and want to ship it as your own image in your
 own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
+## Run headless
+
+The web console is optional — protoAgent is an **API-first agent server**. Run it
+headless and drive it over HTTP via the **OpenAI-compatible** API, the **A2A** protocol,
+or both. Same agent, tools, skills, memory, and goals — no browser.
+
+```bash
+python -m server --ui none --host 0.0.0.0   # API + A2A + /metrics, no UI
+
+# OpenAI-compatible — point any OpenAI client at the base URL:
+curl localhost:7870/v1/chat/completions -H "Authorization: Bearer $TOKEN" \
+  -d '{"messages":[{"role":"user","content":"hi"}]}'
+
+# A2A — the agent card + JSON-RPC endpoint other agents/fleets call:
+curl localhost:7870/.well-known/agent-card.json
+```
+
+`--ui` tiers: `full` (Gradio + console, default) · `console` (React + API) · `none`
+(headless). See [Run headless](./docs/guides/headless.md).
+
 ## Architecture
 
 ```
