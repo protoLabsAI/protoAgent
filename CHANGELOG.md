@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin-UI SDK: host bridge + reference remote (ADR 0034 slice 2)** — `@protoagent/plugin-ui`
+  now exposes a **host bridge** (`setHostBridge`/`getHostBridge`: the authed API client, `authToken`,
+  `apiUrl`, `brandName`) so a remote gets host context without importing host internals. The
+  `hello-react` reference remote **consumes the SDK**: it registers a context-menu item that
+  appears in the host's rail menus — the end-to-end proof that a federated plugin extends the
+  console's menus across the boundary (ADR 0036).
 - **Plugin-UI SDK foundation (ADR 0034 slice 2)** — a new versioned **`@protoagent/plugin-ui`**
   package now holds the context-menu registry/store/types, and the host shares it as a **Module
   Federation singleton** — so a `ui: react` remote gets the *same* registry instance and a plugin

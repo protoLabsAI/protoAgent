@@ -23,6 +23,7 @@ export default defineConfig({
         react: { requiredVersion: false },
         "react-dom": { requiredVersion: false },
         "@tanstack/react-query": { requiredVersion: false },
+        "@protoagent/plugin-ui": { requiredVersion: false },
       },
     }),
   ],
