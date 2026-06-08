@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 
 async function openScheduleModal(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  // Schedule is a first-class right-rail panel (notes/beads/goals/schedule).
   await page.getByRole("button", { name: "Schedule", exact: true }).click();
   await page.getByTestId("schedule-new").click();
   await expect(page.getByTestId("schedule-modal")).toBeVisible();

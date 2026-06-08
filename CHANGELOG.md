@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Scheduler is a first-class right-rail panel** — moved from Activity → Schedule to the
+  right rail (Notes · Beads · Goals · Schedule), one click from chat.
+
 ## [0.24.0] - 2026-06-08
 
 ### Added
