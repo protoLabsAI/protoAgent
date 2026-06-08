@@ -23,7 +23,7 @@ The right side **mirrors** the left: both are **rails** hosting surfaces. The co
 draggable divider. Same rail component, same interaction, both sides.
 
 - Left rail (default): Chat, Activity, Studio, Knowledge, Plugins, Settings.
-- Right rail (default): Notes, Beads, Goals, Schedule, Users, Plugins.
+- Right rail (default): Notes, Beads, Goals, Schedule, Plugins.
 
 The old "right panel with its own tab style" is gone — it becomes a right *rail* identical to
 the left.
@@ -34,9 +34,9 @@ A surface isn't bound to a side. The user can **move any available surface to ei
 (its default side is just a default). So you can put Beads on the left and Chat on the right if
 that's your workflow. Assignment is per-user, persisted (D5).
 
-*Open question for review:* may the same surface be open on **both** rails at once, or is each
-surface assigned to exactly one side at a time? (Leaning: one side at a time — simpler, avoids
-duplicate-state surfaces like two live Chats.)
+**A surface lives on exactly one side at a time** (resolved) — moving it to a rail removes it
+from the other. This avoids duplicate-state surfaces (two live Chats) and keeps the model simple:
+the split shows two *different* surfaces.
 
 ### D3 — One unified tab/rail style
 
@@ -62,13 +62,14 @@ you were.** (Server data stays in react-query; this store is *UI* state only —
 Design the layout mobile-first, then enhance to the dual-rail split on wider viewports:
 
 - **Mobile:** a single surface at a time. A **bottom quick-access bar** of 4–5 surfaces (app-style
-  bottom nav) + a **hamburger** for the full surface list. **A plugin may claim a quick-bar slot.**
-  No split screen on mobile.
+  bottom nav) + a **hamburger** for the full surface list. No split screen on mobile.
 - **Desktop:** the dual-rail split (D1) with the resize handle (D4).
 - Breakpoint-driven: the same surfaces + store, a different shell.
 
-*Open questions for review:* the default 4–5 mobile quick-bar surfaces; how a plugin's slot is
-chosen (manifest hint? user pick?).
+**The quick-bar is user-configurable** (resolved) — the user picks which surfaces fill its 4–5
+slots from the available set, persisted (D5). Sensible default (e.g. Chat, Activity, Knowledge,
+Plugins). **A plugin needs no special slot mechanism** — plugin views are surfaces like any
+other, so pinning one to the quick-bar is the same action as pinning Chat.
 
 ### D7 — Design-system + theming pass
 
@@ -76,12 +77,6 @@ Alongside the layout: consolidate the theme tokens, tighten spacing/typography/c
 make theming first-class (so the ADR 0034 plugin-UI SDK can expose a *stable* token set to
 remotes). Scope to be detailed as its own slice — this ADR commits to doing it with the layout,
 not to a specific token list yet.
-
-### D8 — "Users" is a new surface
-
-The right-rail default includes **Users** — a surface we don't have yet. *Open question:* what
-is it (operator/member management? presence? auth/roles?) — scoped separately; listed here so the
-rail's default set is complete.
 
 ## Consequences
 
