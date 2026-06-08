@@ -464,3 +464,25 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     assert msg["contextId"] == ACTIVITY_CONTEXT
     assert msg["metadata"]["scheduler_job_id"] == job.id
     assert msg["metadata"]["origin"] == "scheduler"
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_dedupes_identical_jobs(tmp_path):
+    """schedule_task must not create a second job identical to an active one
+    (same prompt + schedule) — the common cause of scheduled-task spam."""
+    from tools.lg_tools import _build_scheduler_tools
+
+    sched = _make_scheduler(tmp_path)
+    tools = {t.name: t for t in _build_scheduler_tools(sched)}
+    schedule = tools["schedule_task"]
+
+    r1 = await schedule.ainvoke({"prompt": "summarize logs", "when": "0 * * * *"})
+    assert "Scheduled job" in r1
+    r2 = await schedule.ainvoke({"prompt": "summarize logs", "when": "0 * * * *"})
+    assert "Already scheduled" in r2 and "duplicate" in r2
+    assert len(sched.list_jobs()) == 1
+
+    # A different schedule for the same prompt is NOT a duplicate.
+    r3 = await schedule.ainvoke({"prompt": "summarize logs", "when": "0 9 * * *"})
+    assert "Scheduled job" in r3
+    assert len(sched.list_jobs()) == 2
