@@ -78,6 +78,11 @@ function handleApiGet(pathname) {
   switch (pathname) {
     case "/api/runtime/status":
       return RUNTIME_STATUS;
+    case "/api/config":
+      return {
+        config: { identity: { name: "mock-agent", operator: "" } },
+        soul: "# Mock agent\nYou are a helpful test agent.",
+      };
     case "/api/subagents":
       return { subagents: SUBAGENTS };
     case "/api/tools":

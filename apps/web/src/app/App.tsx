@@ -70,7 +70,6 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface } from "../settings/SettingsSurface";
-import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
@@ -83,10 +82,11 @@ import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { RuntimePanel } from "./RuntimePanel";
+import { IdentityPanel } from "../agent/IdentityPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { McpPanel } from "./McpPanel";
 import { SubagentsPanel } from "./SubagentsPanel";
+import { MiddlewarePanel } from "./MiddlewarePanel";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -96,7 +96,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 // Core surfaces are the fixed literals; plugin views (ADR 0026) add dynamic
 // surfaces keyed `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal
 // autocomplete while allowing those runtime keys.
-type Surface = "chat" | "activity" | "studio" | "knowledge" | "runtime" | "plugins" | "settings" | (string & {});
+type Surface = "chat" | "activity" | "studio" | "knowledge" | "agent" | "plugins" | "settings" | (string & {});
 
 // A plugin view names its rail glyph by lucide icon name. The curated set below
 // is the common-case fast path (already bundled); anything else falls back to the
@@ -158,13 +158,13 @@ function pluginViewIcon(name?: string): ReactNode {
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
 // old "Run" tab is gone and Studio is just Workflows.
-type RuntimeTab = "overview" | "tools" | "mcp" | "subagents" | "telemetry";
+// Agent = the agent's own makeup: its identity (name + SOUL.md), tools, MCP
+// servers, subagents, skills, and middleware. (Runtime status + telemetry moved
+// to Settings → Overview.)
+type AgentTab = "identity" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox";
-// Knowledge = what the agent knows (ADR 0020): the searchable knowledge Store
-// (factual memory) + Playbooks (procedural memory). Store leads.
-type KnowledgeTab = "store" | "playbooks";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
 type RightPanel = "notes" | "beads" | "goals" | "schedule";
@@ -211,9 +211,8 @@ export function App() {
   // Background-streaming indicator for the Chat rail (narrow selector → only
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
-  const [runtimeTab, setRuntimeTab] = useState<RuntimeTab>("overview");
+  const [agentTab, setAgentTab] = useState<AgentTab>("identity");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
-  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   // Collapsible/resizable right panel (persisted). Flag is "1"/"" string; width
   // is a px string clamped on read.
@@ -674,10 +673,10 @@ export function App() {
             onClick={() => setSurface("knowledge")}
           />
           <RailButton
-            active={surface === "runtime"}
-            label="Runtime"
-            icon={<Gauge size={18} />}
-            onClick={() => setSurface("runtime")}
+            active={surface === "agent"}
+            label="Agent"
+            icon={<Bot size={18} />}
+            onClick={() => setSurface("agent")}
           />
           <RailButton
             active={surface === "plugins"}
@@ -729,27 +728,17 @@ export function App() {
               ]}
             />
           ) : null}
-          {surface === "knowledge" ? (
-            // Store (factual memory) + Skills (procedural memory) — ADR 0020.
+          {surface === "agent" ? (
             <StageSubnav
-              active={knowledgeTab}
-              onSelect={(id) => setKnowledgeTab(id as typeof knowledgeTab)}
+              active={agentTab}
+              onSelect={(id) => setAgentTab(id as typeof agentTab)}
               tabs={[
-                { id: "store", label: "Store", icon: Database },
-                { id: "playbooks", label: "Skills", icon: BookMarked },
-              ]}
-            />
-          ) : null}
-          {surface === "runtime" ? (
-            <StageSubnav
-              active={runtimeTab}
-              onSelect={(id) => setRuntimeTab(id as typeof runtimeTab)}
-              tabs={[
-                { id: "overview", label: "Overview", icon: Gauge },
+                { id: "identity", label: "Identity", icon: Sparkles },
                 { id: "tools", label: "Tools", icon: Wrench },
                 { id: "mcp", label: "MCP", icon: Plug },
                 { id: "subagents", label: "Subagents", icon: Bot },
-                { id: "telemetry", label: "Telemetry", icon: BarChart3 },
+                { id: "skills", label: "Skills", icon: BookMarked },
+                { id: "middleware", label: "Middleware", icon: Layers },
               ]}
             />
           ) : null}
@@ -765,14 +754,14 @@ export function App() {
           {surface === "activity" && activityTab === "inbox" ? <InboxPanel /> : null}
 
 
-          {surface === "runtime" && runtimeTab === "overview" ? <RuntimePanel /> : null}
-          {surface === "runtime" && runtimeTab === "tools" ? <ToolsPanel /> : null}
-          {surface === "runtime" && runtimeTab === "mcp" ? <McpPanel /> : null}
-          {surface === "runtime" && runtimeTab === "subagents" ? <SubagentsPanel /> : null}
-          {surface === "runtime" && runtimeTab === "telemetry" ? <TelemetrySurface /> : null}
+          {surface === "agent" && agentTab === "identity" ? <IdentityPanel /> : null}
+          {surface === "agent" && agentTab === "tools" ? <ToolsPanel /> : null}
+          {surface === "agent" && agentTab === "mcp" ? <McpPanel /> : null}
+          {surface === "agent" && agentTab === "subagents" ? <SubagentsPanel /> : null}
+          {surface === "agent" && agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
+          {surface === "agent" && agentTab === "middleware" ? <MiddlewarePanel /> : null}
           {surface === "plugins" ? <PluginsSurface /> : null}
-          {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
-          {surface === "knowledge" && knowledgeTab === "playbooks" ? <PlaybooksSurface onError={setError} /> : null}
+          {surface === "knowledge" ? <KnowledgeStore onError={setError} /> : null}
           {surface === "settings" ? <SettingsSurface /> : null}
 
           {/* Plugin view (ADR 0026) — the plugin serves the page; PluginView hosts
