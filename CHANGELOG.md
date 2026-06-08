@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Console upgraded to React 19** — `apps/web` moved React 18.3 → 19.2 (already on `createRoot`
+  with no removed-API usage, so a clean bump; all 60 e2e pass). Sets the shared singleton for the
+  ADR 0034 plugin-UI federation harness.
+
 ## [0.29.0] - 2026-06-08
 
 ### Added
