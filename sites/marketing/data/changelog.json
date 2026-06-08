@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.29.0",
+    "date": "2026-06-08",
+    "changes": [
+      "ACP answer-text streams"
+    ]
+  },
+  {
     "version": "v0.28.0",
     "date": "2026-06-08",
     "changes": [
