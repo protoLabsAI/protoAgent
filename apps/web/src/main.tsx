@@ -10,6 +10,7 @@ import { brandName } from "./lib/brand";
 // Tailwind + the shadcn→token bridge, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
 import "./app/tailwind.css";
+import "@protolabsai/ui/styles.css";
 import "./app/theme.css";
 import { queryClient } from "./lib/queryClient";
 

@@ -1,7 +1,7 @@
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
-import { Button } from "../components/ui/button";
+import { Button } from "@protolabsai/ui";
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -159,8 +159,8 @@ export function SettingsCategory({
                 Test connection
               </button>
             ) : null}
-            {/* Pilot shadcn/Radix component (ADR 0037 S1) — themed by the brand tokens. */}
-            <Button variant="secondary" size="sm" type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
+            {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
+            <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
               <RotateCcw size={15} /> Discard
             </Button>
             <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
