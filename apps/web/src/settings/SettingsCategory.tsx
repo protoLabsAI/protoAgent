@@ -1,5 +1,5 @@
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { AlertTriangle, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -61,6 +61,14 @@ export function SettingsCategory({
   const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
   const hasDiscord = groups.some((g) => g.section === "Discord");
   const hasGoogle = groups.some((g) => g.section === "Google");
+
+  // Active agent runtime (ADR 0033) — for the banner + header badge when this category
+  // carries the selector (the Agent settings). Reflects the pending (dirty) choice live.
+  const runtimeField = groups.flatMap((g) => g.fields).find((f) => f.key === "agent_runtime");
+  const activeRuntime = runtimeField
+    ? String((dirty["agent_runtime"] ?? runtimeField.value) ?? "native")
+    : null;
+  const acpAgent = activeRuntime && activeRuntime.startsWith("acp:") ? activeRuntime.slice(4) : null;
 
   const pendingRestart = useMemo(() => {
     const labels: string[] = [];
@@ -134,7 +142,13 @@ export function SettingsCategory({
     <>
       <PanelHeader
         title={title}
-        kicker={dirtyKeys.length ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}` : "applies on save"}
+        kicker={
+          dirtyKeys.length
+            ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}`
+            : runtimeField
+              ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
+              : "applies on save"
+        }
         actions={
           <>
             {hasModel ? (
@@ -153,6 +167,16 @@ export function SettingsCategory({
         }
       />
       <div className="stage-body">
+        {acpAgent ? (
+          <div className="settings-banner runtime-banner">
+            <Bot size={14} />
+            <span>
+              Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
+              The model settings below power protoAgent's own calls (compaction, goal checks); with no
+              gateway key configured, those run on {acpAgent} too.
+            </span>
+          </div>
+        ) : null}
         {pendingRestart.length ? (
           <div className="settings-banner" role="alert">
             <AlertTriangle size={14} />

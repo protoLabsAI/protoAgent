@@ -2948,6 +2948,12 @@ textarea {
   font-size: 0.82rem;
 }
 .settings-banner svg { flex: none; }
+/* Active-runtime banner (ADR 0033) — info tone (brand violet), not the amber warning. */
+.settings-banner.runtime-banner {
+  background: color-mix(in srgb, var(--pl-color-brand-lavender) 14%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 32%, transparent);
+  color: inherit;
+}
 .settings-status {
   margin: 0 0 10px;
   font-size: 0.8rem;
