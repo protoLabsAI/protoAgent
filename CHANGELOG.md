@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Mobile shell (ADR 0035 slice 4)** — below 768px the console drops the dual-rail split for a
+  single-surface view with a **bottom quick-bar** (configurable, default Chat/Activity/Knowledge/
+  Plugins) + a **hamburger drawer** listing every surface. Chat stays mounted (streaming
+  continuity). Breakpoint-driven off the same store; desktop unchanged. (Drawer is interim —
+  swaps for `@protolabsai/ui`'s Drawer when it lands.)
 - **Everything-swappable rails (ADR 0036)** — plugin views are now first-class `railOrder`
   members (reconciled in/out as plugins come and go), and **Chat is movable too** (it mounts on
   whichever rail holds it, preserving streaming continuity). Right-click any surface → **Move up /

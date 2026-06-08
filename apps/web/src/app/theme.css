@@ -3327,3 +3327,100 @@ textarea {
   word-break: break-word;
 }
 
+
+/* Mobile shell (ADR 0035 S4) — single surface + bottom quick-bar + hamburger drawer. The
+   --pl-color-overlay / --pl-color-bg-hover tokens land in @protolabsai/design 0.4.0; fallbacks
+   keep it correct until then. */
+.workspace.mobile {
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: none;
+}
+.workspace.mobile .stage {
+  flex: 1;
+  min-height: 0;
+  border-right: none;
+  padding-bottom: 60px; /* clear the fixed bottom bar */
+}
+.mobile-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  z-index: 40;
+}
+.mobile-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+.mobile-tab.active {
+  color: var(--brand-violet-light);
+}
+.mobile-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--pl-color-overlay, rgba(0, 0, 0, 0.55));
+  z-index: 50;
+  display: flex;
+}
+.mobile-drawer {
+  width: 82%;
+  max-width: 320px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+.mobile-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.mobile-drawer-head button {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.mobile-drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  overflow: auto;
+}
+.mobile-drawer-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+}
+.mobile-drawer-list button.active,
+.mobile-drawer-list button:hover {
+  background: var(--pl-color-bg-hover, rgba(255, 255, 255, 0.06));
+}
