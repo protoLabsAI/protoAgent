@@ -12,7 +12,9 @@
     "build:remotes": "vite build -c remotes/hello-react/vite.config.ts && vite build -c remotes/notes/vite.config.ts"
   },
   "dependencies": {
-    "@protolabsai/design": "^0.3.0",
+    "@protoagent/plugin-ui": "*",
+    "@protolabsai/design": "^0.4.0",
+    "@protolabsai/ui": "^0.4.0",
     "@radix-ui/react-dropdown-menu": "^2.1.17",
     "@tanstack/react-query": "^5.100.14",
     "class-variance-authority": "^0.7.1",
@@ -25,8 +27,7 @@
     "remark-gfm": "^4.0.0",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
-    "zustand": "^5.0.14",
-    "@protoagent/plugin-ui": "*"
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@originjs/vite-plugin-federation": "^1.4.1",
