@@ -71,9 +71,36 @@ def _operator_subagent_list():
     return _operator_list_subagents(STATE.graph_config)
 
 
+# Group the flat tool inventory by subsystem (matches get_all_tools' sections) so the
+# console can section the list instead of showing a wall of 30. Name → category;
+# unknown core names fall back to "General", plugin/mcp tools to their source.
+_TOOL_CATEGORY = {
+    "current_time": "General", "calculator": "General", "web_search": "General",
+    "fetch_url": "General", "ask_human": "General", "request_user_input": "General",
+    "github_get_pr": "GitHub", "github_get_issue": "GitHub",
+    "github_list_issues": "GitHub", "github_get_commit_diff": "GitHub",
+    "notes_list": "Notes", "notes_read": "Notes", "notes_write": "Notes", "notes_revert": "Notes",
+    "memory_ingest": "Memory", "memory_recall": "Memory", "memory_list": "Memory",
+    "memory_stats": "Memory", "daily_log": "Memory",
+    "schedule_task": "Scheduler", "list_schedules": "Scheduler", "cancel_schedule": "Scheduler",
+    "check_inbox": "Inbox",
+    "beads_create": "Beads", "beads_list": "Beads", "beads_update": "Beads", "beads_close": "Beads",
+    "set_goal": "Goals",
+    "task": "Delegation", "task_batch": "Delegation", "run_workflow": "Workflows",
+    "save_workflow": "Workflows", "search_tools": "Discovery",
+}
+
+
+def _tool_category(name: str, source: str) -> str:
+    if source == "core":
+        return _TOOL_CATEGORY.get(name, "General")
+    return "Plugin" if source == "plugin" else "MCP"
+
+
 def _operator_tools_list():
-    """Live tool inventory grouped by source (core / plugin / mcp) for the
-    Runtime → Tools tab. Best-effort: degrades to an empty list pre-setup."""
+    """Live tool inventory for the Tools tab — name, one-line description, source
+    (core/plugin/mcp), and a subsystem category for grouping. Best-effort; degrades
+    to an empty list pre-setup."""
     cfg = STATE.graph_config
     out: list[dict] = []
     seen: set[str] = set()
@@ -84,7 +111,10 @@ def _operator_tools_list():
             return
         seen.add(name)
         desc = (getattr(tool, "description", "") or "").strip().split("\n")[0]
-        out.append({"name": name, "description": desc, "source": source})
+        out.append({
+            "name": name, "description": desc, "source": source,
+            "category": _tool_category(name, source),
+        })
 
     try:
         from tools.lg_tools import get_all_tools
