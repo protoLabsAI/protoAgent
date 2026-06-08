@@ -17,30 +17,37 @@ type Transport = "stdio" | "http" | "sse";
 function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"form" | "json">("form");
   const [name, setName] = useState("");
   const [transport, setTransport] = useState<Transport>("stdio");
   const [command, setCommand] = useState("");
   const [args, setArgs] = useState("");
   const [url, setUrl] = useState("");
+  const [json, setJson] = useState("");
 
-  const reset = () => { setName(""); setCommand(""); setArgs(""); setUrl(""); setTransport("stdio"); };
+  const reset = () => {
+    setName(""); setCommand(""); setArgs(""); setUrl(""); setTransport("stdio"); setJson("");
+  };
+  const onSuccess = (msg: string) => {
+    qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+    reset();
+    setOpen(false);
+    onDone(msg);
+  };
   const add = useMutation({
     mutationFn: () =>
-      api.addMcpServer(
-        transport === "stdio"
-          ? { name, transport, command, args }
-          : { name, transport, url },
-      ),
-    onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      reset();
-      setOpen(false);
-      onDone(`Connected ${res.name} — its tools are live.`);
-    },
+      api.addMcpServer(transport === "stdio" ? { name, transport, command, args } : { name, transport, url }),
+    onSuccess: (res) => onSuccess(`Connected ${res.name} — its tools are live.`),
     onError: (err: unknown) => onDone(`Couldn't add server: ${err instanceof Error ? err.message : String(err)}`),
   });
+  const importJson = useMutation({
+    mutationFn: () => api.importMcpServers(json),
+    onSuccess: (res) => onSuccess(`Imported ${res.added.length} server${res.added.length === 1 ? "" : "s"}: ${res.added.join(", ")}.`),
+    onError: (err: unknown) => onDone(`Import failed: ${err instanceof Error ? err.message : String(err)}`),
+  });
 
-  const valid = name.trim() && (transport === "stdio" ? command.trim() : url.trim());
+  const formValid = name.trim() && (transport === "stdio" ? command.trim() : url.trim());
+  const busy = add.isPending || importJson.isPending;
 
   if (!open) {
     return (
@@ -50,26 +57,51 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
     );
   }
   return (
-    <form className="mcp-add-form" onSubmit={(e) => { e.preventDefault(); if (valid) add.mutate(); }}>
-      <div className="mcp-add-row">
-        <input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
-        <select className="playbook-search" value={transport} onChange={(e) => setTransport(e.target.value as Transport)}>
-          <option value="stdio">stdio</option>
-          <option value="http">http</option>
-          <option value="sse">sse</option>
-        </select>
+    <form
+      className="mcp-add-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (mode === "json") { if (json.trim()) importJson.mutate(); }
+        else if (formValid) add.mutate();
+      }}
+    >
+      <div className="segmented mcp-add-modes">
+        <button type="button" className={mode === "form" ? "active" : ""} onClick={() => setMode("form")}>Form</button>
+        <button type="button" className={mode === "json" ? "active" : ""} onClick={() => setMode("json")}>Paste JSON</button>
       </div>
-      {transport === "stdio" ? (
-        <div className="mcp-add-row">
-          <input className="playbook-search" placeholder="command (e.g. python)" value={command} onChange={(e) => setCommand(e.target.value)} />
-          <input className="playbook-search" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
-        </div>
+
+      {mode === "json" ? (
+        <textarea
+          className="playbook-search mcp-json"
+          rows={8}
+          placeholder={'Paste a server config, e.g.\n{\n  "mcpServers": {\n    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"] }\n  }\n}'}
+          value={json}
+          onChange={(e) => setJson(e.target.value)}
+        />
       ) : (
-        <input className="playbook-search" placeholder="url (https://…)" value={url} onChange={(e) => setUrl(e.target.value)} />
+        <>
+          <div className="mcp-add-row">
+            <input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
+            <select className="playbook-search" value={transport} onChange={(e) => setTransport(e.target.value as Transport)}>
+              <option value="stdio">stdio</option>
+              <option value="http">http</option>
+              <option value="sse">sse</option>
+            </select>
+          </div>
+          {transport === "stdio" ? (
+            <div className="mcp-add-row">
+              <input className="playbook-search" placeholder="command (e.g. python)" value={command} onChange={(e) => setCommand(e.target.value)} />
+              <input className="playbook-search" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
+            </div>
+          ) : (
+            <input className="playbook-search" placeholder="url (https://…)" value={url} onChange={(e) => setUrl(e.target.value)} />
+          )}
+        </>
       )}
+
       <div className="mcp-add-actions">
-        <button type="submit" className="ghost-button" disabled={!valid || add.isPending}>
-          {add.isPending ? <Loader2 size={14} className="spin" /> : "Connect"}
+        <button type="submit" className="ghost-button" disabled={busy || (mode === "json" ? !json.trim() : !formValid)}>
+          {busy ? <Loader2 size={14} className="spin" /> : mode === "json" ? "Import" : "Connect"}
         </button>
         <button type="button" className="ghost-button" onClick={() => { reset(); setOpen(false); }}>Cancel</button>
       </div>

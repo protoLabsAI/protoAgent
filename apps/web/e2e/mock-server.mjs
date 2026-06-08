@@ -279,6 +279,14 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/mcp/servers" && req.method === "POST") {
       return sendJson(res, { ok: true, name: body.name, servers: [body.name] });
     }
+    if (pathname === "/api/mcp/servers/import" && req.method === "POST") {
+      let added = ["imported"];
+      try {
+        const d = JSON.parse(body.raw || "{}");
+        added = d.mcpServers ? Object.keys(d.mcpServers) : [d.name || "imported"];
+      } catch { return sendJson(res, { detail: "invalid JSON" }, 400); }
+      return sendJson(res, { ok: true, added, servers: added });
+    }
     {
       const m = pathname.match(/^\/api\/mcp\/servers\/([^/]+)$/);
       if (m && req.method === "DELETE") {

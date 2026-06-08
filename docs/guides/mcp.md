@@ -14,7 +14,10 @@ Built on [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mc
 MCP is **off by default** — configuring a server is the opt-in. The quickest way is
 the console: **Agent → MCP → Add server** (name, transport, command/args or URL) wires
 it in **without a restart** (the change hot-reloads and the server connects), and the
-remove button drops one the same way. Prefer YAML? Add an `mcp` section to your config
+remove button drops one the same way. Got a config blob instead? Use **Paste JSON** —
+it accepts the standard `{"mcpServers": {…}}` format (as shared by Claude Desktop / most
+MCP docs), a single server object, or our own export, and imports them all at once.
+Prefer YAML? Add an `mcp` section to your config
 (`config/langgraph-config.yaml`, or via the wizard/drawer):
 
 ```yaml

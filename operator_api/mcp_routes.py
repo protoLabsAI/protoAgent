@@ -54,11 +54,62 @@ def _clean_entry(body: dict) -> dict:
         env = {str(k).strip(): str(v) for k, v in env.items() if str(k).strip()}
         if env:
             entry["env"] = env
+    headers = body.get("headers")
+    if transport != "stdio" and isinstance(headers, dict):
+        headers = {str(k).strip(): str(v) for k, v in headers.items() if str(k).strip()}
+        if headers:
+            entry["headers"] = headers
     return entry
 
 
+# Map the various "transport"/"type" spellings found in shared MCP JSON to ours.
+_TRANSPORT_ALIASES = {
+    "streamable-http": "streamable_http", "streamablehttp": "streamable_http",
+    "http-stream": "streamable_http",
+}
+
+
+def _normalize_named(name: str, spec: dict) -> dict:
+    """A `{name: {...}}` entry (Claude-Desktop / mcp.json style) → a clean entry.
+
+    Infers transport when absent: an explicit ``transport``/``type``, else ``stdio``
+    if there's a ``command``, else ``http`` if there's a ``url``.
+    """
+    s = dict(spec or {})
+    s["name"] = s.get("name") or name
+    if "transport" not in s:
+        t = str(s.get("type", "")).strip().lower()
+        if t:
+            s["transport"] = _TRANSPORT_ALIASES.get(t, t)
+        elif s.get("command"):
+            s["transport"] = "stdio"
+        elif s.get("url"):
+            s["transport"] = "http"
+    return _clean_entry(s)
+
+
+def _entries_from_blob(data: object) -> list[dict]:
+    """Normalize a pasted MCP JSON blob into clean mcp.servers entries.
+
+    Accepts the common shapes: the standard ``{"mcpServers": {name: spec}}`` wrapper,
+    our own ``{"servers": [ {name, ...} ]}`` export, a single server object, or a bare
+    ``{name: spec}`` map.
+    """
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="expected a JSON object")
+    if isinstance(data.get("mcpServers"), dict):
+        return [_normalize_named(n, s) for n, s in data["mcpServers"].items()]
+    if isinstance(data.get("servers"), list):
+        return [_clean_entry(s) for s in data["servers"]]
+    if data.get("command") or data.get("url"):
+        return [_clean_entry(data)]  # a single server object (must carry a name)
+    if data and all(isinstance(v, dict) for v in data.values()):
+        return [_normalize_named(n, s) for n, s in data.items()]
+    raise HTTPException(status_code=400, detail="no MCP server found in the JSON")
+
+
 def register_mcp_routes(app) -> None:
-    """Register `POST /api/mcp/servers` and `DELETE /api/mcp/servers/{name}`."""
+    """Register add / import / delete for `mcp.servers`."""
 
     @app.post("/api/mcp/servers")
     async def _add(body: dict | None = None):
@@ -74,6 +125,32 @@ def register_mcp_routes(app) -> None:
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "name": entry["name"], "servers": [s["name"] for s in servers]}
+
+    @app.post("/api/mcp/servers/import")
+    async def _import(body: dict | None = None):
+        """Add one or more servers from a pasted MCP JSON blob (`{"raw": "<json>"}`)."""
+        import json as _json
+
+        raw = (body or {}).get("raw")
+        if not isinstance(raw, str) or not raw.strip():
+            raise HTTPException(status_code=400, detail="raw JSON is required")
+        try:
+            data = _json.loads(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+
+        entries = _entries_from_blob(data)
+        names = {e["name"] for e in entries}
+        cfg = STATE.graph_config
+        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") not in names]
+        servers.extend(entries)
+
+        from server.agent_init import _apply_settings_changes
+
+        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": servers}})
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        return {"ok": True, "added": sorted(names), "servers": [s["name"] for s in servers]}
 
     @app.delete("/api/mcp/servers/{name}")
     async def _remove(name: str):

@@ -865,6 +865,16 @@ select:disabled {
   display: flex;
   gap: 8px;
 }
+.mcp-add-modes {
+  align-self: flex-start;
+}
+.mcp-json {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 .scroll-area {
   min-width: 0;
