@@ -14,10 +14,8 @@ capabilities:
 # iframe fallback for untrusted hosts; `notes` is on the shipped trust allowlist
 # (graph/plugins/loader.py) so it mounts in-process.
 views:
-  # Labelled "Notes (new)" only while it coexists with the legacy native Notes for verification;
-  # a follow-up retires the native surface + tools + store and renames this to "Notes".
   - {
-      id: notes, label: "Notes (new)", icon: "FileText", placement: right,
+      id: notes, label: "Notes", icon: "FileText", placement: right,
       ui: react, path: "/api/plugins/notes/view",
       remote: { url: "/app/remotes/notes/assets/remoteEntry.js", module: "./Panel" },
     }

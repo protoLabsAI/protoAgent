@@ -6,17 +6,6 @@ from fastapi.testclient import TestClient
 from operator_api.routes import register_operator_routes
 
 
-class _Notes:
-    def __init__(self) -> None:
-        self.saved = None
-
-    def load_workspace(self):
-        return {"loaded": True}
-
-    def save_workspace(self, workspace):
-        self.saved = workspace
-
-
 class _Beads:
     def status(self, project_path: str):
         return {"initialized": True, "project_path": project_path}
@@ -42,7 +31,6 @@ class _Beads:
 
 def _client(*, run=None):
     app = FastAPI()
-    notes = _Notes()
 
     async def default_run(req):
         return f"ran:{req['type']}:{req['prompt']}"
@@ -56,10 +44,9 @@ def _client(*, run=None):
         subagent_list=lambda: [{"name": "researcher"}],
         subagent_run=run or default_run,
         subagent_batch=batch,
-        notes_service=notes,
         beads_service=_Beads(),
     )
-    return TestClient(app), notes
+    return TestClient(app)
 
 
 class _FakeBeadsStore:
@@ -81,7 +68,6 @@ def test_beads_store_route_ignores_project_path() -> None:
         subagent_list=lambda: [],
         subagent_run=lambda req: "",
         subagent_batch=lambda req: "",
-        notes_service=_Notes(),
         beads_store=_FakeBeadsStore(),  # in-process → agent-global adapter
     )
     client = TestClient(app)
@@ -91,7 +77,7 @@ def test_beads_store_route_ignores_project_path() -> None:
 
 
 def test_operator_routes_return_expected_shapes(tmp_path) -> None:
-    client, notes = _client()
+    client = _client()
 
     assert client.get("/api/runtime/status").json() == {"graph_loaded": True}
     assert client.get("/api/subagents").json() == {"subagents": [{"name": "researcher"}]}
@@ -108,12 +94,6 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
         json={"tasks": [{"prompt": "one"}, {"prompt": "two"}]},
     )
     assert batch.json()["output"] == "batch:2"
-
-    # Notes are agent-global — no project_path in the request or response.
-    assert client.get("/api/notes/workspace").json() == {"workspace": {"loaded": True}}
-    save = client.post("/api/notes/workspace", json={"workspace": {"tabs": {}}})
-    assert save.json() == {"ok": True}
-    assert notes.saved == {"tabs": {}}
 
     notes_path = str(tmp_path)
     assert client.get("/api/beads/status", params={"project_path": notes_path}).json() == {
@@ -142,7 +122,7 @@ def test_operator_routes_map_value_errors_to_400() -> None:
     async def run(_req):
         raise ValueError("bad prompt")
 
-    client, _notes = _client(run=run)
+    client = _client(run=run)
     response = client.post(
         "/api/subagents/run",
         json={"type": "researcher", "prompt": "check"},

@@ -68,7 +68,7 @@ export const useUI = create<UIState>()(
   persist(
     (set) => ({
       surface: "chat",
-      rightPanel: "notes",
+      rightPanel: "beads",
       agentTab: "identity",
       pluginsTab: "local",
       knowledgeTab: "store",
@@ -78,7 +78,7 @@ export const useUI = create<UIState>()(
       rightWidth: 360,
       railOrder: {
         left: ["chat", "activity", "studio", "knowledge", "agent", "plugins", "settings"],
-        right: ["notes", "beads", "goals", "schedule"],
+        right: ["beads", "goals", "schedule"],
       },
       moveSurface: (id, side) =>
         set((s) => {
