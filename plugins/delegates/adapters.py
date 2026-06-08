@@ -12,6 +12,7 @@ ADR 0024 ``AcpClient``; the a2a adapter reuses the ``peer_tools`` JSON-RPC path)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -165,7 +166,7 @@ class A2aAdapter(Adapter):
         import httpx
 
         import security
-        from tools.peer_tools import _TERMINAL, _extract_text
+        from tools.peer_tools import _extract_text, _is_terminal
 
         blocked = security.check_url(d.url)
         if blocked:
@@ -188,23 +189,27 @@ class A2aAdapter(Adapter):
                 raise DelegateError(str(data["error"]))
             return data.get("result") or {}
 
-        async with httpx.AsyncClient(timeout=timeout or 30) as client:
-            result = await _rpc(client, "message/send", {"message": {
-                "role": "user", "parts": [{"kind": "text", "text": query}],
+        # A2A 1.0 (a2a-sdk >=1.0): JSON-RPC `SendMessage` / `GetTask`, the ROLE_USER
+        # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
+        # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
+        async with httpx.AsyncClient(timeout=timeout or 60) as client:
+            result = await _rpc(client, "SendMessage", {"message": {
+                "role": "ROLE_USER", "parts": [{"text": query}],
                 "messageId": str(uuid.uuid4()),
             }})
             text = _extract_text(result)
             if text:
                 return text
-            task_id = result.get("id")
-            state = (result.get("status") or {}).get("state")
-            import asyncio
+            task = result.get("task", result) or {}
+            task_id = task.get("id")
+            state = (task.get("status") or {}).get("state")
             polls = 0
-            while task_id and state not in _TERMINAL and polls < 30:
+            while task_id and not _is_terminal(state) and polls < 30:
                 await asyncio.sleep(1.0)
                 polls += 1
-                result = await _rpc(client, "tasks/get", {"id": task_id})
-                state = (result.get("status") or {}).get("state")
+                result = await _rpc(client, "GetTask", {"name": task_id})
+                task = result.get("task", result) or {}
+                state = (task.get("status") or {}).get("state")
             text = _extract_text(result)
             if text:
                 return text
