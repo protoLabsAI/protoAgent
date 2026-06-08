@@ -183,7 +183,7 @@ export const SETTINGS_SCHEMA = [
   },
   {
     section: "Compaction",
-    category: "Behavior",
+    category: "System",
     fields: [
       { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true },
     ],

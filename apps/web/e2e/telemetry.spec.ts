@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 // The System ▸ Telemetry tab renders the per-turn rollups from
 // /api/telemetry/* (ADR 0006 Slice 3): summary cards + a recent-turns table.
 
-test("Settings → Overview shows the telemetry summary cards and recent turns", async ({ page }) => {
+test("Settings → Telemetry shows the telemetry summary cards and recent turns", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Telemetry moved under Settings → Overview (the read-only status + telemetry).
+  // Telemetry is its own tab under Settings now (split out of Overview).
   await page.locator(".rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Overview", exact: true }).click();
+  await page.locator(".stage-subnav").getByRole("button", { name: "Telemetry", exact: true }).click();
 
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();
