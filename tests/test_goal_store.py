@@ -62,3 +62,24 @@ def test_all_empty_and_skips_corrupt(tmp_path):
     (tmp_path / "broken.json").write_text("{ not json")  # must be skipped, not raise
     states = store.all()
     assert [s.session_id for s in states] == ["ok"]
+
+
+def test_resolve_base_is_instance_scoped(monkeypatch, tmp_path):
+    """Two agents on one machine must not share a goals dir (ADR 0004) — else
+    scheduled/activity turns (shared session id) collide and goals leak across
+    agents. _resolve_base namespaces by PROTOAGENT_INSTANCE."""
+    from graph.goals import store as goal_store
+
+    monkeypatch.setenv("GOAL_PATH", str(tmp_path))
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "alpha")
+    base_a = goal_store._resolve_base()
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "beta")
+    base_b = goal_store._resolve_base()
+    assert base_a != base_b
+    assert base_a.name == tmp_path.name and base_a.parent.name == "alpha"
+    assert base_b.parent.name == "beta"
+
+    # No instance id → unscoped (single-instance back-compat).
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    assert goal_store._resolve_base() == tmp_path
