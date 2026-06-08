@@ -25,7 +25,7 @@ from tools.fallbacks import with_fallback
 
 _HANDLE_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _POLL_INTERVAL_S = 1.0
-_MAX_POLLS = 30  # ~30s for an async peer to reach a terminal state
+_MAX_POLLS = 150  # ~150s — a delegated skill (e.g. Quinn's bug_triage) can run a while
 
 
 def _resolve_peer(name: str) -> tuple[str | None, str | None]:
@@ -85,8 +85,8 @@ def get_peer_tools() -> list:
 
     @tool
     @with_fallback()
-    async def peer_consult(name: str, message: str) -> str:
-        """Ask another agent (by peer handle) a question and return its reply.
+    async def peer_consult(name: str, message: str, skill: str = "") -> str:
+        """Ask another agent (by peer handle) a question, or delegate a named skill, and return its reply.
 
         Deprecated: prefer ``delegate_to(target, query)`` with an ``a2a`` delegate
         (the unified delegate registry, ADR 0025) — same A2A consult over one tool
@@ -95,7 +95,11 @@ def get_peer_tools() -> list:
 
         Args:
             name: Peer handle (must match a configured ``PEER_<HANDLE>_URL``).
-            message: The question — be specific; the peer answers from its own context.
+            message: The question / instruction — be specific; the peer answers from its own context.
+            skill: Optional skill to route to on the peer (sent as ``metadata.skillHint``). A fleet
+                peer like ``workstacean`` dispatches the named skill to the owning agent — e.g.
+                ``skill="bug_triage"`` / ``"pr_review"`` routes to Quinn. Omit to hit the peer's
+                default (``chat``) executor. Peers that ignore skillHint just read ``message``.
         """
         if not name.strip():
             return "Error: peer name is required."
@@ -126,15 +130,26 @@ def get_peer_tools() -> list:
                 raise RuntimeError(str(data["error"]))
             return data.get("result") or {}
 
+        msg: dict = {
+            "role": "user",
+            "parts": [{"kind": "text", "text": message}],
+            "messageId": str(uuid.uuid4()),
+        }
+        params: dict = {"message": msg}
+        if skill.strip():
+            # Route to a named skill. A2A peers read skillHint from the message
+            # metadata (and some from params.metadata) — set both for safety.
+            hint = {"skillHint": skill.strip()}
+            msg["metadata"] = hint
+            params["metadata"] = hint
+
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                result = await _rpc(client, "message/send", {
-                    "message": {
-                        "role": "user",
-                        "parts": [{"kind": "text", "text": message}],
-                        "messageId": str(uuid.uuid4()),
-                    }
-                })
+            # A delegated skill answers synchronously on message/send and can run
+            # for a minute+ (e.g. Quinn's bug_triage ≈ 58s) — the peer holds the
+            # connection until done rather than returning a task to poll. Give the
+            # request room; the polling loop below covers peers that DO go async.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(200.0, connect=10.0)) as client:
+                result = await _rpc(client, "message/send", params)
                 # Inline reply? (some peers answer synchronously)
                 text = _extract_text(result)
                 if text:
