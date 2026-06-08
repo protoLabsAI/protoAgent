@@ -116,3 +116,54 @@ def test_chat_caches_acp_runtime_per_thread(monkeypatch):
     assert r1 is r2          # same thread → same stateful ACP session
     assert r1 is not r3      # different thread → its own session
     assert r1.agent == "codex"
+
+
+def test_gateway_configured_detection(monkeypatch):
+    from runtime.acp_runtime import _gateway_configured
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert _gateway_configured(types.SimpleNamespace(api_key="sk-x")) is True
+    assert _gateway_configured(types.SimpleNamespace(api_key="")) is False
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    assert _gateway_configured(types.SimpleNamespace(api_key="")) is True
+
+
+def test_create_llm_acp_fallback_only_without_gateway(monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.llm import create_llm
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # ACP runtime + no gateway key → ACP-backed aux model.
+    c = LangGraphConfig(); c.agent_runtime = "acp:proto"; c.api_key = ""
+    assert type(create_llm(c)).__name__ == "AcpChatModel"
+
+    # ACP runtime BUT a gateway key is set → use the gateway (they configured one).
+    c2 = LangGraphConfig(); c2.agent_runtime = "acp:proto"; c2.api_key = "sk-real"; c2.api_base = "https://x/v1"
+    assert type(create_llm(c2)).__name__ != "AcpChatModel"
+
+    # Native runtime → always the gateway model, untouched.
+    c3 = LangGraphConfig(); c3.agent_runtime = "native"; c3.api_key = "sk-real"; c3.api_base = "https://x/v1"
+    assert type(create_llm(c3)).__name__ != "AcpChatModel"
+
+
+async def test_acp_aux_model_generates_via_client(monkeypatch):
+    import runtime.acp_runtime as rt
+    from langchain_core.messages import HumanMessage
+
+    async def _fake_prompt(agent, config, text):
+        return f"AUX[{text}]"
+
+    monkeypatch.setattr(rt, "_aux_prompt", _fake_prompt)
+    model = rt.make_acp_aux_model(types.SimpleNamespace(agent_runtime="acp:proto"))
+    res = await model._agenerate([HumanMessage(content="summarize this")])
+    assert res.generations[0].message.content == "AUX[summarize this]"
+
+
+def test_validate_headless_allows_acp_only():
+    import types as _t
+    from graph.config_io import validate_for_headless
+    # ACP-only: no api_base / api_key required.
+    ok, _ = validate_for_headless(_t.SimpleNamespace(agent_runtime="acp:proto", api_base="", api_key=""))
+    assert ok is True
+    # native still requires a gateway.
+    ok2, _ = validate_for_headless(_t.SimpleNamespace(agent_runtime="native", api_base="", api_key=""))
+    assert ok2 is False

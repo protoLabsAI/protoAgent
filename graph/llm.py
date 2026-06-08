@@ -4,12 +4,15 @@ All models route through the LiteLLM gateway (OpenAI-compatible),
 so we use ChatOpenAI for everything.
 """
 
+import logging
 import os
 from collections.abc import Callable
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from graph.config import LangGraphConfig
+
+log = logging.getLogger(__name__)
 
 # Same allowlisted UA the chat client uses (Cloudflare WAF blocks the SDK default).
 _GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
@@ -86,6 +89,18 @@ def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> Cha
     for a different model on the same gateway (used for compaction /
     fallback models).
     """
+    # ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
+    # key is configured, back protoAgent's auxiliary LLM calls (compaction, goal-eval, fact
+    # extraction) with that same ACP agent — so an ACP-only setup needs no OpenAI-compatible
+    # endpoint. Tightly guarded: native runtimes, and ACP-with-a-gateway-key, are unchanged.
+    try:
+        from runtime.acp_runtime import _gateway_configured, is_acp_runtime, make_acp_aux_model
+
+        if is_acp_runtime(config) and not _gateway_configured(config):
+            return make_acp_aux_model(config)
+    except Exception:  # noqa: BLE001 — never let the ACP path break native model creation
+        log.debug("[llm] ACP aux-model resolution skipped", exc_info=True)
+
     kwargs = _build_llm_kwargs(config)
     if model_name:
         kwargs["model"] = model_name
