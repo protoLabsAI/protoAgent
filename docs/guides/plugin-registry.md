@@ -24,7 +24,7 @@ section + secrets by default (a reinstall restores your settings); pass `--purge
 to remove those too. Declared pip deps are **never** auto-removed (shared venv) —
 they're reported so you can `pip uninstall` them if unused.
 
-**Console:** Settings → Integrations → **Plugins** — paste the URL, review the
+**Console:** the **Plugins** section → **Download** — paste the URL, review the
 manifest + capabilities, install, uninstall.
 
 Either way, **install fetches code only — it does not enable or run it.** To

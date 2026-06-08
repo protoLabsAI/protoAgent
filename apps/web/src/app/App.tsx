@@ -71,7 +71,8 @@ import { ChatSurface } from "../chat/ChatSurface";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
-import { SettingsSurface } from "../settings/SettingsSurface";
+import { SettingsSurface, SETTINGS_TABS, type SettingsTab } from "../settings/SettingsSurface";
+import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
@@ -163,9 +164,11 @@ function pluginViewIcon(name?: string): ReactNode {
 // Agent = the agent's own makeup: its identity (name + SOUL.md), tools, MCP
 // servers, subagents, skills, and middleware. (Runtime status + telemetry moved
 // to Settings → Overview.)
-type AgentTab = "identity" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
+type AgentTab = "identity" | "settings" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
 // Plugins = installed (local), discover (market), and install-from-git (download).
 type PluginsTab = "local" | "market" | "download";
+// Knowledge = the store + its settings (memory/knowledge config).
+type KnowledgeTab = "store" | "settings";
 // Activity = the "triggers / events" surface (ADR 0009): what happened (thread),
 // inbound (inbox), and timed (schedule — cron is a trigger, not a work-type).
 type ActivityTab = "thread" | "inbox";
@@ -217,6 +220,8 @@ export function App() {
   const chatStreaming = useAnyChatStreaming();
   const [agentTab, setAgentTab] = useState<AgentTab>("identity");
   const [pluginsTab, setPluginsTab] = useState<PluginsTab>("local");
+  const [knowledgeTab, setKnowledgeTab] = useState<KnowledgeTab>("store");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("overview");
   const [activityTab, setActivityTab] = useState<ActivityTab>("thread");
   const [rightPanel, setRightPanel] = useState<RightPanel>("notes");
   // Collapsible/resizable right panel (persisted). Flag is "1"/"" string; width
@@ -744,6 +749,7 @@ export function App() {
               onSelect={(id) => setAgentTab(id as typeof agentTab)}
               tabs={[
                 { id: "identity", label: "Identity", icon: Sparkles },
+                { id: "settings", label: "Settings", icon: Settings2 },
                 { id: "tools", label: "Tools", icon: Wrench },
                 { id: "mcp", label: "MCP", icon: Plug },
                 { id: "subagents", label: "Subagents", icon: Bot },
@@ -765,6 +771,25 @@ export function App() {
             />
           ) : null}
 
+          {surface === "knowledge" ? (
+            <StageSubnav
+              active={knowledgeTab}
+              onSelect={(id) => setKnowledgeTab(id as KnowledgeTab)}
+              tabs={[
+                { id: "store", label: "Store", icon: Database },
+                { id: "settings", label: "Settings", icon: Settings2 },
+              ]}
+            />
+          ) : null}
+
+          {surface === "settings" ? (
+            <StageSubnav
+              active={settingsTab}
+              onSelect={(id) => setSettingsTab(id as SettingsTab)}
+              tabs={SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
+            />
+          ) : null}
+
           {/* ChatSurface is rendered UNCONDITIONALLY and hidden via `active` when
               off-tab — so an in-flight turn keeps streaming in the background and
               the chat is progressing when you navigate back (not torn down). */}
@@ -777,14 +802,16 @@ export function App() {
 
 
           {surface === "agent" && agentTab === "identity" ? <IdentityPanel /> : null}
+          {surface === "agent" && agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
           {surface === "agent" && agentTab === "tools" ? <ToolsPanel /> : null}
           {surface === "agent" && agentTab === "mcp" ? <McpPanel /> : null}
           {surface === "agent" && agentTab === "subagents" ? <SubagentsPanel /> : null}
           {surface === "agent" && agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
           {surface === "agent" && agentTab === "middleware" ? <MiddlewarePanel /> : null}
           {surface === "plugins" ? <PluginsSurface tab={pluginsTab} /> : null}
-          {surface === "knowledge" ? <KnowledgeStore onError={setError} /> : null}
-          {surface === "settings" ? <SettingsSurface /> : null}
+          {surface === "knowledge" && knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : null}
+          {surface === "knowledge" && knowledgeTab === "settings" ? <SettingsCategoryPanel category="Memory" title="Settings" /> : null}
+          {surface === "settings" ? <SettingsSurface tab={settingsTab} /> : null}
 
           {/* Plugin view (ADR 0026) — the plugin serves the page; PluginView hosts
               it in a same-origin iframe. ChatSurface stays mounted above (hidden)

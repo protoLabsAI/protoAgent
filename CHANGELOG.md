@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings decentralized** — settings now live where the thing lives. **Agent** settings
+  (model, routing, goal mode, tools) are a Settings tab in the Agent view; **Memory** settings
+  a Settings tab in the Knowledge view. The central Settings surface is now just cross-cutting
+  tabs — **Overview · Telemetry · Plugins · System** (Telemetry split out of Overview;
+  Integrations renamed Plugins). A plugin with its own view owns its settings; a view-less one
+  falls back to Settings → Plugins.
+
 ### Added
 - **Paste-JSON import for MCP servers** — Agent → MCP → Add server has a Paste JSON mode
   that accepts the standard `{"mcpServers": {…}}` blob (Claude-Desktop style), a single
