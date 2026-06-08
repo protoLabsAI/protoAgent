@@ -99,3 +99,25 @@ def test_get_all_tools_includes_peers_only_when_configured(monkeypatch):
     monkeypatch.setenv("PEER_ALICE_URL", "https://alice.example")
     names2 = {t.name for t in get_all_tools()}
     assert "peer_consult" in names2 and "peer_list" in names2
+
+
+@pytest.mark.asyncio
+async def test_peer_consult_routes_skill_hint(monkeypatch):
+    """skill= sets metadata.skillHint on both the message and params (peer skill routing)."""
+    monkeypatch.setenv("PEER_ALICE_URL", "https://alice.example")
+    captured = {}
+
+    class _CapClient(_FakeClient):
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return self._responses.pop(0)
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **k: _CapClient([_Resp(_task("completed", "done"))]))
+    out = await _tools()["peer_consult"].ainvoke(
+        {"name": "alice", "message": "q", "skill": "bug_triage"})
+    assert out == "[alice] done"
+    params = captured["json"]["params"]
+    assert params["message"]["metadata"]["skillHint"] == "bug_triage"
+    assert params["metadata"]["skillHint"] == "bug_triage"
