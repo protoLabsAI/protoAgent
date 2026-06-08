@@ -1,8 +1,8 @@
 """ACP client — launch a CLI coding agent and drive one session.
 
 protoAgent is the ACP *client*: one ``AcpClient`` owns one agent subprocess and
-one session, cached per configured agent so follow-up ``code_with`` calls
-continue the same thread (mirrors the A2A peer's sticky ``contextId``). Transport
+one session, cached per launch+policy signature so follow-up ``delegate_to``
+dispatches continue the same thread (mirrors the A2A peer's sticky ``contextId``). Transport
 is JSON-RPC 2.0, newline-delimited, over the child's stdin/stdout. The matching
 server side is e.g. ``proto --acp``. Spec: https://agentclientprotocol.com.
 

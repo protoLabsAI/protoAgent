@@ -121,6 +121,6 @@ curl -s -X POST localhost:7870/api/delegates/test -d '{"type":"a2a","url":"https
 ## Relationship to `code_with` / `peer_consult`
 
 `delegate_to` supersedes them: an `acp` delegate is what `code_with` did, and an
-`a2a` delegate is what `peer_consult` did. **Both are now deprecated** (their
-docstrings say so) — they still work for back-compat and will be removed in a
-future release. New setups should use `delegates` + `delegate_to`.
+`a2a` delegate is what `peer_consult` did. **`code_with` has been removed** (the
+`coding_agent` plugin is now just the shared ACP client library); `peer_consult`
+remains, deprecated, for back-compat. New setups use `delegates` + `delegate_to`.

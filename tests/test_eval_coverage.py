@@ -250,11 +250,11 @@ def test_no_requirements_runs():
     assert runner._requirements_unmet({"requires_env": []}) is None
 
 
-def test_code_with_eval_case_present_and_gated():
-    case = {c["id"]: c for c in TASKS}.get("code_with_delegation")
-    assert case is not None, "code_with_delegation case missing"
+def test_acp_delegation_eval_case_present_and_gated():
+    case = {c["id"]: c for c in TASKS}.get("acp_delegation")
+    assert case is not None, "acp_delegation case missing"
     assert case["requires_env"] == ["EVAL_CODING_AGENT"]   # skips by default
-    assert case["expected_tools"] == ["code_with"]
+    assert case["expected_tools"] == ["delegate_to"]
     assert case["kind"] == "ask"
 
 

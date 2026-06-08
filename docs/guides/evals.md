@@ -159,23 +159,23 @@ The case `kind`s that ship:
 A case can declare `requires_env: [VAR, …]`. If any of those env vars is unset
 the case is **skipped** (shown `SKIP`, not counted as pass or fail) instead of
 run — so a case that needs an optional integration doesn't break the default
-board. For example the `code_with_delegation` case needs a live CLI coding agent
-([Spawn CLI coding agents](/guides/coding-agents)) configured on the instance, so
+board. For example the `acp_delegation` case needs a live CLI coding agent
+([CLI coding agents over ACP](/guides/coding-agents)) configured on the instance, so
 it's gated:
 
 ```json
 {
-  "id": "code_with_delegation",
+  "id": "acp_delegation",
   "category": "tool",
   "kind": "ask",
   "requires_env": ["EVAL_CODING_AGENT"],
-  "prompt": "Use your code_with tool to have a coding agent run `pwd` …",
-  "expected_tools": ["code_with"]
+  "prompt": "Use your delegate_to tool to have your coding agent run `pwd` …",
+  "expected_tools": ["delegate_to"]
 }
 ```
 
-Configure the plugin + an agent, export `EVAL_CODING_AGENT=1`, and run
-`python -m evals.runner --tasks code_with_delegation`.
+Declare an `acp` delegate, export `EVAL_CODING_AGENT=1`, and run
+`python -m evals.runner --tasks acp_delegation`.
 
 ## Asserting the agent layer (subagents & workflows)
 
