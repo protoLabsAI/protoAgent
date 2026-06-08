@@ -37,6 +37,7 @@ class ScheduleAddRequest(BaseModel):
     prompt: str
     schedule: str  # 5-field cron expression OR an ISO-8601 datetime
     job_id: str | None = None
+    timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
 class WorkflowRunRequest(BaseModel):

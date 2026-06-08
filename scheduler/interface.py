@@ -33,6 +33,9 @@ class Job:
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     next_fire: str | None = None        # ISO; None means "compute on save"
     last_fire: str | None = None
+    # IANA timezone the cron expression is evaluated in (e.g. "America/Chicago").
+    # None = UTC. Ignored for one-shot ISO schedules (those carry their own offset).
+    timezone: str | None = None
     enabled: bool = True
 
     def as_dict(self) -> dict[str, Any]:
@@ -49,11 +52,15 @@ class SchedulerBackend(Protocol):
 
     name: str  # short label for logs / agent-facing strings: "local", "workstacean"
 
-    def add_job(self, prompt: str, schedule: str, *, job_id: str | None = None) -> Job:
+    def add_job(
+        self, prompt: str, schedule: str, *, job_id: str | None = None,
+        timezone: str | None = None,
+    ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
 
-        Raises ``ValueError`` for malformed schedule strings."""
+        ``timezone`` is an IANA name the cron expression is evaluated in
+        (None = UTC). Raises ``ValueError`` for malformed schedule/timezone."""
         ...
 
     def cancel_job(self, job_id: str) -> bool:

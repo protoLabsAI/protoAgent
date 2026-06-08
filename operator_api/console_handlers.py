@@ -156,7 +156,8 @@ async def _operator_scheduler_add(req: dict) -> dict:
     if not schedule:
         raise ValueError("schedule is required")
     job = await asyncio.to_thread(
-        STATE.scheduler.add_job, prompt, schedule, job_id=req.get("job_id") or None
+        STATE.scheduler.add_job, prompt, schedule,
+        job_id=req.get("job_id") or None, timezone=req.get("timezone") or None,
     )
     return job.as_dict()
 

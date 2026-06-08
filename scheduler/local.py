@@ -144,16 +144,29 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _compute_next_fire(schedule: str, *, after: datetime | None = None) -> str:
-    """Resolve a schedule string to the next ISO timestamp it fires.
+def _compute_next_fire(
+    schedule: str, *, after: datetime | None = None, tz: str | None = None,
+) -> str:
+    """Resolve a schedule string to the next ISO (UTC) timestamp it fires.
 
     ``after`` controls when "next" starts — current time by default;
     pass an explicit reference when rescheduling a cron job after a
-    fire so successive fires don't drift.
+    fire so successive fires don't drift. ``tz`` (IANA name) evaluates a
+    cron expression in that timezone — so ``"0 9 * * *"`` means 9am local,
+    handling DST — then normalizes the result to UTC for storage. Ignored
+    for one-shot ISO schedules (those carry their own offset).
     """
     after = after or datetime.now(UTC)
     if is_cron(schedule):
-        return croniter(schedule, after).get_next(datetime).astimezone(UTC).isoformat()
+        base = after
+        if tz:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+            try:
+                base = after.astimezone(ZoneInfo(tz))
+            except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+                raise ValueError(f"invalid timezone {tz!r}: {exc}") from exc
+        return croniter(schedule, base).get_next(datetime).astimezone(UTC).isoformat()
     return parse_iso_to_utc(schedule).isoformat()
 
 
@@ -166,7 +179,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     next_fire   TEXT NOT NULL,
     last_fire   TEXT,
     enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    timezone    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
@@ -231,6 +245,11 @@ class LocalScheduler:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
+            # Lightweight migration for stores created before per-job timezone.
+            try:
+                db.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already present
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -238,10 +257,14 @@ class LocalScheduler:
 
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
-    def add_job(self, prompt: str, schedule: str, *, job_id: str | None = None) -> Job:
+    def add_job(
+        self, prompt: str, schedule: str, *, job_id: str | None = None,
+        timezone: str | None = None,
+    ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
-        next_fire = _compute_next_fire(schedule)  # raises ValueError for malformed input
+        # Computes in `timezone` for cron (raises ValueError for a bad tz or schedule).
+        next_fire = _compute_next_fire(schedule, tz=timezone)
 
         job = Job(
             id=job_id or self._generate_id(),
@@ -249,14 +272,15 @@ class LocalScheduler:
             schedule=schedule,
             agent_name=self.agent_name,
             next_fire=next_fire,
+            timezone=timezone,
         )
         db = self._connect()
         try:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                "last_fire, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "last_fire, enabled, created_at, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (job.id, job.prompt, job.schedule, job.agent_name,
-                 job.next_fire, job.last_fire, int(job.enabled), job.created_at),
+                 job.next_fire, job.last_fire, int(job.enabled), job.created_at, job.timezone),
             )
             db.commit()
         except sqlite3.IntegrityError as exc:
@@ -433,7 +457,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             if is_cron(job.schedule):
-                next_iso = _compute_next_fire(job.schedule, after=fired_at)
+                next_iso = _compute_next_fire(job.schedule, after=fired_at, tz=job.timezone)
                 db.execute(
                     "UPDATE jobs SET next_fire = ?, last_fire = ? WHERE id = ?",
                     (next_iso, fired_at.isoformat(), job.id),
@@ -467,7 +491,7 @@ class LocalScheduler:
             for row in rows:
                 job = _row_to_job(row)
                 if is_cron(job.schedule):
-                    next_iso = _compute_next_fire(job.schedule)
+                    next_iso = _compute_next_fire(job.schedule, tz=job.timezone)
                     db.execute(
                         "UPDATE jobs SET next_fire = ? WHERE id = ?",
                         (next_iso, job.id),
@@ -556,6 +580,7 @@ class LocalScheduler:
 
 
 def _row_to_job(row: Any) -> Job:
+    keys = row.keys()
     return Job(
         id=row["id"],
         prompt=row["prompt"],
@@ -565,4 +590,5 @@ def _row_to_job(row: Any) -> Job:
         last_fire=row["last_fire"],
         enabled=bool(row["enabled"]),
         created_at=row["created_at"],
+        timezone=row["timezone"] if "timezone" in keys else None,
     )
