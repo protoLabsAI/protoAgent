@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process instead of leaking one. Best-effort + idempotent; no change to existing callers (the
   ACP runtime owns its own client separately and is unaffected).
 
+### Removed
+- **`code_with` tool + the `coding_agent` plugin** (breaking) — retired in favour of `delegate_to`
+  with an `acp` delegate (ADR 0025), which does the same over one tool alongside a2a/openai
+  delegates and a console panel. `plugins/coding_agent/` remains as the **shared ACP client
+  library** (`AcpClient`, `_client_for`, `_make_permission`, `evict_client`) that the `delegates`
+  plugin and the ACP runtime import — but it no longer ships a manifest/tool, and the
+  `coding_agent:` config section is gone. **Migration:** replace `plugins.enabled: [coding_agent]`
+  + the `coding_agent.agents` list with `plugins.enabled: [delegates]` + `acp` delegates (same
+  `command`/`args`/`workdir`/`permissions` fields); call `delegate_to(name, task)` instead of
+  `code_with(agent, task)`. See [CLI coding agents over ACP](docs/guides/coding-agents.md).
+
 ## [0.27.0] - 2026-06-08
 
 ### Added

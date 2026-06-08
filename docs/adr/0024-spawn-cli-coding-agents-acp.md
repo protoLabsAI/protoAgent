@@ -1,6 +1,9 @@
 # 0024 — Spawn CLI coding agents over ACP (`code_with`)
 
-Status: **Accepted** (PR1 — thin vertical)
+Status: **Superseded by [ADR 0025](./0025-unified-delegate-registry-and-panel.md)** — the
+`code_with` tool was retired in favour of `delegate_to` with an `acp` delegate, which
+reuses the ACP client mechanics below. `plugins/coding_agent/` remains as the shared ACP
+client library. (Originally: Accepted, PR1 — thin vertical.)
 
 ## Context
 

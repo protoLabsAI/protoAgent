@@ -1,9 +1,11 @@
-"""Tests for the coding_agent plugin (ADR 0024).
+"""Tests for the coding_agent ACP client library (ADR 0024).
 
-Covers config normalization + the `code_with` tool wiring (unit), and a real
-ACP wire exchange: AcpClient drives a fake ACP agent subprocess through
-initialize → session/new → session/prompt, accumulating agent_message_chunk
-text and auto-allowing a session/request_permission.
+The ``code_with`` tool was retired in favour of ``delegate_to`` (ADR 0025); this
+module is now the shared ACP client library. Covered here: a real ACP wire
+exchange (``AcpClient`` drives a fake ACP agent subprocess through
+initialize → session/new → session/prompt, accumulating agent_message_chunk text
+and auto-allowing a session/request_permission), the by-kind permission policy,
+and client-cache eviction/teardown.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import sys
 import pytest
 
 import plugins.coding_agent as P
-from plugins.coding_agent import _make_permission, _normalize_agents, register
+from plugins.coding_agent import _make_permission
 from plugins.coding_agent.acp_client import AcpClient, AcpError
 
 # ── a minimal ACP "agent" (server side) we can drive over stdio ───────────────
@@ -61,79 +63,6 @@ while True:
                            "content": {"type": "text", "text": chunk}}}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 '''
-
-
-# ── config normalization ──────────────────────────────────────────────────────
-
-
-def test_normalize_agents_keeps_valid_and_drops_bad():
-    agents = _normalize_agents([
-        {"name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp"},
-        {"name": "nofields"},                       # missing command/workdir
-        {"name": "x", "command": "x"},              # missing workdir
-        "not-a-dict",                                # wrong type
-        {"name": "proto", "command": "dup", "workdir": "/tmp"},  # duplicate name
-    ])
-    assert set(agents) == {"proto"}
-    assert agents["proto"]["command"] == "proto"     # first wins over the dup
-    assert agents["proto"]["args"] == ["--acp"]
-
-
-def test_normalize_agents_coerces_env_and_args():
-    agents = _normalize_agents([
-        {"name": "a", "command": "c", "workdir": "/tmp",
-         "args": "oops", "env": {"K": 1}},
-    ])
-    assert agents["a"]["args"] == []                 # non-list args ignored
-    assert agents["a"]["env"] == {"K": "1"}          # env values stringified
-
-
-# ── register() wiring ─────────────────────────────────────────────────────────
-
-
-class _StubRegistry:
-    def __init__(self, config):
-        self.config = config
-        self.tools = []
-
-    def register_tool(self, tool):
-        self.tools.append(tool)
-
-
-def test_register_no_agents_registers_nothing():
-    reg = _StubRegistry({"agents": []})
-    register(reg)
-    assert reg.tools == []
-
-
-def test_register_with_agents_exposes_code_with():
-    reg = _StubRegistry({"agents": [
-        {"name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp"},
-    ]})
-    register(reg)
-    assert [t.name for t in reg.tools] == ["code_with"]
-    # Configured agent names are surfaced in the LLM-facing description.
-    assert "proto" in reg.tools[0].description
-
-
-async def test_code_with_unknown_agent_returns_error():
-    reg = _StubRegistry({"agents": [
-        {"name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp"},
-    ]})
-    register(reg)
-    code_with = reg.tools[0]
-    out = await code_with.ainvoke({"agent": "nope", "task": "do it"})
-    assert "unknown coding agent" in out and "proto" in out
-
-
-async def test_code_with_empty_task_returns_error():
-    reg = _StubRegistry({"agents": [
-        {"name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp"},
-    ]})
-    register(reg)
-    code_with = reg.tools[0]
-    out = await code_with.ainvoke({"agent": "proto", "task": "   "})
-    assert "empty" in out.lower()
 
 
 # ── ACP wire exchange against the fake agent ──────────────────────────────────
@@ -235,52 +164,7 @@ def test_policy_custom_allow_deny_kinds():
     assert _perm("readonly", "edit", allow=["read", "edit"]) == "a"  # explicitly allowed
 
 
-def test_normalize_agents_parses_safety_fields():
-    a = _normalize_agents([{
-        "name": "p", "command": "c", "workdir": "/tmp",
-        "permissions": "READONLY", "confirm": True,
-        "allow_kinds": ["Read"], "deny_kinds": ["Execute"],
-    }])["p"]
-    assert a["permissions"] == "readonly"          # lower-cased
-    assert a["confirm"] is True
-    assert a["allow_kinds"] == ["read"] and a["deny_kinds"] == ["execute"]
-
-
-def test_normalize_agents_bad_policy_falls_back_to_auto():
-    a = _normalize_agents([{"name": "p", "command": "c", "workdir": "/tmp", "permissions": "yolo"}])["p"]
-    assert a["permissions"] == "auto"
-    assert a["confirm"] is False                    # default
-
-
-# ── per-call consent gate (confirm) ───────────────────────────────────────────
-
-
-async def test_confirm_gate_declines(monkeypatch):
-    import langgraph.types as lt
-    monkeypatch.setattr(lt, "interrupt", lambda payload: "no")
-    reg = _StubRegistry({"agents": [
-        {"name": "proto", "command": "proto", "workdir": "/tmp", "confirm": True},
-    ]})
-    register(reg)
-    out = await reg.tools[0].ainvoke({"agent": "proto", "task": "do it"})
-    assert "Declined" in out
-
-
-async def test_confirm_gate_approves_then_runs(monkeypatch):
-    import langgraph.types as lt
-    monkeypatch.setattr(lt, "interrupt", lambda payload: "yes")
-
-    class _StubClient:
-        async def prompt(self, task, progress_callback=None, timeout=600.0):
-            return "did the work"
-
-    monkeypatch.setattr(P, "_client_for", lambda spec: _StubClient())
-    reg = _StubRegistry({"agents": [
-        {"name": "proto", "command": "proto", "workdir": "/tmp", "confirm": True},
-    ]})
-    register(reg)
-    out = await reg.tools[0].ainvoke({"agent": "proto", "task": "do it"})
-    assert out == "did the work"
+# ── client cache eviction / teardown ──────────────────────────────────────────
 
 
 async def test_evict_client_pops_and_closes():
