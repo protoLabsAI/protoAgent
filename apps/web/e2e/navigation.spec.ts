@@ -66,4 +66,9 @@ test("plugins section: Loaded/Disabled groups, marketplace, and install", async 
   // Marketplace discovery + install-from-git section both present.
   await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
+
+  // Direct enable: the disabled plugin's row has an Enable button → hot-toggle hint.
+  await page.locator(".subagent-row", { hasText: "Zzz Disabled" })
+    .getByRole("button", { name: "Enable" }).click();
+  await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 });

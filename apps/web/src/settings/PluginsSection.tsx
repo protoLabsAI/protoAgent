@@ -48,7 +48,8 @@ export function PluginsSection() {
         <h3><Package size={16} /> Install from a git URL</h3>
         <p className="settings-section-sub">
           Install a plugin from a git URL. Fetching code never runs it — review, then{" "}
-          <strong>enable</strong> it (add to <code>plugins.enabled</code> and restart). Untrusted code?
+          <strong>enable</strong> it from the list above (tools apply live; a console view or
+          background surface needs a restart). Untrusted code?
           Use an <a href="https://protolabsai.github.io/protoAgent/guides/mcp" target="_blank" rel="noreferrer">MCP server</a> instead.{" "}
           <a href={REGISTRY_GUIDE_URL} target="_blank" rel="noreferrer">Guide</a>.
         </p>
@@ -124,7 +125,8 @@ function PluginRow({ p, onRemove, removing }: { p: InstalledPlugin; onRemove: ()
         ) : null}
         {!p.enabled ? (
           <p className="plugin-enable-hint">
-            To enable: add <code>{p.id}</code> to <code>plugins.enabled</code> in config, then restart.
+            To enable: use the <strong>Enable</strong> button in the list above (or add{" "}
+            <code>{p.id}</code> to <code>plugins.enabled</code> in config).
           </p>
         ) : null}
       </div>
