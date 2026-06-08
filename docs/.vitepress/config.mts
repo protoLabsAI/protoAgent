@@ -22,7 +22,16 @@ export default defineConfig({
   // lives in the repo (committed, shared) but is NOT part of the published site.
   srcExclude: ["dev/**"],
 
-  head: [["link", { rel: "icon", href: `${base}favicon.svg` }]],
+  head: [
+    ["link", { rel: "icon", href: `${base}favicon.svg` }],
+    // Social cards — canonical absolute image (the dark protoAgent banner) so it
+    // resolves regardless of which base the build serves under.
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:title", content: "protoAgent" }],
+    ["meta", { property: "og:image", content: "https://agent.protolabs.studio/docs/protoagent-banner.png" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:image", content: "https://agent.protolabs.studio/docs/protoagent-banner.png" }],
+  ],
 
   themeConfig: {
     logo: "/favicon.svg",
