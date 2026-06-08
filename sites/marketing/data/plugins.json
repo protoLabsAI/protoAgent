@@ -122,6 +122,22 @@
     }
   },
   {
+    "id": "github",
+    "name": "GitHub (read tools)",
+    "category": "Integrations",
+    "official": true,
+    "tagline": "Read-only GitHub over the gh CLI — fetch a PR, an issue, list issues, a commit diff. Opt-in; not every agent needs GitHub.",
+    "adds": [
+      "tool"
+    ],
+    "bundled": true,
+    "enable": "github",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/github",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
     "id": "spacetraders",
     "name": "SpaceTraders",
     "category": "Examples",

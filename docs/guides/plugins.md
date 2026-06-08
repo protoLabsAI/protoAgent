@@ -7,9 +7,10 @@ verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
 Plugins run **in-process** with the agent's privileges, so they're **disabled by
 default** and you opt in explicitly — only enable plugins you trust.
 
-> The first-party **Discord** and **Google** integrations ship as plugins
-> (`plugins/discord/`, `plugins/google/`) — disable either with
-> `plugins: { disabled: [discord] }` / `[google]`, no core edit. The opt-in
+> The first-party **Discord**, **Google**, and **GitHub** integrations ship as
+> plugins (`plugins/discord/`, `plugins/google/`, `plugins/github/`) — Discord/Google
+> are on by default (disable with `plugins: { disabled: [discord] }`); GitHub is
+> opt-in (`plugins: { enabled: [github] }`). The opt-in
 > **coding_agent** plugin (`plugins/coding_agent/`) adds `code_with` to spawn a
 > CLI coding agent over ACP — see [Spawn CLI coding agents](/guides/coding-agents).
 

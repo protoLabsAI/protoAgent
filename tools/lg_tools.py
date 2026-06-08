@@ -740,10 +740,8 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     # (run outside that runner) must not get it, so it's gated by allowlist:
     # present in the full set for the lead agent, absent from subagent allowlists.
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
-    # GitHub read tools (PRs/issues/commits) over the gh CLI. Always
-    # included — they degrade to a readable error if gh/auth is missing.
-    from tools.github_tools import get_github_tools
-    tools.extend(get_github_tools())
+    # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
+    # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Project-notes tools — read/write the operator console's Notes panel tabs,
     # gated per-tab by the operator's Agent-read/write toggles. Always included
     # so "what's on my Todo tab?" reaches the notes, not the memory store.

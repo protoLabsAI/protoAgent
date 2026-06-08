@@ -92,9 +92,16 @@ _TOOL_CATEGORY = {
 
 
 def _tool_category(name: str, source: str) -> str:
-    if source == "core":
-        return _TOOL_CATEGORY.get(name, "General")
-    return "Plugin" if source == "plugin" else "MCP"
+    # Known tools group by subsystem regardless of source — so first-party plugin
+    # tools (e.g. GitHub) keep their subsystem group instead of a generic "Plugin".
+    known = _TOOL_CATEGORY.get(name)
+    if known:
+        return known
+    if source == "plugin":
+        return "Plugin"
+    if source == "mcp":
+        return "MCP"
+    return "General"
 
 
 def _operator_tools_list():
