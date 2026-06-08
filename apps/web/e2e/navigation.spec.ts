@@ -74,3 +74,16 @@ test("plugins section: Local / Market / Download tabs", async ({ page }) => {
   await page.locator(".stage-subnav").getByRole("button", { name: "Download", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
+
+test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Move off the defaults: a left surface (Agent) + a right-panel tab (Beads).
+  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".segmented").getByRole("button", { name: "Beads", exact: true }).click();
+
+  // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
+  await page.reload({ waitUntil: "load" });
+  await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".segmented").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
+});

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Persisted UI state (ADR 0035 slice 1)** — the console's navigation/layout state (active
+  surface, sub-tabs, right-panel width/collapse) now lives in a Zustand `persist` store, so a
+  **refresh restores where you were** instead of snapping back to Chat/Notes. Pure state migration
+  — no visible layout change yet; the foundation the dual-rail/mobile slices build on.
 - **Plugin UI — first-class React (ADR 0034, slice 1)** — the console is now a Module
   Federation *host*: a plugin view declaring `ui: react` mounts a federated React **remote**
   into the console's own tree (sharing the host's React 19 + react-query — one instance, one
