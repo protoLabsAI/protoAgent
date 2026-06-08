@@ -16,10 +16,15 @@ views:
     label: "Board"                 # rail + tab label
     icon: LayoutDashboard          # a lucide-react icon name
     path: /plugins/myplugin/board  # the page the iframe loads (you serve it)
+    placement: rail                # "rail" (default — left-rail surface) | "right" (right sidebar)
     tabs:                          # optional sub-nav (view-tabs)
       - { id: open, label: "Open", path: /plugins/myplugin/board?tab=open }
       - { id: done, label: "Done", path: /plugins/myplugin/board?tab=done }
 ```
+
+**`placement`** chooses where the view lives: **`rail`** (default) is a full left-rail
+surface; **`right`** is a panel in the right sidebar alongside Notes / Beads / Goals /
+Schedule. Same iframe host either way.
 
 The console reads this from `/api/runtime/status` and renders a rail icon per
 view (keyed `plugin:<id>:<viewId>`). When selected, it hosts `path` in a

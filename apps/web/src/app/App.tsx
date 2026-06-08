@@ -167,7 +167,7 @@ type AgentTab = "identity" | "tools" | "mcp" | "subagents" | "skills" | "middlew
 type ActivityTab = "thread" | "inbox";
 // The agent's persistent working memory, grouped in the right sidebar:
 // its notebook, its task board, and its goals.
-type RightPanel = "notes" | "beads" | "goals" | "schedule";
+type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {});  // + plugin:<id>:<viewId> (ADR 0026)
 
 function createNoteTab() {
   const now = Date.now();
@@ -245,10 +245,15 @@ export function App() {
   // views become a dynamic rail icon (keyed plugin:<id>:<viewId>) whose panel is
   // an iframe of the page the plugin serves. PR1 thin vertical — PR2 generalizes
   // the rail into a full registry.
-  const pluginRail = (runtime?.plugins ?? [])
+  // A plugin view declares its placement: "rail" (default — a left-rail surface) or
+  // "right" (a right-sidebar panel, alongside Notes/Beads/Goals/Schedule — ADR 0026).
+  const allPluginViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
+  const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right");
+  const pluginRightPanels = allPluginViews.filter((v) => v.placement === "right");
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
+  const activeRightPluginPanel = pluginRightPanels.find((v) => v.key === rightPanel) ?? null;
 
   // Stale-surface fallback: if we're on a plugin view that no longer exists (its
   // plugin was disabled/removed, or a config reload dropped it) — once runtime is
@@ -801,7 +806,18 @@ export function App() {
               <CalendarClock size={15} />
               Schedule
             </button>
+            {/* Plugin-contributed right-rail panels (ADR 0026) — placement: "right". */}
+            {pluginRightPanels.map((v) => (
+              <button key={v.key} type="button" className={rightPanel === v.key ? "active" : ""} onClick={() => setRightPanel(v.key)}>
+                {pluginViewIcon(v.icon)}
+                {v.label}
+              </button>
+            ))}
           </div>
+
+          {activeRightPluginPanel ? (
+            <PluginView key={activeRightPluginPanel.key} view={activeRightPluginPanel} />
+          ) : null}
 
           {rightPanel === "notes" ? (
             <section className="panel side-panel notes-panel">

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugin right-rail panels** (ADR 0026) — a plugin console view can set `placement: "right"`
+  to render as a right-sidebar panel (alongside Notes/Beads/Goals/Schedule) instead of a
+  left-rail surface. Same iframe host; the substrate for moving Notes to a plugin.
+
 ### Changed
 - **GitHub read tools → the opt-in `github` plugin** — removed from the default tool set
   (not every agent needs GitHub). Ships disabled; enable with `plugins.enabled: [github]`.

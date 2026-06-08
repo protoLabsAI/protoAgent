@@ -54,10 +54,17 @@ views:
     label: "Board"            # rail + tab label
     icon: LayoutDashboard     # a lucide icon name (see D4)
     path: /plugins/myplugin/board   # what the iframe loads (plugin-served)
+    placement: rail           # "rail" (default — a left-rail surface) | "right"
     tabs:                     # optional sub-nav (view-tabs)
       - { id: open, label: "Open", path: /plugins/myplugin/board?tab=open }
       - { id: done, label: "Done", path: /plugins/myplugin/board?tab=done }
 ```
+
+**Placement (later addition).** A view's optional `placement` puts it either in the
+**left rail** as a full surface (`rail`, default) or in the **right sidebar** as a panel
+alongside Notes / Beads / Goals / Schedule (`right`). Both render the same iframe host;
+`right` is the substrate for moving Notes itself to a plugin. (No backend change — the
+manifest passes view dicts through verbatim; the console filters by `placement`.)
 
 Declared as **pure data** (like `config`/`settings`, ADR 0019) so it's known
 without importing the plugin, and surfaced to the frontend via
