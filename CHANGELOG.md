@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugin UI — first-class React (ADR 0034, slice 1)** — the console is now a Module
+  Federation *host*: a plugin view declaring `ui: react` mounts a federated React **remote**
+  into the console's own tree (sharing the host's React 19 + react-query — one instance, one
+  cache), instead of an iframe. Ships the `FederatedView` runtime loader with a fail-safe error
+  card (a bad remote never white-screens the console), the `ui`/`remote` manifest fields, and a
+  `hello-react` reference remote (right panel). `ui: iframe` stays the default for untrusted
+  third-party plugins.
+
 ### Fixed
 - **ACP persona reaches GitHub Copilot** — Copilot CLI didn't adopt the configured persona
   (it answered as "GitHub Copilot CLI") because it reads `.github/copilot-instructions.md`, not

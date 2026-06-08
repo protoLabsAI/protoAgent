@@ -81,6 +81,12 @@ export type PluginView = {
   // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
   // alongside Notes/Beads/Goals/Schedule (ADR 0026).
   placement?: "rail" | "right";
+  // ADR 0034 — how the view body renders. "iframe" (default) = same-origin iframe of
+  // `path`. "react" = a federated React remote mounted into the host tree (trusted plugins).
+  ui?: "iframe" | "react";
+  // For ui:"react" — the Module Federation remote: the remoteEntry URL + the exposed module
+  // key (e.g. "./Panel"). `scope` (the federation remote name) defaults to the view id.
+  remote?: { url: string; module: string; scope?: string };
 };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its
