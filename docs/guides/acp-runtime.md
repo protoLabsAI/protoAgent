@@ -42,8 +42,10 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
 
 ## How a turn runs
 
-1. **Persona** — your `SOUL.md` is written as **`AGENTS.md`** (plus a vendor file like `CLAUDE.md`)
-   into the session's working dir, which the coding agent loads into **its own** system prompt — so
+1. **Persona** — your `SOUL.md` is written as **`AGENTS.md`** (plus the agent's own canonical
+   file where it differs — `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` for
+   Copilot) into the session's working dir, which the coding agent loads into **its own** system
+   prompt — so
    it adopts *your* agent's identity instead of its built-in "I'm Codex/Claude" default. (Ask it
    "who are you?" — it answers as your agent.) The session runs in a dedicated, instance-scoped
    workspace, not your repo, so it never touches your project's own `AGENTS.md`.

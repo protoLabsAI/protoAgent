@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **ACP persona reaches GitHub Copilot** — Copilot CLI didn't adopt the configured persona
+  (it answered as "GitHub Copilot CLI") because it reads `.github/copilot-instructions.md`, not
+  just `AGENTS.md`. The ACP runtime now also writes the agent's canonical file (Copilot's under
+  `.github/`); verified live — Copilot answers as your agent.
+
 ### Changed
 - **Console upgraded to React 19** — `apps/web` moved React 18.3 → 19.2 (already on `createRoot`
   with no removed-API usage, so a clean bump; all 60 e2e pass). Sets the shared singleton for the

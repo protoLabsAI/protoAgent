@@ -220,3 +220,16 @@ async def test_acp_client_streams_answer_text_deltas():
     await client._handle_update({"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "world"}}})
     assert deltas == ["Hello ", "world"]
     assert client._answer == "Hello world"   # still accumulated for the final return
+
+
+async def test_persona_written_to_copilot_instructions(tmp_path, monkeypatch):
+    import runtime.acp_runtime as rt_mod
+    monkeypatch.setattr(rt_mod, "persona_doc", lambda config: "# id\nYou are Aria.")
+    rt = AcpRuntime(
+        types.SimpleNamespace(agent_runtime="acp:copilot"),
+        cwd=str(tmp_path), client_factory=_FakeClient, context=_FakeCtx(),
+    )
+    rt._ensure_client()
+    # Copilot reads its own canonical file (under .github/) — and we still write AGENTS.md.
+    assert (tmp_path / "AGENTS.md").read_text() == "# id\nYou are Aria."
+    assert (tmp_path / ".github" / "copilot-instructions.md").read_text() == "# id\nYou are Aria."

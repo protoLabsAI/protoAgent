@@ -95,8 +95,14 @@ def operator_mcp_server_spec(config) -> dict | None:
     }
 
 
-# A coding agent reads AGENTS.md universally; some prefer a vendor file too.
-_VENDOR_PERSONA_FILE = {"claude": "CLAUDE.md", "gemini": "GEMINI.md"}
+# Most coding agents read AGENTS.md, but some have a canonical file of their own and won't
+# reliably pick up AGENTS.md from a non-repo cwd. Write the vendor file too (relative path —
+# Copilot's lives under .github/, which we mkdir). Value can be a subpath, not just a name.
+_VENDOR_PERSONA_FILE = {
+    "claude": "CLAUDE.md",
+    "gemini": "GEMINI.md",
+    "copilot": ".github/copilot-instructions.md",
+}
 
 
 def _strip_injection(text: str) -> str:
@@ -178,7 +184,9 @@ class AcpRuntime:
             base = Path(self.cwd)
             base.mkdir(parents=True, exist_ok=True)
             for name in {"AGENTS.md", _VENDOR_PERSONA_FILE.get(self.agent, "AGENTS.md")}:
-                (base / name).write_text(doc, encoding="utf-8")
+                target = base / name
+                target.parent.mkdir(parents=True, exist_ok=True)  # vendor file may be in a subdir (.github/)
+                target.write_text(doc, encoding="utf-8")
         except Exception:  # noqa: BLE001 — persona is best-effort, never fail the turn
             log.warning("[acp-runtime] could not write persona files to %s", self.cwd, exc_info=True)
 
