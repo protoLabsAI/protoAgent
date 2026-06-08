@@ -54,7 +54,7 @@ class _FakeClient:
         self.prompts = []
         self.closed = False
 
-    async def prompt(self, text, progress_callback=None, tool_callback=None):
+    async def prompt(self, text, progress_callback=None, tool_callback=None, text_callback=None):
         self.prompts.append(text)
         return "ANSWER"
 
@@ -204,3 +204,19 @@ async def test_acp_client_emits_structured_tool_events():
     assert captured[0] == {"phase": "start", "id": "t1", "name": "Editing app.py", "input": ""}
     assert captured[1]["phase"] == "end" and captured[1]["id"] == "t1"
     assert "wrote 3 lines" in captured[1]["output"]
+
+
+async def test_acp_client_streams_answer_text_deltas():
+    from plugins.coding_agent.acp_client import AcpClient
+
+    client = AcpClient("noop", cwd="/tmp", name="t")
+    deltas = []
+
+    async def on_text(d):
+        deltas.append(d)
+
+    client._on_text = on_text
+    await client._handle_update({"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "Hello "}}})
+    await client._handle_update({"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "world"}}})
+    assert deltas == ["Hello ", "world"]
+    assert client._answer == "Hello world"   # still accumulated for the final return
