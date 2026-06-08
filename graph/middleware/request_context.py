@@ -43,7 +43,13 @@ class request_metadata_scope:
 
     def __exit__(self, *_exc):
         if self._token is not None:
-            _request_metadata_ctx.reset(self._token)
+            try:
+                _request_metadata_ctx.reset(self._token)
+            except ValueError:
+                # The token was created in a different Context — happens when the body
+                # awaited across context boundaries (e.g. the ACP runtime's reader-loop
+                # tasks). Resetting is best-effort; fall back to clearing the value.
+                _request_metadata_ctx.set({})
             self._token = None
         return False
 

@@ -35,6 +35,15 @@ class Field:
 
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
+    # ── Agent runtime (ADR 0033) — leads the Agent settings: "who runs the turn?" ──
+    Field("agent_runtime", "agent_runtime", "Agent runtime", "select", "Agent runtime",
+          "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
+          "coding agent over ACP (needs its CLI installed + authenticated on the host).",
+          options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"]),
+    Field("operator_mcp.tools", "operator_mcp_tools", "Tools exposed to the ACP brain", "string_list",
+          "Agent runtime", "Allowlist of operator tools an external (ACP) brain may call via MCP — "
+          "one per line, or `*` for all (minus execute_code). Empty = none. Ignored by native."),
+
     # ── Model ────────────────────────────────────────────────────────────────
     Field("model.name", "model_name", "Primary model", "select", "Model",
           "The main reasoning model (gateway alias).", options_source="models"),
@@ -54,15 +63,6 @@ FIELDS: list[Field] = [
           "Blank = use the main model."),
     Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
           "Routing", "Retried in order when the primary model errors."),
-
-    # ── Agent runtime (ADR 0033) — which brain drives a turn ───────────────────
-    Field("agent_runtime", "agent_runtime", "Agent runtime", "select", "Agent runtime",
-          "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
-          "coding agent over ACP (needs its CLI installed + authenticated on the host).",
-          options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"]),
-    Field("operator_mcp.tools", "operator_mcp_tools", "Tools exposed to the ACP brain", "string_list",
-          "Agent runtime", "Allowlist of operator tools an external (ACP) brain may call via MCP — one "
-          "per line (e.g. memory_recall, beads_create). Empty = none. Ignored by the native runtime."),
 
     # ── Context compaction ───────────────────────────────────────────────────
     Field("compaction.enabled", "compaction_enabled", "Enable compaction", "bool", "Compaction",
