@@ -79,14 +79,25 @@ def operator_tools(config):
         goal_enabled=bool(getattr(config, "goal_enabled", False)),
     ))
     tools += list(getattr(STATE, "plugin_tools", None) or [])
+    # "*" = expose everything (minus a small danger set you must opt into by name) — so you
+    # don't have to enumerate every tool. List specific names instead for tight control.
+    star = "*" in allow
     seen: set[str] = set()
     out = []
     for t in tools:
         name = getattr(t, "name", None)
-        if name in allow and name not in seen:
+        if not name or name in seen:
+            continue
+        if (name in allow) or (star and name not in _STAR_EXCLUDE):
             seen.add(name)
             out.append(t)
     return out
+
+
+# Tools "*" skips — a coding-agent brain already has its own code execution / file tools,
+# so exposing protoAgent's execute_code over the bus is redundant. Not a security gate
+# (you can still allowlist it by name); just avoids handing it a tool it already has.
+_STAR_EXCLUDE = {"execute_code"}
 
 
 def build_server(config, *, name: str = "protoAgent-operator"):

@@ -55,6 +55,15 @@ FIELDS: list[Field] = [
     Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
           "Routing", "Retried in order when the primary model errors."),
 
+    # ── Agent runtime (ADR 0033) — which brain drives a turn ───────────────────
+    Field("agent_runtime", "agent_runtime", "Agent runtime", "select", "Agent runtime",
+          "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
+          "coding agent over ACP (needs its CLI installed + authenticated on the host).",
+          options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"]),
+    Field("operator_mcp.tools", "operator_mcp_tools", "Tools exposed to the ACP brain", "string_list",
+          "Agent runtime", "Allowlist of operator tools an external (ACP) brain may call via MCP — one "
+          "per line (e.g. memory_recall, beads_create). Empty = none. Ignored by the native runtime."),
+
     # ── Context compaction ───────────────────────────────────────────────────
     Field("compaction.enabled", "compaction_enabled", "Enable compaction", "bool", "Compaction",
           "Summarize old history near the context limit."),
@@ -181,6 +190,7 @@ _SECTION_CATEGORY = {
     "Identity": "Agent",
     "Model": "Agent",
     "Routing": "Agent",
+    "Agent runtime": "Agent",
     "Goal mode": "Agent",
     "Tools": "Agent",
     # Memory — knowledge/recall config (rendered in the Knowledge view's Settings tab).

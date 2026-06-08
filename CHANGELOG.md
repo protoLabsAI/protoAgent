@@ -11,7 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Instance-scoped config** (ADR 0004) — with `PROTOAGENT_INSTANCE` set, the live config +
+  secrets + setup-marker are now per-instance (seeded from the default's on first boot), so a
+  scoped instance's saves no longer mutate the shared config. No-op for the default instance.
+
 ### Added
+- **Agent runtime selectable in the console** — Agent → Settings has an **Agent runtime** group:
+  a dropdown (native | acp:proto | acp:codex | acp:claude | acp:copilot | acp:opencode) + a
+  **tools allowlist** for the ACP brain. The allowlist accepts `*` to expose everything (minus
+  `execute_code`, which a coding agent already has) — no need to enumerate every tool.
 - **ACP delegate teardown** — `coding_agent.evict_client(spec)` + `AcpAdapter.teardown(delegate)`
   evict the cached `AcpClient` for a spec **and** terminate its subprocess (a plain cache `pop`
   forgot the handle but left the child running). Completes the delegate lifecycle for callers that
