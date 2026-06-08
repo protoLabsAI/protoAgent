@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (it answered as "GitHub Copilot CLI") because it reads `.github/copilot-instructions.md`, not
   just `AGENTS.md`. The ACP runtime now also writes the agent's canonical file (Copilot's under
   `.github/`); verified live — Copilot answers as your agent.
+- **ACP turns attributed correctly in telemetry** — they were recorded under the gateway
+  model (`protolabs/reasoning`, which never ran) with no model of their own. The ACP path now
+  emits a usage frame tagging the turn `acp:<agent>`; gateway tokens/cost stay 0 because the
+  external agent's own subscription meters usage (the `acp:` label is the signal it wasn't
+  gateway-metered).
 
 ### Changed
 - **Console upgraded to React 19** — `apps/web` moved React 18.3 → 19.2 (already on `createRoot`

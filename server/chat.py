@@ -569,6 +569,16 @@ async def _chat_langgraph_stream(
                     log.exception("[acp-runtime] turn failed")
                     yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
                     return
+                # Attribute the turn to the ACP agent in telemetry — else it defaults to the
+                # gateway model (`protolabs/reasoning`), which never ran. Gateway tokens/cost are
+                # 0: the external agent's own subscription meters its usage, not us. (The model
+                # label `acp:<agent>` is the honest signal that this turn wasn't gateway-metered.)
+                yield ("usage", {
+                    "model": f"acp:{rt.agent}",
+                    "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                    "cost_usd": 0.0,
+                })
                 # The answer already streamed as text deltas; `done` finalizes (executor appends
                 # only meta when text was streamed, so no duplication).
                 yield ("done", answer)
