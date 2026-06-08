@@ -88,3 +88,36 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
   await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });
 
+
+test("right-click a rail surface opens a context menu that moves it (ADR 0036)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const rightRail = page.locator(".rail-right");
+  const leftRail = page.locator(".rail:not(.rail-right)");
+
+  // Notes starts on the right rail.
+  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+
+  // Right-click it → the context menu opens with the move item.
+  await rightRail.getByRole("button", { name: "Notes", exact: true }).click({ button: "right" });
+  const menu = page.getByTestId("context-menu");
+  await expect(menu).toBeVisible();
+  await menu.getByText("Move to left rail").click();
+
+  // Notes moved to the left rail (store-backed → persists, but checking the move is enough here).
+  await expect(leftRail.getByRole("button", { name: "Notes", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Notes", exact: true })).toHaveCount(0);
+});
+
+test("Chat is movable too — right-click → move to the right rail (ADR 0036)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const leftRail = page.locator(".rail:not(.rail-right)");
+  const rightRail = page.locator(".rail-right");
+
+  await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+  await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
+  await page.getByTestId("context-menu").getByText("Move to right rail").click();
+
+  // Chat now lives on the right rail (no longer pinned left).
+  await expect(rightRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+  await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
+});

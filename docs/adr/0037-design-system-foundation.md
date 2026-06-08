@@ -97,3 +97,19 @@ renders with the *same* accessible, on-brand components as the host, for free. (
   `#9b87f2`, see [[brand-assets-source]] in memory). shadcn/ui (owned-source Radix + Tailwind
   components). ADR 0034 (plugin-ui SDK shares these to remotes), ADR 0035 (this is its S5),
   ADR 0036 (context menu renderer now uses shadcn Radix `DropdownMenu`).
+
+## D7 — `@protolabsai/ui` is the component source; AppShell convergence
+
+protoContent is actively building **`@protolabsai/ui`** (alongside `@protolabsai/design`) — Dialog,
+Drawer, Toast, Tooltip, Table, Input/Select/Switch/Checkbox, etc. (→ 0.4.0). So:
+
+- Our **locally-built shadcn components** (`Button`, `dropdown-menu`, `SurfaceRail`) are **interim
+  scaffolding**. When `@protolabsai/ui` lands we **adopt its components and retire the locals**
+  (the `dropdown-menu` stays until it ships a menu/dropdown — not in the first batch).
+- **Principle: componentize + prove here, extract later.** Build reusable, props-driven,
+  token-only components in protoAgent first (no app-specific coupling), prove them against the real
+  console, then lift the stable ones into `@protolabsai/ui`. `SurfaceRail` is built this way.
+- **AppShell convergence (coordination):** protoContent deferred its **AppShell** (icon-rail +
+  3-column + resizable panel) to "spec against both dashboards" — that **is** our dual-rail layout
+  (ADR 0035: `railOrder`, the resize handle, mobile shell). Feed our proven design into their
+  AppShell so the two converge instead of diverging.

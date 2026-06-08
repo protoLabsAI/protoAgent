@@ -85,6 +85,8 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
+import { SurfaceRail } from "../components/SurfaceRail";
+import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
@@ -240,7 +242,8 @@ export function App() {
   const setRightCollapsed = useUI((s) => s.setRightCollapsed);
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
-  const railOf = useUI((s) => s.railOf);
+  const railOrder = useUI((s) => s.railOrder);
+  const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -642,14 +645,24 @@ export function App() {
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
     { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
   ];
-  // Surfaces (+ plugin views) assigned to a rail side. Plugin views follow their manifest
-  // placement (rail→left, right→right); core surfaces follow railOf. Chat is always left.
-  function railSurfaces(side: "left" | "right"): { id: string; label: string; icon: ReactNode }[] {
-    const core = CORE_SURFACES.filter((s) => (s.id === "chat" ? side === "left" : (railOf[s.id] ?? "left") === side));
-    const plugins = (side === "left" ? pluginRail : pluginRightPanels).map((v) => ({
-      id: v.key, label: v.label, icon: pluginViewIcon(v.icon),
-    }));
-    return [...core, ...plugins];
+  // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core AND plugin views are
+  // first-class railOrder members — reconciled below — so all are reorderable/movable, including
+  // Chat. Metadata resolves from core or the live plugin-view set; a freshly-appeared plugin not
+  // yet reconciled is appended so it still shows.
+  type RailItem = { id: string; label: string; icon: ReactNode };
+  const coreMeta = new globalThis.Map<string, RailItem>(CORE_SURFACES.map((s) => [s.id, s] as const));
+  const pluginMeta = new globalThis.Map<string, RailItem>(
+    allPluginViews.map((v) => [v.key, { id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }] as const),
+  );
+  const metaFor = (id: string): RailItem | undefined => coreMeta.get(id) ?? pluginMeta.get(id);
+  function railSurfaces(side: "left" | "right"): RailItem[] {
+    const placed = new Set([...railOrder.left, ...railOrder.right]);
+    const ordered = (railOrder[side] ?? []).map(metaFor).filter((s): s is RailItem => Boolean(s));
+    // Safety net: a plugin view that appeared before reconcile ran — append it for this side.
+    const extra = (side === "left" ? pluginRail : pluginRightPanels)
+      .filter((v) => !placed.has(v.key))
+      .map((v): RailItem => ({ id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }));
+    return [...ordered, ...extra];
   }
 
   function renderSurface(id: string): ReactNode {
@@ -767,16 +780,31 @@ export function App() {
     }
   }
 
-  // Active surface per rail, clamped to a member of that rail (so a moved surface doesn't
-  // leave a stale active). Chat is the left fallback; the first right member is the right one.
+  // Keep plugin views as first-class railOrder members (ADR 0036) — append new ones, prune gone.
+  // Keyed on a stable signature so the effect only fires when the view set actually changes.
+  const pluginViewSig = allPluginViews.map((v) => `${v.key}:${v.placement ?? "rail"}`).join(",");
+  useEffect(() => {
+    reconcilePluginViews([
+      ...pluginRail.map((v) => ({ id: v.key, side: "left" as const })),
+      ...pluginRightPanels.map((v) => ({ id: v.key, side: "right" as const })),
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pluginViewSig, reconcilePluginViews]);
+
+  // Active surface per rail, clamped to a member of that side (a moved surface never leaves a
+  // stale active). Chat is no longer pinned — it lives on whichever rail holds it.
   const leftMembers = railSurfaces("left").map((s) => s.id);
   const rightMembers = railSurfaces("right").map((s) => s.id);
-  const leftActive = leftMembers.includes(surface) ? surface : "chat";
+  const leftActive = leftMembers.includes(surface) ? surface : (leftMembers[0] ?? "chat");
   const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "notes");
+  // Chat mounts unconditionally on whichever side it's on (streaming continuity, #613).
+  const chatRail: "left" | "right" = railOrder.right.includes("chat") ? "right" : "left";
 
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
+      {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry. */}
+      <ContextMenuRenderer />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}
@@ -830,21 +858,20 @@ export function App() {
         className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
         style={{ "--right-width": rightCol } as CSSProperties}
       >
-        {/* Left rail (ADR 0035) — members from railOf; hover a (non-Chat, non-plugin) icon to
-            send it to the right rail. Chat is pinned left. */}
-        <aside className="rail" aria-label="Workspace surfaces">
-          {railSurfaces("left").map((s) => (
-            <RailButton
-              key={s.id}
-              active={leftActive === s.id}
-              label={s.label}
-              icon={s.icon}
-              onClick={() => setSurface(s.id)}
-              badge={s.id === "activity" ? activityUnread + inboxUnread : undefined}
-              dot={s.id === "chat" ? chatStreaming && surface !== "chat" : undefined}
-            />
-          ))}
-        </aside>
+        {/* Left rail (ADR 0035/0036) — members + order from railOrder; right-click a surface to
+            reorder or move it across. The rail is the extraction-ready <SurfaceRail>. */}
+        <SurfaceRail
+          side="left"
+          ariaLabel="Workspace surfaces"
+          items={railSurfaces("left").map((s) => ({
+            ...s,
+            badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
+            dot: s.id === "chat" ? chatStreaming && surface !== "chat" : undefined,
+          }))}
+          activeId={leftActive}
+          onSelect={(id) => setSurface(id)}
+          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "left" })}
+        />
 
         <main className="stage">
           {error ? (
@@ -857,7 +884,7 @@ export function App() {
           {/* Chat mounts UNCONDITIONALLY + hidden via `active` (streaming continuity, #613);
               it's pinned to the left rail. Every other left-rail surface renders through the
               shared renderSurface (ADR 0035 S3) — so it can live on either rail. */}
-          <ChatSurface onError={setError} active={leftActive === "chat"} />
+          {chatRail === "left" ? <ChatSurface onError={setError} active={leftActive === "chat"} /> : null}
           {leftActive !== "chat" ? renderSurface(leftActive) : null}
         </main>
 
@@ -878,24 +905,21 @@ export function App() {
               data-testid="right-resize"
             />
           ) : null}
-          {/* The right surface renders through the same renderSurface as the left (ADR 0035
-              S3) — so notes/beads/goals/schedule (or anything moved here) mount identically. */}
-          {!rightCollapsed ? renderSurface(rightActive) : null}
+          {/* The right surface renders through the same renderSurface as the left (ADR 0035 S3).
+              If Chat lives on this rail it mounts unconditionally (continuity), like the stage. */}
+          {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
+          {!rightCollapsed && rightActive !== "chat" ? renderSurface(rightActive) : null}
         </aside>
 
-        {/* Right rail (ADR 0035 D1/D2) — mirrors the left on the far edge; members from railOf.
-            Hover a (non-plugin) icon to send it to the left rail. */}
-        <aside className="rail rail-right" aria-label="Context surfaces">
-          {railSurfaces("right").map((s) => (
-            <RailButton
-              key={s.id}
-              active={rightActive === s.id && !rightCollapsed}
-              label={s.label}
-              icon={s.icon}
-              onClick={() => { setRightPanel(s.id); setRightCollapsed(false); }}
-            />
-          ))}
-        </aside>
+        {/* Right rail (ADR 0035/0036) — mirrors the left on the far edge; same <SurfaceRail>. */}
+        <SurfaceRail
+          side="right"
+          ariaLabel="Context surfaces"
+          items={railSurfaces("right")}
+          activeId={rightCollapsed ? "" : rightActive}
+          onSelect={(id) => { setRightPanel(id); setRightCollapsed(false); }}
+          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "right" })}
+        />
       </div>
 
       <footer className="utility-bar">
@@ -957,38 +981,4 @@ export function App() {
   );
 }
 
-function RailButton({
-  active,
-  label,
-  icon,
-  onClick,
-  badge,
-  dot,
-  onContextMenu,
-}: {
-  active: boolean;
-  label: string;
-  icon: ReactNode;
-  onClick: () => void;
-  badge?: number;
-  // A small pulsing indicator (no count) — e.g. a chat turn streaming in the
-  // background while you're on another tab.
-  dot?: boolean;
-  // Right-click hook (ADR 0036) — opens the rail-surface context menu.
-  onContextMenu?: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button className={active ? "active" : ""} type="button" onClick={onClick} onContextMenu={onContextMenu} title={label} aria-label={label}>
-      {icon}
-      <span>{label}</span>
-      {badge ? (
-        <span className="rail-badge" data-testid="activity-badge">
-          {badge > 9 ? "9+" : badge}
-        </span>
-      ) : dot ? (
-        <span className="rail-dot" data-testid="chat-streaming-dot" aria-label="streaming" />
-      ) : null}
-    </button>
-  );
-}
 

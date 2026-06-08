@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Everything-swappable rails (ADR 0036)** — plugin views are now first-class `railOrder`
+  members (reconciled in/out as plugins come and go), and **Chat is movable too** (it mounts on
+  whichever rail holds it, preserving streaming continuity). Right-click any surface → **Move up /
+  Move down / Move to other rail**. The rail is now an extraction-ready `<SurfaceRail>` component.
+- **Right-click context menus (ADR 0036 slice 1)** — an app-wide context-menu system on shadcn
+  Radix `DropdownMenu`: a registry keyed by `ContextType` (core *and* plugins register items,
+  merged by priority + deduped), an imperative `openContextMenu(type, e, ctx)`, and one
+  `<ContextMenuRenderer>`. First menu: **right-click a rail icon → Move to other rail** (the
+  surface-swap trigger, replacing the removed hover buttons). `registerContextMenu` is the plugin
+  extension point (to be exposed via the plugin-ui SDK).
 - **Design-system foundation (ADR 0037 slice 1)** — the console adopts **Tailwind + the
   `@protolabsai/design` preset/tokens + shadcn/Radix**. Tailwind runs with preflight off so it
   coexists with the legacy `theme.css` (incremental migration); a shadcn→token bridge maps the

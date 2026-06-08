@@ -39,11 +39,15 @@ type UIState = {
   activityTab: ActivityTab;
   rightCollapsed: boolean;
   rightWidth: number;
-  // Which rail each surface lives on (ADR 0035 D2) — a surface is on exactly one side.
-  // Core surfaces seeded below; plugin views default by their manifest `placement`. Chat is
-  // pinned left (it mounts unconditionally for streaming continuity), so it isn't moved.
-  railOf: Record<string, "left" | "right">;
-  moveSurface: (id: string, side: "left" | "right") => void;
+  // Ordered surface lists per rail (ADR 0035 D2 + 0036) — a surface is on exactly one side, at a
+  // position. Core surfaces seeded below; plugin views append by their manifest `placement`. Chat
+  // is pinned left (mounts unconditionally for streaming continuity) — never moved across rails.
+  railOrder: { left: string[]; right: string[] };
+  moveSurface: (id: string, side: "left" | "right") => void; // splice out → append to side's bottom
+  reorderSurface: (id: string, dir: -1 | 1) => void; // swap with the neighbour within its rail
+  // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
+  // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
+  reconcilePluginViews: (views: { id: string; side: "left" | "right" }[]) => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setAgentTab: (t: AgentTab) => void;
@@ -67,12 +71,40 @@ export const useUI = create<UIState>()(
       activityTab: "thread",
       rightCollapsed: false,
       rightWidth: 360,
-      railOf: {
-        chat: "left", activity: "left", studio: "left", knowledge: "left",
-        agent: "left", plugins: "left", settings: "left",
-        notes: "right", beads: "right", goals: "right", schedule: "right",
+      railOrder: {
+        left: ["chat", "activity", "studio", "knowledge", "agent", "plugins", "settings"],
+        right: ["notes", "beads", "goals", "schedule"],
       },
-      moveSurface: (id, side) => set((s) => ({ railOf: { ...s.railOf, [id]: side } })),
+      moveSurface: (id, side) =>
+        set((s) => {
+          const left = s.railOrder.left.filter((x) => x !== id);
+          const right = s.railOrder.right.filter((x) => x !== id);
+          (side === "left" ? left : right).push(id); // append to the target's bottom
+          return { railOrder: { left, right } };
+        }),
+      reorderSurface: (id, dir) =>
+        set((s) => {
+          const swap = (arr: string[]) => {
+            const i = arr.indexOf(id);
+            const j = i + dir;
+            if (i < 0 || j < 0 || j >= arr.length) return arr;
+            const next = arr.slice();
+            [next[i], next[j]] = [next[j], next[i]];
+            return next;
+          };
+          return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right) } };
+        }),
+      reconcilePluginViews: (views) =>
+        set((s) => {
+          const ids = new Set(views.map((v) => v.id));
+          const keep = (arr: string[]) => arr.filter((x) => !x.startsWith("plugin:") || ids.has(x));
+          const left = keep(s.railOrder.left);
+          const right = keep(s.railOrder.right);
+          for (const v of views) {
+            if (!left.includes(v.id) && !right.includes(v.id)) (v.side === "left" ? left : right).push(v.id);
+          }
+          return { railOrder: { left, right } };
+        }),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setAgentTab: (agentTab) => set({ agentTab }),
@@ -85,7 +117,15 @@ export const useUI = create<UIState>()(
     }),
     {
       name: "protoagent.ui", // localStorage key — the single source of truth (ADR 0035 D5)
-      version: 1,
+      version: 2, // v2: railOf (side map) → railOrder (ordered lists per rail)
+      migrate: (persisted: unknown) => {
+        // Drop the obsolete railOf; railOrder falls back to the default via merge.
+        if (persisted && typeof persisted === "object") {
+          const { railOf: _drop, ...rest } = persisted as Record<string, unknown>;
+          return rest as never;
+        }
+        return persisted as never;
+      },
     },
   ),
 );
