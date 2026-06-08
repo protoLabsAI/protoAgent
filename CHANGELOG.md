@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Runtime context contract** (ADR 0033 slice 2) — `runtime/context.py`: `assemble_context()`
+  → `{stable_prefix, volatile_delta}` (a cacheable persona prefix + per-turn retrieved
+  knowledge/skills/prior-sessions) + an `after_turn()` write-back hook, so any runtime (native
+  or an external ACP brain) produces context the same cache-disciplined way. Reuses
+  `build_system_prompt` + the knowledge/skills retrieval; no change to the native loop.
 - **Operator tools as an MCP server** (ADR 0033 slice 1) — publish this agent's tools (core +
   plugin, allowlist-gated) as an MCP server via `python -m server.operator_mcp` (stdio or HTTP),
   so any MCP client (Claude Desktop, Cursor) or an ACP runtime can operate the instance. Config:
