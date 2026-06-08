@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ACP tool calls surface as cards** — the coding agent's tool calls (its own + the operator
+  MCP tools) now stream as `tool_start`/`tool_end` to the chat, same as the native runtime,
+  instead of only the final answer.
 - **ACP runtime adopts your persona** (ADR 0033) — `SOUL.md` is written as `AGENTS.md` (+ a
   vendor file) into the coding agent's session workspace, so it loads your agent's identity into
   its own system prompt and answers as your agent, not generic "Codex/Claude". The session runs
@@ -31,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embed endpoint, else semantic recall degrades to keyword — unchanged.)
 
 ### Fixed
+- **ACP runtime: agent now uses protoAgent's operator tools, not its own** — the persona file
+  directs the coding agent to use the `protoagent-operator` tools (`beads_create`, `memory_*`,
+  `notes_*`, `set_goal`, …) for anything that must persist, instead of its ephemeral built-in
+  todo/memory tools. Verified: 'create a task' now lands a bead in protoAgent, not the agent's
+  private session.
 - **ACP runtime: request-metadata scope cross-context reset** — an ACP turn awaits across
   context boundaries (the client's reader-loop tasks), so the ADR-0032 `request_metadata_scope`
   token could be reset in a different Context (`ValueError`). The scope now swallows that and
