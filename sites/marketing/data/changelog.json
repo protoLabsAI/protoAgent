@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.27.0",
+    "date": "2026-06-08",
+    "changes": [
+      "ACP runtime wired into the request path",
+      "ACP agent runtime",
+      "Runtime context contract",
+      "Operator tools as an MCP server",
+      "ACP runtime guide",
+      "ADR 0033"
+    ]
+  },
+  {
     "version": "v0.26.0",
     "date": "2026-06-08",
     "changes": [

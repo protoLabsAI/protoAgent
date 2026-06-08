@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-06-08
+
 ### Added
 - **ACP runtime wired into the request path** (ADR 0033 slice 4) — with `agent_runtime: acp:<agent>`,
   A2A/chat turns are driven by an external coding agent (proto/codex/claude/…), which reaches
