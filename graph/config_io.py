@@ -72,7 +72,13 @@ PRESETS_DIR = _BUNDLE_CONFIG_DIR / "soul-presets"
 # ``.example`` template on first run (see ``ensure_live_config``) and rewritten
 # by the wizard/drawer. Keeping it out of git means setup edits never dirty a
 # tracked file; the template carries the shipped defaults + comments.
-CONFIG_YAML_PATH = _LIVE_CONFIG_DIR / "langgraph-config.yaml"
+# Instance-scoped (ADR 0004): a per-instance config when PROTOAGENT_INSTANCE is set, so
+# `--instance foo` gets its own config/secrets instead of sharing the default's — a no-op
+# (the base path) for the unscoped default. The unscoped base is kept for graceful seeding.
+from paths import scope_leaf as _scope_leaf
+
+_BASE_CONFIG_YAML = _LIVE_CONFIG_DIR / "langgraph-config.yaml"
+CONFIG_YAML_PATH = _scope_leaf(_BASE_CONFIG_YAML)
 SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 
 # Secrets overlay. The setup wizard / drawer collect a model API key and an
@@ -80,7 +86,8 @@ SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 # configured checkout carries credentials in git. Instead they live in this
 # untracked sibling file (gitignored + dockerignored), read back by
 # ``LangGraphConfig.from_yaml`` and stripped from the main YAML on every save.
-SECRETS_YAML_PATH = _LIVE_CONFIG_DIR / "secrets.yaml"
+_BASE_SECRETS_YAML = _LIVE_CONFIG_DIR / "secrets.yaml"
+SECRETS_YAML_PATH = _scope_leaf(_BASE_SECRETS_YAML)
 
 # (section, key) pairs that must never be written to the tracked YAML.
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
@@ -111,7 +118,8 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
 # server should boot straight into the chat UI. Absence = show the
 # wizard on first page load. Lives in the live config dir so a Docker volume
 # mount (or the desktop app-data dir) persists setup across runs.
-SETUP_MARKER_PATH = _LIVE_CONFIG_DIR / ".setup-complete"
+_BASE_SETUP_MARKER = _LIVE_CONFIG_DIR / ".setup-complete"
+SETUP_MARKER_PATH = _scope_leaf(_BASE_SETUP_MARKER)
 
 
 # ---------------------------------------------------------------------------
@@ -130,24 +138,39 @@ except ImportError:
 
 
 def ensure_live_config() -> bool:
-    """Seed the live config from the tracked ``.example`` template on first run.
+    """Seed the live config on first run. Returns True only when it created the file.
 
-    The live ``langgraph-config.yaml`` is untracked, so a fresh clone / a new
-    container volume won't have one. Copy the template (comments + shipped
-    defaults intact) into place when it's missing. Idempotent — does nothing
-    once the live file exists, so wizard/drawer edits are never clobbered.
-    Returns True only when it created the file.
+    The live ``langgraph-config.yaml`` is untracked, so a fresh clone / new container
+    volume / **new instance** won't have one. Seed source:
+
+    - An **instance-scoped** path (PROTOAGENT_INSTANCE set) inherits the unscoped *base*
+      config + secrets + setup-marker when they exist — so `--instance foo` boots from
+      the default's setup, then diverges on its own saves (graceful, no re-setup).
+    - Otherwise (or no base yet) copy the tracked ``.example`` template.
+
+    Idempotent — does nothing once the live file exists, so edits are never clobbered.
     """
-    if CONFIG_YAML_PATH.exists() or not CONFIG_EXAMPLE_PATH.exists():
+    if CONFIG_YAML_PATH.exists():
         return False
     import shutil
 
+    from paths import instance_id
+
+    scoped = bool(instance_id())  # PROTOAGENT_INSTANCE set ⇒ this path is instance-scoped
+    source = _BASE_CONFIG_YAML if (scoped and _BASE_CONFIG_YAML.exists()) else CONFIG_EXAMPLE_PATH
+    if not source.exists():
+        return False
+
     CONFIG_YAML_PATH.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(CONFIG_EXAMPLE_PATH, CONFIG_YAML_PATH)
-    log.info(
-        "[config] seeded live config %s from %s",
-        CONFIG_YAML_PATH, CONFIG_EXAMPLE_PATH.name,
-    )
+    shutil.copyfile(source, CONFIG_YAML_PATH)
+    # When seeding a scoped instance from the base, carry its secrets + setup state too,
+    # so the instance is usable immediately instead of dropping into the setup wizard.
+    if scoped and source == _BASE_CONFIG_YAML:
+        if _BASE_SECRETS_YAML.exists() and not SECRETS_YAML_PATH.exists():
+            shutil.copyfile(_BASE_SECRETS_YAML, SECRETS_YAML_PATH)
+        if _BASE_SETUP_MARKER.exists() and not SETUP_MARKER_PATH.exists():
+            shutil.copyfile(_BASE_SETUP_MARKER, SETUP_MARKER_PATH)
+    log.info("[config] seeded live config %s from %s", CONFIG_YAML_PATH, source.name)
     return True
 
 
