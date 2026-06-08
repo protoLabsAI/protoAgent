@@ -11,8 +11,11 @@ Built on [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mc
 
 ## Enabling it
 
-MCP is **off by default** — configuring a server is the opt-in. Add an `mcp`
-section to your config (`config/langgraph-config.yaml`, or via the wizard/drawer):
+MCP is **off by default** — configuring a server is the opt-in. The quickest way is
+the console: **Agent → MCP → Add server** (name, transport, command/args or URL) wires
+it in **without a restart** (the change hot-reloads and the server connects), and the
+remove button drops one the same way. Prefer YAML? Add an `mcp` section to your config
+(`config/langgraph-config.yaml`, or via the wizard/drawer):
 
 ```yaml
 mcp:

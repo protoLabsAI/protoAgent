@@ -276,6 +276,15 @@ const server = createServer(async (req, res) => {
         });
       }
     }
+    if (pathname === "/api/mcp/servers" && req.method === "POST") {
+      return sendJson(res, { ok: true, name: body.name, servers: [body.name] });
+    }
+    {
+      const m = pathname.match(/^\/api\/mcp\/servers\/([^/]+)$/);
+      if (m && req.method === "DELETE") {
+        return sendJson(res, { ok: true, servers: [] });
+      }
+    }
     if (pathname === "/api/plugins/install") {
       const id = (String(body.url || "").replace(/\.git$/, "").split("/").pop()) || "ext_plugin";
       const sha = "abc1234567def8900000000000000000000abcd";

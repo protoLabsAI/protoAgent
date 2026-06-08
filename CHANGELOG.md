@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Add MCP servers from the console** — Agent → MCP has an inline Add-server form (stdio
+  command/args, or http/sse URL) plus a per-server remove button; both hot-reload, so the
+  server connects (or drops) without a restart.
 - **One-click plugin enable/disable** — toggle a plugin straight from the console Plugins
   panel; it edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
   immediately (a console view or background surface needs a restart, and the toggle says so).
