@@ -341,6 +341,13 @@ class LangGraphConfig:
     mcp_timeout_seconds: float = 20.0
     mcp_denylist: list[str] = field(default_factory=list)
 
+    # Operator MCP server (ADR 0033 slice 1) — expose THIS agent's tools as an MCP
+    # server so any MCP client (Claude Desktop, Cursor) or an ACP coding-agent runtime
+    # can operate the instance. Opt-in + allowlist-gated: only the named tools are
+    # exposed (empty = none). Served standalone via ``python -m server.operator_mcp``.
+    operator_mcp_enabled: bool = False
+    operator_mcp_tools: list[str] = field(default_factory=list)
+
     # Plugins — drop-in packages (manifest + register()) that contribute tools
     # and bundled skills. Run IN-PROCESS with the agent's privileges, so a
     # plugin loads only when enabled: listed here, or ``enabled: true`` in its
@@ -482,6 +489,7 @@ class LangGraphConfig:
         knowledge = data.get("knowledge", {})
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
+        operator_mcp = data.get("operator_mcp", {})
         plugins = data.get("plugins", {})
         identity = data.get("identity", {})
         # `or {}` (not a default arg): a section present but empty/commented in
@@ -577,6 +585,8 @@ class LangGraphConfig:
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
             mcp_denylist=list(mcp.get("denylist", []) or []),
+            operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
+            operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),

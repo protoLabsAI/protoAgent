@@ -43,6 +43,7 @@ langgraph-checkpoint-sqlite>=2.0
 # streamable-HTTP); their tools become agent tools. See tools/mcp_tools.py.
 # Pulls the `mcp` SDK transitively (also used by examples/mcp/echo_server.py).
 langchain-mcp-adapters>=0.2,<0.3
+mcp>=1.2
 
 # Starter tools (tools/lg_tools.py)
 ddgs>=9.0

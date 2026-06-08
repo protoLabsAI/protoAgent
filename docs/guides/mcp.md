@@ -135,6 +135,33 @@ mcp:
 Start protoAgent and check `GET /api/runtime/status` — you'll see the `echo`
 server with one tool (`echo__echo`).
 
+## Expose THIS agent as an MCP server (operator tools)
+
+The reverse direction (ADR 0033): publish this agent's own tools as an MCP server, so any
+MCP client — Claude Desktop, Cursor, or an ACP coding-agent runtime — can **operate the
+instance** (read/write notes & beads, recall/ingest memory, run workflows, delegate to
+subagents, set goals, schedule work). It's **opt-in + allowlist-gated** — only the tools you
+name are exposed:
+
+```yaml
+operator_mcp:
+  enabled: true
+  tools: [memory_recall, memory_ingest, beads_list, beads_create, notes_read, run_workflow]
+```
+
+Run it standalone:
+
+```bash
+python -m server.operator_mcp                 # stdio (for an MCP client / ACP session)
+python -m server.operator_mcp --http --port 8848
+```
+
+**Core + plugin tools ride the same bridge** — a plugin's `register_tools` tools are exposed
+through this one server (no per-plugin MCP); plugins that *are* an MCP server (`register_mcp_server`)
+are mounted by the client directly. Empty `tools` ⇒ nothing exposed (don't hand `execute_code`
+etc. to an outside brain unless you mean to). The sidecar boots **stores only** — it never starts
+the agent's background loops — so it's safe to run against a live instance's data.
+
 ## Notes & limits
 
 - **Tools only** for now — MCP *Resources* and *Prompts* aren't wired yet.
