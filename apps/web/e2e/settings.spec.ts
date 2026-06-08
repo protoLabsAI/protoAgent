@@ -25,6 +25,7 @@ test("central Settings is just the cross-cutting tabs", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default
   // System holds the runtime/perf knobs (Compaction + Runtime here).
   await tab(page, "System");
+  await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
@@ -33,6 +34,7 @@ test("Agent settings live in the Agent view's Settings tab", async ({ page }) =>
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
   await page.locator(".stage-subnav").getByRole("button", { name: "Settings", exact: true }).click();
   // Model + Routing render here, not in the central Settings surface.
+  await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);
   const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
   await expect(aux).toHaveValue("protolabs/fast");
