@@ -66,31 +66,45 @@ def test_roll_does_not_pile_blank_lines() -> None:
     assert "\n\n\n" not in out
 
 
-def test_to_entries_parses_versions_and_strips_markdown():
-    md = (
-        "# Changelog\n\n"
-        "## [Unreleased]\n\n### Added\n- not released yet\n\n"
-        "## [0.2.0] - 2026-02-02\n\n"
-        "### Added\n- **Bold thing** with `code` and a [link](https://x).\n"
-        "  continues on the next line\n"
-        "### Fixed\n- plain fix\n\n"
-        "## [0.1.0] - 2026-01-01\n\n### Added\n- first\n"
-    )
-    entries = changelog.to_entries(md)
-    assert [e["version"] for e in entries] == ["v0.2.0", "v0.1.0"]  # Unreleased skipped, newest-first
-    e = entries[0]
-    assert e["date"] == "2026-02-02"
-    assert e["changes"] == [
-        "Bold thing with code and a link. continues on the next line",  # md stripped, continuation joined
-        "plain fix",
-    ]
+_SCAFFOLD_MD = (
+    "# Changelog\n\n"
+    "## [Unreleased]\n\n### Added\n- not released yet\n\n"
+    "## [0.2.0] - 2026-02-02\n\n"
+    "### Added\n- **Bold title** — long technical detail (ADR 0026) with `code` and a [link](https://x).\n"
+    "  a continuation line that should be ignored for the title\n"
+    "  - a nested bullet that is not a top-level change\n"
+    "### Fixed\n- plain fix without a bold lead, second clause\n"
+)
 
 
-def test_json_output_matches_committed_changelog():
-    """The committed marketing changelog.json must be the generator's output for the
-    current CHANGELOG.md — guards against it drifting stale again."""
+def test_titles_are_concise_and_jargon_free():
+    _date, body = changelog._section(_SCAFFOLD_MD, "0.2.0")
+    # Bold lead becomes the title; long tail / ADR ref / nested bullet dropped.
+    # Non-bold bullets keep their first clause (up to a dash or sentence end).
+    assert changelog._titles(body) == ["Bold title", "plain fix without a bold lead, second clause"]
+
+
+def test_scaffold_prepends_when_absent_and_is_idempotent(tmp_path, monkeypatch):
     import json
 
-    expected = changelog.to_entries(changelog.CHANGELOG.read_text(encoding="utf-8"))
-    actual = json.loads(changelog.MARKETING_JSON.read_text(encoding="utf-8"))
-    assert actual == expected, "run `python scripts/changelog.py json` to resync"
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(_SCAFFOLD_MD, encoding="utf-8")
+    mj = tmp_path / "changelog.json"
+    mj.write_text(json.dumps([{"version": "v0.1.0", "date": "2026-01-01", "changes": ["curated blurb"]}]), encoding="utf-8")
+    monkeypatch.setattr(changelog, "CHANGELOG", cl)
+    monkeypatch.setattr(changelog, "MARKETING_JSON", mj)
+
+    assert changelog.scaffold("0.2.0") is True
+    entries = json.loads(mj.read_text(encoding="utf-8"))
+    assert [e["version"] for e in entries] == ["v0.2.0", "v0.1.0"]  # prepended
+    assert entries[1]["changes"] == ["curated blurb"]              # existing curation untouched
+    # Running again is a no-op (doesn't clobber a curated entry).
+    assert changelog.scaffold("0.2.0") is False
+    assert json.loads(mj.read_text(encoding="utf-8")) == entries
+
+
+def test_no_released_version_is_missing_from_marketing_changelog():
+    """Staleness guard (the original 'stuck at 0.21' bug): every dated CHANGELOG.md
+    version must have a marketing changelog.json entry."""
+    missing = changelog.missing_versions()
+    assert not missing, f"changelog.json missing: {missing} — run `changelog.py scaffold <v>` then curate"
