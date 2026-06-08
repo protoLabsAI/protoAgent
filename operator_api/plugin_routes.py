@@ -33,12 +33,13 @@ def register_plugin_routes(app) -> None:
 
     @app.get("/api/plugins/installed")
     async def _installed():
-        # enabled state comes from the loader's per-plugin meta (id → enabled)
+        # enabled + trust state come from the loader's per-plugin meta (ADR 0034 D5)
         enabled = {p["id"]: bool(p.get("enabled")) for p in (STATE.plugin_meta or [])}
+        trusted = {p["id"]: bool(p.get("trusted")) for p in (STATE.plugin_meta or [])}
         root = installer.live_plugins_dir()
         out = []
         for e in installer.list_installed():
-            item = {**e, "enabled": enabled.get(e["id"], False)}
+            item = {**e, "enabled": enabled.get(e["id"], False), "trusted": trusted.get(e["id"], False)}
             m = load_manifest(root / e["id"]) if e.get("present") else None
             if m is not None:
                 item["manifest"] = {
@@ -100,6 +101,26 @@ def register_plugin_routes(app) -> None:
         meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
         restart = bool(want and meta and meta.get("views"))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
+
+    @app.post("/api/plugins/{plugin_id}/trusted")
+    async def _set_trusted(plugin_id: str, body: dict | None = None):
+        """Allow/revoke a plugin's IN-PROCESS React mount by editing ``plugins.trusted`` (ADR 0034
+        D5). An untrusted ``ui: react`` plugin renders in a sandboxed iframe; trusting it lets the
+        renderer mount it as a federated React remote (host React/query/auth). Operator-gated — a
+        plugin can't trust itself. A console view only re-renders after the meta refreshes, so the
+        new trust applies on the next status poll (no restart needed for the gate itself)."""
+        want = bool((body or {}).get("trusted"))
+        cfg = STATE.graph_config
+        trusted = [p for p in (getattr(cfg, "plugins_trusted", []) or []) if p != plugin_id]
+        if want:
+            trusted.append(plugin_id)
+
+        from server.agent_init import _apply_settings_changes
+
+        ok, messages = _apply_settings_changes(config={"plugins": {"trusted": trusted}})
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        return {"ok": True, "trusted": want, "reloaded": True}
 
     @app.delete("/api/plugins/{plugin_id}")
     async def _uninstall(plugin_id: str, purge: bool = False):

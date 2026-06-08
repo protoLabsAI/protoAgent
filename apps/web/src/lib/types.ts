@@ -62,6 +62,8 @@ export type RuntimeStatus = {
     version?: string;
     enabled: boolean;
     loaded: boolean;
+    // ADR 0034 D5 — host-decided trust; gates whether the plugin's ui:react views mount in-process.
+    trusted?: boolean;
     tools: string[];
     skills: number;
     error?: string;
@@ -87,6 +89,9 @@ export type PluginView = {
   // For ui:"react" — the Module Federation remote: the remoteEntry URL + the exposed module
   // key (e.g. "./Panel"). `scope` (the federation remote name) defaults to the view id.
   remote?: { url: string; module: string; scope?: string };
+  // ADR 0034 D5 — host-decided trust (shipped allowlist ∪ operator's plugins.trusted). Only a
+  // trusted plugin gets the in-process React mount; untrusted `ui: react` degrades to the iframe.
+  trusted?: boolean;
 };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its

@@ -866,6 +866,13 @@ export const api = {
       { method: "POST", body: { enabled } },
     );
   },
+  // ADR 0034 D5 — allow/revoke a plugin's in-process React mount (operator trust opt-in).
+  setPluginTrusted(id: string, trusted: boolean) {
+    return request<{ ok: boolean; trusted: boolean; reloaded: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}/trusted`,
+      { method: "POST", body: { trusted } },
+    );
+  },
   addMcpServer(entry: Record<string, unknown>) {
     return request<{ ok: boolean; name: string; servers: string[] }>(
       "/api/mcp/servers",

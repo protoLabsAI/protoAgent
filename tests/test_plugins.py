@@ -308,6 +308,27 @@ def test_loader_meta_exposes_views_for_enabled_plugin(monkeypatch, tmp_path) -> 
     assert [v["id"] for v in meta["views"]] == ["board"]
 
 
+def test_loader_stamps_host_decided_trust_on_views(monkeypatch, tmp_path) -> None:
+    # A `ui: react` plugin can NOT self-declare trust (ADR 0034 D5) — the host decides, via the
+    # shipped allowlist + the operator's plugins.trusted. Default is untrusted → sandboxed iframe.
+    root = tmp_path / "plugins"
+    _make_plugin(
+        root, "reacty", enabled=True, tool="rt",
+        manifest_extra="views:\n  - {id: panel, label: Panel, path: /plugins/reacty/panel, ui: react}\n",
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+
+    # Not shipped-trusted, not operator-trusted → untrusted (renderer falls back to iframe).
+    res = load_plugins(_cfg(plugins_enabled=["reacty"]))
+    assert res.meta[0]["trusted"] is False
+    assert res.meta[0]["views"][0]["trusted"] is False
+
+    # Operator adds it to plugins.trusted → trusted (the React path is unlocked).
+    res = load_plugins(_cfg(plugins_enabled=["reacty"], plugins_trusted=["reacty"]))
+    assert res.meta[0]["trusted"] is True
+    assert res.meta[0]["views"][0]["trusted"] is True
+
+
 # ── full-bundle auto-discovery (ADR 0027) ─────────────────────────────────────
 
 

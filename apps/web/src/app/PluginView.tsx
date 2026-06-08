@@ -56,10 +56,11 @@ export function PluginView({ view }: { view: PluginViewType }) {
     }
   }
 
-  // ADR 0034 — a `ui: react` view mounts a federated React remote into the host tree
-  // (one React, shared query cache) instead of an iframe. The iframe path below is
-  // unchanged and stays the default for `ui: iframe` / untrusted plugins.
-  if (view.ui === "react" && view.remote) {
+  // ADR 0034 — a `ui: react` view mounts a federated React remote into the host tree (one React,
+  // shared query cache) instead of an iframe. The trust gate (D5) is enforced here: only a
+  // host-trusted plugin gets the in-process mount; an untrusted `ui: react` view falls through to
+  // the sandboxed iframe of its `path` below. Trust is host-decided (never the plugin's word).
+  if (view.ui === "react" && view.remote && view.trusted) {
     return (
       <section className="panel stage-panel plugin-view">
         <div className="plugin-view-body">
