@@ -106,5 +106,7 @@ def test_scaffold_prepends_when_absent_and_is_idempotent(tmp_path, monkeypatch):
 def test_no_released_version_is_missing_from_marketing_changelog():
     """Staleness guard (the original 'stuck at 0.21' bug): every dated CHANGELOG.md
     version must have a marketing changelog.json entry."""
+    if not changelog.MARKETING_JSON.exists():
+        pytest.skip("no marketing site (a fork dropped it) — staleness guard N/A")
     missing = changelog.missing_versions()
     assert not missing, f"changelog.json missing: {missing} — run `changelog.py scaffold <v>` then curate"
