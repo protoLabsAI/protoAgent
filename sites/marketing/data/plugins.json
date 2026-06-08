@@ -2,9 +2,16 @@
   {
     "id": "plugin-devkit",
     "name": "Plugin Devkit",
+    "category": "Authoring",
     "official": true,
     "tagline": "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle.",
-    "adds": ["tool", "subagent", "skill", "workflow", "view"],
+    "adds": [
+      "tool",
+      "subagent",
+      "skill",
+      "workflow",
+      "view"
+    ],
     "bundled": true,
     "enable": "plugin-devkit",
     "links": {
@@ -15,9 +22,13 @@
   {
     "id": "delegates",
     "name": "Delegate Registry",
+    "category": "Orchestration",
     "official": true,
     "tagline": "A hot-swappable registry of the agents and endpoints your agent can talk to — fleet A2A agents, OpenAI-compatible endpoints, ACP coding agents — managed from the console.",
-    "adds": ["tool", "settings"],
+    "adds": [
+      "tool",
+      "settings"
+    ],
     "bundled": true,
     "enable": "delegates",
     "links": {
@@ -28,9 +39,12 @@
   {
     "id": "coding_agent",
     "name": "CLI Coding Agent (ACP)",
+    "category": "Orchestration",
     "official": true,
     "tagline": "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol.",
-    "adds": ["tool"],
+    "adds": [
+      "tool"
+    ],
     "bundled": true,
     "enable": "coding_agent",
     "links": {
@@ -41,9 +55,14 @@
   {
     "id": "discord",
     "name": "Discord",
+    "category": "Communication",
     "official": true,
     "tagline": "Run your agent as a Discord bot — an inbound DM/channel gateway plus outbound posting tools.",
-    "adds": ["surface", "tool", "secrets"],
+    "adds": [
+      "surface",
+      "tool",
+      "secrets"
+    ],
     "bundled": true,
     "enable": "discord",
     "links": {
@@ -54,9 +73,13 @@
   {
     "id": "telegram",
     "name": "Telegram",
+    "category": "Communication",
     "official": true,
     "tagline": "Run your agent as a Telegram bot — inbound DMs/groups, replies back out. The reference communication plugin (ADR 0029) — ~80 lines of transport on the ChatAdapter standard.",
-    "adds": ["surface", "config"],
+    "adds": [
+      "surface",
+      "config"
+    ],
     "bundled": true,
     "enable": "telegram",
     "links": {
@@ -67,9 +90,13 @@
   {
     "id": "slack",
     "name": "Slack",
+    "category": "Communication",
     "official": true,
     "tagline": "Run your agent as a Slack app over Socket Mode (no public URL) — inbound messages, replies back out. A communication plugin (ADR 0029) with a websocket transport.",
-    "adds": ["surface", "config"],
+    "adds": [
+      "surface",
+      "config"
+    ],
     "bundled": true,
     "enable": "slack",
     "links": {
@@ -80,9 +107,13 @@
   {
     "id": "google",
     "name": "Google (Gmail + Calendar)",
+    "category": "Integrations",
     "official": true,
     "tagline": "Gmail + Calendar via a managed MCP server, connected in-app with an OAuth consent flow — no credentials.json to wrangle.",
-    "adds": ["mcp", "secrets"],
+    "adds": [
+      "mcp",
+      "secrets"
+    ],
     "bundled": true,
     "enable": "google",
     "links": {
@@ -93,9 +124,16 @@
   {
     "id": "spacetraders",
     "name": "SpaceTraders",
+    "category": "Examples",
     "official": true,
     "tagline": "An autonomous SpaceTraders fleet commander — crew subagents, navigation/mining/trading tools, workflows, and a Fleet dashboard. The reference full-bundle plugin.",
-    "adds": ["tool", "subagent", "workflow", "skill", "view"],
+    "adds": [
+      "tool",
+      "subagent",
+      "workflow",
+      "skill",
+      "view"
+    ],
     "bundled": false,
     "install": "https://github.com/protoLabsAI/spacetraders-plugin",
     "links": {
@@ -106,9 +144,15 @@
   {
     "id": "prototrader-finance",
     "name": "protoTrader Finance",
+    "category": "Finance",
     "official": true,
     "tagline": "Trading research as a full bundle — market data, backtesting, factor IC, a behavioral journal, a gated paper broker, the research desk, and a Quant Desk dashboard.",
-    "adds": ["tool", "subagent", "workflow", "view"],
+    "adds": [
+      "tool",
+      "subagent",
+      "workflow",
+      "view"
+    ],
     "bundled": false,
     "install": "https://github.com/protoLabsAI/prototrader-finance",
     "links": {
@@ -119,9 +163,14 @@
   {
     "id": "hello",
     "name": "Hello (example)",
+    "category": "Examples",
     "official": true,
     "tagline": "A minimal starting point — one tool, one bundled skill, and a console view. Copy it to scaffold your own plugin by hand.",
-    "adds": ["tool", "skill", "view"],
+    "adds": [
+      "tool",
+      "skill",
+      "view"
+    ],
     "bundled": true,
     "enable": "hello",
     "links": {
