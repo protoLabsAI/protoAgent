@@ -1,8 +1,8 @@
 import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 
 import { useUI } from "../state/uiStore";
-import { registerContextMenu } from "./registry";
-import type { MenuEntry } from "./types";
+import { registerContextMenu } from "@protoagent/plugin-ui";
+import type { MenuEntry } from "@protoagent/plugin-ui";
 
 // First customer (ADR 0036 D6 / ADR 0035 D2): right-click a rail icon → reorder it within its
 // rail (Move up/down) and move it to the other rail (append to the bottom). Chat is pinned to the

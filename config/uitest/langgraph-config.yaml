@@ -1,0 +1,143 @@
+# protoAgent — LangGraph runtime configuration
+#
+# The template ships with a single ``researcher`` subagent and no knowledge
+# store. Fork this file to match your agent's skills / subagents /
+# middleware needs. Anything referenced here must also have a matching
+# entry in ``graph/subagents/config.py`` (for subagents) or a tool
+# registered in ``tools/lg_tools.py``.
+
+model:
+  provider: openai
+  # Default LiteLLM gateway alias. Point an alias (e.g. ``protolabs/reasoning``)
+  # in your gateway config at the real model — swapping the model becomes a
+  # gateway edit, not a code change in the fork.
+  name: protolabs/reasoning
+  api_base: https://api.proto-labs.ai/v1
+  temperature: 0.2
+  max_tokens: 32768  # 32k — required headroom for the Qwen models we run
+  max_iterations: 50
+  # Advanced sampling — all optional; omit to use the gateway / model-card
+  # defaults. top_p + presence_penalty are standard OpenAI params; top_k +
+  # repetition_penalty + chat_template_kwargs ride extra_body for vLLM-style
+  # gateways. Typical self-hosted Qwen card:
+  #   top_p: 0.95
+  #   top_k: 20
+  #   presence_penalty: 0.0
+  #   repetition_penalty: 1.05
+  #   chat_template_kwargs: { preserve_thinking: true }
+
+subagents:
+  researcher:
+    enabled: true
+    tools:
+      - current_time
+      - web_search
+      - fetch_url
+      - memory_recall
+      - memory_list
+    max_turns: 40
+
+middleware:
+  # All four subsystems default ON. The template constructs the
+  # knowledge store + scheduler backends automatically (see
+  # ``server.py::_build_knowledge_store`` and ``_build_scheduler``).
+  # Flip any of these to ``false`` to opt out — the corresponding
+  # tools (memory_*, schedule_*) are dropped from the agent loop
+  # without touching the researcher subagent's tool allowlist.
+  knowledge: true
+  audit: true
+  memory: true
+  scheduler: true
+
+knowledge:
+  db_path: /sandbox/knowledge/agent.db
+  embeddings: true
+  embed_model: qwen3-embedding
+  top_k: 5
+
+# Session memory loading — prior summaries injected into system prompt
+# by KnowledgeMiddleware when it is active. Persistence via MemoryMiddleware
+# uses the same path. Mount a volume at this path to survive container restarts.
+memory:
+  path: /sandbox/memory/
+  max_sessions: 10
+  max_tokens: 2000
+
+# Skill index — SQLite FTS5 store for learned skill-v1 artifacts.
+# Skills emitted by task() are indexed here and injected into the system
+# prompt as a <learned_skills> block at inference time.
+skills:
+  db_path: /sandbox/skills.db
+  top_k: 5
+  max_tokens: 2000
+
+# --- agent optimization (Hermes/OpenClaw-style) ---
+# Fast-model router: one cheap/fast alias for the non-reasoning calls —
+# context summarization, goal verification, AND subagent delegation all fall
+# back to this unless they set a specific override. Single knob.
+  enabled: true
+  dir: ''
+routing:
+  aux_model: protolabs/fast
+
+# Context compaction: summarize the middle of long histories near the context
+# limit, keeping the last N turns intact. Uses routing.aux_model (above).
+compaction:
+  enabled: true
+  # Message-count trigger (not "fraction:…") — the gateway model alias has no
+  # langchain profile, so fraction/token-window triggers can't be computed.
+  trigger: "messages:80"
+  keep_messages: 25
+
+# Programmatic tool calling: lets the model write one Python script that
+# composes several tools in a single turn (collapses long tool-call chains).
+# SECURITY: runs model-authored code in a subprocess (scrubbed env + timeout).
+# Enabled here for the local dev agent; prefer a hardened container in prod.
+execute_code:
+  enabled: true
+
+# React operator console — the beads/notes APIs accept a project path from
+# the (free-text) UI, so the server, not the client, decides which
+# directories they may touch. The protoAgent repo root is always allowed;
+# add any other project roots you operate on here. Empty = repo root only.
+# Editable in-app from the setup wizard's Workspace step.
+operator:
+  allowed_dirs:
+    - /Users/kj/dev/protoMaker
+identity:
+  name: protoagent
+  operator: ''
+  # - /home/kj/projects/my-other-repo
+
+# --- added for local testing (extensibility demo) ---
+mcp:
+  enabled: true
+  servers:
+    - name: echo
+      transport: stdio
+      command: /Users/kj/dev/protoAgent/.venv-test/bin/python
+      args:
+        - /Users/kj/dev/protoAgent/examples/mcp/echo_server.py
+  timeout_seconds: 20.0
+  denylist: []
+plugins:
+  enabled:
+    - hello
+    - delegates
+  dir: ''
+  disabled: []
+runtime:
+  autostart_on_boot: false
+discord:
+  enabled: false
+  admin_ids: []
+google:
+  enabled: false
+  client_id: ''
+  tz: ''
+hello:
+  greeting: Hello
+agent_runtime: acp:copilot
+operator_mcp:
+  tools:
+    - '*'

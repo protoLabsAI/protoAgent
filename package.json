@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "apps/web",
-    "apps/desktop"
+    "apps/desktop",
+    "packages/*"
   ],
   "scripts": {
     "docs:dev": "vitepress dev docs",
