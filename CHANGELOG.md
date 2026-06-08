@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ACP runtime adopts your persona** (ADR 0033) — `SOUL.md` is written as `AGENTS.md` (+ a
+  vendor file) into the coding agent's session workspace, so it loads your agent's identity into
+  its own system prompt and answers as your agent, not generic "Codex/Claude". The session runs
+  in a dedicated instance-scoped workspace (not your repo); the persona is injection-scanned.
 - **Runtime selector leads the Agent settings** — the Agent runtime group is now first in
   Agent → Settings, with an active-runtime badge in the header and a banner (when an ACP
   runtime is active) explaining the model settings still power protoAgent's own aux calls.
