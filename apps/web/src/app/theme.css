@@ -3280,3 +3280,24 @@ textarea {
 .plugin-review .warn { color: #f5b450; display: inline-flex; align-items: center; gap: 3px; }
 .plugin-enable-hint { font-size: 11px; color: var(--fg-secondary); margin: 6px 0 0; }
 .btn-icon.danger:hover { color: #ef6b6b; }
+
+/* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
+.federated-loading,
+.federated-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.federated-loading { align-items: center; }
+.federated-error { color: #eadf9a; }
+.federated-error strong { color: var(--fg); }
+.federated-error-detail {
+  margin: 4px 0 8px;
+  font-family: var(--mono, monospace);
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  word-break: break-word;
+}

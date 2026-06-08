@@ -72,3 +72,19 @@ test("a plugin view with placement:right becomes a right-sidebar panel", async (
   await expect(frame).toBeVisible();
   await expect(frame).toHaveAttribute("src", /\/plugins\/boardy\/scratch/);
 });
+
+test("a ui:react view mounts a federated React remote (ADR 0034), not an iframe", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Right-panel tab for the React view.
+  await page.locator(".segmented").getByRole("button", { name: "React Panel", exact: true }).click();
+
+  // The federated remote mounts into the host React tree — its content renders directly
+  // (no iframe). If React were dual-loaded, the remote's hook would throw on render.
+  await expect(page.getByText("Hello from a React plugin remote", { exact: false })).toBeVisible();
+  await expect(page.locator(".plugin-view-frame")).toHaveCount(0);
+
+  // The shared-React hook works: clicking increments the remote's useState counter.
+  await page.getByRole("button", { name: /clicked 0×/ }).click();
+  await expect(page.getByRole("button", { name: /clicked 1×/ })).toBeVisible();
+});
