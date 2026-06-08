@@ -52,8 +52,15 @@ manual dedupe). Federation is the mature Vite answer and handles shared-singleto
 Two React copies break hooks. The host exposes a fixed **shared** set that remotes consume,
 never re-bundle: `react`, `react-dom`, `@tanstack/react-query` (one cache), the router, the
 **design system / theme**, and the **API client** (so a plugin's calls carry the host's auth +
-hit the same query cache). All pinned as `singleton: true` with the host's version as the
-floor.
+hit the same query cache).
+
+**Version policy (per Quinn's review):** each is `singleton: true`, and the host pins the
+**exact** shared version it ships (e.g. React `19.2`). A remote declares the **range** it was
+built against; a remote whose range excludes the host's version degrades to the D6 error card
+rather than dual-loading a second copy. *Example:* host ships React `19.2` → a remote requiring
+`^19` loads against the shared singleton; one pinned to `18` is rejected (error card), never
+dual-loaded. The host advertises its shared versions so a remote can be built/checked against
+them ahead of time.
 
 ### D4 — A versioned plugin-UI SDK (`@protoagent/plugin-ui`)
 
@@ -85,6 +92,14 @@ A remote that fails to load (network, version skew, throw) renders a bounded **e
 its placement (name + "failed to load" + retry), never a blank console or a crashed host. The
 shared-deps range from D3 is enforced; an incompatible remote degrades to the card, and (if
 declared) its `ui: iframe` fallback.
+
+**Limit of the boundary (per Quinn's review):** D6 contains a remote that *fails* — it cannot
+fully contain a trusted remote that *misbehaves*. A `ui: react` remote shares the React runtime
++ query cache **in-process**, so a buggy or hostile one can corrupt shared state (no hard
+sandbox). That residual risk is exactly why `ui: react` is **trust-gated (D5)**; the SDK (D4)
+narrows the blast radius by exposing typed accessors (API client, scoped query keys, theme
+tokens) rather than raw host internals. Untrusted code that needs hard isolation stays on the
+`ui: iframe` path.
 
 ### D7 — Notes is the reference port
 
