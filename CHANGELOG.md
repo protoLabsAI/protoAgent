@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Marketing: a /features page** — differentiators deep-dive + a comparison table vs
+  Hermes & OpenClaw (bare-bones+extensible+A2A-orchestration vs batteries-included),
+  plus the dogfooding story (SpaceTraders / protoTrader / ORBIS-over-A2A). Linked in nav + footer.
 - **Headless-mode docs + advertising** — a [Run headless](docs/guides/headless.md) guide
   (UI tiers, the OpenAI-compatible `/v1/chat/completions` API, the A2A endpoint, auth,
   headless `--setup`), a README "Run headless" section, and a marketing feature card —

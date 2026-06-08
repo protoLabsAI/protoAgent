@@ -1,0 +1,167 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+// Differentiators deep-dive + a comparison vs batteries-included agent frameworks.
+// NOTE: the Hermes / OpenClaw cells are a best-effort read of their positioning, not a
+// verified feature audit — sharpen before leaning on it publicly. protoAgent's column
+// is accurate to the codebase.
+
+const pillars = [
+  {
+    title: 'Bare-bones core, opt-in everything',
+    body: "You start with a small, legible core and add only what you need — tools, skills, subagents, workflows, console views, memory backends — as plugins. No inheriting a pile of use-cases you'll never use, then fighting to remove them.",
+  },
+  {
+    title: 'A2A-native, built for fleets',
+    body: "Every protoAgent is a first-class A2A 1.0 server and can fan out to other A2A endpoints (delegate_to). It's designed to run distributed and be orchestrated as a fleet across your machines — not as one monolith on one box.",
+  },
+  {
+    title: 'Local-first, model-agnostic',
+    body: "Powered by your models through an OpenAI-compatible gateway — local 30B, a hosted frontier model, whatever you point it at. Not a coding-agent competitor: it orchestrates work (and can drive any coding agent over ACP).",
+  },
+];
+
+const differentiators = [
+  {
+    title: 'Extend without forking',
+    body: 'Plugins are repos: install from a git URL, pinned in a lockfile, removed cleanly. A plugin can add tools, SKILL.md skills, subagents, workflows, FastAPI routes, managed MCP servers, console rail views, and its own config/secrets — without touching core. Share one as a repo; the agent can even scaffold its own.',
+  },
+  {
+    title: 'Multi-agent orchestration over A2A',
+    body: 'A unified, hot-swappable delegate registry routes a sub-task to another agent or endpoint over a2a / openai / acp, with a health prober. Your agent becomes a hub: an A2A endpoint that coordinates a fleet — and is itself reachable by ORBIS, other agents, or your own tools.',
+  },
+  {
+    title: 'Headless + OpenAI-compatible',
+    body: "Run it with no UI (--ui none): API + A2A + /metrics. Drive it via /v1/chat/completions (point any OpenAI client at it) or the A2A protocol. Same agent, tools, memory, and goals — no browser required.",
+  },
+  {
+    title: 'First-class observability',
+    body: 'Langfuse tracing (distributed across A2A hops) + Prometheus /metrics + a built-in per-turn telemetry store (cost, latency p50/p95, tokens, cache-hit, by-model) with CSV export and a retention guardrail — out of the box, not a bolt-on.',
+  },
+  {
+    title: 'Pluggable memory & embeddings',
+    body: 'Ships with a SQLite + FTS5 knowledge store (hybrid semantic search via the gateway). Swap in pgvector / Qdrant / Chroma — or an in-process embedder — as a plugin (register_knowledge_store / register_embedder). The store is a seam, not a hard dependency.',
+  },
+  {
+    title: 'Real autonomy',
+    body: 'Goal mode with pluggable verifiers + monitor goals for long-horizon, externally-driven targets; a scheduler; and a reactive inbox for webhooks/cron/sister-agents. Compose an OODA loop: observe on a cadence, adjust, escalate to a strategist subagent, all toward a standing goal.',
+  },
+  {
+    title: 'Drive any coding agent (ACP)',
+    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol. protoAgent doesn't compete as a coding agent — it manages them.",
+  },
+  {
+    title: 'Custom UI that slots in',
+    body: 'A plugin can add a left-rail icon and a full console view (its own dashboard) — like the SpaceTraders Fleet view or the Quant Desk — without a console rebuild. Plus a native desktop app (Tauri).',
+  },
+  {
+    title: 'Sandboxing & egress fences',
+    body: 'A fenced filesystem toolset, an egress allowlist, and NVIDIA OpenShell support out of the box — the safety rails for running agents that touch your machine and the network.',
+  },
+];
+
+// Comparison rows. ✓ = yes · ~ = partial/via add-ons · — = not a focus / verify.
+const cmp = [
+  ['Core philosophy', 'Bare-bones + opt-in plugins', 'Batteries-included', 'Batteries-included'],
+  ['Extend without forking (git-URL plugins)', '✓', '~', '~'],
+  ['A2A 1.0 server + fleet delegation', '✓', '—', '—'],
+  ['Headless + OpenAI-compatible endpoint', '✓ both', '~', '~'],
+  ['Built-in telemetry (cost/latency) + export', '✓', '—', '—'],
+  ['First-class Langfuse + Prometheus', '✓', '~', '~'],
+  ['Pluggable memory / vector store', '✓', '~', '~'],
+  ['Goal mode + monitor goals + scheduler', '✓', '~', '~'],
+  ['Reactive inbox (webhooks / cron / agents)', '✓', '—', '—'],
+  ['Delegate to coding agents over ACP', '✓', '—', '—'],
+  ['Custom console views + native desktop', '✓', '~', '—'],
+  ['Sandboxing + egress allowlist', '✓', '~', '~'],
+  ['Local-model-first', '✓', '✓', '✓'],
+  ['Open source, fork-to-ship', '✓', '✓', '✓'],
+];
+---
+
+<BaseLayout title="Features — protoAgent" description="How protoAgent is different: a bare-bones, A2A-native, fully extensible agent platform — vs batteries-included frameworks like Hermes and OpenClaw.">
+  <div class="mx-auto max-w-6xl px-6 py-20">
+    <h1 class="text-4xl font-bold tracking-tight mb-3">Why protoAgent</h1>
+    <p class="text-zinc-400 text-lg max-w-2xl mb-14">
+      Most agent frameworks hand you everything and dare you to delete what you don't want.
+      protoAgent inverts that: a small core you actually understand, and everything else as
+      a plugin — built to run distributed and orchestrate a fleet over A2A.
+    </p>
+
+    <!-- Pillars -->
+    <div class="grid gap-5 sm:grid-cols-3 mb-20">
+      {pillars.map((p) => (
+        <div class="card p-6">
+          <h2 class="font-semibold text-lg mb-2">{p.title}</h2>
+          <p class="text-sm text-zinc-400 leading-relaxed">{p.body}</p>
+        </div>
+      ))}
+    </div>
+
+    <!-- Comparison -->
+    <h2 class="text-2xl font-bold tracking-tight mb-2">protoAgent vs Hermes &amp; OpenClaw</h2>
+    <p class="text-sm text-zinc-500 mb-6">✓ yes · ~ partial / via add-ons · — not a focus</p>
+    <div class="overflow-x-auto mb-3">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="text-left border-b border-[var(--pl-color-border)]">
+            <th class="py-2 pr-4 font-medium text-zinc-300"></th>
+            <th class="py-2 px-3 font-semibold" style="color: var(--pl-color-brand-lavender)">protoAgent</th>
+            <th class="py-2 px-3 font-medium text-zinc-400">Hermes</th>
+            <th class="py-2 px-3 font-medium text-zinc-400">OpenClaw</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cmp.map(([dim, a, b, c]) => (
+            <tr class="border-b border-[var(--pl-color-border)]">
+              <td class="py-2 pr-4 text-zinc-300">{dim}</td>
+              <td class="py-2 px-3 text-zinc-100">{a}</td>
+              <td class="py-2 px-3 text-zinc-500">{b}</td>
+              <td class="py-2 px-3 text-zinc-500">{c}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-zinc-600 mb-20">
+      Reflects protoAgent's design priorities and our reading of the alternatives at time of
+      writing; these tools evolve fast — corrections welcome.
+    </p>
+
+    <!-- Deep dive -->
+    <h2 class="text-2xl font-bold tracking-tight mb-6">The features that make the difference</h2>
+    <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-20">
+      {differentiators.map((f) => (
+        <div class="card p-6">
+          <h3 class="font-semibold mb-2">{f.title}</h3>
+          <p class="text-sm text-zinc-400 leading-relaxed">{f.body}</p>
+        </div>
+      ))}
+    </div>
+
+    <!-- Dogfooding -->
+    <div class="card p-8 mb-16">
+      <h2 class="text-2xl font-bold tracking-tight mb-3">Stress-tested by building on it</h2>
+      <p class="text-zinc-400 leading-relaxed max-w-3xl">
+        We don't just ship the core — we build real agents on it and contribute the patterns
+        back as plugins. A <strong>SpaceTraders</strong> agent runs an OODA loop on the scheduler
+        (observe every 20 min, escalate to a strategist subagent hourly) toward a standing goal
+        of 1,000,000 credits — with a Fleet dashboard, entirely as plugins that never touch core.
+        A <strong>protoTrader Finance</strong> plugin adds market data, backtesting, and a gated
+        paper broker. <strong>ORBIS</strong> (voice companion) connects over A2A to control it by
+        voice. Same substrate, wildly different agents.
+      </p>
+      <div class="mt-5 flex flex-wrap gap-4 text-sm">
+        <a href="/plugins" class="text-[var(--pl-color-brand-lavender)] hover:brightness-110">Browse plugins →</a>
+        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="text-zinc-400 hover:text-white">Read the docs ↗</a>
+      </div>
+    </div>
+
+    <div class="text-center">
+      <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer"
+         class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[var(--pl-color-bg)] hover:brightness-110 transition">
+        Build your agent →
+      </a>
+    </div>
+  </div>
+</BaseLayout>
