@@ -33,3 +33,10 @@ def test_cost_usd_empty_usage_is_zero() -> None:
 def test_cost_usd_handles_none_and_missing_fields() -> None:
     # Robust to partial usage dicts (no crash, sensible number).
     assert pricing.cost_usd("gpt-4o", {"input_tokens": 100}) == round(100 * 0.0000025, 6)
+
+
+def test_rate_for_protolabs_gateway_models() -> None:
+    # Self-hosted protolabs/* (vLLM) — low nominal local-compute estimate, not the
+    # Claude-ish default (which would overstate ~30x). Aliases resolve by substring.
+    assert pricing.rate_for("protolabs/reasoning") == pricing.MODEL_RATES["protolabs/reasoning"]
+    assert pricing.rate_for("protolabs/fast")["input"] < pricing.MODEL_RATES["default"]["input"]
