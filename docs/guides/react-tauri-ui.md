@@ -369,34 +369,38 @@ to do with notes/beads:
 - The runtime-status `project.allowed_dirs` field reports the fence; it does not
   relax the server-side check.
 
-## Studio, Activity & the right sidebar (the control stack)
+## The console IA (rail · Agent section · right sidebar)
 
-Per [ADR 0009](/adr/0009-studio-control-stack), Studio holds the
-orchestration→execution layers — **Workflows** (the order) → **Run** (one
-focused worker, with the Single/Batch toggle). **Schedule** moved to **Activity**
-(Thread · Inbox · Schedule) — cron is a *trigger* ("when"), grouped with the
-inbox/event-bus (ADR 0003), not a Studio work-type. Skills moved to the
-**Knowledge ▸ Playbooks** surface (below) — they're retrieved memory, not work.
+The left rail groups the console: **Chat** · **Activity** (Thread · Inbox) ·
+**Studio** (Workflows) · **Knowledge** (a single searchable Store) · **Agent** ·
+**Plugins** · **Settings**.
 
-The right sidebar is the agent's **persistent working memory** — **Notes**
-(its notebook) · **Beads** (its task board) · **Goals** (its autonomy layer:
-the standing conditions it works toward, set in chat with `/goal`). Goals used
-to be a Studio tab; they're really *agent state* the operator watches and
-clears, so they sit next to notes and beads. All three are agent-global
-(one instance-scoped store each), not per-project.
+The **Agent** section is the agent's own makeup, tabbed: **Identity** (edit its
+name + `SOUL.md` persona inline — saving merge-applies config + hot-reloads the
+graph) · **Tools** (the live tool inventory, by source) · **MCP** (servers) ·
+**Subagents** (the delegate roster) · **Skills** (the procedural-memory skill
+index) · **Middleware** (the per-turn graph middleware). The read-only status
+snapshot + the **Telemetry** dashboard live under **Settings ▸ Overview**.
+
+The **right sidebar** is the agent's persistent working memory + its when-triggers
+— **Notes** (its notebook) · **Beads** (its task board) · **Goals** (the standing
+conditions it works toward, set in chat with `/goal`) · **Schedule** (cron/one-off
+fires — a *trigger*, so it sits with the rest of the agent's live state). All are
+agent-global (one instance-scoped store each), not per-project.
 
 ## Telemetry surface
 
-The **System ▸ Telemetry** sub-tab (`apps/web/src/telemetry/TelemetrySurface.tsx`,
+The **Settings ▸ Overview** tab (`apps/web/src/telemetry/TelemetrySurface.tsx`,
+rendered by `settings/OverviewPanel.tsx` alongside the read-only status snapshot,
 ADR 0006) renders the local per-turn cost/latency rollup: summary cards (total
 cost, turns, success rate, cache-hit %, p50/p95 latency, tokens, tool calls), a
 by-model table, and a recent-turns table. It reads `GET /api/telemetry/summary`
 + `/api/telemetry/recent` — no chat-stream coupling — and degrades to a clear
 note when the store is disabled or empty.
 
-## Playbooks surface
+## Skills surface (Agent ▸ Skills)
 
-The **Knowledge ▸ Playbooks** surface (`apps/web/src/playbooks/PlaybooksSurface.tsx`,
+The **Agent ▸ Skills** surface (`apps/web/src/playbooks/PlaybooksSurface.tsx`,
 ADR 0009) browses the procedural-memory skill index (`skills.db`) the operator
 was otherwise blind to. It lists each skill as **pinned** (a `SKILL.md` on disk,
 re-seeded at boot) or **learned** (agent-emitted, curated/decaying), with
@@ -434,7 +438,7 @@ regress) is verifiable in CI.
 - Specs: `chat.spec.ts` (tool-call cards — collapsed-by-default, pretty-printed
   JSON on expand, markdown answers, no horizontal overflow), `commands.spec.ts`
   (slash-command autocomplete), `navigation.spec.ts` (every surface mounts; the
-  Runtime panel shows skills / MCP / plugins).
+  Agent surface tabs + Settings → Overview render).
 - Run locally: `npm run test:e2e --workspace @protoagent/web` (builds first,
   boots the mock server, runs headless). `test:e2e:ui` opens the Playwright UI.
 - CI: the **Web E2E smoke** job in `.github/workflows/checks.yml`.
