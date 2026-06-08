@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Notes plugin — the first-class React reference plugin (ADR 0034 slice 4)** — a greenfield
+  `notes` plugin replaces the legacy native Notes: one shared markdown doc (no tabs/undo/
+  versioning), instance-scoped, owned by the plugin. It registers the agent tools
+  `read_note`/`write_note`/`append_note`, a bearer-gated data route, and a `ui: react` console
+  panel (single-panel editor + preview toggle + autosave) mounted in-process (it's on the shipped
+  trust allowlist). Ships alongside the native Notes for now (labelled "Notes (new)"); a follow-up
+  retires the native surface/tools/store. New guide: *Building a React plugin view*.
 - **Plugin trust gate (ADR 0034 slice 3)** — a `ui: react` plugin mounts **in-process only if
   host-trusted** (a shipped first-party allowlist ∪ the operator's `plugins.trusted`); an untrusted
   `ui: react` view **degrades to a sandboxed iframe**. Trust is **host-decided, never plugin-
