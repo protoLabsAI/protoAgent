@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.28.0",
+    "date": "2026-06-08",
+    "changes": [
+      "ACP tool calls surface as cards",
+      "ACP runtime adopts your persona",
+      "Runtime selector leads the Agent settings",
+      "Auto-scoping for co-located instances",
+      "ACP-only setups need no gateway",
+      "Agent runtime selectable in the console",
+      "ACP delegate teardown",
+      "ACP runtime: agent now uses protoAgent's operator tools, not its own",
+      "ACP runtime: request-metadata scope cross-context reset",
+      "Instance-scoped config",
+      "code_with tool + the coding_agent plugin"
+    ]
+  },
+  {
     "version": "v0.27.0",
     "date": "2026-06-08",
     "changes": [
