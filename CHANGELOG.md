@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-06-08
+
 ### Changed
 - **Settings decentralized** — settings now live where the thing lives. **Agent** settings
   (model, routing, goal mode, tools) are a Settings tab in the Agent view; **Memory** settings
