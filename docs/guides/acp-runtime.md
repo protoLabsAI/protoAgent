@@ -42,16 +42,20 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
 
 ## How a turn runs
 
-1. **Context** — protoAgent assembles a [cacheable persona prefix](/adr/0033-pluggable-agent-runtime-acp)
-   (SOUL + static instructions) sent **once** at session start, then per-turn deltas (retrieved
-   knowledge / skills). ACP sessions are stateful, so the agent keeps history — we don't resend
-   the world each turn, which keeps the agent's own prompt caching intact.
-2. **Tools** — protoAgent's operator tools are published as an MCP server (see
+1. **Persona** — your `SOUL.md` is written as **`AGENTS.md`** (plus a vendor file like `CLAUDE.md`)
+   into the session's working dir, which the coding agent loads into **its own** system prompt — so
+   it adopts *your* agent's identity instead of its built-in "I'm Codex/Claude" default. (Ask it
+   "who are you?" — it answers as your agent.) The session runs in a dedicated, instance-scoped
+   workspace, not your repo, so it never touches your project's own `AGENTS.md`.
+2. **Context** — each turn carries only the per-turn delta (retrieved knowledge / skills) + your
+   message. ACP sessions are stateful, so the agent keeps history — we don't resend the world each
+   turn, which keeps the agent's own prompt caching intact.
+3. **Tools** — protoAgent's operator tools are published as an MCP server (see
    [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server)) and **mounted into
    the ACP session** (`session/new` `mcpServers`). The coding agent calls `beads_create`,
    `memory_recall`, `run_workflow`, … alongside its own tools.
-3. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
-4. **Write back** — durable facts persist to the knowledge store after the turn.
+4. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
+5. **Write back** — durable facts persist to the knowledge store after the turn.
 
 One stateful ACP session is kept **per conversation thread** and reused across turns.
 

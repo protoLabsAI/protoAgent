@@ -95,11 +95,45 @@ def operator_mcp_server_spec(config) -> dict | None:
     }
 
 
+# A coding agent reads AGENTS.md universally; some prefer a vendor file too.
+_VENDOR_PERSONA_FILE = {"claude": "CLAUDE.md", "gemini": "GEMINI.md"}
+
+
+def _strip_injection(text: str) -> str:
+    """Light guard (both comps scan SOUL): drop lines that try to redefine the chat role."""
+    bad = ("system:", "developer:", "assistant:", "<|", "###system")
+    return "\n".join(ln for ln in text.splitlines() if not ln.strip().lower().startswith(bad))
+
+
+def persona_doc(config) -> str:
+    """The persona an ACP coding agent should adopt as its own — SOUL.md + a short operating
+    note. Written to AGENTS.md in the session cwd so the agent loads it into ITS system prompt
+    (the slot that beats its built-in identity). A focused doc, NOT protoAgent's full native
+    system prompt (which carries loop-specific bits like the <output> response format)."""
+    try:
+        from graph.config_io import read_soul
+        soul = _strip_injection((read_soul() or "").strip())
+    except Exception:  # noqa: BLE001
+        soul = ""
+    if not soul:
+        return ""
+    return (
+        "# Your identity & operating rules\n\n"
+        "Adopt the persona and rules below as your own — they override your default identity. "
+        "You run inside protoAgent, which provides your runtime and operator tools (notes, "
+        "memory, beads, goals, scheduling, subagents) over MCP; use them when they fit.\n\n---\n\n"
+        + soul
+    )
+
+
 class AcpRuntime:
     """Drives turns through an external coding agent over ACP.
 
     One instance per session/thread (the ACP session is stateful — the agent holds
-    history, so we send the cacheable prefix once then per-turn deltas).
+    history). Persona is authoritative via files (ADR 0033 / due-diligence): SOUL.md is
+    written as AGENTS.md (+ a vendor file) into the session cwd, which the coding agent
+    loads into ITS system prompt — beating its built-in "I'm <agent>" identity. So each
+    turn's prompt carries only the per-turn delta (retrieved knowledge/skills) + message.
     """
 
     def __init__(self, config, *, cwd: str | None = None, client_factory=None, context=None):
@@ -108,11 +142,16 @@ class AcpRuntime:
         if kind != "acp":
             raise ValueError("AcpRuntime constructed for a non-ACP runtime")
         self.agent = agent
-        self.cwd = cwd or os.getcwd()
+        # A dedicated, instance-scoped workspace — NOT the repo cwd (we write AGENTS.md
+        # there and don't want to clobber the project's own).
+        if cwd:
+            self.cwd = cwd
+        else:
+            from paths import workspace_dir
+            self.cwd = str(workspace_dir(create=True))
         self._context = context or self._default_context()
         self._client_factory = client_factory or self._default_client_factory
         self._client = None
-        self._prefix_sent = False
 
     def _default_context(self) -> ContextAssembler:
         from runtime.state import STATE
@@ -121,6 +160,20 @@ class AcpRuntime:
             knowledge_store=getattr(STATE, "knowledge_store", None),
             skills_index=getattr(STATE, "skills_index", None),
         )
+
+    def _write_persona_files(self) -> None:
+        """Write the persona where the coding agent will read it as its own identity:
+        AGENTS.md (universal) + a vendor file for this agent. Best-effort."""
+        doc = persona_doc(self.config)
+        if not doc.strip():
+            return
+        try:
+            base = Path(self.cwd)
+            base.mkdir(parents=True, exist_ok=True)
+            for name in {"AGENTS.md", _VENDOR_PERSONA_FILE.get(self.agent, "AGENTS.md")}:
+                (base / name).write_text(doc, encoding="utf-8")
+        except Exception:  # noqa: BLE001 — persona is best-effort, never fail the turn
+            log.warning("[acp-runtime] could not write persona files to %s", self.cwd, exc_info=True)
 
     def _default_client_factory(self):
         spec = adapter_for(self.agent, self.config)
@@ -133,18 +186,16 @@ class AcpRuntime:
 
     def _ensure_client(self):
         if self._client is None:
+            self._write_persona_files()   # before the session starts → agent loads it
             self._client = self._client_factory()
         return self._client
 
     async def run_turn(self, message: str, *, progress_callback=None) -> str:
-        """Run one turn: build the prompt (prefix once, then deltas) → ACP → write back."""
+        """Run one turn: per-turn context delta + message → ACP → write back. Persona is
+        carried by the AGENTS.md file, not the prompt."""
         client = self._ensure_client()
         ctx = self._context.assemble(query=message)
-        if not self._prefix_sent:
-            prompt = ctx.as_prompt(message)            # persona prefix + volatile + message
-            self._prefix_sent = True                   # session is stateful — don't resend the prefix
-        else:
-            prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
+        prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
         answer = await client.prompt(prompt, progress_callback=progress_callback)
         self._context.after_turn(user=message, response=answer)
         return answer
