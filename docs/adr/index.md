@@ -43,3 +43,4 @@ decision, numbered, never deleted (supersede instead).
 | [0032](./0032-pluggable-middleware.md) | Pluggable middleware (register_middleware + per-request metadata contextvar) | Accepted |
 | [0033](./0033-pluggable-agent-runtime-acp.md) | Pluggable agent runtime (ACP executor) — runtime≠model axis, operator-tools MCP bus, context contract + caching | Proposed |
 | [0034](./0034-plugin-ui-first-class-react.md) | Plugin UI as first-class React (Module Federation) — `ui: react` remotes + shared singletons + plugin-ui SDK + trust gate; Notes is the reference port | Proposed |
+| [0035](./0035-console-layout-dual-rail-mobile-first.md) | Console layout — symmetric dual-rail (swappable surfaces), one tab style, mobile-first (bottom quick-bar + hamburger), persisted UI state (Zustand) | Proposed |
