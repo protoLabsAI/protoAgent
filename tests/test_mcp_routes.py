@@ -68,3 +68,47 @@ def test_remove_server(monkeypatch):
 def test_name_required(monkeypatch):
     _wire(monkeypatch, servers=[])
     assert _client().post("/api/mcp/servers", json={"transport": "stdio", "command": "x"}).status_code == 400
+
+
+def test_import_mcpservers_wrapper(monkeypatch):
+    """Standard Claude-Desktop / mcp.json blob: {"mcpServers": {name: spec}}."""
+    captured = _wire(monkeypatch, servers=[])
+    raw = """{
+      "mcpServers": {
+        "filesystem": {"command": "npx", "args": ["-y", "@mcp/fs", "/data"]},
+        "weather": {"url": "https://example.com/mcp", "type": "streamable-http"}
+      }
+    }"""
+    body = _client().post("/api/mcp/servers/import", json={"raw": raw}).json()
+    assert body["added"] == ["filesystem", "weather"]
+    servers = {s["name"]: s for s in captured["config"]["mcp"]["servers"]}
+    assert servers["filesystem"] == {"name": "filesystem", "transport": "stdio", "command": "npx", "args": ["-y", "@mcp/fs", "/data"]}
+    assert servers["weather"]["transport"] == "streamable_http"  # alias normalized
+    assert servers["weather"]["url"] == "https://example.com/mcp"
+
+
+def test_import_single_object_with_name(monkeypatch):
+    captured = _wire(monkeypatch, servers=[])
+    body = _client().post("/api/mcp/servers/import",
+                          json={"raw": '{"name": "echo", "command": "python", "args": ["-m", "echo"]}'}).json()
+    assert body["added"] == ["echo"]
+    assert captured["config"]["mcp"]["servers"][0]["command"] == "python"
+
+
+def test_import_passes_headers_for_remote(monkeypatch):
+    captured = _wire(monkeypatch, servers=[])
+    raw = '{"mcpServers": {"api": {"url": "https://x/mcp", "type": "http", "headers": {"Authorization": "Bearer t"}}}}'
+    _client().post("/api/mcp/servers/import", json={"raw": raw}).json()
+    api = captured["config"]["mcp"]["servers"][0]
+    assert api["headers"] == {"Authorization": "Bearer t"}
+
+
+def test_import_invalid_json_is_400(monkeypatch):
+    _wire(monkeypatch, servers=[])
+    r = _client().post("/api/mcp/servers/import", json={"raw": "{not json"})
+    assert r.status_code == 400 and "invalid JSON" in r.json()["detail"]
+
+
+def test_import_requires_raw(monkeypatch):
+    _wire(monkeypatch, servers=[])
+    assert _client().post("/api/mcp/servers/import", json={}).status_code == 400

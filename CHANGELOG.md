@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Paste-JSON import for MCP servers** — Agent → MCP → Add server has a Paste JSON mode
+  that accepts the standard `{"mcpServers": {…}}` blob (Claude-Desktop style), a single
+  server object, or our own export, and imports them all at once (hot-reloaded).
 - **Add MCP servers from the console** — Agent → MCP has an inline Add-server form (stdio
   command/args, or http/sse URL) plus a per-server remove button; both hot-reload, so the
   server connects (or drops) without a restart.

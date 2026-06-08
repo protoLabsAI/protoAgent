@@ -878,6 +878,12 @@ export const api = {
       { method: "DELETE" },
     );
   },
+  importMcpServers(raw: string) {
+    return request<{ ok: boolean; added: string[]; servers: string[] }>(
+      "/api/mcp/servers/import",
+      { method: "POST", body: { raw } },
+    );
+  },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
       method: "POST",
