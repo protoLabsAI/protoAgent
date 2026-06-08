@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-06-08
+
 ### Added
 - **ACP tool calls surface as cards** — the coding agent's tool calls (its own + the operator
   MCP tools) now stream as `tool_start`/`tool_end` to the chat, same as the native runtime,
