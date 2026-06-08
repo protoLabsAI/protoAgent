@@ -153,3 +153,70 @@ class AcpRuntime:
         if self._client is not None and hasattr(self._client, "close"):
             await self._client.close()
             self._client = None
+
+
+# ── ACP-backed aux model ───────────────────────────────────────────────────────
+# So an ACP-only setup (no gateway) still has a model for protoAgent's *auxiliary* calls
+# (compaction, goal-verification, fact extraction). Text-only — no tool-calling needed.
+
+_AUX_CLIENTS: dict[str, object] = {}  # one reused aux session per agent
+
+
+def _gateway_configured(config) -> bool:
+    """True when a real OpenAI-compatible gateway key is available (config or env)."""
+    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    return bool(key)
+
+
+async def _aux_prompt(agent: str, config, text: str) -> str:
+    client = _AUX_CLIENTS.get(agent)
+    if client is None:
+        spec = adapter_for(agent, config)
+        from plugins.coding_agent.acp_client import AcpClient
+        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux")
+        _AUX_CLIENTS[agent] = client
+    return await client.prompt(text)
+
+
+def _messages_to_text(messages) -> str:
+    parts = []
+    for m in messages:
+        content = getattr(m, "content", m)
+        parts.append(content if isinstance(content, str) else str(content))
+    return "\n\n".join(p for p in parts if p)
+
+
+def make_acp_aux_model(config):
+    """A `BaseChatModel` backed by the configured ACP agent — for aux LLM calls under an
+    ACP-only setup. Lazy + import-guarded so langchain stays optional at import time."""
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    agent = resolve_runtime(config)[1] or "proto"
+
+    class AcpChatModel(BaseChatModel):
+        """Text-only chat model over the ACP coding agent (no tools)."""
+
+        @property
+        def _llm_type(self) -> str:
+            return f"acp:{agent}"
+
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> "ChatResult":
+            text = await _aux_prompt(agent, config, _messages_to_text(messages))
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> "ChatResult":
+            # Sync path — run the async prompt on a private loop in a worker thread so it's
+            # safe whether or not the caller is already inside an event loop.
+            import asyncio
+            import concurrent.futures
+
+            def _run():
+                return asyncio.run(_aux_prompt(agent, config, _messages_to_text(messages)))
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                text = ex.submit(_run).result()
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+    return AcpChatModel()

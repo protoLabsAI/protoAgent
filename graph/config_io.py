@@ -708,6 +708,12 @@ def validate_for_headless(config) -> tuple[bool, str]:
     Used by ``--setup`` and the boot-time auto-complete; on failure the caller
     fails fast rather than marking a broken config complete.
     """
+    # ACP-only setup (ADR 0033): an external coding agent drives turns + backs aux calls,
+    # so no OpenAI-compatible gateway is required. (Semantic recall degrades to keyword
+    # without an embed endpoint — fine, not a blocker.)
+    if str(getattr(config, "agent_runtime", "native") or "native").startswith("acp:"):
+        return True, "ok"
+
     if not str(getattr(config, "api_base", "") or "").strip():
         return False, "model.api_base is not set"
     key = str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
