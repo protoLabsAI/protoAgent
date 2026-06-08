@@ -166,6 +166,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
     _register_plugin_subagents(_plugins.subagents)
     _apply_config_subagents(STATE.graph_config)  # YAML subagent overrides (tools/max_turns/model)
+    STATE.plugin_middleware = _resolve_plugin_middleware(STATE.graph_config, _plugins.middleware)  # ADR 0032
 
     # MCP — external Model Context Protocol servers; their tools become agent
     # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
@@ -193,6 +194,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.graph = create_agent_graph(
         STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
         skills_index=STATE.skills_index, extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+        extra_middleware=STATE.plugin_middleware,
         checkpointer=STATE.checkpointer, workflow_registry=STATE.workflow_registry,
         inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
     )
@@ -396,6 +398,24 @@ def _register_plugin_subagents(subagents) -> None:
         SUBAGENT_REGISTRY[name] = cfg
         _plugin_subagent_names.add(name)
         log.info("[plugins] registered subagent: %s", name)
+
+
+def _resolve_plugin_middleware(config, factories) -> list:
+    """Resolve plugin middleware factories ``(config) -> AgentMiddleware|None`` to
+    instances (ADR 0032). Best-effort: a factory that raises or returns None is
+    skipped + logged, so one bad plugin can't take down the graph build."""
+    out = []
+    for factory in (factories or []):
+        try:
+            mw = factory(config)
+        except Exception:  # noqa: BLE001
+            log.exception("[plugins] middleware factory failed; skipping")
+            continue
+        if mw is not None:
+            out.append(mw)
+    if out:
+        log.info("[plugins] %d middleware contributed", len(out))
+    return out
 
 
 # Built-in subagents whose runtime config the operator can override in YAML
@@ -971,12 +991,14 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_store = _apply_plugin_knowledge_backend(new_config, new_store, new_plugins)
             _register_plugin_subagents(new_plugins.subagents)
             _apply_config_subagents(new_config)  # YAML subagent overrides take effect on reload
+            new_middleware = _resolve_plugin_middleware(new_config, new_plugins.middleware)  # ADR 0032
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_workflow_registry = _build_workflow_registry(new_config)
             new_inbox_store = _build_inbox_store(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
+                extra_middleware=new_middleware,
                 checkpointer=STATE.checkpointer, workflow_registry=new_workflow_registry,
                 inbox_store=new_inbox_store,
             )
@@ -1016,6 +1038,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # _main wires routes) — harmless.
         pass
     STATE.graph = new_graph
+    STATE.plugin_middleware = new_middleware  # ADR 0032
     STATE.workflow_registry = new_workflow_registry
     STATE.inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget

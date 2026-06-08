@@ -37,6 +37,7 @@ class PluginLoadResult:
     routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
     surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
     subagents: list = field(default_factory=list)   # SubagentConfig
+    middleware: list = field(default_factory=list)  # factories: (config) -> AgentMiddleware|None (ADR 0032)
     mcp_servers: list = field(default_factory=list)  # factories: config -> entry|None (ADR 0019)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
     meta: list[dict] = field(default_factory=list)
@@ -232,6 +233,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         for s in registry.surfaces:
             result.surfaces.append({"plugin_id": manifest.id, **s})
         result.subagents.extend(registry.subagents)
+        result.middleware.extend(registry.middleware)  # ADR 0032
         for name, fn in registry.goal_verifiers.items():  # ADR 0028
             if name in result.goal_verifiers:
                 log.warning("[plugins] %s: goal verifier %s collides — skipped", manifest.id, name)

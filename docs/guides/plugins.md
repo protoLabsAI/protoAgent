@@ -2,11 +2,10 @@
 
 Plugins are **drop-in packages** that extend protoAgent without forking it. A
 plugin contributes **tools**, bundled **skills**, FastAPI **routes**, background
-**surfaces**, **subagents**, and managed **MCP servers** — plus its own
-**config / secrets / Settings** (ADR 0018/0019). (Middleware is the only
-extension point not yet plugin-contributable.) Plugins run **in-process** with
-the agent's privileges, so they're **disabled by default** and you opt in
-explicitly — only enable plugins you trust.
+**surfaces**, **subagents**, **middleware**, knowledge backends/embedders, goal
+verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
+Plugins run **in-process** with the agent's privileges, so they're **disabled by
+default** and you opt in explicitly — only enable plugins you trust.
 
 > The first-party **Discord** and **Google** integrations ship as plugins
 > (`plugins/discord/`, `plugins/google/`) — disable either with
@@ -73,6 +72,7 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | `register_router(router, prefix=None)` | A FastAPI `APIRouter` | **mounted once** at init (default prefix `/plugins/<id>`) |
 | `register_surface(start, stop=None, name=None, reload=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown, `reload(cfg)` on config save |
 | `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
+| `register_middleware(factory)` | A LangGraph **`AgentMiddleware`** (per-turn before/after-model + tool hooks) — `factory(config) → middleware \| None` | graph build; appended before message-capture (ADR 0032) |
 | `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
 | `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
 
@@ -100,6 +100,36 @@ is how the first-party **Google** plugin ships its OAuth-gated Gmail/Calendar
 server (`plugins/google/`). For a frozen desktop build (no `python` on PATH),
 launch via `args: ["--mcp-plugin", "<id>"]` and expose a `mcp_main()` in your
 plugin module — the binary re-invokes itself and the shim runs it.
+
+### Middleware — `register_middleware` (ADR 0032)
+
+A plugin can contribute a LangGraph **`AgentMiddleware`** — the per-turn hook layer
+(`before_model` / `after_model` / `wrap_tool_call` / …) the core uses for knowledge
+injection, enforcement, compaction, and audit. The factory gets the live config and
+returns a middleware instance (or `None` to opt out); it's appended to the chain just
+before the internal message-capture middleware, so its hooks run and the turn is still
+captured.
+
+For **per-request** data (the A2A request's merged metadata — project scope, origin,
+caller keys), read `current_request_metadata()` — a contextvar bound for the duration
+of each turn. This is how a fork injects a per-turn directive without editing the core
+executor:
+
+```python
+from langchain.agents.middleware import AgentMiddleware
+from graph.middleware.request_context import current_request_metadata
+
+class ScopeBannerMiddleware(AgentMiddleware):
+    def before_model(self, state, runtime):
+        project = current_request_metadata().get("project")
+        if not project:
+            return None
+        banner = SystemMessage(content=f"Active project scope: {project}. Stay within it.")
+        return {"messages": [banner, *state["messages"]]}
+
+def register(registry):
+    registry.register_middleware(lambda config: ScopeBannerMiddleware())
+```
 
 ## Host services — `registry.host`
 

@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Pluggable middleware** (ADR 0032) — plugins contribute LangGraph `AgentMiddleware` via
+  `register_middleware(factory)` (appended just before message-capture), and per-request A2A
+  metadata is exposed to middleware through `current_request_metadata()` (a per-turn contextvar).
+  Middleware was the last core extension point that forced a fork to edit core — a per-turn
+  directive (e.g. roxy's project-scope banner) is now a ~15-line plugin with zero core edits.
+
 ### Fixed
 - **Chat tabs open to the right** — a new chat tab is appended (right) instead of prepended.
 - **Favicon renders in the browser tab** — the console favicon link was missing

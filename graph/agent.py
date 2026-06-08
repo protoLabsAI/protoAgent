@@ -18,7 +18,7 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 from tools.lg_tools import get_all_tools
 
 
-def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None):
+def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None):
     middleware = []
 
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
@@ -107,6 +107,14 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
         from langchain.agents.middleware import ModelFallbackMiddleware
         fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
         middleware.append(ModelFallbackMiddleware(*fallbacks))
+
+    # Plugin-contributed middleware (ADR 0032) — appended after the core chain but
+    # before MessageCapture, so their before/after-model + tool hooks run and the
+    # turn is still captured. Each is already an instance (factories resolved in
+    # agent_init); skip falsy entries (a factory may opt out by returning None).
+    for mw in (extra_middleware or []):
+        if mw is not None:
+            middleware.append(mw)
 
     middleware.append(MessageCaptureMiddleware())
 
@@ -648,6 +656,7 @@ def create_agent_graph(
     scheduler=None,
     skills_index=None,
     extra_tools=None,
+    extra_middleware=None,
     include_subagents: bool = True,
     checkpointer=None,
     workflow_registry=None,
@@ -706,7 +715,7 @@ def create_agent_graph(
         keep = resolve_deferred_keep(config.tools_deferred_keep)
         all_tools.append(build_search_tools_tool(all_tools, keep))
 
-    middleware = _build_middleware(config, knowledge_store, skills_index=skills_index)
+    middleware = _build_middleware(config, knowledge_store, skills_index=skills_index, extra_middleware=extra_middleware)
 
     system_prompt = build_system_prompt(
         include_subagents=include_subagents,
