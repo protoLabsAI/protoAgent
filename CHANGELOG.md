@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- **ADR 0033** (Proposed) — pluggable agent runtime over ACP: drive the runtime with an external coding agent (proto/codex/claude/copilot/opencode), runtime≠model axis, operator-tools MCP bus, and a cache-disciplined runtime context contract.
+
 ## [0.26.0] - 2026-06-08
 
 ### Changed
