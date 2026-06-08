@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Resizable right panel — real handle (ADR 0035 slice 3)** — the divider is now a proper
+  grab target (14px hit area, visible grip that thickens on hover/focus) and **keyboard-resizable**
+  (←/→ nudge, Shift = bigger step, Home/End = max/min) with **double-click to reset**. Width still
+  persists via the UI store.
 - **Symmetric dual rails (ADR 0035 slice 2)** — the right panel's horizontal segmented tab
   strip becomes a vertical **right rail** mirroring the left (same `RailButton` component) on the
   far edge: [left rail | left surface | right surface | right rail]. Picking a right surface

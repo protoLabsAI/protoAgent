@@ -580,6 +580,17 @@ export function App() {
     window.addEventListener("mouseup", onUp);
   }
 
+  // Keyboard-resizable (ADR 0035 S3): arrows nudge, Home/End jump to max/min, double-click
+  // resets. The handle sits on the right panel's LEFT edge, so ← widens / → narrows.
+  const RIGHT_DEFAULT_WIDTH = 360;
+  function onResizeKey(e: React.KeyboardEvent) {
+    const step = e.shiftKey ? 48 : 16;
+    if (e.key === "ArrowLeft") { setRightWidth(rightWidth + step); e.preventDefault(); }
+    else if (e.key === "ArrowRight") { setRightWidth(rightWidth - step); e.preventDefault(); }
+    else if (e.key === "Home") { setRightWidth(720); e.preventDefault(); }
+    else if (e.key === "End") { setRightWidth(280); e.preventDefault(); }
+  }
+
   // Drive only the right column's WIDTH via a CSS var — the grid template
   // itself lives in CSS (.workspace), so the responsive media query can
   // collapse to two columns below the breakpoint. Setting the full template
@@ -839,8 +850,14 @@ export function App() {
               className="resize-handle"
               role="separator"
               aria-orientation="vertical"
-              aria-label="Resize side panel"
+              aria-label="Resize side panel (arrows to nudge, double-click to reset)"
+              aria-valuenow={rightWidth}
+              aria-valuemin={280}
+              aria-valuemax={720}
+              tabIndex={0}
               onMouseDown={startRightResize}
+              onKeyDown={onResizeKey}
+              onDoubleClick={() => setRightWidth(RIGHT_DEFAULT_WIDTH)}
               data-testid="right-resize"
             />
           ) : null}
