@@ -34,7 +34,7 @@ function ScheduleModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onAdd: (body: { prompt: string; schedule: string; job_id?: string }) => void;
+  onAdd: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => void;
   busy: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("once");
@@ -45,6 +45,14 @@ function ScheduleModal({
   const [cronRaw, setCronRaw] = useState("");
   const [prompt, setPrompt] = useState("");
   const [jobId, setJobId] = useState("");
+  const [tz, setTz] = useState("");  // "" = UTC; only meaningful for recurring (cron)
+  // Offer the operator's own zone + a few common ones; de-duped, browser zone first.
+  const tzOptions = useMemo(() => {
+    let local = "";
+    try { local = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { /* ignore */ }
+    const common = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Tokyo"];
+    return Array.from(new Set([local, ...common].filter(Boolean)));
+  }, []);
 
   const schedule = useMemo(() => {
     if (mode === "once") return buildOnce(onceAt);
@@ -128,8 +136,18 @@ function ScheduleModal({
           </label>
         )}
 
+        {mode !== "once" && (
+          <label className="field">
+            <span>Timezone</span>
+            <select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
+              <option value="">UTC (default)</option>
+              {tzOptions.map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </label>
+        )}
+
         <p className="schedule-preview" data-testid="schedule-preview">
-          {preview ? <>Runs <strong>{preview}</strong> <code>{schedule}</code></> : <span className="muted">Pick when it should run</span>}
+          {preview ? <>Runs <strong>{preview}</strong> <code>{schedule}</code>{mode !== "once" && tz ? <span className="muted"> · {tz}</span> : null}</> : <span className="muted">Pick when it should run</span>}
         </p>
 
         <label className="field">
@@ -145,7 +163,7 @@ function ScheduleModal({
         <div className="confirm-actions">
           <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
           <button type="button" className="primary-button" disabled={!canSubmit} data-testid="schedule-submit"
-                  onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined })}>
+                  onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
             <Plus size={16} /> Schedule
           </button>
         </div>
@@ -164,7 +182,7 @@ function ScheduleBody() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.schedules });
 
   const add = useMutation({
-    mutationFn: (body: { prompt: string; schedule: string; job_id?: string }) => api.addSchedule(body),
+    mutationFn: (body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) => api.addSchedule(body),
     onSuccess: () => setModalOpen(false),
     onSettled: invalidate,
   });

@@ -505,7 +505,7 @@ export const api = {
     return request<{ jobs: ScheduledJob[]; backend: string }>("/api/scheduler/jobs");
   },
 
-  addSchedule(body: { prompt: string; schedule: string; job_id?: string }) {
+  addSchedule(body: { prompt: string; schedule: string; job_id?: string; timezone?: string }) {
     return request<{ job: ScheduledJob }>("/api/scheduler/jobs", {
       method: "POST",
       body,

@@ -531,3 +531,33 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
 
     assert len(calls) == 1          # fired once, not once-per-tick
     assert s.list_jobs() == []      # one-shot deleted after the turn finally landed
+
+
+def test_per_job_timezone_evaluates_cron_in_that_zone(tmp_path):
+    """A cron with a timezone fires at local wall-clock time, stored as UTC."""
+    from zoneinfo import ZoneInfo
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("noon in chicago", "0 12 * * *", job_id="tz", timezone="America/Chicago")
+    assert job.timezone == "America/Chicago"
+    # next_fire is stored UTC; converted back to Chicago it must be 12:00 local.
+    nf_local = datetime.fromisoformat(job.next_fire).astimezone(ZoneInfo("America/Chicago"))
+    assert nf_local.hour == 12 and nf_local.minute == 0
+    # Round-trips through the DB.
+    assert s.list_jobs()[0].timezone == "America/Chicago"
+
+
+def test_invalid_timezone_raises(tmp_path):
+    s = _make_scheduler(tmp_path)
+    with pytest.raises(ValueError, match="invalid timezone"):
+        s.add_job("x", "0 9 * * *", job_id="bad", timezone="Mars/Phobos")
+
+
+def test_no_timezone_defaults_to_utc(tmp_path):
+    from zoneinfo import ZoneInfo
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("noon utc", "0 12 * * *", job_id="utc")
+    assert job.timezone is None
+    nf_utc = datetime.fromisoformat(job.next_fire).astimezone(ZoneInfo("UTC"))
+    assert nf_utc.hour == 12
