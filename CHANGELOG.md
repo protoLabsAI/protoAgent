@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto-scoping for co-located instances** (#706) — set `PROTOAGENT_AUTO_SCOPE=1` and an
+  instance with no explicit `PROTOAGENT_INSTANCE` derives a stable per-working-directory id, so
+  instances on one machine never silently share `~/.protoagent` and clobber each other's goals/
+  knowledge/checkpoints. Opt-in (relocating existing unscoped data is deliberate); regardless,
+  the server now **warns loudly at boot** when running unscoped against a non-empty data home.
 - **ACP-only setups need no gateway** (ADR 0033) — when the runtime is `acp:<agent>` and no
   OpenAI-compatible gateway key is set, protoAgent's auxiliary LLM calls (compaction, goal
   verification, fact extraction) fall back to the same coding agent via an `AcpChatModel`

@@ -34,6 +34,24 @@ With an id set, **every** store nests under it — e.g.
 `~/.protoagent/alice/memory/`, and so on — so two ids never share a file. The
 env var wins over the config field.
 
+## Don't want to name every instance? Auto-scope (#706)
+
+Running a lot of instances on one box and don't want to set an id for each? Turn on
+**auto-scoping** — each instance derives a stable id from its **working directory** so
+co-located instances never silently share the root:
+
+```bash
+PROTOAGENT_AUTO_SCOPE=1   # export once (e.g. in your shell profile)
+```
+
+With it on, an instance with no explicit `PROTOAGENT_INSTANCE` scopes to
+`<dirname>-<hash>` of its cwd — isolated by default, stable across restarts. It's
+**opt-in** (default off) because turning it on relocates an existing *unscoped*
+deployment's data to its scoped dir. Instances launched from the **same** directory
+(e.g. on different ports) still need an explicit `PROTOAGENT_INSTANCE` — and the server
+**warns loudly at boot** whenever it runs unscoped against a non-empty data home, so the
+silent clobbering of #706 can't happen quietly.
+
 ### Opt-in — no migration
 
 Leaving the id **unset** keeps the exact single-instance paths used today, so

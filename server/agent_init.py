@@ -58,6 +58,13 @@ def _init_langgraph_agent(headless_setup: bool = False):
         validate_for_headless,
     )
 
+    # Warn loudly if running UNSCOPED while the data home already has state — an unscoped
+    # instance shares the loose root and can clobber a co-located sibling (#706).
+    from paths import unscoped_warning
+    _unscoped = unscoped_warning()
+    if _unscoped:
+        log.warning("[instance] %s", _unscoped)
+
     # Seed the untracked live config from the .example template on first run.
     # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
     # it at per-user app-data), so load through it rather than a fixed path.
