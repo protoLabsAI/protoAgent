@@ -96,3 +96,23 @@ def test_default_factory_mounts_operator_mcp(monkeypatch):
 def test_constructing_for_native_raises():
     with pytest.raises(ValueError):
         AcpRuntime(types.SimpleNamespace(agent_runtime="native"))
+
+
+def test_chat_caches_acp_runtime_per_thread(monkeypatch):
+    import importlib
+
+    chat = importlib.import_module("server.chat")  # the `server.chat` attr is the re-exported fn
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE, "graph_config",
+        types.SimpleNamespace(agent_runtime="acp:codex", operator_mcp_tools=[], acp_agents={}),
+        raising=False,
+    )
+    chat._ACP_RUNTIMES.clear()
+    r1 = chat._get_acp_runtime("t1")
+    r2 = chat._get_acp_runtime("t1")
+    r3 = chat._get_acp_runtime("t2")
+    assert r1 is r2          # same thread → same stateful ACP session
+    assert r1 is not r3      # different thread → its own session
+    assert r1.agent == "codex"

@@ -53,6 +53,20 @@ def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
     return f"a2a:{session_id}"
 
 
+# One ACP runtime per thread (the ACP session is stateful — the coding agent holds
+# history, so we reuse it across turns; ADR 0033 slice 4).
+_ACP_RUNTIMES: dict[str, Any] = {}
+
+
+def _get_acp_runtime(thread_id: str):
+    rt = _ACP_RUNTIMES.get(thread_id)
+    if rt is None:
+        from runtime.acp_runtime import AcpRuntime
+        rt = AcpRuntime(STATE.graph_config)
+        _ACP_RUNTIMES[thread_id] = rt
+    return rt
+
+
 def _setup_required_message() -> list[dict[str, Any]]:
     """Returned by chat endpoints when the wizard hasn't been run.
 
@@ -512,6 +526,21 @@ async def _chat_langgraph_stream(
                 sub_out = await _run_parsed_subagent(sub_type, sub_prompt)
                 yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
                 yield ("done", sub_out)
+                return
+
+            # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
+            # external coding agent (proto/codex/claude/…) drives the turn over ACP
+            # instead of the native LangGraph loop. One stateful ACP session per thread.
+            from runtime.acp_runtime import is_acp_runtime
+            if is_acp_runtime(STATE.graph_config):
+                rt = _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
+                try:
+                    answer = await rt.run_turn(message)
+                except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
+                    log.exception("[acp-runtime] turn failed")
+                    yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
+                    return
+                yield ("done", answer)
                 return
 
             # thread_id keys this session's history in the checkpointer (bound

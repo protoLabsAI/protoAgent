@@ -162,6 +162,28 @@ are mounted by the client directly. Empty `tools` ⇒ nothing exposed (don't han
 etc. to an outside brain unless you mean to). The sidecar boots **stores only** — it never starts
 the agent's background loops — so it's safe to run against a live instance's data.
 
+## Run on a coding agent (ACP runtime)
+
+protoAgent can hand the *whole turn* to an external coding agent — **proto, Codex, Claude,
+Copilot, OpenCode** — over ACP (ADR 0033). The coding agent is the brain (with its own
+tools); protoAgent stays the shell (A2A, scheduling, goals, console, memory), and exposes
+its operator tools to that brain via the MCP server above, mounted into the ACP session.
+
+```yaml
+agent_runtime: acp:proto         # native (default) | acp:<agent>
+operator_mcp:
+  tools: [memory_recall, memory_ingest, beads_create, beads_list, notes_read, run_workflow]
+# acp:                           # optional — override an agent's launch command
+#   agents:
+#     codex: { command: npx, args: ["-y", "@zed-industries/codex-acp"] }
+```
+
+With this set, each turn is driven by the coding agent: protoAgent assembles the context
+(a cacheable persona prefix sent once, then per-turn deltas — ADR 0033 D5), the agent reasons
++ uses its own tools, and reaches back into protoAgent's notes/beads/memory/workflows through
+the mounted operator MCP server. Defaults are `native` (the built-in LangGraph loop), so this
+is inert until you opt in. Each agent needs its CLI installed + authenticated on the host.
+
 ## Notes & limits
 
 - **Tools only** for now — MCP *Resources* and *Prompts* aren't wired yet.
