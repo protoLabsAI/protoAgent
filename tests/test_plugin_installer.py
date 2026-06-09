@@ -197,3 +197,61 @@ def test_configured_allowlist_reads_config(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg_dir))
     assert installer.configured_allowlist() == ["github.com/protoLabsAI/*"]
+
+
+# ── bundles (a repo of plugin references, installed together) ─────────────────
+def _make_bundle_repo(root: Path, members: list[Path]) -> Path:
+    """A bundle repo: protoagent.bundle.yaml referencing member plugin repos by
+    local path, plus a builtin entry that must be skipped."""
+    repo = root / "src-bundle"
+    repo.mkdir(parents=True)
+    lines = ["id: demo_stack", "name: Demo Stack", "description: a test bundle", "plugins:"]
+    lines.append("  - { id: delegates, builtin: true }")
+    for m in members:
+        # id is read from each member's manifest on install; the bundle only needs url
+        lines.append(f"  - {{ id: x, url: {m} }}")
+    lines += ["enabled: [delegates, demo_a, demo_b]", "config:", "  demo_a: { k: v }"]
+    (repo / "protoagent.bundle.yaml").write_text("\n".join(lines) + "\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    return repo
+
+
+def test_install_bundle_fans_out_and_records_provenance(env):
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    bundle = _make_bundle_repo(env, [a, b])
+
+    summary = installer.install(str(bundle))
+
+    # returns a bundle summary, installs both members, skips the builtin
+    assert summary["bundle"] == "demo_stack"
+    assert {p["id"] for p in summary["installed"]} == {"demo_a", "demo_b"}
+    assert summary["skipped_builtin"] == ["delegates"]
+    # enable list + config are surfaced (suggested), not applied
+    assert summary["enabled"] == ["delegates", "demo_a", "demo_b"]
+    assert summary["config"] == {"demo_a": {"k": "v"}}
+
+    # both members landed + are pinned individually; the bundle is recorded
+    assert (installer.live_plugins_dir() / "demo_a" / "protoagent.plugin.yaml").exists()
+    assert (installer.live_plugins_dir() / "demo_b" / "protoagent.plugin.yaml").exists()
+    lock = installer._read_lock()
+    assert {e["id"] for e in lock["plugins"]} >= {"demo_a", "demo_b"}
+    assert any(e["by"] == "bundle:demo_stack" for e in lock["plugins"])
+    bundles = lock.get("bundles") or []
+    assert bundles and bundles[0]["id"] == "demo_stack"
+    assert set(bundles[0]["plugins"]) == {"demo_a", "demo_b"}
+
+
+def test_install_bundle_member_missing_url_errors(env):
+    repo = env / "src-badbundle"
+    repo.mkdir(parents=True)
+    (repo / "protoagent.bundle.yaml").write_text(
+        "id: bad\nplugins:\n  - { id: nope }\n"  # no url, not builtin
+    )
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    with pytest.raises(installer.InstallError):
+        installer.install(str(repo))
