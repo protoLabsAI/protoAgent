@@ -1432,7 +1432,8 @@ select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #0c0c0f;
+  /* token-bridged so inputs flip in light mode (was a hardcoded #0c0c0f dark). */
+  background: var(--pl-color-bg-inset, #0c0c0f);
   color: var(--fg);
   padding: 8px 10px;
 }
