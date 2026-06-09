@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Fork extension seam (ADR 0038 slice 3)** — a build-time **`src/ext/`** seam: a fork drops a
+  `*.tsx` that calls `registerSurface()` / `registerContextMenu()`; the console auto-loads it via
+  `import.meta.glob`. **Core ships the directory empty**, so `git pull upstream` never conflicts on
+  a fork's additions. The trusted, in-process, fork-owned path — distinct from sandboxed plugins.
+  Completes the two-mode plugin-UI model (ADR 0038).
 - **Generative-UI artifacts (ADR 0038)** — a first-party `artifact` plugin: the agent calls
   `show_artifact(kind, code)` to render HTML / SVG / Mermaid / React on demand into a sandboxed
   iframe (the Claude Artifacts / Open WebUI model). Plus a `rendering-artifacts` skill so the
