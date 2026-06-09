@@ -36,3 +36,29 @@ def test_unscoped_warning_only_when_root_has_state(monkeypatch, tmp_path):
     assert "UNSCOPED" in (paths.unscoped_warning() or "")
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "alice")
     assert paths.unscoped_warning() is None           # scoped → quiet
+
+
+def test_shared_skills_resolve_to_commons_not_scoped(monkeypatch, tmp_path):
+    """ADR 0041 — a `shared` skills store resolves to the COMMONS (un-scoped),
+    identical for every instance; a scoped store stays per-instance."""
+    from server.agent_init import _resolve_skills_db
+
+    commons = tmp_path / "commons"
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "agentA")
+    shared_a = _resolve_skills_db("/x/skills.db", shared=True, commons=commons)
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "agentB")
+    shared_b = _resolve_skills_db("/x/skills.db", shared=True, commons=commons)
+    scoped_b = _resolve_skills_db(str(tmp_path / "cfg" / "skills.db"), shared=False)
+
+    assert shared_a == shared_b == str(commons / "skills.db")  # one commons for all agents
+    assert "agentB" in scoped_b and scoped_b != shared_a        # scoped is per-instance
+
+
+def test_skills_tier_config_parses(tmp_path):
+    """`skills.shared` + `commons.path` parse into the config (ADR 0041)."""
+    from graph.config import LangGraphConfig
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("skills: { shared: true }\ncommons: { path: /tmp/commons }\n")
+    c = LangGraphConfig.from_yaml(str(cfg))
+    assert c.skills_shared is True
+    assert c.commons_path == "/tmp/commons"
