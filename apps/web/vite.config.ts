@@ -16,6 +16,11 @@ export default defineConfig(({ mode }) => {
         "/api": apiBase,
         "/a2a": apiBase,
         "/v1": apiBase,
+        // Plugin-contributed views are iframes the backend serves at /plugins/<id>/…
+        // (ADR 0026). In prod the backend serves /app + /plugins together; the dev
+        // server must proxy them too, else a plugin view 404s on Vite's /app/ base.
+        "/plugins": apiBase,
+        "/healthz": apiBase,
       },
     },
   };
