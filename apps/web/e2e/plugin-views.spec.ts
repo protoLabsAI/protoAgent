@@ -71,6 +71,21 @@ test("a plugin bus event lights the rail notification dot, cleared on open", asy
   await expect(board.locator(".rail-dot")).toHaveCount(0);
 });
 
+test("a COLLAPSED right panel still lights its plugin's dot (collapsed ≠ visible)", async ({ page }) => {
+  // Regression: a right-placed plugin selected as the right panel but COLLAPSED must not count as
+  // "visible" — otherwise its dot is suppressed + cleared forever (persisted), so it can never ping.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "protoagent.ui",
+      JSON.stringify({ state: { rightCollapsed: true, rightPanel: "plugin:boardy:scratch" }, version: 2 }),
+    );
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  // The mock streams `boardy.created`; Scratch is selected but collapsed → its rail icon dots.
+  const scratch = page.locator(".rail-right").getByRole("button", { name: "Scratch", exact: true });
+  await expect(scratch.locator(".rail-dot")).toBeVisible();
+});
+
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 

@@ -560,15 +560,21 @@ export function App() {
   const setPluginDot = useUI((s) => s.setPluginDot);
   const pluginKeysRef = useRef<string[]>([]);
   pluginKeysRef.current = allPluginViews.map((v) => v.key);
+  // Which plugin surfaces are actually ON SCREEN — so we never dot what the user is looking at, and
+  // we clear a dot only when its surface becomes visible. A COLLAPSED right panel is NOT visible
+  // even though `rightActive` still names the last-selected panel (and it's persisted), so it must
+  // be excluded — otherwise that panel could never light a dot.
+  const visibleKeys: string[] = [leftActive, mobileActive];
+  if (!rightCollapsed) visibleKeys.push(rightActive);
   const activeKeysRef = useRef<Set<string>>(new Set());
-  activeKeysRef.current = new Set([leftActive, rightActive, mobileActive]);
+  activeKeysRef.current = new Set(visibleKeys);
   useEffect(
     () =>
       onTopic("#", (_data, topic) => {
         const pid = topic.split(".")[0];
         if (!pid) return;
         for (const key of pluginKeysRef.current) {
-          // key === `plugin:<pid>:<viewId>`; dot it unless its surface is already visible.
+          // key === `plugin:<pid>:<viewId>`; dot it unless its surface is already on screen.
           if (key.startsWith(`plugin:${pid}:`) && !activeKeysRef.current.has(key)) {
             setPluginDot(key, true);
           }
@@ -576,12 +582,13 @@ export function App() {
       }),
     [setPluginDot],
   );
-  // Clear a plugin surface's dot once it's the active surface on its rail.
+  // Clear a plugin surface's dot once it's actually visible on screen.
   useEffect(() => {
-    for (const key of [leftActive, rightActive, mobileActive]) {
+    for (const key of visibleKeys) {
       if (key && key.startsWith("plugin:")) setPluginDot(key, false);
     }
-  }, [leftActive, rightActive, mobileActive, setPluginDot]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftActive, rightActive, mobileActive, rightCollapsed, setPluginDot]);
 
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
