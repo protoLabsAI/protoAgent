@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Goals broadcast on the event bus** — a terminal goal now emits `goal.achieved` / `goal.failed`
+  (ADR 0039) with `{session_id, condition, status, reason, evidence, mode}`, alongside the existing
+  plugin `goal_hooks`. **Any plugin (or the console) can react to a goal completing without writing a
+  goal-hook plugin** — the decoupled flywheel (no cross-plugin dependency).
 - **Telemetry opt-out in Settings** — `telemetry.enabled` (+ retention) are now a console toggle
   (System → Telemetry), not YAML-only. Off = no store is opened and the per-turn record path no-ops;
   telemetry is local and never sent anywhere. (Memory/knowledge middleware were already toggles.)
