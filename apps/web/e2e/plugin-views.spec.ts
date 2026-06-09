@@ -59,6 +59,18 @@ test("console hands the plugin view a bearer + theme via postMessage", async ({ 
   await expect(body).toHaveAttribute("data-bridge", "authed");
 });
 
+test("a plugin bus event lights the rail notification dot, cleared on open", async ({ page }) => {
+  // ADR 0039 — the mock pushes a `boardy.created` event on the /api/events stream; the
+  // console routes it by topic and lights the boardy surface's rail icon until it's opened.
+  await page.goto("/app/", { waitUntil: "load" });
+  const board = page.locator(".rail").getByRole("button", { name: "Board", exact: true });
+  await expect(board).toBeVisible();
+  await expect(board.locator(".rail-dot")).toBeVisible(); // event arrived → dot
+
+  await board.click(); // opening the surface clears its dot
+  await expect(board.locator(".rail-dot")).toHaveCount(0);
+});
+
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 

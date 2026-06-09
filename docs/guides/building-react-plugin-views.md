@@ -68,6 +68,45 @@ window.addEventListener("message", (e) => {
 });
 ```
 
+## Events — broadcast and subscribe (ADR 0039)
+
+Plugins talk to the rest of the app through the **event bus**, never by importing each other. You
+broadcast and forget; anyone who cares subscribes by topic. Topics are namespaced to your plugin
+(`<plugin_id>.<event>`), and you may only publish under your own namespace.
+
+**From Python** (in `register`):
+
+```python
+def register(registry):
+    registry.emit("created", {"id": "a1"})     # publishes "<plugin_id>.created"
+    registry.on("notes.*", lambda evt: ...)    # subscribe to ANY topic (read-only); * / # wildcards
+```
+
+**From a sandboxed view** (your served page), over the bridge:
+
+```js
+// subscribe to topics you care about, then receive them
+parent.postMessage({ type: "protoagent:subscribe", patterns: ["artifact.#"] }, "*");
+window.addEventListener("message", (e) => {
+  const m = e.data || {};
+  if (m.type === "protoagent:event") { /* m.topic, m.data */ }
+});
+// publish (the host forces your namespace + gates it)
+parent.postMessage({ type: "protoagent:publish", topic: "created", data: { id: "a1" } }, "*");
+```
+
+**Declare your contract** in the manifest so others can discover it (shown in runtime status):
+
+```yaml
+emits: ["artifact.created"]
+subscribes: ["notes.changed"]
+```
+
+**Notification dots come for free:** any event under `<plugin_id>.*` lights your plugin's rail icon
+until the user opens that surface — no badge endpoint, no polling. (See the
+[security & trust model](../explanation/security-and-trust.md): subscribing is safe; publishing is
+the gated direction.)
+
 ## Want React (or any framework)?
 
 Build your UI however you like and **serve the built files** — inline (a single `_PAGE` string),

@@ -102,8 +102,11 @@ def test_sse_event_stream_preamble_and_frame():
 
     preamble, frame = asyncio.run(run())
     assert preamble == ": connected\n\n"
-    # Frame now carries the seq as the SSE id (ADR 0039 — reconnect catch-up).
-    assert frame == 'id: 1\nevent: activity.message\ndata: {"text": "hi"}\n\n'
+    # Frame is an unnamed SSE event carrying the topic in the payload + the seq as the
+    # SSE id (ADR 0039 — client routes by topic; id enables Last-Event-ID reconnect).
+    assert frame == (
+        'id: 1\ndata: {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}\n\n'
+    )
 
 
 def test_sse_event_stream_emits_keepalive_when_idle():
