@@ -11,7 +11,7 @@ import { api } from "../lib/api";
 import { PanelHeader } from "./PanelHeader";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { ScrollArea } from "./ScrollArea";
+import { ScrollArea } from "@protolabsai/ui";
 import { StatusPill } from "./StatusPill";
 
 // The agent's goals (autonomy layer), in the right sidebar. First surface on
@@ -98,7 +98,7 @@ export function GoalsPanel() {
         title="Goals"
         kicker={<>the agent's standing goals · set with <code>/goal</code> in chat</>}
       />
-      <ScrollArea className="goals-list" ariaLabel="Goals">
+      <ScrollArea className="goals-list" role="region" aria-label="Goals" tabIndex={0}>
         <QueryErrorResetBoundary>
           {({ reset }) => (
             <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="goals" />}>

@@ -65,7 +65,7 @@ import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "@protolabsai/ui";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { useAnyChatStreaming } from "../chat/chat-store";
@@ -793,14 +793,16 @@ export function App() {
       <ConfirmDialog
         open={confirmState !== null}
         title={confirmState?.title ?? ""}
-        message={confirmState?.message}
-        confirmLabel={confirmState?.confirmLabel}
+        confirmLabel={confirmState?.confirmLabel ?? "Delete"}
+        destructive
         onConfirm={() => {
           confirmState?.onConfirm();
           setConfirmState(null);
         }}
-        onCancel={() => setConfirmState(null)}
-      />
+        onClose={() => setConfirmState(null)}
+      >
+        {confirmState?.message}
+      </ConfirmDialog>
     </div>
   );
 }

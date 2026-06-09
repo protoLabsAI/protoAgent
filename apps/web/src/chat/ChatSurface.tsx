@@ -9,7 +9,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { ConfirmDialog } from "../app/ConfirmDialog";
+import { ConfirmDialog } from "@protolabsai/ui";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
@@ -152,18 +152,18 @@ export function ChatSurface({
       <ConfirmDialog
         open={pendingClose !== null}
         title="Delete this chat?"
-        message={
-          pendingCloseSession
-            ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
-            : undefined
-        }
         confirmLabel="Delete chat"
+        destructive
         onConfirm={() => {
           if (pendingClose) closeSession(pendingClose);
           setPendingClose(null);
         }}
-        onCancel={() => setPendingClose(null)}
-      />
+        onClose={() => setPendingClose(null)}
+      >
+        {pendingCloseSession
+          ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
+          : undefined}
+      </ConfirmDialog>
     </section>
   );
 }

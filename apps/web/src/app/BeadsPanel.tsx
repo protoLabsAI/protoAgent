@@ -34,7 +34,7 @@ import {
   type IssueDraft,
 } from "./beads";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { ScrollArea } from "./ScrollArea";
+import { ScrollArea } from "@protolabsai/ui";
 import { StatusPill } from "./StatusPill";
 
 // The agent's task board (in-process beads store), on the TanStack Query data
@@ -145,7 +145,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         ) : null}
       </form>
 
-      <ScrollArea className="issue-list" ariaLabel="Beads tasks">
+      <ScrollArea className="issue-list" role="region" aria-label="Beads tasks" tabIndex={0}>
         {issues.length === 0 ? (
           <div className="empty-state stacked">
             <Boxes size={18} />

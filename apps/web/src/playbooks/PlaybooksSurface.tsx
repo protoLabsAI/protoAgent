@@ -1,7 +1,7 @@
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog } from "../app/ConfirmDialog";
+import { ConfirmDialog } from "@protolabsai/ui";
 import { PanelHeader } from "../app/PanelHeader";
 import { api } from "../lib/api";
 import type { Playbook } from "../lib/types";
@@ -154,15 +154,15 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
       <ConfirmDialog
         open={pending !== null}
         title="Delete skill?"
-        message={
-          pending
-            ? `Remove "${pending.name}"${pending.source === "disk" ? " — note: a pinned SKILL.md re-seeds on the next restart." : "."}`
-            : undefined
-        }
         confirmLabel="Delete"
+        destructive
         onConfirm={() => void confirmDelete()}
-        onCancel={() => setPending(null)}
-      />
+        onClose={() => setPending(null)}
+      >
+        {pending
+          ? `Remove "${pending.name}"${pending.source === "disk" ? " — note: a pinned SKILL.md re-seeds on the next restart." : "."}`
+          : undefined}
+      </ConfirmDialog>
 
       <p className="playbook-foot">
         <BookMarked size={13} /> Skills (`SKILL.md`) are methodology the agent <strong>retrieves</strong> into
