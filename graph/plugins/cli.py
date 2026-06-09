@@ -19,8 +19,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pi = sub.add_parser("install", help="install a plugin from a git URL (does NOT enable it)")
-    pi.add_argument("url", help="git URL (https://, ssh://, git@, or a local path)")
+    pi = sub.add_parser("install", help="install a plugin — or a bundle of plugins — from a git URL (does NOT enable it)")
+    pi.add_argument("url", help="git URL (https://, ssh://, git@, or a local path) of a plugin or a bundle repo")
     pi.add_argument("--ref", default=None, help="tag, branch, or commit SHA to pin (default: default branch HEAD)")
     pi.add_argument("--force", action="store_true", help="replace an already-installed plugin of the same id")
 
@@ -40,6 +40,23 @@ def run_plugin_cli(argv: list[str]) -> int:
         if args.cmd == "install":
             s = installer.install(args.url, args.ref, force=args.force,
                                   allow=installer.configured_allowlist())
+            if "bundle" in s:  # a bundle: a set of plugins installed together
+                print(f"✓ installed bundle {s['bundle']}" + (f" — {s['name']}" if s["name"] else ""))
+                if s["description"]:
+                    print(f"  {s['description']}")
+                for p in s["installed"]:
+                    print(f"  ✓ {p['id']} v{p['version']} @ {p['resolved_sha'][:10]}")
+                if s["skipped_builtin"]:
+                    print(f"  · built-in (already ships with protoAgent): {', '.join(s['skipped_builtin'])}")
+                deps = sorted({d for p in s["installed"] for d in p.get("requires_pip", [])})
+                if deps:
+                    print(f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}")
+                if s["enabled"]:
+                    print(f"  NOT enabled. To turn on the stack, set plugins.enabled to include: "
+                          f"[{', '.join(s['enabled'])}], then restart.")
+                if s["config"]:
+                    print(f"  recommended config: {s['config']}")
+                return 0
             print(f"✓ installed {s['id']} v{s['version']} @ {s['resolved_sha'][:10]}")
             if s["description"]:
                 print(f"  {s['description']}")

@@ -164,10 +164,17 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
         staging = Path(tmp) / "repo"
         sha = _clone(url, ref, staging)
 
+        # A bundle repo (protoagent.bundle.yaml) carries no code — it names a set of
+        # plugin repos to install together. Fan out to per-plugin install().
+        bundle = load_bundle(staging)
+        if bundle is not None:
+            return _install_bundle(bundle, url, sha, ref, force=force, by=by, allow=allow)
+
         manifest = load_manifest(staging)
         if manifest is None:
             raise InstallError(
-                f"{url!r} has no valid protoagent.plugin.yaml — not a protoAgent plugin."
+                f"{url!r} has no protoagent.plugin.yaml or protoagent.bundle.yaml — "
+                "not a protoAgent plugin or bundle."
             )
         pid = manifest.id
 
@@ -197,6 +204,68 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
            f"installed {pid}@{sha[:10]}")
     log.info("[plugins] installed %s@%s from %s", pid, sha[:10], url)
     return summary
+
+
+BUNDLE_FILENAME = "protoagent.bundle.yaml"
+
+
+def load_bundle(repo: Path) -> dict | None:
+    """Parse ``<repo>/protoagent.bundle.yaml`` → a bundle dict, or ``None`` if it's
+    absent/invalid. A **bundle** is a reference manifest: it names a set of plugin
+    repos (``{id, url, ref}`` or ``{id, builtin: true}``) to install together, plus a
+    suggested ``enabled`` list + ``config``. It carries no plugin code of its own."""
+    import yaml
+    f = repo / BUNDLE_FILENAME
+    if not f.exists():
+        return None
+    try:
+        doc = yaml.safe_load(f.read_text()) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict) or not doc.get("id") or not isinstance(doc.get("plugins"), list):
+        return None
+    return doc
+
+
+def _install_bundle(bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None,
+                    *, force: bool, by: str, allow: list[str] | None) -> dict:
+    """Install every plugin a bundle names (reusing single-plugin ``install()`` for
+    each — so each member is allow-checked + pinned in ``plugins.lock`` exactly as a
+    direct install), then record the bundle for provenance. Enable + config are
+    *suggested* in the return value, never applied (install ≠ enable ≠ trust)."""
+    bid = str(bundle.get("id"))
+    installed: list[dict] = []
+    skipped: list[str] = []
+    for entry in bundle.get("plugins") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("builtin"):
+            skipped.append(str(entry.get("id", "?")))  # ships with protoAgent — nothing to fetch
+            continue
+        purl = entry.get("url")
+        if not purl:
+            raise InstallError(f"bundle {bid!r}: plugin {entry.get('id', '?')!r} has no url")
+        installed.append(install(str(purl), entry.get("ref"), force=force,
+                                 by=f"bundle:{bid}", allow=allow))
+
+    lock = _read_lock()
+    lock.setdefault("bundles", [])
+    lock["bundles"] = [b for b in lock["bundles"] if b.get("id") != bid]
+    lock["bundles"].append({
+        "id": bid, "source_url": bundle_url, "requested_ref": ref or "",
+        "resolved_sha": bundle_sha, "plugins": [s["id"] for s in installed],
+        "installed_at": datetime.now(timezone.utc).isoformat(), "by": by,
+    })
+    _write_lock(lock)
+    _audit("install-bundle", {"url": bundle_url, "sha": bundle_sha, "id": bid},
+           f"installed bundle {bid} ({len(installed)} plugin(s))")
+    log.info("[plugins] installed bundle %s@%s (%d plugins) from %s",
+             bid, bundle_sha[:10], len(installed), bundle_url)
+    return {
+        "bundle": bid, "name": bundle.get("name", ""), "description": bundle.get("description", ""),
+        "resolved_sha": bundle_sha, "installed": installed, "skipped_builtin": skipped,
+        "enabled": list(bundle.get("enabled") or []), "config": bundle.get("config") or {},
+    }
 
 
 def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
