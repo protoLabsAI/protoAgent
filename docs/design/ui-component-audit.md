@@ -130,6 +130,21 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 
 Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu now; Popover/Combobox/Select later) styled with `--pl-*`; everything else className-only; no Tailwind.** Segmented Tabs variant spec'd on #137 (UI team to add).
 
+## Console adoption status (branch `ds-adoption-sweep`, 2026-06-09)
+
+Sharing standard: **`docs/design/component-sharing-standard.md`** (the contract). Each row is a held commit; all green (68/68 e2e, tsc+build).
+
+**Adopted (local retired + CSS removed):**
+- `PanelHeader` → DS (19 surfaces) · `StageSubnav` → DS `Tabs` · context menu → DS `Menu` (local `dropdown-menu` deleted) · `ScrollArea` + `ConfirmDialog` → DS · `StatusPill` → DS `Badge` (adapter) · `PanelSkeleton` spinner → DS `Spinner`.
+- Bumped `@protolabsai/ui` `^0.4.0` → **`^0.8.0`**; all imports on domain **subpaths** (root barrel gone).
+- Fixed: always-mounted DS `Menu` must render **outside** the `.app-shell` grid (stray anchor row → footer overlap).
+
+**Remaining — mechanical long-tail, do as deliberate held slices (each locally reviewed):**
+- **Button** (~66 static + dynamic): `primary-button`→`variant="primary"`, `secondary-button`→default, `ghost-button`→`variant="ghost"`, `icon-button`→`icon variant="ghost"`, `…danger`→`variant="danger"`. Per-file (open+close tag) refactor; retires the biggest bespoke-button CSS block.
+- **Forms**: settings/setup `input`/`select`/`textarea`/`checkbox`/toggle → DS `Field`/`Input`/`Select`/`Textarea`/`Switch`/`Checkbox`.
+- **`Callout`/`Table`/`Tooltip`** where apt (panel-error/settings-banner → `Callout`; telemetry table → `Table`; native `title=` → `Tooltip`).
+- **`SurfaceRail`/`MobileNav`/`AppShell`**: **deferred by design** — the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137), not a rushed swap.
+
 ## Full-sweep classification (all 323 `theme.css` class groups triaged)
 
 Every reusable widget class was cross-referenced against installed `@protolabsai/ui@0.4.0` source. Three buckets:
