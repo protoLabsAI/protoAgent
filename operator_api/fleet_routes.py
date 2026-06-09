@@ -14,19 +14,50 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from fastapi import Request  # module-level so the stringized `request: Request` annotation
+                             # on the proxy route resolves (function-local imports don't,
+                             # under `from __future__ import annotations`).
+
 log = logging.getLogger("protoagent.server")
 
 
 def register_fleet_routes(app) -> None:
     from fastapi import Body, HTTPException
 
-    from graph.fleet import supervisor
+    from graph.fleet import proxy, supervisor
     from graph.workspaces import manager
 
     @app.get("/api/fleet")
     async def _list_fleet():
         """Every workspace agent + live status (running/stopped, port, pid, bundle)."""
-        return {"agents": supervisor.status()}
+        return {"agents": supervisor.status(), "active": proxy.get_active()}
+
+    @app.get("/api/fleet/active")
+    async def _get_active():
+        """The agent the console proxy currently points at (None if unset/stopped)."""
+        return {"active": proxy.get_active()}
+
+    @app.post("/api/fleet/{name}/activate")
+    async def _activate(name: str):
+        """Point the console proxy at a running agent — the in-place switch."""
+        try:
+            return {"ok": True, **proxy.set_active(name)}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.api_route("/active/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def _proxy(path: str, request: Request):
+        """Reverse-proxy the *console* to the active agent (chat → /active/api/chat,
+        SSE → /active/api/events). This is the human's lens only — switching re-points
+        it with no change to the caller's URL.
+
+        It does NOT gate agent↔agent A2A: every agent stays an independent endpoint on
+        its own port (``127.0.0.1:<port>/a2a``), reachable regardless of focus, so a
+        focused agent's ``delegate_to`` hits an unfocused sibling directly — the proxy
+        never sees that traffic.
+        """
+        return await proxy.forward(request, path)
 
     @app.post("/api/fleet")
     async def _create_agent(body: dict = Body(...)):
