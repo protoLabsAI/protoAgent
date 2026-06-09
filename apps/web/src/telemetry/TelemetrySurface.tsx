@@ -15,7 +15,7 @@ import {
 import { Suspense } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { api } from "../lib/api";
 import { telemetryQuery } from "../lib/queries";
 

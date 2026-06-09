@@ -8,7 +8,7 @@ import { Trash2 } from "lucide-react";
 import { Suspense } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui";

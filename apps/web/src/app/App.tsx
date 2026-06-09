@@ -91,7 +91,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui";

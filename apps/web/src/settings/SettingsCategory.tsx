@@ -5,7 +5,7 @@ import { Button } from "@protolabsai/ui";
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";

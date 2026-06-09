@@ -2,7 +2,7 @@ import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery 
 import { Suspense, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";

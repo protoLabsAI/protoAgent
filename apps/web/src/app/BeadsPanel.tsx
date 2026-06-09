@@ -17,7 +17,7 @@ import {
 import { Suspense, useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { beadsIssuesQuery, queryKeys } from "../lib/queries";
 import type { BeadsIssue } from "../lib/types";
 import {

@@ -1,0 +1,12 @@
+{
+  "plugins": [
+    {
+      "id": "artifact",
+      "source_url": "https://github.com/protoLabsAI/artifact-plugin",
+      "requested_ref": "v0.2.1",
+      "resolved_sha": "e49f185f8366bb371114ef3eb35f1cec3842f321",
+      "installed_at": "2026-06-09T03:22:57.893594+00:00",
+      "by": "console"
+    }
+  ]
+}

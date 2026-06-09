@@ -525,20 +525,9 @@ h2 {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.panel-header {
-  min-height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.panel-header.compact {
-  min-height: 44px;
-  padding: 10px;
-}
+/* .panel-header / .panel-header.compact now live in @protolabsai/ui (.pl-panel-header).
+   The .panel-kicker + .panel-actions classes stay — surfaces use them directly
+   (e.g. telemetry section heads, workflow toolbars), not only via PanelHeader. */
 
 .chat-stage {
   grid-template-rows: auto minmax(0, 1fr);

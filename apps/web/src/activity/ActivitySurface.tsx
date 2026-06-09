@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { onServerEvent } from "../lib/events";
 import type { ActivityEntry } from "../lib/types";
 
