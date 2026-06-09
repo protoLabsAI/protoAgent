@@ -88,6 +88,7 @@ import { PluginView } from "./PluginView";
 import { SurfaceRail } from "../components/SurfaceRail";
 import { MobileNav } from "../components/MobileNav";
 import { useIsMobile } from "../lib/useIsMobile";
+import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
@@ -445,7 +446,11 @@ export function App() {
     const extra = (side === "left" ? pluginRail : pluginRightPanels)
       .filter((v) => !placed.has(v.key))
       .map((v): RailItem => ({ id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }));
-    return [...ordered, ...extra];
+    // Fork-contributed surfaces (ADR 0038 D3 — the src/ext seam), appended for their rail side.
+    const ext = registeredSurfaces()
+      .filter((s) => (s.placement ?? "left") === side)
+      .map((s): RailItem => ({ id: s.id, label: s.label, icon: s.icon }));
+    return [...ordered, ...extra, ...ext];
   }
 
   function renderSurface(id: string): ReactNode {
@@ -520,6 +525,9 @@ export function App() {
       case "schedule":
         return <SchedulePanel />;
       default: {
+        // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
+        const ext = registeredSurfaces().find((s) => s.id === id);
+        if (ext) return ext.render();
         const v = allPluginViews.find((x) => x.key === id);
         return v ? <PluginView key={v.key} view={v} /> : null;
       }
