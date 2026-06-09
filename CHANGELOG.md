@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Artifact plugin is now external** — extracted from core to
+  [protoLabsAI/artifact-plugin](https://github.com/protoLabsAI/artifact-plugin) (git-installable,
+  `protoagent-plugin` topic). It's the reference distributable plugin; core ships leaner. Install via
+  Plugins → Download.
+
 ### Removed
 - **Retired Module Federation (ADR 0038)** — plugin UI is now **sandboxed iframes** only
   (the right model for untrusted third-party + generative code, and trivially git-installable).
