@@ -94,6 +94,7 @@ import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
+import { useToast } from "@protolabsai/ui";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
@@ -345,6 +346,21 @@ export function App() {
       }),
     [],
   );
+
+  // Goal completions surface as a toast (goal.achieved / goal.failed on the bus, ADR 0039) so a
+  // plain operator notices a terminal goal without writing a plugin hook.
+  const toast = useToast();
+  useEffect(() => {
+    const offDone = onServerEvent("goal.achieved", (d) =>
+      toast({ tone: "success", title: "Goal achieved", message: String(d.condition || "the goal") }));
+    const offFail = onServerEvent("goal.failed", (d) =>
+      toast({
+        tone: "error",
+        title: "Goal failed",
+        message: `${String(d.condition || "the goal")}${d.reason ? ` — ${String(d.reason)}` : ""}`,
+      }));
+    return () => { offDone(); offFail(); };
+  }, [toast]);
   useEffect(() => {
     if (viewingInbox()) setInboxUnread(0);
   }, [surface, activityTab]);
