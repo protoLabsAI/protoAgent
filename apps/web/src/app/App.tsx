@@ -275,6 +275,26 @@ export function App() {
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
   // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
   const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
+
+  // Plugin-driven console navigation (ADR 0044) — any plugin can ask to open one of its
+  // own views via the reserved `ui.navigate` host intent `{plugin, view}` (emitted by
+  // `registry.navigate(view)`). Core honors it GENERICALLY: resolve `plugin:<plugin>:<view>`
+  // (blank view → that plugin's first view) and focus it only if the surface exists. No
+  // per-plugin code — this is the single extensibility point for "the AI navigates the UI".
+  const pluginViewsRef = useRef(allPluginViews);
+  pluginViewsRef.current = allPluginViews;
+  useEffect(
+    () =>
+      onServerEvent("ui.navigate", (d) => {
+        const pid = String(d?.plugin || "");
+        if (!pid) return;
+        const own = pluginViewsRef.current.filter((v) => v.key.startsWith(`plugin:${pid}:`));
+        const target = d?.view ? own.find((v) => v.key === `plugin:${pid}:${d.view}`) : own[0];
+        if (target) setSurface(target.key);
+      }),
+    [],
+  );
+
   const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right");
   const pluginRightPanels = allPluginViews.filter((v) => v.placement === "right");
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;

@@ -88,6 +88,23 @@ class PluginRegistry:
         else:  # non-server context (tests, headless) — no bus wired
             log.debug("[plugins] %s: emit(%s) dropped — no bus", pid, topic)
 
+    def navigate(self, view: str = "") -> None:
+        """Ask the operator console to open one of THIS plugin's views — plugin-driven
+        UI navigation (ADR 0044). Fire-and-forget.
+
+        Publishes a reserved host intent ``ui.navigate`` with ``{plugin, view}``; the
+        console focuses ``plugin:<this plugin>:<view>`` when that surface exists (a blank
+        ``view`` opens the plugin's first view). Unlike :meth:`emit`, this is a host-level
+        navigation request, not a namespaced plugin event — and it is **scoped**: the
+        payload carries this plugin's id, so a plugin can only open its own views, never
+        hijack the console to another surface. The console honors it generically (one
+        handler, no per-plugin code), so any plugin gets agent-driven navigation for free.
+        """
+        if self.host and self.host.publish:
+            self.host.publish("ui.navigate", {"plugin": self.plugin_id, "view": view or ""})
+        else:  # non-server context (tests, headless) — no bus wired
+            log.debug("[plugins] %s: navigate(%s) dropped — no bus", self.plugin_id, view)
+
     def on(self, topic: str, handler) -> None:
         """Subscribe an in-process handler to bus topics (ADR 0039). ``topic`` may use
         ``*`` (one segment) / ``#`` (tail) wildcards and match ANY plugin's namespace —
