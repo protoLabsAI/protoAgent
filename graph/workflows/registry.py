@@ -62,7 +62,10 @@ class WorkflowRegistry:
                     for i in (r.get("inputs") or []) if isinstance(i, dict)
                 ],
                 "steps": [
-                    {"id": s.get("id"), "subagent": s.get("subagent"), "depends_on": list(s.get("depends_on", []) or [])}
+                    # depends_on may be authored as a single id string (e.g. `depends_on: step-a`)
+                    # — list() would shatter that into characters, so coerce a str to [str].
+                    {"id": s.get("id"), "subagent": s.get("subagent"),
+                     "depends_on": ([dep] if isinstance(dep := s.get("depends_on"), str) else list(dep or []))}
                     for s in (r.get("steps") or []) if isinstance(s, dict)
                 ],
             })
