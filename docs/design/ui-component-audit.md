@@ -113,7 +113,19 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 | [#132](https://github.com/protoLabsAI/protoContent/issues/132) | `PanelHeader` composite | P1 | Filed |
 | [#133](https://github.com/protoLabsAI/protoContent/issues/133) | `Tabs` icon+badge slots | P1 | Filed |
 | [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | Filed |
+| [#135](https://github.com/protoLabsAI/protoContent/issues/135) | `Button` variants (ghost/danger) + icon-only + size | P1 | Filed |
+| [#136](https://github.com/protoLabsAI/protoContent/issues/136) | `Skeleton` loading-placeholder primitive | P1 | Filed |
 | — | **AppShell** dual-rail convergence | P0 | **Held — live coordination first** (architectural) |
+
+## Full-sweep classification (all 323 `theme.css` class groups triaged)
+
+Every reusable widget class was cross-referenced against installed `@protolabsai/ui@0.4.0` source. Three buckets:
+
+- **DS gap → filed:** Menu (#131), PanelHeader (#132), Tabs icon+badge (#133), ScrollArea parity (#134), Button variants (#135), Skeleton (#136). AppShell (rail shell / resize-handle / mobile-drawer) held for live coordination.
+- **Covered by 0.4.0 → adopt, not filed:** Button (default/primary), Badge (chips/priorities/states), StatusDot (dots), Card (all `*-card`), Dialog (confirm/schedule/mcp-add modals), Drawer (mobile), Field/Input/Textarea/Select/Switch/Checkbox (all form rows), Callout (panel-error/settings-banner/errors), Stat/Stats (metrics), Table (telemetry/lists), Tooltip (89 native `title=`), Spinner (`.spin`/loaders), Empty (empty-states), Divider, Kbd, Prose.
+- **App-specific → stays local:** markdown renderer, chat tool-renderers (`.tool-*`), chat tabs (closeable/editable sessions), slash command menu (`.slash-*` — chat autocomplete), setup wizard stepper (`.setup-*` — one-off onboarding), workflow builder canvas, plugin-iframe host, intro splash, activity/inbox/beads domain rows. `.segmented` (2 uses) → suggested as a `Tabs variant="segmented"` on #133.
+
+**Conclusion:** the DS gap surface is closed at #131–#136 + AppShell-held. Everything else the console needs is either already in 0.4.0 (an adoption sweep, task #68) or legitimately app-specific.
 
 ## Summary for the UI team
 
