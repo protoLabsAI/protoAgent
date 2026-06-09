@@ -291,6 +291,14 @@ def _main():
 
         raise SystemExit(run_workspace_cli(sys.argv[2:]))
 
+    # Skills subcommand (ADR 0041 slice 3): `python -m server skills ls|promote <name>`
+    # — inspect/curate the layered (commons ∪ private) skill library. Acts on the DBs
+    # and exits.
+    if len(sys.argv) > 1 and sys.argv[1] == "skills":
+        from graph.skills.cli import run_skills_cli
+
+        raise SystemExit(run_skills_cli(sys.argv[2:]))
+
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
     # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m

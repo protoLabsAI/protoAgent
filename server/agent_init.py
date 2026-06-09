@@ -340,12 +340,22 @@ def _build_skills_index(config, extra_skill_dirs=None):
         from graph.skills.index import SkillsIndex
         from graph.skills.loader import seed_skills_index
 
-        db_path = _resolve_skills_db(
-            config.skills_db_path,
-            shared=getattr(config, "skills_shared", False),
-            commons=_commons_dir(config),
-        )
-        index = SkillsIndex(db_path=db_path)
+        # Tier (ADR 0041): scoped (private) | shared (one commons) | layered
+        # (read commons ∪ private, write private). Blank scope → derived from the
+        # slice-1 `shared` bool for back-compat.
+        scope = (getattr(config, "skills_scope", "") or "").strip().lower()
+        if scope not in ("scoped", "shared", "layered"):
+            scope = "shared" if getattr(config, "skills_shared", False) else "scoped"
+        commons = _commons_dir(config)
+        if scope == "layered":
+            from graph.skills.layered import LayeredSkillsIndex
+            private_path = _resolve_skills_db(config.skills_db_path, shared=False)
+            shared_path = _resolve_skills_db(config.skills_db_path, shared=True, commons=commons)
+            index = LayeredSkillsIndex(SkillsIndex(db_path=private_path), SkillsIndex(db_path=shared_path))
+            db_path = f"layered({private_path} ∪ {shared_path})"
+        else:
+            db_path = _resolve_skills_db(config.skills_db_path, shared=(scope == "shared"), commons=commons)
+            index = SkillsIndex(db_path=db_path)
 
         live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (
             _live_config_dir() / "skills"

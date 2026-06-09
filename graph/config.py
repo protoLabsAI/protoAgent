@@ -323,6 +323,10 @@ class LangGraphConfig:
     # Slice 1: skills can be shared (a fleet's compounding skill library). Default
     # False = legacy per-instance behavior (no surprise migration).
     skills_shared: bool = False
+    # Tier (ADR 0041 slice 3): "scoped" (private), "shared" (one commons for all), or
+    # "layered" (read commons ∪ private, write private, promote to commons). Blank →
+    # derived from skills_shared (back-compat): shared→"shared", else "scoped".
+    skills_scope: str = ""
     commons_path: str = ""  # commons base dir; blank → ~/.protoagent/commons
 
     # Workflows — declarative multi-step subagent recipes (see ADR 0002),
@@ -593,6 +597,7 @@ class LangGraphConfig:
             skills_top_k=skills.get("top_k", cls.skills_top_k),
             skills_dir=skills.get("dir", cls.skills_dir),
             skills_shared=skills.get("shared", cls.skills_shared),
+            skills_scope=skills.get("scope", cls.skills_scope),
             commons_path=(data.get("commons", {}) or {}).get("path", cls.commons_path),
             mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
             mcp_servers=list(mcp.get("servers", []) or []),
