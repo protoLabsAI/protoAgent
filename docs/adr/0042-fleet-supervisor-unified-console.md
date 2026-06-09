@@ -96,6 +96,44 @@ Resource-bound: default **keep-N-warm** (recently-active agents stay running; th
 stopped and resume from checkpoint on switch), with an opt-in **run-all** for small fleets.
 Configurable in the hub.
 
+### H. Native desktop — the Tauri shell *is* the hub
+
+On the desktop app (`apps/desktop`, Tauri), the **shell plays the hub**. It already spawns +
+supervises the server as a sidecar (the parent-death watchdog / autostart machinery), so it
+takes the supervisor + proxy roles directly and the fleet becomes **GUI-first** — the CLI's
+`workspace`/`fleet`/`plugin` verbs become panels over the *same* control-plane API, so native
+and headless never diverge.
+
+**Roles on native**
+- **Process management** — the shell spawns each agent as a sidecar (`python -m server
+  --ui none` per workspace, via `workspaces.run_exec` / the `fleet` API), tracks pid+port,
+  reaps them on quit (reusing its server-sidecar machinery), and applies the keep-N-warm
+  policy (a laptop won't run a big fleet hot).
+- **Proxy** — the in-app webview renders one console; the shell (or a thin in-process hub it
+  sidecars) routes the active console's chat / A2A / SSE to the selected agent. Loopback + a
+  shell-held token — no per-agent surface is exposed.
+- **Contract** — the panels drive the same `/api/fleet` + `/api/archetypes` the CLI uses.
+
+**Panels (React, `apps/web`)**
+- **Onboarding** — first run becomes *"create your first agent"*: an **archetype picker**
+  (cards from `GET /api/archetypes` — **Basic** + every installed bundle's `archetype:`) →
+  name → `POST /api/fleet` (create + start). Replaces the single-agent setup wizard.
+- **Switcher** — the topbar agent name → a dropdown (fleet list + status dots + "+ New agent").
+- **Fleet manager** (Settings → Agents) — `GET /api/fleet` rows with start/stop/remove + "+ New."
+- **Per-agent config** — the *existing* Settings drawer (model / plugins / secrets), now
+  scoped to the **active** agent's workspace (config is per-`PROTOAGENT_CONFIG_DIR`).
+
+**Build seam (who builds what)**
+- *Server*: the `fleet` supervisor (slice 1, shipped) + the control-plane API & reverse proxy
+  (slice 2) + `run_exec` (the launch primitive).
+- *Tauri shell*: the agent-sidecar spawn/reap + proxy plumbing (recommended — it's already
+  supervising a sidecar), **or** delegate both to a thin Python hub it sidecars. Either works.
+- *React*: the onboarding/archetype picker, switcher, and fleet-manager panels — all over the
+  control-plane API.
+
+Net: the desktop just **renders the control plane the CLI already drives** — one model, two
+front-ends.
+
 ## Options considered
 
 - **Separate consoles per agent** (ADR 0041 slice-4 simple) — navigate to each agent's own
