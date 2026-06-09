@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Generative-UI artifacts (ADR 0038)** — a first-party **`artifact`** plugin: the agent calls
+  `show_artifact(kind, code)` to render **HTML / SVG / Mermaid / React on demand** into a
+  **sandboxed iframe** (`sandbox="allow-scripts"`, no same-origin) — the Claude Artifacts / Open
+  WebUI model, so generated code is isolated from the console. Rides the existing iframe surface
+  path (no federation). First slice of the two-mode plugin-UI model (ADR 0038); the `src/ext` fork
+  seam + Module Federation retirement follow.
+
 ## [0.30.0] - 2026-06-09
 
 ### Added

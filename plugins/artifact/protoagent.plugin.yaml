@@ -1,0 +1,14 @@
+id: artifact
+name: Artifact
+version: 0.1.0
+description: >-
+  A generative-UI surface (ADR 0038): the agent renders HTML / charts / Mermaid diagrams /
+  SVG on demand into a sandboxed iframe — the way Claude Artifacts and Open
+  WebUI do it. The shell page is served by this plugin and iframed; the agent's
+  generated code renders in a nested sandbox with no access to the console.
+enabled: true
+capabilities:
+  network: []
+  filesystem: none
+views:
+  - { id: artifact, label: "Artifact", icon: "Sparkles", placement: right, path: "/api/plugins/artifact/view" }
