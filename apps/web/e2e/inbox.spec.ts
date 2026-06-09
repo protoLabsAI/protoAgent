@@ -11,7 +11,7 @@ test("inbox badge appears, panel lists items, and dismiss removes one", async ({
 
   // Open Activity → its Inbox sub-tab.
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await page.getByRole("button", { name: /Inbox/ }).click();
+  await page.getByRole("tab", { name: /Inbox/ }).click();
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
 
   // Items from GET /api/inbox render with priority + source.

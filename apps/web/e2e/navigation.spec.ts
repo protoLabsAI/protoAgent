@@ -21,7 +21,7 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await page.getByRole("button", { name: "Studio", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
   // The old Run sub-tab is gone.
-  await expect(page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true })).toHaveCount(0);
+  await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
 test("schedule is a right-rail panel that lists scheduled jobs", async ({ page }) => {
@@ -49,10 +49,10 @@ test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) 
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing tab
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
-  await page.locator(".stage-subnav").getByRole("button", { name: "Tools", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Tools", exact: true }).click();
   await expect(page.getByText("web_search")).toBeVisible();
 
-  await page.locator(".stage-subnav").getByRole("button", { name: "MCP", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "MCP", exact: true }).click();
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
@@ -67,11 +67,11 @@ test("plugins section: Local / Market / Download tabs", async ({ page }) => {
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
   // Market tab — discovery links.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Market", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Market", exact: true }).click();
   await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
 
   // Download tab — install from a git URL.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Download", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Download", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
 

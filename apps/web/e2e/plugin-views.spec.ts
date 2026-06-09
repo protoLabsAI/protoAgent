@@ -42,10 +42,10 @@ test("switches between two plugin views, each loading its own page", async ({ pa
 test("view-tabs switch the hosted page", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".rail").getByRole("button", { name: "Board", exact: true }).click();
-  const subnav = page.locator(".stage-subnav");
-  await expect(subnav.getByRole("button", { name: "Open", exact: true })).toBeVisible();
+  const subnav = page.locator(".pl-tabs");
+  await expect(subnav.getByRole("tab", { name: "Open", exact: true })).toBeVisible();
   await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /tab=open/);
-  await subnav.getByRole("button", { name: "Done", exact: true }).click();
+  await subnav.getByRole("tab", { name: "Done", exact: true }).click();
   await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /tab=done/);
 });
 

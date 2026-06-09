@@ -6,7 +6,7 @@ import { expect, test } from "@playwright/test";
 test("MCP tab lists servers and adds one inline", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.getByRole("button", { name: "MCP", exact: true }).click();
+  await page.getByRole("tab", { name: "MCP", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
   await expect(page.getByText("echo · stdio")).toBeVisible();
@@ -22,7 +22,7 @@ test("MCP tab lists servers and adds one inline", async ({ page }) => {
 test("MCP tab imports servers from pasted JSON", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.getByRole("button", { name: "MCP", exact: true }).click();
+  await page.getByRole("tab", { name: "MCP", exact: true }).click();
 
   await page.getByRole("button", { name: /Add server/ }).click();
   await page.getByRole("button", { name: "Paste JSON", exact: true }).click();

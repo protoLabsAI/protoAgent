@@ -1753,55 +1753,9 @@ textarea {
 .activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }
 
 /* In-surface sub-nav (grouped rail surfaces) ------------------------------- */
-.stage-subnav {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 12px 16px 0;
-  margin-bottom: 10px;
-}
-
-.stage-subnav button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.stage-subnav button svg {
-  flex: 0 0 auto;
-}
-
-.stage-subnav button:hover {
-  color: var(--fg);
-}
-
-.stage-subnav button.active {
-  background: color-mix(in srgb, var(--accent, #7c8cff) 14%, transparent);
-  color: var(--accent, #7c8cff);
-  border-color: color-mix(in srgb, var(--accent, #7c8cff) 50%, var(--border));
-}
-
-.subnav-badge {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent, #7c8cff);
-  color: #fff;
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-  font-weight: 600;
-}
+/* The sub-tab strip is now @protolabsai/ui <Tabs> (.pl-tabs/.pl-tab); the inbox
+   unread count rides as the DS `badge` slot (.pl-tab__badge). Local .stage-subnav
+   + .subnav-badge retired. */
 
 /* Inbox panel (ADR 0003) ---------------------------------------------------- */
 .inbox-list {

@@ -90,7 +90,7 @@ import { MobileNav } from "../components/MobileNav";
 import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
-import { StageSubnav } from "./StageSubnav";
+import { Tabs } from "@protolabsai/ui";
 import { PanelHeader } from "@protolabsai/ui";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
@@ -202,6 +202,14 @@ function useLocalStorageState(key: string, fallback: string) {
   }, [key, value]);
 
   return [value, setValue] as const;
+}
+
+// Adapt the app's sub-tab shape (Lucide icon *component* + optional badge) to the
+// DS `Tabs` `TabItem` (icon as a rendered ReactNode) — so call sites keep passing
+// `icon: SomeLucideIcon` while the strip renders through @protolabsai/ui.
+function toTab(t: { id: string; label: string; icon?: LucideIcon; badge?: ReactNode }) {
+  const Icon = t.icon;
+  return { id: t.id, label: t.label, icon: Icon ? <Icon size={15} /> : undefined, badge: t.badge };
 }
 
 export function App() {
@@ -474,10 +482,10 @@ export function App() {
       case "activity":
         return (
           <>
-            <StageSubnav active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} tabs={[
+            <Tabs active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
               { id: "thread", label: "Thread", icon: Activity },
-              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
-            ]} />
+              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
+            ].map(toTab)} />
             {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
           </>
         );
@@ -486,7 +494,7 @@ export function App() {
       case "agent":
         return (
           <>
-            <StageSubnav active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} tabs={[
+            <Tabs active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} items={[
               { id: "identity", label: "Identity", icon: Sparkles },
               { id: "settings", label: "Settings", icon: Settings2 },
               { id: "tools", label: "Tools", icon: Wrench },
@@ -494,7 +502,7 @@ export function App() {
               { id: "subagents", label: "Subagents", icon: Bot },
               { id: "skills", label: "Skills", icon: BookMarked },
               { id: "middleware", label: "Middleware", icon: Layers },
-            ]} />
+            ].map(toTab)} />
             {agentTab === "identity" ? <IdentityPanel /> : null}
             {agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
             {agentTab === "tools" ? <ToolsPanel /> : null}
@@ -507,28 +515,28 @@ export function App() {
       case "plugins":
         return (
           <>
-            <StageSubnav active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} tabs={[
+            <Tabs active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
               { id: "local", label: "Local", icon: Boxes },
               { id: "market", label: "Market", icon: Store },
               { id: "download", label: "Download", icon: Download },
-            ]} />
+            ].map(toTab)} />
             <PluginsSurface tab={pluginsTab} />
           </>
         );
       case "knowledge":
         return (
           <>
-            <StageSubnav active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} tabs={[
+            <Tabs active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} items={[
               { id: "store", label: "Store", icon: Database },
               { id: "settings", label: "Settings", icon: Settings2 },
-            ]} />
+            ].map(toTab)} />
             {knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : <SettingsCategoryPanel category="Memory" title="Settings" />}
           </>
         );
       case "settings":
         return (
           <>
-            <StageSubnav active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} tabs={SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))} />
+            <Tabs active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
             <SettingsSurface tab={settingsTab} />
           </>
         );

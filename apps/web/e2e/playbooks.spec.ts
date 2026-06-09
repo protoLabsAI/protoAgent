@@ -7,7 +7,7 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
   // Skills moved under the Agent section — switch to the Skills tab.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Skills", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Skills", exact: true }).click();
 
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -27,7 +27,7 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Skills", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
 
