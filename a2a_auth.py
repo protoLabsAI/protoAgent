@@ -39,14 +39,16 @@ _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 # console + OpenAI-compat APIs (which drive subagents, rewrite config/SOUL,
 # schedule jobs, and run turns). The agent card, /healthz, /metrics, and the
 # static console assets live OUTSIDE these prefixes and stay public.
-_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/")
+# /active/* is the fleet hub's reverse proxy to the focused agent (ADR 0042). It must
+# be guarded too — it drives the agent's full API (chat, config, subagents/run, …), and
+# spawned peers carry no token of their own, so the hub is the only gate.
+_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/", "/active/")
 
-# Exempt from the guard: the read-only Server-Sent-Events stream. Browsers'
-# EventSource cannot set an Authorization header, so a bearer can't be presented
-# here — and it only exposes activity/inbox events, not any action. The
-# agent-driving endpoints (/api/subagents/run, /api/config, /api/chat, /a2a, …)
-# stay guarded.
-_GUARD_EXEMPT = ("/api/events",)
+# Exempt from the guard: the read-only Server-Sent-Events stream (direct + proxied).
+# Browsers' EventSource cannot set an Authorization header, so a bearer can't be presented
+# here — and it only exposes activity/inbox events, not any action. The agent-driving
+# endpoints (/api/subagents/run, /api/config, /api/chat, /a2a, /active/* …) stay guarded.
+_GUARD_EXEMPT = ("/api/events", "/active/api/events")
 
 
 def set_bearer_token(token: str | None) -> None:

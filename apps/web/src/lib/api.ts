@@ -131,14 +131,20 @@ export function getActivePrefix() {
   return _activePrefix;
 }
 function isHubPath(path: string) {
+  // The fleet control plane is served by the supervisor itself — never proxied to an agent.
   return path.startsWith("/api/fleet") || path.startsWith("/api/archetypes");
+}
+function isAgentPath(path: string) {
+  // Everything that drives the focused AGENT: its console API, its A2A brain (streaming chat
+  // posts here — #2), and its OpenAI-compat endpoint. /api/fleet stays on the hub.
+  return (path.startsWith("/api/") && !isHubPath(path)) || path.startsWith("/a2a") || path.startsWith("/v1");
 }
 
 export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
-  // Agent-level /api/* routes through the active agent's proxy in fleet mode.
+  // Agent-level paths route through the active agent's proxy in fleet mode.
   let p = path;
-  if (_activePrefix && path.startsWith("/api/") && !isHubPath(path)) {
+  if (_activePrefix && isAgentPath(path)) {
     p = `${_activePrefix}${path}`;
   }
   const base = defaultApiBase();
