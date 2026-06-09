@@ -78,8 +78,7 @@ with **no** `allow-same-origin`.
 
 ## Reference plugins (in `plugins/`)
 
-- **`artifact`** — generative UI: the agent calls `show_artifact(kind, code)`; the page renders
-  HTML / SVG / Mermaid / React in a **nested sandboxed iframe**. The template for "render on demand."
+- **artifact-plugin** (external — github.com/protoLabsAI/artifact-plugin) — generative UI: the agent calls `show_artifact(kind, code)`; renders in a nested sandboxed iframe. The reference distributable plugin.
 - **`notes`** — a self-contained markdown editor: tools (`read_note`/`write_note`/`append_note`) +
   a `/note` data route + a `/view` editor page. The template for "a plugin that owns its vertical."
 
