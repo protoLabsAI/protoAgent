@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Plugin devkit refreshed (v0.2.0)** — the reference plugin + scaffolder now models current best
+  practice: console views are sandboxed iframes served under `/api/plugins/<id>` (bearer-gated, ADR
+  0038/0026), and the event bus (ADR 0039) is first-class — the scaffold stubs + the `building-plugins`
+  skill + the `plugin-architect` show `registry.emit`/`on` and manifest `emits:`/`subscribes:`, and the
+  devkit itself emits `plugin-devkit.scaffolded`.
 - **Artifact plugin is now external** — extracted from core to
   [protoLabsAI/artifact-plugin](https://github.com/protoLabsAI/artifact-plugin) (git-installable,
   `protoagent-plugin` topic). It's the reference distributable plugin; core ships leaner. Install via

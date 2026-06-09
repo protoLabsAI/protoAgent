@@ -31,7 +31,11 @@ Map the ask to the contribution surface:
 - **tool / subagent / route / MCP server** → code, via `register(registry)`.
 - **SKILL.md skills** / **`*.yaml` workflows** → data, auto-discovered from
   conventional `skills/` and `workflows/` subdirs (no code).
-- **console view** (rail icon + page) → declared in the manifest `views:`.
+- **console view** (rail icon + page) → declared in the manifest `views:`; a **sandboxed
+  iframe** of a page your plugin serves (ADR 0038).
+- **events** (broadcast / react) → `registry.emit("x", data)` / `registry.on("topic.*", fn)`;
+  declare `emits:` / `subscribes:` in the manifest (ADR 0039). Plugins coordinate via the bus,
+  never by importing each other.
 - **config / secrets / Settings fields** → declared in the manifest.
 - **chat integration** (Discord/Slack/Telegram-style) → it's a *communication
   plugin* — use `scaffold_plugin(..., with_comms=True)` to get a `ChatAdapter`
@@ -61,8 +65,10 @@ secrets: [api_key]          # keys routed to secrets.yaml, never tracked YAML
 settings:                   # render in Settings → its group
   - { key: api_base, label: "API base", type: string }
   - { key: api_key, label: "API key", type: secret }
-views:                      # console rail view (ADR 0026), optional
-  - { id: board, label: "Board", icon: LayoutDashboard, path: /plugins/my-plugin/board }
+views:                      # console rail view (ADR 0026/0038) — a sandboxed iframe of a page you serve
+  - { id: board, label: "Board", icon: LayoutDashboard, path: /api/plugins/my-plugin/board }
+emits: ["my-plugin.updated"]     # event-bus topics you broadcast (ADR 0039; optional, for discovery)
+subscribes: ["other-plugin.*"]   # topics you listen for
 requires_pip: ["httpx>=0.27"]   # deps — declared, NOT auto-installed (ADR 0027)
 repository: https://github.com/owner/my-plugin
 ```
@@ -74,12 +80,16 @@ def register(registry):
     cfg = registry.config                       # this plugin's resolved config (ADR 0019)
     registry.register_tool(my_tool)             # a LangChain @tool
     registry.register_subagent(my_subagent)     # a SubagentConfig
-    registry.register_router(my_router)          # FastAPI routes at /plugins/<id>/…
+    registry.register_router(my_router, prefix="/api/plugins/my-plugin")  # gated FastAPI routes
     registry.register_mcp_server(my_factory)     # a managed MCP server
+    registry.emit("updated", {"n": 1})          # broadcast on the bus → "my-plugin.updated" (ADR 0039)
+    registry.on("other-plugin.*", on_event)     # react to another plugin without importing it
     # skills/ and workflows/ subdirs auto-load — no call needed.
 ```
-A `views:` page is served by your router (e.g. `@router.get("/board")` returning
-HTML). For the auth/theme handshake into a view iframe, see the `plugin-views` guide.
+A `views:` page is served by your router (e.g. `@router.get("/board")` returning HTML). Mount the
+router under **`/api/plugins/<id>`** so it inherits the operator bearer gate; the console iframes the
+page (sandboxed) and `postMessage`s it the bearer + theme — see the `plugin-views` guide. An event
+under `<id>.*` lights your plugin's rail icon (a notification dot) until the user opens it.
 
 ## 5. Test it
 - Enable it: `plugins: { enabled: [my-plugin] }`, restart, then
