@@ -1,0 +1,12 @@
+# gitleaks config — extend the defaults, then allowlist files that legitimately contain
+# placeholder/example tokens or are lockfiles (no real secrets).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Examples, lockfiles, and docs — no real secrets here."
+paths = [
+  '''.*\.example\.ya?ml$''',
+  '''(^|/)(package-lock\.json|uv\.lock|plugins\.lock)$''',
+  '''^docs/''',
+]

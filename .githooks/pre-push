@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Local backstop — block a push if a per-instance secret/config or a key-looking value is
+# staged into tracked files. Enable once: `git config core.hooksPath .githooks`.
+set -euo pipefail
+bad=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null | grep -E 'config/[^/]+/(secrets\.yaml|langgraph-config\.yaml|\.setup-complete)$' || true)
+if [ -n "$bad" ]; then
+  echo "✗ pre-push blocked: per-instance config staged (holds secrets):"; echo "$bad"
+  echo "  These belong in .gitignore — never commit config/<instance>/…"; exit 1
+fi
+if git diff --cached -U0 -- . 2>/dev/null | grep -E '^\+' | grep -Eq 'sk-[A-Za-z0-9_-]{16,}|api_key:[[:space:]]*[A-Za-z0-9_-]{16,}'; then
+  echo "✗ pre-push blocked: a key-looking value is being added. Remove it or use a secret store."; exit 1
+fi
+exit 0

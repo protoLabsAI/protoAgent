@@ -83,3 +83,9 @@ apps/web/.playwright/
 sites/marketing/dist/
 sites/marketing/node_modules/
 sites/marketing/.astro/
+
+# Per-instance runtime config (PROTOAGENT_INSTANCE / PROTOAGENT_CONFIG_DIR → config/<id>/…).
+# NEVER commit — holds live secrets. (Leak postmortem 2026-06-09: a key reached main via #749.)
+config/*/secrets.yaml
+config/*/langgraph-config.yaml
+config/*/.setup-complete
