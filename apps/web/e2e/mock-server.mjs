@@ -246,11 +246,12 @@ const server = createServer(async (req, res) => {
       frame("inbox.item", { id: 99, priority: "next", source: "mock", text: "live inbox ping" });
       frame("boardy.created", { id: "b1" }); // ADR 0039 — exercises the rail notification dot
     }, 500);
-    // One-shot goal.achieved (ADR 0039) so the goal toast is deterministically testable.
-    const g = setTimeout(() => {
-      res.write('event: goal.achieved\ndata: {"condition":"unit tests pass","status":"achieved","mode":"drive"}\n\n');
-    }, 300);
-    req.on("close", () => { clearInterval(t); clearTimeout(g); });
+    // goal.achieved (ADR 0039) so the goal toast is testable. Must be an UNNAMED topic-in-payload
+    // frame like the others — the client routes via onmessage, not named SSE events. Fire a couple
+    // of times early so a slow connect can't miss the one-shot (the toast just needs to appear once).
+    const goals = [setTimeout(() => frame("goal.achieved", { condition: "unit tests pass", status: "achieved", mode: "drive" }), 300),
+                   setTimeout(() => frame("goal.achieved", { condition: "unit tests pass", status: "achieved", mode: "drive" }), 1200)];
+    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); });
     return;
   }
   if (pathname.startsWith("/api/")) {
