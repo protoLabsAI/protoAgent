@@ -26,7 +26,8 @@ class AppState:
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
     skills_index: Any = None
-    workflow_registry: Any = None
+    workflow_registry: Any = None  # set by the workflows plugin (None = plugin disabled)
+    workflow_run: Any = None  # async (name, inputs, on_step) -> result; set by the workflows plugin
     telemetry_store: Any = None
     inbox_store: Any = None
     beads_store: Any = None

@@ -186,7 +186,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # seeded into the FTS index; KnowledgeMiddleware retrieves + injects them.
     STATE.skills_index = _build_skills_index(STATE.graph_config, extra_skill_dirs=STATE.plugin_skill_dirs)
 
-    STATE.workflow_registry = _build_workflow_registry(STATE.graph_config)
+    # STATE.workflow_registry is set by the workflows plugin (plugins/workflows) when
+    # enabled — core no longer builds it (lean core, opt-in).
 
     STATE.inbox_store = _build_inbox_store(STATE.graph_config)
     if STATE.activity_log is None:
@@ -202,7 +203,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
         skills_index=STATE.skills_index, extra_tools=STATE.mcp_tools + STATE.plugin_tools,
         extra_middleware=STATE.plugin_middleware,
-        checkpointer=STATE.checkpointer, workflow_registry=STATE.workflow_registry,
+        checkpointer=STATE.checkpointer,
         inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
     )
 
@@ -733,43 +734,6 @@ def _build_telemetry_store(config):
         return None
 
 
-def _build_workflow_registry(config):
-    """Load workflow recipes (ADR 0002) from the bundled repo ``workflows/`` dir
-    plus a writable dir (user/agent-emitted). Best-effort; never blocks boot."""
-    if not getattr(config, "workflows_enabled", True):
-        return None
-    try:
-        import os
-        from pathlib import Path
-
-        from graph.workflows.registry import WorkflowRegistry
-
-        dirs: list[str] = []
-        bundled = _bundle_root() / "workflows"
-        if bundled.is_dir():
-            dirs.append(str(bundled))
-        # Plugin-bundled workflow recipes (ADR 0027) — enabled plugins' workflows/
-        # dirs, so installing a plugin repo pulls in its workflows too. Before the
-        # writable dir below, so a user-saved recipe still wins on a name clash.
-        for d in (getattr(STATE, "plugin_workflow_dirs", None) or []):
-            if Path(d).is_dir():
-                dirs.append(str(d))
-        # Writable dir for user / agent-emitted recipes (same fallback shape).
-        writable = scope_leaf(Path(config.workflow_dir).expanduser())
-        try:
-            writable.mkdir(parents=True, exist_ok=True)
-            if not os.access(writable, os.W_OK):
-                raise OSError
-        except OSError:
-            writable = scope_leaf(Path.home() / ".protoagent" / "workflows")
-            writable.mkdir(parents=True, exist_ok=True)
-        dirs.append(str(writable))
-        return WorkflowRegistry(dirs, writable_dir=str(writable))
-    except Exception:
-        log.exception("[workflows] registry init failed; running without workflows")
-        return None
-
-
 def _commons_dir(config):
     """The shared commons base (ADR 0041) — read by every agent on the host, never
     per-instance scoped. Configurable via ``commons.path``; defaults to
@@ -1013,6 +977,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
+            # The workflows plugin re-sets these in its register() if still enabled;
+            # reset first so disabling it on reload leaves them cleared.
+            STATE.workflow_registry = STATE.workflow_run = None
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
             new_plugins = _build_plugins(
@@ -1032,13 +999,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             _apply_config_subagents(new_config)  # YAML subagent overrides take effect on reload
             new_middleware = _resolve_plugin_middleware(new_config, new_plugins.middleware)  # ADR 0032
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
-            new_workflow_registry = _build_workflow_registry(new_config)
             new_inbox_store = _build_inbox_store(new_config)
             new_graph = create_agent_graph(
                 new_config, knowledge_store=new_store, scheduler=next_scheduler,
                 skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
                 extra_middleware=new_middleware,
-                checkpointer=STATE.checkpointer, workflow_registry=new_workflow_registry,
+                checkpointer=STATE.checkpointer,
                 inbox_store=new_inbox_store,
             )
         except Exception as e:
@@ -1048,7 +1014,6 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             return False, f"graph rebuild failed: {e}"
     else:
         new_graph = None
-        new_workflow_registry = None
         new_inbox_store = None
 
     # Commit: config → A2A bearer → graph. All three reference the
@@ -1078,7 +1043,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         pass
     STATE.graph = new_graph
     STATE.plugin_middleware = new_middleware  # ADR 0032
-    STATE.workflow_registry = new_workflow_registry
+    # STATE.workflow_registry / workflow_run were (re)set by the workflows plugin above.
     STATE.inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget
     # onto the active loop so reload stays sync. We've already verified

@@ -125,7 +125,7 @@ function handleApiGet(pathname) {
       return DELEGATES;
     case "/api/plugins/installed":
       return { plugins: INSTALLED_PLUGINS };
-    case "/api/workflows":
+    case "/api/plugins/workflows/list":
       return { workflows: WORKFLOWS };
     case "/api/activity":
       return ACTIVITY_HISTORY;
@@ -269,8 +269,14 @@ const server = createServer(async (req, res) => {
         restart_required: settingsRestartRequired(body.updates),
       });
     }
-    if (/^\/api\/workflows\/[^/]+\/run$/.test(pathname)) {
+    if (/^\/api\/plugins\/workflows\/[^/]+\/run$/.test(pathname)) {
       return sendJson(res, WORKFLOW_RUN_RESULT);
+    }
+    if (pathname === "/api/plugins/workflows/save") {
+      return sendJson(res, { saved: true, name: "demo" });
+    }
+    if (req.method === "DELETE" && /^\/api\/plugins\/workflows\/[^/]+$/.test(pathname)) {
+      return sendJson(res, { deleted: true });
     }
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
       return sendJson(res, { enabled: true, deleted: true });

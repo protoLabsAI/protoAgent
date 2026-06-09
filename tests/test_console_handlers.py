@@ -33,15 +33,6 @@ def test_inbox_authorized_requires_match(monkeypatch):
     assert ch._inbox_authorized(None) is False
 
 
-def test_workflows_list_empty_when_registry_off():
-    assert ch._operator_workflows_list() == {"workflows": []}
-
-
-def test_workflow_save_rejects_without_registry():
-    with pytest.raises(RuntimeError):
-        ch._operator_workflow_save({"name": "x"})
-
-
 async def test_scheduler_list_disabled():
     assert await ch._operator_scheduler_list() == {"jobs": [], "backend": "disabled"}
 

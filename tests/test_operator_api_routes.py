@@ -213,39 +213,40 @@ def test_chat_commands_absent_when_not_wired() -> None:
     assert TestClient(app).get("/api/chat/commands").status_code == 404
 
 
-def test_workflow_save_validates_saves_and_deletes() -> None:
-    """POST /api/workflows validates the recipe (against known subagents) then
-    saves it; an unknown-subagent recipe is rejected; DELETE removes it."""
-    from graph.workflows.engine import validate_recipe
+def test_workflows_plugin_router_save_validates_and_deletes(tmp_path, monkeypatch) -> None:
+    """The workflows plugin self-registers /api/plugins/workflows; save validates the
+    recipe (against the live subagent registry) then writes it; an unknown-subagent
+    recipe is rejected (400); DELETE removes it. Workflows now live in the plugin."""
+    from types import SimpleNamespace
 
-    saved: dict = {}
+    import plugins.workflows as wf
+    import runtime.state as rs
 
-    def _save(recipe):
-        errors = validate_recipe(recipe, known_subagents={"researcher"})
-        if errors:
-            raise ValueError("; ".join(errors))
-        saved[recipe["name"]] = recipe
-        return {"saved": True, "name": recipe["name"]}
+    # Point the writable recipe dir at a tmp dir + a known subagent set (no live STATE).
+    monkeypatch.setattr(wf.sdk, "config", lambda: SimpleNamespace(workflow_dir=str(tmp_path)))
+    monkeypatch.setattr(wf.sdk, "subagent_types", lambda: {"researcher"})
+    # register() publishes onto global STATE — record so monkeypatch restores it (no leak).
+    monkeypatch.setattr(rs.STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "workflow_run", None, raising=False)
 
-    def _delete(name):
-        return {"deleted": saved.pop(name, None) is not None}
+    captured: dict = {}
 
-    async def _run(req):
-        return "ok"
+    class _Reg:
+        workflow_dirs: list = []
 
-    async def _batch(req):
-        return "ok"
+        def register_tools(self, tools):
+            pass
+
+        def register_workflow_dir(self, d):
+            pass
+
+        def register_router(self, router, prefix=None):
+            captured["router"], captured["prefix"] = router, prefix
+
+    wf.register(_Reg())
 
     app = FastAPI()
-    register_operator_routes(
-        app,
-        runtime_status=lambda: {},
-        subagent_list=lambda: [],
-        subagent_run=_run,
-        subagent_batch=_batch,
-        workflows_save=_save,
-        workflows_delete=_delete,
-    )
+    app.include_router(captured["router"], prefix=captured["prefix"])
     client = TestClient(app)
 
     good = {
@@ -254,12 +255,11 @@ def test_workflow_save_validates_saves_and_deletes() -> None:
         "steps": [{"id": "s1", "subagent": "researcher", "prompt": "{{inputs.topic}}"}],
         "output": "{{steps.s1.output}}",
     }
-    r = client.post("/api/workflows", json=good)
+    r = client.post("/api/plugins/workflows/save", json=good)
     assert r.status_code == 200 and r.json()["saved"] is True
-    assert "demo" in saved
 
     bad = dict(good, name="bad", steps=[{"id": "s1", "subagent": "ghost", "prompt": "x"}])
-    assert client.post("/api/workflows", json=bad).status_code >= 400
+    assert client.post("/api/plugins/workflows/save", json=bad).status_code == 400
 
-    assert client.delete("/api/workflows/demo").json()["deleted"] is True
-    assert client.delete("/api/workflows/demo").json()["deleted"] is False
+    assert client.delete("/api/plugins/workflows/demo").json()["deleted"] is True
+    assert client.delete("/api/plugins/workflows/demo").json()["deleted"] is False

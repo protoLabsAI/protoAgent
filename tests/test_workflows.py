@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
-from graph.workflows.engine import (
+from plugins.workflows.engine import (
     execute_workflow,
     render_template,
     resolve_inputs,
     validate_recipe,
 )
-from graph.workflows.registry import WorkflowRegistry
+from plugins.workflows.registry import WorkflowRegistry
 
 VALID = {
     "name": "demo",

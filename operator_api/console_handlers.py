@@ -238,44 +238,6 @@ async def _operator_goals_set(body: dict) -> dict:
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
-def _operator_workflows_list() -> dict:
-    if STATE.workflow_registry is None:
-        return {"workflows": []}
-    return {"workflows": STATE.workflow_registry.list()}
-
-
-async def _operator_workflow_run(name: str, inputs: dict) -> dict:
-    if STATE.graph is None:
-        raise RuntimeError("agent graph is not loaded; finish setup first")
-    from graph.agent import run_manual_workflow
-    return await run_manual_workflow(
-        STATE.graph_config, STATE.workflow_registry,
-        knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
-        name=name, inputs=inputs or {},
-        extra_tools=STATE.plugin_tools + STATE.mcp_tools,
-    )
-
-
-def _operator_workflow_save(recipe: dict) -> dict:
-    # Validate against the live subagent registry before writing, so a
-    # UI-authored recipe can't reference an unknown subagent / bad DAG.
-    if STATE.workflow_registry is None:
-        raise RuntimeError("workflows are not available")
-    from graph.subagents.config import SUBAGENT_REGISTRY
-    from graph.workflows.engine import validate_recipe
-    errors = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
-    if errors:
-        raise ValueError("invalid recipe: " + "; ".join(errors))
-    path = STATE.workflow_registry.save(recipe)
-    return {"saved": True, "name": recipe.get("name"), "path": path}
-
-
-def _operator_workflow_delete(name: str) -> dict:
-    if STATE.workflow_registry is None:
-        raise RuntimeError("workflows are not available")
-    return {"deleted": STATE.workflow_registry.delete(name)}
-
-
 async def _operator_activity_list() -> dict:
     """Return the Activity provenance feed (ADR 0022) — newest-first entries
     with origin/trigger/priority — plus the thread's message history from the

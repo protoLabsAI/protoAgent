@@ -7,9 +7,9 @@ from pathlib import Path
 import yaml
 
 from graph.subagents.config import SUBAGENT_REGISTRY
-from graph.workflows.engine import validate_recipe
+from plugins.workflows.engine import validate_recipe
 
-RECIPE_PATH = Path(__file__).parent.parent / "workflows" / "deep-research.yaml"
+RECIPE_PATH = Path(__file__).parent.parent / "plugins" / "workflows" / "recipes" / "deep-research.yaml"
 
 
 def _recipe() -> dict:

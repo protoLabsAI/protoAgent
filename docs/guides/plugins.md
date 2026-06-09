@@ -160,6 +160,21 @@ def register(registry):
     registry.register_surface(lambda: _gateway(_on_message), name="my-gateway")
 ```
 
+### Tapping core deeper — `graph.sdk` (ADR 0043)
+
+`registry.host` covers the common cases. For deeper capability, import the **consumption
+SDK** directly — `from graph.sdk import …`, the *stable* surface plugins call into core
+(so core can refactor underneath you; never reach into `graph.agent` internals). v1:
+
+- `run_subagent(subagent_type, prompt, *, description)` — run **one subagent** to
+  completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
+- `subagent_types()` — the configured subagent ids.
+- `config()` — the live `LangGraphConfig`.
+
+The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
+injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
+core, not just contribute to it.
+
 ## Events — the plugin bus (ADR 0039)
 
 Plugins coordinate by **broadcasting events**, never by importing each other. You publish under your

@@ -368,16 +368,13 @@ def _parse_workflow_command(message: str):
 async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
     """Run a workflow command and format its output as the assistant reply.
 
-    ``on_step`` is forwarded to ``run_manual_workflow`` so the caller can stream
-    per-step progress (the chat path renders a tool card per step)."""
-    from graph.agent import run_manual_workflow
-
+    ``on_step`` is forwarded to the workflows plugin's runner (``STATE.workflow_run``,
+    set when the plugin is enabled) so the caller can stream per-step progress (the
+    chat path renders a tool card per step)."""
+    if STATE.workflow_run is None:
+        return "⚠️ workflows are not enabled"
     try:
-        result = await run_manual_workflow(
-            STATE.graph_config, STATE.workflow_registry,
-            knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
-            name=name, inputs=inputs, on_step=on_step,
-        )
+        result = await STATE.workflow_run(name, inputs, on_step=on_step)
     except ValueError as exc:
         return f"⚠️ {exc}"
     raw = result.get("output") or ""
