@@ -901,40 +901,16 @@ select:disabled {
   line-height: 1.5;
 }
 
-.scroll-area {
-  min-width: 0;
+/* Scroll regions use @protolabsai/ui <ScrollArea> (.pl-scroll). Bridge the bits
+   the DS primitive doesn't carry yet: min-height:0 so it scrolls inside a flex/
+   grid parent, overscroll containment, a stable gutter, and a focus ring for the
+   keyboard-focusable region (role="region" tabIndex=0). Candidate DS upticks. */
+.pl-scroll {
   min-height: 0;
-  overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
 }
-
-.scroll-area::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.scroll-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scroll-area::-webkit-scrollbar-thumb {
-  min-height: 40px;
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
-  background-clip: padding-box;
-}
-
-.scroll-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.34);
-  background-clip: padding-box;
-}
-
-.scroll-area:focus-visible {
+.pl-scroll:focus-visible {
   outline: 1px solid var(--fg);
   outline-offset: -2px;
 }

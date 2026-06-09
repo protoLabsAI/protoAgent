@@ -31,17 +31,17 @@ test("deleting a playbook confirms first, then removes it", async ({ page }) => 
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
 
-  // Delete the learned one → custom confirm dialog (not window.confirm).
+  // Delete the learned one → confirm dialog (@protolabsai/ui, not window.confirm).
   await surface.getByTestId("playbook-delete-2").click();
-  const dialog = page.getByTestId("confirm-dialog");
+  const dialog = page.getByRole("dialog", { name: "Delete skill?" });
   await expect(dialog).toBeVisible();
 
   // Cancel keeps it.
-  await page.getByTestId("confirm-cancel").click();
+  await page.getByRole("button", { name: "Cancel" }).click();
   await expect(surface.getByText("pr-triage-flow")).toBeVisible();
 
   // Confirm removes the row.
   await surface.getByTestId("playbook-delete-2").click();
-  await page.getByTestId("confirm-accept").click();
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(surface.getByText("pr-triage-flow")).toBeHidden();
 });
