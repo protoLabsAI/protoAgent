@@ -87,12 +87,17 @@ What the console needs that **`@protolabsai/ui@0.4.0` does not provide.** Ordere
 
 4. **`Tabs` — add `icon` + `badge` slots.** DS `TabItem` is `{id, label, disabled, locked}`. Our `StageSubnav` (21 uses) needs a leading **icon** and a trailing **badge** (e.g. Inbox unread count). Small additive change to the existing `TabItem` type; would let us retire `StageSubnav`.
 
-### P2 — smaller composites / verifications
+### P2 — one real gap; the rest verified as already-covered
 
-5. **`Banner` / `Alert`** — inline settings banners + `panel-error` (6 css rules). DS has `Callout` (marketing) — confirm it fits app inline-error/notice use or add an app `Alert`.
-6. **`EmptyState`** — DS `Empty` exists; confirm it covers our empty-list/zero-state needs (icon + title + hint + action) before we standardize.
-7. **Metric/Stat** — telemetry `.metric`/`.telemetry-table` → DS `Stat`/`Stats`; verify the dashboard look maps.
-8. **Markdown / `Prose`** — chat + docs render markdown (46 `.markdown` rules). Likely stays app-side (chat-specific affordances), but DS `Prose` may cover static prose. Flag, don't assume.
+5. **`ScrollArea` parity** ([#134](https://github.com/protoLabsAI/protoContent/issues/134)) — adopting DS `ScrollArea` showed `.pl-scroll` drops `min-height:0` (breaks flex/grid-child scroll), `overscroll-behavior`, and any focus ring for a focusable region. We bridge it app-side today (PR #767); filed to fold upstream.
+
+**Verified against installed 0.4.0 source — these are NOT gaps, just adopt:**
+- **Banner/Alert** → DS **`Callout`** `{tone, title, children}` covers settings-banner + `panel-error`.
+- **Metric** → DS **`Stat`/`Stats`** covers telemetry `.metric`.
+- **StatusPill** → DS **`StatusDot`** has a `label` prop (and `Badge` for the pill form) — clean map.
+- **Form fields** → DS **`Field`** has `multiline`/`readOnly`/`onValueChange`.
+- **EmptyState** → DS **`Empty`** is a bare styled wrapper; compose icon/title/action inside it (workable, not filed).
+- **Markdown** → stays app-side (chat-specific affordances); DS `Prose` only for static prose.
 
 ### Not for the DS (stays app-local)
 
@@ -107,6 +112,7 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 | [#131](https://github.com/protoLabsAI/protoContent/issues/131) | `Menu` / `DropdownMenu` (Radix, open-at-coords) | P0 | Filed |
 | [#132](https://github.com/protoLabsAI/protoContent/issues/132) | `PanelHeader` composite | P1 | Filed |
 | [#133](https://github.com/protoLabsAI/protoContent/issues/133) | `Tabs` icon+badge slots | P1 | Filed |
+| [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | Filed |
 | — | **AppShell** dual-rail convergence | P0 | **Held — live coordination first** (architectural) |
 
 ## Summary for the UI team
