@@ -85,7 +85,8 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
-import { AppShell, UtilityBar } from "@protolabsai/ui/app-shell";
+import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
+import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
@@ -598,20 +599,18 @@ export function App() {
       {/* macOS desktop: the topbar IS the window's drag region (its brand insets
           right of the native traffic lights — see `.is-tauri-mac .topbar`).
           Interactive children (the status dot) stay clickable; harmless on web. */}
-      <header className="topbar" data-tauri-drag-region>
-        <div className="brand-lockup">
-          {/* BASE_URL is "/app/" in dev and "./" in the desktop build — a
-              hardcoded "/app/…" 404s in the bundle (assets sit at the root). */}
-          <img src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" className="brand-mark" />
-          <div>
-            {/* White-label: the brand name follows the configured identity
-                (Settings → Identity), defaulting to protoAgent for the template.
-                A fork sets its name once and the whole UI follows. */}
-            <div className="brand-name">{brandName(runtime?.identity?.name)}</div>
-            <div className="brand-subline">{runtime?.identity?.org || "protoLabs.studio"}</div>
-          </div>
-        </div>
-        <div className="topbar-status">
+      {/* White-label top bar — DS Header (protoContent #159). name follows the configured
+          identity (Settings ▸ Identity), org is identity.org (falls back to protoLabs.studio),
+          logo is the brand mark, status is the glanceable health light. BASE_URL is "/app/" in
+          dev and "./" in the desktop build (assets sit at the root). dragRegion = the Tauri
+          window drag region. */}
+      <div className="app-topbar">
+      <Header
+        dragRegion
+        logo={<Logo src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" size={22} />}
+        name={brandName(runtime?.identity?.name)}
+        org={runtime?.identity?.org || "protoLabs.studio"}
+        status={
           <button
             type="button"
             className={`status-dot tone-${health.tone}`}
@@ -630,8 +629,9 @@ export function App() {
             data-testid="live-indicator"
             data-live={live ? "true" : "false"}
           />
-        </div>
-      </header>
+        }
+      />
+      </div>
 
       {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
           cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all
