@@ -46,3 +46,15 @@ def test_skills_scope_config_parses(tmp_path):
     cfg = tmp_path / "c.yaml"
     cfg.write_text("skills: { scope: layered }\n")
     assert LangGraphConfig.from_yaml(str(cfg)).skills_scope == "layered"
+
+
+def test_layered_dedup_best_match_wins(tmp_path):
+    """ADR 0041 contract — a skill present in BOTH tiers appears once in a layered
+    read (de-duped by name; the better BM25 match wins)."""
+    private, commons = _idx(tmp_path)
+    private.add_skill(_art("dup_skill", "private copy mentions apples"))
+    commons.add_skill(_art("dup_skill", "commons copy mentions apples"))
+    idx = LayeredSkillsIndex(private, commons)
+    hits = [r for r in idx.load_skills("apples", k=10) if r.name == "dup_skill"]
+    assert len(hits) == 1  # de-duped across tiers, single best-scoring record
+    idx.close()
