@@ -4,7 +4,7 @@
 - **Date:** 2026-05-30
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** architecture, scheduler, reactive, a2a, streaming, inbox, security
-- **Supersedes / Superseded by:** The reactive **machinery** stands; the **Activity surface** is refined by [ADR 0022](./0022-activity-provenance-feed.md) (a provenance feed, not a second chat).
+- **Supersedes / Superseded by:** The reactive **machinery** stands; the **Activity surface** is refined by [ADR 0022](./0022-activity-provenance-feed.md) (a provenance feed, not a second chat). The **event bus** here is extended into a decoupled plugin pub/sub by [ADR 0039](./0039-plugin-event-bus.md) (topics + wildcards + in-process subscriptions; the SSE frame becomes topic-in-payload).
 
 > Accepted. protoAgent gains a **reactive surface** so the agent can respond to
 > stimuli that aren't a live user chat turn — scheduled prompts, webhooks, and
