@@ -269,6 +269,22 @@ class GoalController:
         self._store.set(state)
         # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
         await fire_goal_hooks(status, state)
+        # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a terminal
+        # goal — no goal_hook plugin required, no cross-dependency. `goal.achieved` on success;
+        # `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must never break finish.
+        try:
+            from graph.plugins.host import HOST
+            if HOST.publish:
+                HOST.publish("goal.achieved" if status == "achieved" else "goal.failed", {
+                    "session_id": state.session_id,
+                    "condition": state.condition,
+                    "status": status,
+                    "reason": reason,
+                    "evidence": evidence or state.last_evidence or "",
+                    "mode": state.mode,
+                })
+        except Exception:  # noqa: BLE001
+            log.debug("[goals] goal.* bus emit failed", exc_info=True)
         glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗"}.get(status, "•")
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 

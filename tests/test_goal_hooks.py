@@ -78,3 +78,29 @@ async def test_controller_finish_fires_on_achieved(tmp_path):
     finally:
         set_goal_hooks([])
         set_plugin_verifiers({})
+
+
+@pytest.mark.asyncio
+async def test_finish_emits_goal_event_on_the_bus(tmp_path):
+    """A terminal goal broadcasts goal.achieved/goal.failed (ADR 0039) so ANY plugin can react —
+    no goal_hook required."""
+    from graph.plugins.host import HOST
+
+    events: list[tuple[str, dict]] = []
+
+    async def _met(spec, ctx):
+        return VerifyResult(True, "passed", "credits=1000000")
+
+    set_plugin_verifiers({"p:always": _met})
+    orig = HOST.publish
+    HOST.publish = lambda topic, data: events.append((topic, data))
+    try:
+        c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+        c.set_goal_safe("s", "reach target", {"type": "plugin", "check": "p:always"})
+        await c.evaluate("s", last_text="done")
+        assert events and events[0][0] == "goal.achieved"
+        assert events[0][1]["condition"] == "reach target"
+        assert events[0][1]["status"] == "achieved"
+    finally:
+        HOST.publish = orig
+        set_plugin_verifiers({})
