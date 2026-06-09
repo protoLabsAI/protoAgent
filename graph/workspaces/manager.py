@@ -183,13 +183,17 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     src_cfg = src_path / "langgraph-config.yaml" if src_path.is_dir() else src_path
     if not src_cfg.exists():
         return
+    import yaml
+
     from graph.config_io import load_yaml_doc, save_yaml_doc
 
-    host = load_yaml_doc(src_cfg)
+    # Read the host's model as PLAIN data (not ruamel) — a ruamel node carries a parent ref and
+    # can't be grafted into another document. The destination stays ruamel (comment-preserving).
+    host = yaml.safe_load(src_cfg.read_text()) or {}
     new = load_yaml_doc(cfg)
     if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
         new["model"] = host["model"]
-        save_yaml_doc(new, cfg)
+        save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
     if src_sec.exists():  # carries the api_key so the gateway actually works
         shutil.copyfile(src_sec, ws / "secrets.yaml")

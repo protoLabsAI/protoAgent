@@ -217,9 +217,9 @@ async function serveStatic(pathname, res) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  // Fleet proxy (ADR 0042): /active/<path> is the hub re-proxying the console to the active
-  // agent. The mock just strips the prefix and serves the same handlers (one agent here).
-  const pathname = url.pathname.startsWith("/active/") ? url.pathname.slice("/active".length) : url.pathname;
+  // Fleet slug proxy (ADR 0042): /agents/<slug>/<path> is the hub re-proxying the console to a
+  // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
+  const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
 
   if (pathname === "/a2a" && req.method === "POST") {
     const body = await readBody(req);

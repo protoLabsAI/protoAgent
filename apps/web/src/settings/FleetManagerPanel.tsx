@@ -6,7 +6,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
-import { api } from "../lib/api";
+import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import type { FleetAgent } from "../lib/types";
 
@@ -22,7 +22,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const [purge, setPurge] = useState(false);
 
   const agents = fleet.data?.agents ?? [];
-  const active = fleet.data?.active ?? null;
+  const slug = currentSlug(); // the agent this window is focused on (the URL slug)
 
   const run = useMutation({
     mutationFn: async (fn: () => Promise<unknown>) => fn(),
@@ -62,8 +62,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         ) : (
           <ul className="fleet-list">
             {agents.map((a) => {
-              // The host is focused when no peer is active (active === null).
-              const isActive = a.name === active || (!!a.host && active === null);
+              const isActive = (a.host ? "host" : a.id) === slug; // slug = stable id, not name
               return (
                 <li key={a.name} className={`fleet-row${isActive ? " active" : ""}`}>
                   <span

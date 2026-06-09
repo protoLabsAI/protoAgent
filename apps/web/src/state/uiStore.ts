@@ -16,29 +16,18 @@ import type { SettingsTab } from "../settings/SettingsSurface";
 
 // Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
 // active surface, plugins out. In the single-agent product that fell out for free (each agent
-// is its own origin → its own localStorage); the unified console (one origin + the /active
-// proxy) collapses that, so we namespace the persisted key by the active agent instead. The
-// switcher calls setLayoutAgent(name) + useUI.persist.rehydrate() on a switch, so flipping
-// agents loads that agent's saved layout. Empty = single-agent (the legacy un-suffixed key).
-const _ACTIVE_AGENT_KEY = "protoagent.activeAgent";
-// Read synchronously at module load so the store hydrates from the right agent's key on
-// reload (no flash / no race with the async fleet fetch).
+// is its own origin → its own localStorage); the unified console collapses that, so we namespace
+// the persisted key by the agent. With slug routing (ADR 0042) the agent IS the URL slug
+// (/app/agent/<slug>/), so derive the layout key from the URL at module load — each window keys
+// its own layout, deterministically, no switch event needed. host = the legacy un-suffixed key.
 let _layoutAgent = (() => {
   try {
-    return globalThis.localStorage.getItem(_ACTIVE_AGENT_KEY) || "";
+    const m = globalThis.location?.pathname?.match(/\/agent\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : "";
   } catch {
     return "";
   }
 })();
-export function setLayoutAgent(name: string) {
-  _layoutAgent = name || "";
-  try {
-    if (_layoutAgent) globalThis.localStorage.setItem(_ACTIVE_AGENT_KEY, _layoutAgent);
-    else globalThis.localStorage.removeItem(_ACTIVE_AGENT_KEY);
-  } catch {
-    /* no-op */
-  }
-}
 const _layoutStorage = createJSONStorage(() => ({
   getItem: (name: string) => globalThis.localStorage.getItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
   setItem: (name: string, value: string) =>

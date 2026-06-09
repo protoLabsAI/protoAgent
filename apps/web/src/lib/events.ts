@@ -59,18 +59,6 @@ function ensureOpen() {
   source.onmessage = (event) => dispatch((event as MessageEvent).data);
 }
 
-/** Re-point the SSE stream at the currently-active agent — call after a fleet switch (ADR 0042)
- *  so live activity/notifications follow the focused agent. The single EventSource resolves its
- *  URL once at open; closing + reopening picks up the new active prefix (`/active/api/events`). */
-export function reopenEvents() {
-  if (source) {
-    source.close();
-    source = null;
-    setConnected(false);
-  }
-  if (subs.size || connListeners.size) ensureOpen(); // reopen only if anything's listening
-}
-
 /** Subscribe to a topic (exact, or a `*`/`#` pattern). Returns an unsubscribe function. */
 export function onTopic(pattern: string, fn: Listener): () => void {
   ensureOpen();

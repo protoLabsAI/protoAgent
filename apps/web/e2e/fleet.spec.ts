@@ -47,7 +47,7 @@ test("stop a running agent flips its status dot", async ({ page }) => {
   }
 });
 
-test("topbar switcher activates an agent in place", async ({ page }) => {
+test("topbar switcher navigates to an agent by slug", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const trigger = page.getByTestId("fleet-switcher");
   await expect(trigger).toBeVisible(); // present because the mock fleet has agents
@@ -55,5 +55,8 @@ test("topbar switcher activates an agent in place", async ({ page }) => {
   const roxy = page.getByRole("menuitem", { name: /roxy/ });
   await expect(roxy).toBeVisible();
   await roxy.click();
-  await expect(trigger).toContainText("roxy"); // active flipped → trigger repaints
+  // Slug routing (ADR 0042): picking an agent navigates to its own URL — each window is its
+  // own agent. After the nav, the console is focused on roxy.
+  await expect(page).toHaveURL(/\/app\/agent\/roxy\//);
+  await expect(page.getByTestId("fleet-switcher")).toContainText("roxy");
 });

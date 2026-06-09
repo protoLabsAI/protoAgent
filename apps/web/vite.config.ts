@@ -16,11 +16,11 @@ export default defineConfig(({ mode }) => {
         "/api": apiBase,
         "/a2a": apiBase,
         "/v1": apiBase,
-        // The fleet hub's reverse proxy to the focused agent (ADR 0042). When a peer is
-        // active, the console rewrites agent calls to /active/* (XHR AND plugin-view iframe
-        // srcs). In prod the backend serves /active; the dev server must proxy it too, else
-        // every switched-into call (and iframe) 404s on Vite's /app/ base.
-        "/active": apiBase,
+        // The fleet hub's per-agent reverse proxy (ADR 0042 slug routing). A console window on
+        // /app/agent/<slug>/ rewrites agent calls to /agents/<slug>/* (XHR AND plugin-view iframe
+        // srcs). In prod the backend serves /agents; the dev server must proxy it too, else every
+        // call (and iframe) from a peer window 404s on Vite's /app/ base.
+        "/agents": apiBase,
         // Plugin-contributed views are iframes the backend serves at /plugins/<id>/…
         // (ADR 0026). In prod the backend serves /app + /plugins together; the dev
         // server must proxy them too, else a plugin view 404s on Vite's /app/ base.

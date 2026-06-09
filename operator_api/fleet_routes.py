@@ -76,6 +76,18 @@ def register_fleet_routes(app) -> None:
         """
         return await proxy.forward(request, path)
 
+    @app.api_route("/agents/{slug}/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def _agent_proxy(slug: str, path: str, request: Request):
+        """Reverse-proxy the console to a specific agent BY SLUG (ADR 0042 slug routing).
+
+        The slug lives in the console URL (``/app/agent/<slug>/``), so each window targets its
+        own agent — two agents can be open in two windows at once, and a reload can't desync
+        (the URL is the source of truth). ``host`` = this instance. Supersedes the single-active
+        ``/active/*`` lens above.
+        """
+        return await proxy.forward_to(slug, request, path)
+
     @app.post("/api/fleet")
     async def _create_agent(body: dict = Body(...)):
         """Create an agent (optionally from a bundle archetype) and start it.

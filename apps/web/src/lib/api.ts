@@ -118,34 +118,44 @@ function defaultApiBase() {
   return "";
 }
 
-// Fleet in-place switch (ADR 0042). When an agent is "active", agent-level /api/* calls
-// route through the hub's reverse proxy (/active/api/*) so the whole console reads/writes
-// the focused agent — one flag, no per-call change. Hub control-plane paths (the fleet
-// itself) are served by the supervisor and must NOT be proxied to an agent.
-let _activePrefix = "";
+// Fleet slug routing (ADR 0042). The focused agent lives in the URL — /app/agent/<slug>/ —
+// so each console window targets its own agent: deterministic, survives reload, and two
+// agents can be open in two windows at once. apiUrl() reads that slug and routes agent-level
+// calls through the hub's per-agent proxy (/agents/<slug>/api/*). `host` (or no slug) = this
+// instance, talking to /api directly. Hub control-plane paths (the fleet itself) are never
+// scoped — they're served by the supervisor.
+export function currentSlug(): string {
+  try {
+    const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : "host";
+  } catch {
+    return "host";
+  }
+}
 
-export function setActivePrefix(prefix: string) {
-  _activePrefix = prefix; // "" = talk to /api directly; "/active" = via the active-agent proxy
+/** URL of the console focused on `slug` (for navigation / opening a new window). */
+export function agentHref(slug: string): string {
+  const base = import.meta.env.BASE_URL || "/"; // "/app/"
+  return slug === "host" ? base : `${base}agent/${encodeURIComponent(slug)}/`;
 }
-export function getActivePrefix() {
-  return _activePrefix;
-}
+
 function isHubPath(path: string) {
-  // The fleet control plane is served by the supervisor itself — never proxied to an agent.
+  // The fleet control plane is served by the supervisor itself — never scoped to an agent.
   return path.startsWith("/api/fleet") || path.startsWith("/api/archetypes");
 }
 function isAgentPath(path: string) {
-  // Everything that drives the focused AGENT: its console API, its A2A brain (streaming chat
-  // posts here — #2), and its OpenAI-compat endpoint. /api/fleet stays on the hub.
+  // Everything that drives the focused AGENT: its console API, its A2A brain (streaming chat),
+  // and its OpenAI-compat endpoint. /api/fleet stays on the hub.
   return (path.startsWith("/api/") && !isHubPath(path)) || path.startsWith("/a2a") || path.startsWith("/v1");
 }
 
 export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
-  // Agent-level paths route through the active agent's proxy in fleet mode.
+  // Agent-level paths route through the focused agent's proxy, keyed by the URL slug.
   let p = path;
-  if (_activePrefix && isAgentPath(path)) {
-    p = `${_activePrefix}${path}`;
+  const slug = currentSlug();
+  if (slug !== "host" && isAgentPath(path)) {
+    p = `/agents/${encodeURIComponent(slug)}${path}`;
   }
   const base = defaultApiBase();
   return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;

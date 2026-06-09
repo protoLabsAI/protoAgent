@@ -97,15 +97,29 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-async def forward(request, path: str):
-    """Reverse-proxy ``request`` to ``/<path>`` on the active agent, streaming the
-    response back (SSE-safe). 409 if no agent is active."""
-    port = _active_port()
-    if port is None:
-        return JSONResponse(
-            {"detail": "no active agent — start one and POST /api/fleet/{name}/activate"},
-            status_code=409)
+# Per-slug port resolution (ADR 0042 slug routing) — each console window targets an agent by URL
+# slug (/agents/<slug>/…) instead of a single global "active". 'host' = this instance; a peer =
+# its workspace port. 1s TTL cache, keyed by slug, to keep the proxy hot path cheap.
+_slug_cache: dict = {}
 
+
+def _port_for_slug(slug: str) -> int | None:
+    now = time.monotonic()
+    hit = _slug_cache.get(slug)
+    if hit and now - hit[1] < 1.0:
+        return hit[0]
+    if slug == "host":
+        from runtime.state import STATE
+        port = getattr(STATE, "active_port", None)
+    else:
+        rec = supervisor._load_state().get(slug)
+        port = rec.get("port") if rec and supervisor._alive(rec.get("pid")) else None
+    _slug_cache[slug] = (port, now)
+    return port
+
+
+async def _forward_to_port(port: int, request, path: str):
+    """Stream-proxy ``request`` to ``/<path>`` on 127.0.0.1:<port> (SSE-safe)."""
     url = f"http://127.0.0.1:{port}/{path}"
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
@@ -116,8 +130,8 @@ async def forward(request, path: str):
         params=dict(request.query_params))
     try:
         upstream = await client.send(upstream_req, stream=True)
-    except httpx.ConnectError:
-        return JSONResponse({"detail": "active agent is not reachable"}, status_code=502)
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
 
     async def _pipe():
         try:
@@ -128,3 +142,23 @@ async def forward(request, path: str):
 
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP}
     return StreamingResponse(_pipe(), status_code=upstream.status_code, headers=resp_headers)
+
+
+async def forward_to(slug: str, request, path: str):
+    """Reverse-proxy to the agent named by ``slug`` (/agents/<slug>/* route, ADR 0042 slug
+    routing). ``host`` targets this instance; 409 if the agent isn't running."""
+    port = _port_for_slug(slug)
+    if port is None:
+        return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
+    return await _forward_to_port(port, request, path)
+
+
+async def forward(request, path: str):
+    """Reverse-proxy to the single active agent (back-compat /active/* route, superseded by
+    /agents/<slug>/* slug routing). 409 if no agent is active."""
+    port = _active_port()
+    if port is None:
+        return JSONResponse(
+            {"detail": "no active agent — start one and POST /api/fleet/{name}/activate"},
+            status_code=409)
+    return await _forward_to_port(port, request, path)
