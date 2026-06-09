@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
             alive.add(4242)
 
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     app = FastAPI()

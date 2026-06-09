@@ -20,6 +20,7 @@ def fleet(tmp_path, monkeypatch):
             alive.add(99001)
 
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
 
     def fake_kill(pid, sig):  # SIGTERM/SIGKILL "kills" the fake process
         alive.discard(int(pid))
@@ -70,6 +71,7 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
             alive.add(self.pid)
 
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     for nm in ("a", "b", "c"):           # a started first → least-recently-active

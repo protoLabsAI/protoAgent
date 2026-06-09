@@ -3,6 +3,7 @@ import { Check, ChevronDown, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api, setActivePrefix } from "../lib/api";
+import { reopenEvents } from "../lib/events";
 import { queryKeys } from "../lib/queries";
 import { setLayoutAgent, useUI } from "../state/uiStore";
 
@@ -39,6 +40,14 @@ export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: Reac
     if (prevAgent.current === null) {
       prevAgent.current = a;
       setLayoutAgent(a);
+      // #4 — on boot/reload, sync the client to the SERVER's fleet-active: the active prefix is
+      // in-memory (lost on reload), so without this the console would talk to /api (host) while
+      // the server reports a peer active — switcher checkmark, layout, and data source all
+      // disagree. Seed the prefix + re-point the SSE to match.
+      if (active) {
+        setActivePrefix("/active");
+        reopenEvents();
+      }
       return;
     }
     if (prevAgent.current !== a) {
@@ -54,9 +63,13 @@ export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: Reac
   const activate = useMutation({
     mutationFn: (a: { name: string; host?: boolean }) => api.activateAgent(a.name),
     onSuccess: (_res, a) => {
-      // Host → talk to /api directly (proxy cleared); peer → route through /active.
+      // Host → talk to /api directly (proxy cleared); peer → route through /active. Set the
+      // prefix BEFORE invalidating so refetches hit the focused agent (#2/#4).
       setActivePrefix(a.host ? "" : "/active");
+      reopenEvents(); // #3 — re-point the SSE stream at the focused agent
       setOpen(false);
+      // The whole console now reads the focused agent, so a full invalidate is intentional;
+      // the eviction freeze it used to stack on is gone (#6 moves stop() off the loop).
       qc.invalidateQueries();
     },
   });

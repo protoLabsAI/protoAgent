@@ -139,16 +139,22 @@ def create(name: str, *, from_config: str | None = None, bundle: str | None = No
         if shared_skills:
             _stamp_identity(cfg, name, True)
 
+    import yaml
     assigned = _pick_port(port)
     rec = {"id": name, "name": name, "port": assigned,
            "created": datetime.now(timezone.utc).isoformat(), "bundle": bundle or ""}
-
-    installed: list[str] = []
-    if bundle:
-        installed = _install_bundle_into(ws, bundle)
-
-    import yaml
+    # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
+    # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
+    # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
+    # workspace that's invisible in the list (no workspace.yaml).
     (ws / "workspace.yaml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    installed: list[str] = []
+    try:
+        if bundle:
+            installed = _install_bundle_into(ws, bundle)
+    except Exception:
+        shutil.rmtree(ws, ignore_errors=True)
+        raise
     return {**rec, "path": str(ws), "installed": installed}
 
 

@@ -18,8 +18,10 @@ import os
 import signal
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from filelock import FileLock, Timeout
 
 from graph.workspaces import manager
 
@@ -32,6 +34,29 @@ class FleetError(Exception):
 
 def _state_path() -> Path:
     return manager.workspaces_root() / "fleet.json"
+
+
+def _state_lock() -> FileLock:
+    """Cross-process lock around fleet.json read-modify-write (#12) — the hub, the CLI, and
+    concurrent requests all touch it, and an unlocked load-modify-save can drop entries."""
+    return FileLock(str(_state_path()) + ".lock", timeout=5)
+
+
+def _is_our_agent(pid: int) -> bool:
+    """PID-reuse guard (#10): fleet.json survives reboots, so a recycled pid can make a dead
+    agent look alive — and stop() could SIGKILL whatever unrelated process now owns it. Only
+    treat/kill a pid as ours if its command line is actually a protoAgent server. Best-effort:
+    if we can't inspect it, fall back to trusting the pid (don't break stop on odd platforms)."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if not out.strip():
+        return False  # pid not found
+    return "-m server" in out or ("python" in out.lower() and "server" in out)
 
 
 def _load_state() -> dict:
@@ -78,48 +103,60 @@ def start(name: str) -> dict:
     if ws is None:
         raise FleetError(f"no workspace {name!r} — create it: workspace new {name}")
 
-    state = _load_state()
-    rec = state.get(name)
-    if rec and _alive(rec.get("pid")):
-        return {**rec, "name": name, "running": True, "already": True}
+    with _state_lock():
+        state = _load_state()
+        rec = state.get(name)
+        if rec and _alive(rec.get("pid")):
+            return {**rec, "name": name, "running": True, "already": True}
 
-    env, argv = manager.run_exec(name, ["--ui", "none"])
-    full_env = {**os.environ, **env}
-    log_path = _log_path(name)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
-    # start_new_session detaches it from this CLI's process group so it survives exit.
-    proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
-    now = datetime.now(timezone.utc).isoformat()
-    rec = {"pid": proc.pid, "port": ws.get("port"), "id": ws.get("id", name),
-           "started_at": now, "last_active": now, "log": str(log_path)}
-    state[name] = rec
-    _save_state(state)
+        env, argv = manager.run_exec(name, ["--ui", "none"])
+        full_env = {**os.environ, **env}
+        log_path = _log_path(name)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
+        # start_new_session detaches it from this CLI's process group so it survives exit.
+        proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
+        now = datetime.now(timezone.utc).isoformat()
+        rec = {"pid": proc.pid, "port": ws.get("port"), "id": ws.get("id", name),
+               "started_at": now, "last_active": now, "log": str(log_path)}
+        state[name] = rec
+        _save_state(state)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
     return {**rec, "name": name, "running": True, "already": False}
 
 
 def stop(name: str, *, timeout: float = 8.0) -> dict:
-    """SIGTERM the agent and reap its registry entry (SIGKILL if it lingers)."""
+    """SIGTERM the agent and reap its registry entry (SIGKILL if it lingers).
+
+    NOTE: this blocks (busy-wait) up to ``timeout`` — call it off the event loop
+    (``asyncio.to_thread``); the routes do. The registry entry is removed under the lock
+    first, then the kill happens OUTSIDE the lock so the wait can't freeze other state ops.
+    """
     name = manager._safe(name)
-    state = _load_state()
-    rec = state.get(name)
-    if not rec or not _alive(rec.get("pid")):
-        state.pop(name, None)
+    with _state_lock():
+        state = _load_state()
+        rec = state.get(name)
+        if not rec or not _alive(rec.get("pid")):
+            state.pop(name, None)
+            _save_state(state)
+            raise FleetError(f"{name!r} is not running")
+        pid = int(rec["pid"])
+        state.pop(name, None)  # reserve the stop while we hold the lock
         _save_state(state)
-        raise FleetError(f"{name!r} is not running")
-    pid = int(rec["pid"])
-    try:
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + timeout
-        while _alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.2)
-        if _alive(pid):
-            os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    state.pop(name, None)
-    _save_state(state)
+    # Kill outside the lock. Verify the pid is actually our agent first (#10 — a recycled
+    # pid after a reboot could otherwise get SIGKILLed even though it's unrelated).
+    if _is_our_agent(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + timeout
+            while _alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.2)
+            if _alive(pid):
+                os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    else:
+        log.warning("[fleet] %s pid %d is not our agent (pid reuse?) — reaped entry, no kill", name, pid)
     log.info("[fleet] stopped %s (pid %d)", name, pid)
     return {"name": name, "stopped": True}
 
@@ -150,15 +187,19 @@ def _host_entry() -> dict:
 
 def status() -> list[dict]:
     """The host (this instance) + every workspace, with live status (running/stopped)."""
-    state = _load_state()
-    dirty = False
+    with _state_lock():
+        state = _load_state()
+        dirty = False
+        for name in list(state):  # prune dead entries under the lock (#12 — atomic cleanup)
+            if not _alive(state[name].get("pid")):
+                state.pop(name, None)
+                dirty = True
+        if dirty:
+            _save_state(state)
     out: list[dict] = [_host_entry()]
     for ws in manager.list_workspaces():
         rec = state.get(ws["name"]) or {}
         running = _alive(rec.get("pid"))
-        if rec and not running:  # stale entry — agent died; clean it
-            state.pop(ws["name"], None)
-            dirty = True
         port = ws.get("port")
         out.append({"name": ws["name"], "id": ws.get("id", ws["name"]),
                     "port": port, "pid": rec.get("pid") if running else None,
@@ -168,8 +209,6 @@ def status() -> list[dict]:
                     # focused agent can `delegate_to` an unfocused sibling here. Live only
                     # while running, but the address is stable.
                     "a2a": f"http://127.0.0.1:{port}/a2a" if port else None})
-    if dirty:
-        _save_state(state)
     return out
 
 
@@ -208,11 +247,12 @@ def max_warm() -> int:
 def touch(name: str) -> None:
     """Mark an agent as most-recently-active (drives LRU eviction)."""
     name = manager._safe(name)
-    state = _load_state()
-    rec = state.get(name)
-    if rec:
-        rec["last_active"] = datetime.now(timezone.utc).isoformat()
-        _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        rec = state.get(name)
+        if rec:
+            rec["last_active"] = datetime.now(timezone.utc).isoformat()
+            _save_state(state)
 
 
 def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> list[str]:
@@ -224,9 +264,17 @@ def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> 
     running = [(n, r) for n, r in _load_state().items() if _alive(r.get("pid"))]
     if len(running) <= keep:
         return []
-    # Oldest last_active first; the protected agent is never a candidate.
+    # Oldest last_active first; the protected target is never a candidate. Grace window (#13):
+    # an agent touched within PROTOAGENT_FLEET_WARM_GRACE seconds is spared too — it may be mid
+    # background turn. (Beyond the grace, eviction can interrupt a turn; the session resumes
+    # from its instance.id-scoped checkpoint on the next switch — that's by design.)
     running.sort(key=lambda kv: kv[1].get("last_active", ""))
-    candidates = [n for n, _ in running if n != protect]
+    # Opt-in grace (default 0 = pure LRU, unchanged): a positive value spares agents touched
+    # within that window, trading a temporarily-over-cap fleet for not killing a recently-active
+    # (possibly mid-turn) agent. Off by default so rapid switching still bounds the warm set.
+    grace = int(os.environ.get("PROTOAGENT_FLEET_WARM_GRACE", "0") or "0")
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace)).isoformat()
+    candidates = [n for n, r in running if n != protect and r.get("last_active", "") < cutoff]
     evicted: list[str] = []
     for n in candidates[: len(running) - keep]:
         try:

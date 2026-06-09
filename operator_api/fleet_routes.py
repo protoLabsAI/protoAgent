@@ -52,10 +52,12 @@ def register_fleet_routes(app) -> None:
             if host and name == host["name"]:
                 return {"ok": True, **proxy.clear_active(), "evicted": []}
             if not supervisor.is_running(name):
-                supervisor.start(name)  # resume a cold agent on switch (from checkpoint)
+                await asyncio.to_thread(supervisor.start, name)  # resume from checkpoint
             result = proxy.set_active(name)
             supervisor.touch(name)
-            evicted = supervisor.enforce_warm_cap(protect=name)
+            # Eviction can busy-wait on a SIGTERM (#6) — off the loop so a switch never
+            # freezes the hub / its proxied SSE streams.
+            evicted = await asyncio.to_thread(supervisor.enforce_warm_cap, protect=name)
             return {"ok": True, **result, "evicted": evicted}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
@@ -90,7 +92,7 @@ def register_fleet_routes(app) -> None:
             # create() may clone+install a bundle (subprocess) — keep it off the loop.
             ws = await asyncio.to_thread(
                 manager.create, name, bundle=bundle, port=port, shared_skills=shared)
-            agent = supervisor.start(name) if start else {
+            agent = (await asyncio.to_thread(supervisor.start, name)) if start else {
                 "name": name, "id": ws["id"], "port": ws["port"], "running": False}
             return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}
         except (manager.WorkspaceError, supervisor.FleetError) as exc:
@@ -99,14 +101,14 @@ def register_fleet_routes(app) -> None:
     @app.post("/api/fleet/{name}/start")
     async def _start_agent(name: str):
         try:
-            return {"ok": True, "agent": supervisor.start(name)}
+            return {"ok": True, "agent": await asyncio.to_thread(supervisor.start, name)}
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/fleet/{name}/stop")
     async def _stop_agent(name: str):
         try:
-            return {"ok": True, **supervisor.stop(name)}
+            return {"ok": True, **await asyncio.to_thread(supervisor.stop, name)}  # #6 — off the loop
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
 
@@ -114,16 +116,18 @@ def register_fleet_routes(app) -> None:
     async def _stop_fleet():
         """Shut down the **entire** fleet (every running agent). Mirrors the CLI's
         ``fleet down`` with no args."""
-        return {"ok": True, "stopped": [r["name"] for r in supervisor.down()]}
+        stopped = await asyncio.to_thread(supervisor.down)  # busy-waits per agent (#6)
+        return {"ok": True, "stopped": [r["name"] for r in stopped]}
 
     @app.delete("/api/fleet/{name}")
     async def _remove_agent(name: str, purge: bool = False):
         try:
             try:
-                supervisor.stop(name)  # stop if running; ignore if not
+                await asyncio.to_thread(supervisor.stop, name)  # stop if running (#6)
             except supervisor.FleetError:
                 pass
-            return {"ok": True, **manager.remove(name, purge=purge)}
+            # remove() rmtree's the workspace (purge) — also blocking.
+            return {"ok": True, **await asyncio.to_thread(manager.remove, name, purge=purge)}
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 

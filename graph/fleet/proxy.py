@@ -13,6 +13,7 @@ client is closed when the stream ends.
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 from starlette.responses import JSONResponse, StreamingResponse
@@ -46,6 +47,7 @@ def set_active(name: str) -> dict:
     if not supervisor.is_running(name):
         raise supervisor.FleetError(f"{name!r} is not running — start it first")
     _active_path().write_text(name)
+    invalidate_port_cache()  # a switch must take effect at once (#7 cache)
     log.info("[fleet] active agent → %s", name)
     return {"active": name}
 
@@ -56,16 +58,43 @@ def clear_active() -> dict:
     f = _active_path()
     if f.exists():
         f.unlink()
+    invalidate_port_cache()  # focusing the host must take effect at once (#7 cache)
     log.info("[fleet] active agent → host (cleared)")
     return {"active": None}
 
 
+# Active-port cache (#7) — forward() runs per proxied request (every chat POST, panel fetch,
+# SSE), so don't pay a full supervisor.status() scan (workspaces dir + YAML parse + os.kill per
+# pid) each time. Resolve the port straight from the active record with a 1s TTL, invalidated
+# immediately on a switch so a focus change still takes effect at once.
+_port_cache: dict = {"name": None, "port": None, "at": 0.0}
+
+
+def invalidate_port_cache() -> None:
+    _port_cache["at"] = 0.0
+
+
 def _active_port() -> int | None:
-    name = get_active()
-    if not name:
-        return None
-    return next((w["port"] for w in supervisor.status()
-                 if w["name"] == name and w["running"]), None)
+    now = time.monotonic()
+    if now - _port_cache["at"] < 1.0:
+        return _port_cache["port"]
+    name = get_active()  # verifies the agent is still running
+    port = (supervisor._load_state().get(name) or {}).get("port") if name else None
+    _port_cache.update(name=name, port=port, at=now)
+    return port
+
+
+# Shared client (#8) — one pooled AsyncClient instead of a fresh one (TCP setup + FD churn) per
+# request. Unlimited read/write (SSE streams forever) but a finite connect timeout so a peer
+# that accepts then stalls doesn't hang non-streaming requests indefinitely.
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0))
+    return _client
 
 
 async def forward(request, path: str):
@@ -81,14 +110,13 @@ async def forward(request, path: str):
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(None))
+    client = _get_client()
     upstream_req = client.build_request(
         request.method, url, headers=headers, content=body,
         params=dict(request.query_params))
     try:
         upstream = await client.send(upstream_req, stream=True)
     except httpx.ConnectError:
-        await client.aclose()
         return JSONResponse({"detail": "active agent is not reachable"}, status_code=502)
 
     async def _pipe():
@@ -96,8 +124,7 @@ async def forward(request, path: str):
             async for chunk in upstream.aiter_raw():
                 yield chunk
         finally:
-            await upstream.aclose()
-            await client.aclose()
+            await upstream.aclose()  # close the response, not the shared client
 
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP}
     return StreamingResponse(_pipe(), status_code=upstream.status_code, headers=resp_headers)
