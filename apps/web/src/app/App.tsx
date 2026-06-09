@@ -65,7 +65,7 @@ import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
-import { ConfirmDialog } from "@protolabsai/ui";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { useAnyChatStreaming } from "../chat/chat-store";
@@ -90,11 +90,11 @@ import { MobileNav } from "../components/MobileNav";
 import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
-import { Tabs } from "@protolabsai/ui";
-import { PanelHeader } from "@protolabsai/ui";
+import { Tabs } from "@protolabsai/ui/navigation";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
-import { useToast } from "@protolabsai/ui";
+import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";

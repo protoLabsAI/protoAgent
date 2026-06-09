@@ -2,7 +2,7 @@ import { Brain, Database, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import type { KnowledgeChunk } from "../lib/types";
 
 // Knowledge → Store (ADR 0020) — a searchable window onto the agent's knowledge

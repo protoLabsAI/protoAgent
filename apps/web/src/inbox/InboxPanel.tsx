@@ -8,7 +8,7 @@ import { Check, RefreshCw } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
 import { inboxQuery, queryKeys } from "../lib/queries";

@@ -8,7 +8,7 @@ import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { queryKeys, subagentsQuery, workflowsQuery } from "../lib/queries";
 import type { WorkflowRunResult } from "../lib/types";

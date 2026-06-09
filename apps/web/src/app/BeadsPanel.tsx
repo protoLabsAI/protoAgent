@@ -17,7 +17,7 @@ import {
 import { Suspense, useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { beadsIssuesQuery, queryKeys } from "../lib/queries";
 import type { BeadsIssue } from "../lib/types";
 import {
@@ -34,7 +34,7 @@ import {
   type IssueDraft,
 } from "./beads";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { ScrollArea } from "@protolabsai/ui";
+import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
 
 // The agent's task board (in-process beads store), on the TanStack Query data

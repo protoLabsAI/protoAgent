@@ -2,7 +2,7 @@ import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 
 // Author a workflow recipe from the console (Sprint C): name + inputs + steps
 // (id, subagent, prompt, depends_on) + output → POST /api/workflows, which

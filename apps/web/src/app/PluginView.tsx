@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
 import { onTopic, topicMatches } from "../lib/events";
-import { Tabs } from "@protolabsai/ui";
+import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
 
 // Derive the plugin id from a view path (`/api/plugins/<id>/...`) — used to namespace-stamp
