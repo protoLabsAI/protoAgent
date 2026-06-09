@@ -34,6 +34,20 @@ themeable, on-brand, and safe to share across the console + every plugin remote.
    styles live in the package's `styles.css`. The console imports `@protolabsai/ui/styles.css` once.
    (The console's Tailwind from ADR 0037 is for *app* markup only — it never styles DS components.)
 
+   **Import from the domain subpath, not a root barrel** (0.8.0+ — the root `export *` was removed):
+   ```ts
+   import { Button, Badge } from "@protolabsai/ui/primitives";
+   import { Dialog, Drawer, ConfirmDialog, ToastProvider, useToast, Tooltip } from "@protolabsai/ui/overlays";
+   import { Tabs, PanelHeader } from "@protolabsai/ui/navigation";
+   import { Field, Input, Select, Textarea, Switch, Checkbox } from "@protolabsai/ui/forms";
+   import { Table, StatusDot, Spinner, ScrollArea, Skeleton } from "@protolabsai/ui/data";
+   import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
+   import { AppShell, SurfaceRail, MobileNav } from "@protolabsai/ui/app-shell";
+   import "@protolabsai/ui/styles.css"; // still one CSS import
+   ```
+   Modules: `primitives` · `layout` · `marketing` · `navigation` · `forms` · `overlays` · `data` ·
+   `menu` · `app-shell`. Internals stay private (no deep imports past a subpath).
+
 3. **Class naming: BEM-ish `pl-` namespace.** `pl-x` (root), `pl-x__part` (element), `pl-x--variant`
    (modifier), `is-active`/`is-open` (state). Mirrors the existing package (`pl-panel-header__title`,
    `pl-btn--ghost`, `pl-rail__badge`).

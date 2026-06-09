@@ -99,7 +99,7 @@ test("right-click a rail surface opens a context menu that moves it (ADR 0036)",
 
   // Right-click it → the context menu opens with the move item.
   await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
-  const menu = page.getByTestId("context-menu");
+  const menu = page.locator(".pl-menu");
   await expect(menu).toBeVisible();
   await menu.getByText("Move to left rail").click();
 
@@ -115,7 +115,7 @@ test("Chat is movable too — right-click → move to the right rail (ADR 0036)"
 
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
   await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
-  await page.getByTestId("context-menu").getByText("Move to right rail").click();
+  await page.locator(".pl-menu").getByText("Move to right rail").click();
 
   // Chat now lives on the right rail (no longer pinned left).
   await expect(rightRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
