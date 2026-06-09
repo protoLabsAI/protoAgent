@@ -318,6 +318,12 @@ class LangGraphConfig:
     skills_db_path: str = "/sandbox/skills.db"
     skills_top_k: int = 5
     skills_dir: str = ""
+    # Tiered stores (ADR 0041) — `shared` lifts a store out of per-instance scoping
+    # into the COMMONS (read by every agent on the host); `scoped` keeps it private.
+    # Slice 1: skills can be shared (a fleet's compounding skill library). Default
+    # False = legacy per-instance behavior (no surprise migration).
+    skills_shared: bool = False
+    commons_path: str = ""  # commons base dir; blank → ~/.protoagent/commons
 
     # Workflows — declarative multi-step subagent recipes (see ADR 0002),
     # exposed via the run_workflow tool. Bundled examples ship in the repo
@@ -586,6 +592,8 @@ class LangGraphConfig:
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),
             skills_dir=skills.get("dir", cls.skills_dir),
+            skills_shared=skills.get("shared", cls.skills_shared),
+            commons_path=(data.get("commons", {}) or {}).get("path", cls.commons_path),
             mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),

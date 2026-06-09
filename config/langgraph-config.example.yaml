@@ -88,6 +88,15 @@ skills:
   db_path: /sandbox/skills.db
   top_k: 5
   max_tokens: 2000
+  # Tiered stores (ADR 0041). `shared: true` lifts the skills library into the
+  # COMMONS — one DB read/written by every agent on this host (a fleet's compounding
+  # skill library) — instead of per-instance scope. Default false = private per
+  # instance. Pairs with multiple agents isolated via `instance.id`.
+  shared: false
+
+# Shared commons (ADR 0041) — base dir for `shared` stores; blank → ~/.protoagent/commons.
+# commons:
+#   path: ""
 
 # A2A card identity (#570) — declare your fork's advertised skills + card
 # description HERE (or contribute skills from a plugin via register_a2a_skill)
