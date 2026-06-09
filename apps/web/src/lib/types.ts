@@ -197,9 +197,12 @@ export type GoalState = {
   condition: string;
   status: string;
   verifier?: { type?: string } & Record<string, unknown>;
+  mode?: "drive" | "monitor";
   iteration?: number;
   max_iterations?: number;
   last_reason?: string;
+  last_evidence?: string;
+  last_checked?: number | null; // monitor: last out-of-band verifier check (epoch seconds)
   started_at?: number;
   finished_at?: number | null;
 };

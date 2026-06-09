@@ -246,7 +246,11 @@ const server = createServer(async (req, res) => {
       frame("inbox.item", { id: 99, priority: "next", source: "mock", text: "live inbox ping" });
       frame("boardy.created", { id: "b1" }); // ADR 0039 — exercises the rail notification dot
     }, 500);
-    req.on("close", () => clearInterval(t));
+    // One-shot goal.achieved (ADR 0039) so the goal toast is deterministically testable.
+    const g = setTimeout(() => {
+      res.write('event: goal.achieved\ndata: {"condition":"unit tests pass","status":"achieved","mode":"drive"}\n\n');
+    }, 300);
+    req.on("close", () => { clearInterval(t); clearTimeout(g); });
     return;
   }
   if (pathname.startsWith("/api/")) {
