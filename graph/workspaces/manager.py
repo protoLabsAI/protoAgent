@@ -118,11 +118,18 @@ plugins:
 """
 
 
-def create(name: str, *, from_config: str | None = None, bundle: str | None = None,
-           port: int | None = None, shared_skills: bool = False) -> dict:
+def create(name: str, *, from_config: str | None = None, inherit_model: str | None = None,
+           bundle: str | None = None, port: int | None = None, shared_skills: bool = False) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
-    an installed plugin bundle. Does not start it. ``from_config`` clones an existing
-    agent's config + secrets as the base (instance.id/identity are re-stamped to *name*)."""
+    an installed plugin bundle. Does not start it.
+
+    Config base, in precedence:
+      * ``from_config`` — a FULL clone of another agent's config + secrets (identity re-stamped).
+      * ``inherit_model`` — a BLANK template, but with only that agent's ``model:`` section +
+        secrets popped over (the gateway), so it boots ready-to-chat WITHOUT inheriting its
+        plugins/skills. This is the fleet's default "new agent" (a blank agent, model carried).
+      * neither — the plain blank template.
+    """
     name = _safe(name)
     ws = _ws_dir(name)
     if ws.exists():
@@ -144,6 +151,8 @@ def create(name: str, *, from_config: str | None = None, bundle: str | None = No
     else:
         cfg.write_text(_CONFIG_TEMPLATE.format(name=name))
         (ws / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        if inherit_model:
+            _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
             _stamp_identity(cfg, name, True)
 
@@ -164,6 +173,26 @@ def create(name: str, *, from_config: str | None = None, bundle: str | None = No
         shutil.rmtree(ws, ignore_errors=True)
         raise
     return {**rec, "path": str(ws), "installed": installed}
+
+
+def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
+    """Pop only the ``model:`` section + secrets from another agent's config into this blank one
+    — the gateway (provider/api_base/key) carries over so the agent boots ready-to-chat, but its
+    plugins/skills/identity stay the blank-template defaults. Best-effort + comment-preserving."""
+    src_path = Path(src).expanduser()
+    src_cfg = src_path / "langgraph-config.yaml" if src_path.is_dir() else src_path
+    if not src_cfg.exists():
+        return
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+
+    host = load_yaml_doc(src_cfg)
+    new = load_yaml_doc(cfg)
+    if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
+        new["model"] = host["model"]
+        save_yaml_doc(cfg, new)
+    src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
+    if src_sec.exists():  # carries the api_key so the gateway actually works
+        shutil.copyfile(src_sec, ws / "secrets.yaml")
 
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool) -> None:

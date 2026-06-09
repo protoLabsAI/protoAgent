@@ -82,28 +82,28 @@ def register_fleet_routes(app) -> None:
 
         Body: ``{name, bundle?: <git-url>, port?: int, start?: bool=true,
         shared_skills?: bool, inherit_config?: bool=true}``. A blank ``bundle`` is the built-in
-        **Basic** archetype. By default a new agent **inherits the host's model config + secrets**
-        (re-stamped to its own identity) so it boots ready-to-chat on the same gateway — set
-        ``inherit_config: false`` for a blank agent you'll configure yourself.
+        **Basic** archetype. By default a new agent is a **blank agent with the host's model
+        config + secrets popped over** (the gateway only — NOT the host's plugins/skills), so it
+        boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll set up.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
-        # Inherit the host's config so peers work immediately — only if the host is actually
-        # configured (a fresh, un-set-up host falls back to the blank template).
-        from_config = None
+        # Carry the host's MODEL only (gateway) so a new agent works immediately without inheriting
+        # its plugins — only if the host is actually configured (fresh host → plain blank template).
+        inherit_model = None
         if bool(body.get("inherit_config", True)):
             from graph.config_io import _live_config_dir
             cfg_dir = _live_config_dir()
             if (cfg_dir / "langgraph-config.yaml").exists():
-                from_config = str(cfg_dir)
+                inherit_model = str(cfg_dir)
         try:
-            # create() may clone the host config + install a bundle (subprocess) — off the loop.
+            # create() may overlay the host model + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(
                 manager.create, name, bundle=bundle, port=port, shared_skills=shared,
-                from_config=from_config)
+                inherit_model=inherit_model)
             agent = (await asyncio.to_thread(supervisor.start, name)) if start else {
                 "name": name, "id": ws["id"], "port": ws["port"], "running": False}
             return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}
