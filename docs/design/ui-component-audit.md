@@ -109,15 +109,17 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 
 **Coordination thread:** [protoContent #137](https://github.com/protoLabsAI/protoContent/issues/137) — the umbrella discussion where both teams work through priorities, API shapes, and AppShell convergence. The rows below are its actionable children.
 
+**`@protolabsai/ui@0.5.0` (published 2026-06-08) delivered 3 of 6** — the P0 + both P1 composites. Adoption now unblocked.
+
 | # | Request | Priority | Status |
 |---|---|---|---|
-| [#131](https://github.com/protoLabsAI/protoContent/issues/131) | `Menu` / `DropdownMenu` (Radix, open-at-coords) | P0 | Filed |
-| [#132](https://github.com/protoLabsAI/protoContent/issues/132) | `PanelHeader` composite | P1 | Filed |
-| [#133](https://github.com/protoLabsAI/protoContent/issues/133) | `Tabs` icon+badge slots | P1 | Filed |
-| [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | Filed |
-| [#135](https://github.com/protoLabsAI/protoContent/issues/135) | `Button` variants (ghost/danger) + icon-only + size | P1 | Filed |
-| [#136](https://github.com/protoLabsAI/protoContent/issues/136) | `Skeleton` loading-placeholder primitive | P1 | Filed |
-| — | **AppShell** dual-rail convergence | P0 | **Held — live coordination first** (architectural) |
+| [#131](https://github.com/protoLabsAI/protoContent/issues/131) | `Menu` / `DropdownMenu` (Radix, open-at-coords) | P0 | ✅ **Shipped 0.5.0** — `Menu` forwardRef + `MenuHandle.open({x,y})`, `MenuItem/Separator/Label/Sub` |
+| [#132](https://github.com/protoLabsAI/protoContent/issues/132) | `PanelHeader` composite | P1 | ✅ **Shipped 0.5.0** — exact `{title,kicker,actions,compact}` API |
+| [#133](https://github.com/protoLabsAI/protoContent/issues/133) | `Tabs` icon+badge slots | P1 | ✅ **Shipped 0.5.0** — `TabItem.icon?` + `.badge?` |
+| [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | ⏳ Open (our `.pl-scroll` bridge stays) |
+| [#135](https://github.com/protoLabsAI/protoContent/issues/135) | `Button` variants (ghost/danger) + icon-only + size | P1 | ⏳ Open |
+| [#136](https://github.com/protoLabsAI/protoContent/issues/136) | `Skeleton` loading-placeholder primitive | P1 | ⏳ Open |
+| — | **AppShell** dual-rail convergence | P0 | 🔶 In design (0.5.0 has `AppShell`/`Surface` stories, no export yet) — coordinate via #137 |
 
 ## Full-sweep classification (all 323 `theme.css` class groups triaged)
 
