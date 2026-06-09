@@ -282,6 +282,15 @@ def _main():
 
         raise SystemExit(run_plugin_cli(sys.argv[2:]))
 
+    # Workspace management subcommand (ADR 0041): `python -m server workspace
+    # new/ls/run/rm` — named, isolated agents on one host. `new`/`ls`/`rm` act on
+    # disk and exit; `run` execs the normal server with the workspace's config dir +
+    # instance + port wired in (so the dispatch below runs unchanged for it).
+    if len(sys.argv) > 1 and sys.argv[1] == "workspace":
+        from graph.workspaces.cli import run_workspace_cli
+
+        raise SystemExit(run_workspace_cli(sys.argv[2:]))
+
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
     # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m
