@@ -5,45 +5,71 @@ console's Artifact panel. The panel is a plugin-served shell page (iframed by th
 0026) that renders the agent's generated code in a **nested sandboxed iframe**
 (``sandbox="allow-scripts"``, no same-origin) — the same isolation model as Claude Artifacts and
 Open WebUI: generated code runs, but can't touch the console, its cookies, or its APIs.
+
+The current artifact is persisted to a **file** (instance-scoped), not module memory — under the
+ACP runtime the tool executes in the operator-MCP process while the route is served by the main
+process, so the two only share state through disk.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 import time
+from pathlib import Path
 
 from langchain_core.tools import tool
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
-# html is the workhorse (charts via a CDN lib, tables, dashboards, mock-ups); mermaid for diagrams;
-# svg for vector. (React is intentionally omitted for now — it needs a starter/harness; ADR 0038.)
-_KINDS = {"html", "svg", "mermaid"}
-# The latest artifact the agent rendered (transient — "what's on screen now").
-_current: dict = {"kind": "", "code": "", "title": "", "ts": 0}
+_KINDS = {"html", "svg", "mermaid", "react"}
+
+
+def _artifact_path() -> Path:
+    base = Path(os.environ.get("ARTIFACT_DIR") or (Path.home() / ".protoagent" / "artifact"))
+    inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+    if inst:
+        base = base / inst
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "current.json"
+
+
+def _read_current() -> dict:
+    try:
+        return json.loads(_artifact_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {"kind": "", "code": "", "title": "", "ts": 0}
+
+
+def _write_current(payload: dict) -> None:
+    path = _artifact_path()
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 @tool
 def show_artifact(kind: str, code: str, title: str = "") -> str:
-    """Render a visual artifact INLINE for the user to see — a chart, diagram, table, dashboard, or
-    mock-up. Reach for this whenever the user asks you to *show*, *render*, *draw*, *visualize*,
-    *chart*, *graph*, *plot*, or *mock up* something. Render it here — do NOT write project files to
-    disk for these requests; the user wants to SEE the result in the console, not get a repo.
+    """Render a generative-UI artifact into the console's Artifact panel.
 
-    ``kind``:
-      - "html"    — a self-contained HTML document (the workhorse). For DATA CHARTS, include a chart
-                    library from https://cdnjs.cloudflare.com (e.g. Chart.js) and draw into a
-                    <canvas>. For tables / dashboards / mock-ups, write the HTML + inline CSS directly.
-      - "mermaid" — a Mermaid diagram definition (flowchart, sequence, ER, gantt, state).
-      - "svg"     — inline SVG markup.
-
-    ``code`` is the source; ``title`` an optional label. The artifact renders in a sandbox with no
-    access to the console — scripts and CDN libraries work, but it can't reach your files or data.
+    ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
+    "mermaid" (a Mermaid diagram definition), or "react" (a self-contained React component script
+    that renders into ``#root``; React, ReactDOM and Babel are provided). ``code`` is the source;
+    ``title`` is an optional label. The artifact runs sandboxed — it cannot access the console.
+    Use this to SHOW the user a chart, diagram, mock-up, or interactive widget you generate —
+    prefer it over writing files when the user just wants to see something rendered.
     """
     k = (kind or "").strip().lower()
     if k not in _KINDS:
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}."
-    _current.update(kind=k, code=code or "", title=title or "", ts=int(time.time() * 1000))
+    _write_current({"kind": k, "code": code or "", "title": title or "", "ts": int(time.time() * 1000)})
     return f"Rendered a {k} artifact ({len(code or '')} chars) to the Artifact panel."
 
 
@@ -55,7 +81,7 @@ def _build_router():
 
     @router.get("/current")
     async def _current_artifact() -> dict:
-        return dict(_current)
+        return _read_current()
 
     @router.get("/view")
     async def _view():
@@ -66,6 +92,7 @@ def _build_router():
 
 def register(registry) -> None:
     registry.register_tool(show_artifact)
+    registry.register_skill_dir("skills")  # teaches: render with show_artifact, don't write files
     registry.register_router(_build_router(), prefix="/api/plugins/artifact")
 
 
@@ -73,7 +100,7 @@ def register(registry) -> None:
 # handshake, polls /current, and renders each new artifact into a NESTED sandboxed iframe. The
 # nested frame is sandbox="allow-scripts" with NO allow-same-origin — generated code is isolated.
 _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
-  html,body{margin:0;height:100%;background:var(--bg,#0a0a0c);color:#9aa0aa;
+  html,body{margin:0;height:100%;background:#0a0a0c;color:#9aa0aa;
     font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
   #empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;padding:24px;font-size:14px}
   #frame{border:0;width:100%;height:100%;display:none;background:#fff}
@@ -85,14 +112,20 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
   window.addEventListener("message", function (e) {
     var m = e.data || {}; if (m.type === "protoagent:init") token = m.token || null;
   });
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   function srcdoc(kind, code) {
     if (kind === "html") return code;
     if (kind === "svg") return '<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh">' + code + '</body>';
     if (kind === "mermaid") return '<!doctype html><body style="margin:0;background:#fff">' +
+      '<pre class="mermaid">' + esc(code) + '</pre>' +
       '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"><\/script>' +
-      '<pre class="mermaid">' + code.replace(/</g, "&lt;") + '<\/pre>' +
-      '<script>mermaid.initialize({startOnLoad:true});<\/script></body>';
-    return "<body>unsupported artifact kind</body>";
+      '<script>mermaid.initialize({startOnLoad:false});mermaid.run();<\/script></body>';
+    if (kind === "react") return '<!doctype html><body style="margin:0"><div id="root"></div>' +
+      '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"><\/script>' +
+      '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"><\/script>' +
+      '<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"><\/script>' +
+      '<script type="text/babel" data-presets="react">' + code + '<\/script></body>';
+    return "<body style=\"font-family:sans-serif;padding:16px\">unsupported artifact kind</body>";
   }
   async function poll() {
     try {

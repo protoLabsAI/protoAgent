@@ -1,4 +1,4 @@
-"""Artifact plugin (ADR 0038) — the show_artifact tool + current store."""
+"""Artifact plugin (ADR 0038) — show_artifact + the file-backed (cross-process) store."""
 import importlib.util
 from pathlib import Path
 
@@ -10,14 +10,18 @@ def _load():
     return mod
 
 
-def test_show_artifact_stores_and_validates() -> None:
+def test_show_artifact_validates_and_persists(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     art = _load()
-    # Unknown kind is rejected, nothing stored.
-    msg = art.show_artifact.invoke({"kind": "bogus", "code": "x"})
-    assert "Unknown artifact kind" in msg
-    # A valid kind stores the current artifact.
+
+    # Unknown kind rejected, nothing written.
+    assert "Unknown artifact kind" in art.show_artifact.invoke({"kind": "bogus", "code": "x"})
+    assert art._read_current()["ts"] == 0
+
+    # Valid kind persists to disk (so a different process — the route — can read it).
     art.show_artifact.invoke({"kind": "mermaid", "code": "graph TD; A-->B", "title": "Flow"})
-    assert art._current["kind"] == "mermaid"
-    assert art._current["code"] == "graph TD; A-->B"
-    assert art._current["title"] == "Flow"
-    assert art._current["ts"] > 0
+    cur = art._read_current()
+    assert cur["kind"] == "mermaid" and cur["code"] == "graph TD; A-->B" and cur["title"] == "Flow"
+    assert cur["ts"] > 0
+    assert (tmp_path / "current.json").exists()
