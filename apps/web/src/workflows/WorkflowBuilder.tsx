@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
+
 import { useState } from "react";
 
 import { api } from "../lib/api";
@@ -86,9 +88,9 @@ export function WorkflowBuilder({
         compact
         title="New workflow"
         actions={
-          <button className="icon-button" type="button" onClick={onCancel} title="Cancel">
+          <Button icon variant="ghost" type="button" onClick={onCancel} title="Cancel">
             <X size={16} />
-          </button>
+          </Button>
         }
       />
 
@@ -104,9 +106,9 @@ export function WorkflowBuilder({
       <div className="builder-section">
         <div className="builder-section-head">
           <span>Inputs</span>
-          <button className="ghost-button" type="button" onClick={() => setInputs((x) => [...x, { name: "", required: false }])}>
+          <Button variant="ghost" type="button" onClick={() => setInputs((x) => [...x, { name: "", required: false }])}>
             <Plus size={13} /> add input
-          </button>
+          </Button>
         </div>
         {inputs.map((inp, i) => (
           <div className="builder-row" key={i}>
@@ -123,9 +125,9 @@ export function WorkflowBuilder({
               />
               <span>required</span>
             </label>
-            <button className="icon-button" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
+            <Button icon variant="ghost" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
               <Trash2 size={14} />
-            </button>
+            </Button>
           </div>
         ))}
       </div>
@@ -133,9 +135,9 @@ export function WorkflowBuilder({
       <div className="builder-section">
         <div className="builder-section-head">
           <span>Steps</span>
-          <button className="ghost-button" type="button" onClick={addStep}>
+          <Button variant="ghost" type="button" onClick={addStep}>
             <Plus size={13} /> add step
-          </button>
+          </Button>
         </div>
         {steps.map((step, i) => (
           <div className="builder-step" key={i}>
@@ -153,9 +155,9 @@ export function WorkflowBuilder({
                 ))}
               </select>
               {steps.length > 1 && (
-                <button className="icon-button" type="button" onClick={() => removeStep(i)} title="Remove step">
+                <Button icon variant="ghost" type="button" onClick={() => removeStep(i)} title="Remove step">
                   <Trash2 size={14} />
-                </button>
+                </Button>
               )}
             </div>
             <textarea
@@ -198,13 +200,13 @@ export function WorkflowBuilder({
       {error && <p className="workflow-failed">{error}</p>}
 
       <div className="panel-actions">
-        <button className="ghost-button" type="button" onClick={onCancel} disabled={saving}>
+        <Button variant="ghost" type="button" onClick={onCancel} disabled={saving}>
           Cancel
-        </button>
-        <button className="primary-button" type="button" onClick={() => void save()} disabled={!valid || saving}>
+        </Button>
+        <Button variant="primary" type="button" onClick={() => void save()} disabled={!valid || saving}>
           {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
           Save workflow
-        </button>
+        </Button>
       </div>
     </div>
   );

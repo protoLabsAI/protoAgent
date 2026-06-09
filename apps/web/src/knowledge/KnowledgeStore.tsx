@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { Brain, Database, RefreshCw } from "lucide-react";
+
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
@@ -58,9 +60,9 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
         title="Knowledge"
         kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}`}
         actions={
-          <button className="icon-button" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
+          <Button icon variant="ghost" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
             <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </button>
+          </Button>
         }
       />
 

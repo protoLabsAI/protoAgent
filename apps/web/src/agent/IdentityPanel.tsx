@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 
@@ -48,15 +50,15 @@ export function IdentityPanel() {
         title="Identity"
         kicker="who this agent is — its name and persona (SOUL.md)"
         actions={
-          <button
-            className="primary-button"
+          <Button
+            variant="primary"
             type="button"
             disabled={!dirty || save.isPending}
             onClick={() => save.mutate()}
             data-testid="identity-save"
           >
             <Save size={15} /> {save.isPending ? "Saving…" : "Save & reload"}
-          </button>
+          </Button>
         }
       />
       <div className="stage-body">

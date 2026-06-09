@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
+
 import {
   Activity,
   AlertTriangle,
@@ -66,13 +68,13 @@ function TelemetryBody() {
         kicker={`per-turn cost & latency · ${summary?.turns ?? 0} turns recorded`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => void downloadTelemetryCsv()}
+            <Button icon variant="ghost" type="button" onClick={() => void downloadTelemetryCsv()}
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
-            </button>
-            <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            </Button>
+            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
               <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </button>
+            </Button>
           </>
         }
       />

@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+
 import { Component, type ReactNode } from "react";
 import { Spinner } from "@protolabsai/ui/data";
 
@@ -60,9 +62,9 @@ export function PanelError({ error, reset, label = "panel" }: FallbackArgs & { l
         <strong>Couldn't load the {label}</strong>
         <span>{error.message}</span>
       </div>
-      <button className="secondary-button" type="button" onClick={reset}>
+      <Button type="button" onClick={reset}>
         <RefreshCw size={14} /> Retry
-      </button>
+      </Button>
     </div>
   );
 }

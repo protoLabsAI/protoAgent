@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
@@ -75,15 +77,15 @@ function GoalsList() {
             )}
             {goal.last_reason ? ` · ${trunc(goal.last_reason)}` : ""}
           </span>
-          <button
-            className="icon-button goal-row-clear"
+          <Button
+            icon variant="ghost" className="goal-row-clear"
             type="button"
             onClick={() => clear.mutate(goal.session_id)}
             disabled={clear.isPending}
             title="Clear goal"
           >
             <Trash2 size={15} />
-          </button>
+          </Button>
         </div>
       ))}
     </>

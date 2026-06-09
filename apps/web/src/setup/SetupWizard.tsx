@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   AlertTriangle,
   Bot,
   CalendarDays,
@@ -428,19 +430,19 @@ export function SetupWizard({
                     ))}
                   </datalist>
                 </label>
-                <button className="secondary-button" type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
+                <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
                   {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
                   Probe
-                </button>
-                <button
-                  className="secondary-button"
+                </Button>
+                <Button
+                 
                   type="button"
                   onClick={() => void testConnection()}
                   disabled={busy || !state.apiBase.trim() || !state.modelName.trim()}
                 >
                   {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
               </div>
               {tested ? (
                 <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
@@ -482,10 +484,10 @@ export function SetupWizard({
                     ))}
                   </select>
                 </label>
-                <button className="secondary-button" type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
+                <Button type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
                   {busy ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
                   Load
-                </button>
+                </Button>
               </div>
               <label className="field">
                 <span>SOUL.md</span>
@@ -579,15 +581,15 @@ export function SetupWizard({
                     placeholder="e.g. 249386616806834177 — comma-separated; empty = anyone"
                   />
                 </label>
-                <button
-                  className="secondary-button"
+                <Button
+                 
                   type="button"
                   onClick={() => void testDiscord()}
                   disabled={busy || !state.discordToken.trim()}
                 >
                   {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
               </div>
               {discordTested ? (
                 <div className={`setup-test ${discordTested.ok ? "ok" : "err"}`} role="status">
@@ -659,20 +661,20 @@ export function SetupWizard({
           {error ? <div className="setup-error">{error}</div> : null}
 
           <div className="setup-actions">
-            <button className="secondary-button" type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
+            <Button type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
               <ChevronLeft size={15} />
               Back
-            </button>
+            </Button>
             {step === "finish" ? (
-              <button className="primary-button" type="button" onClick={() => void finishSetup()} disabled={busy}>
+              <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
                 {busy ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
                 Finish
-              </button>
+              </Button>
             ) : (
-              <button className="primary-button" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
                 Next
                 <ChevronRight size={15} />
-              </button>
+              </Button>
             )}
           </div>
         </section>

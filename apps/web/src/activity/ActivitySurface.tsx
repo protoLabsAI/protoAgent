@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
+
 import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
@@ -122,9 +124,9 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
         title="Activity"
         kicker="what the agent did on its own — and why"
         actions={
-          <button className="icon-button" type="button" onClick={() => void load()} title="Refresh">
+          <Button icon variant="ghost" type="button" onClick={() => void load()} title="Refresh">
             {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          </button>
+          </Button>
         }
       />
 
@@ -164,10 +166,10 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
               }
             }}
           />
-          <button className="primary-button" type="submit" disabled={sending || !draft.trim()}>
+          <Button variant="primary" type="submit" disabled={sending || !draft.trim()}>
             {sending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
             Send
-          </button>
+          </Button>
         </form>
       </div>
     </section>

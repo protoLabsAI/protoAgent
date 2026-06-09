@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
@@ -56,9 +58,9 @@ function InboxBody({
         title="Inbox"
         kicker={`${items.length} pending`}
         actions={
-          <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+          <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
             <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-          </button>
+          </Button>
         }
       />
 
@@ -76,14 +78,14 @@ function InboxBody({
                 {item.priority}
               </span>
               {item.source ? <span className="inbox-source">{item.source}</span> : null}
-              <button
-                className="icon-button inbox-dismiss"
+              <Button
+                icon variant="ghost" className="inbox-dismiss"
                 type="button"
                 onClick={() => dismiss.mutate(item.id)}
                 title="Mark delivered (dismiss)"
               >
                 <Check size={15} />
-              </button>
+              </Button>
             </div>
             <div className="inbox-text">{item.text}</div>
           </div>

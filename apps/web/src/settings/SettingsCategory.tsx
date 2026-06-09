@@ -1,7 +1,7 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
-import { Button } from "@protolabsai/ui/primitives";
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -154,18 +154,18 @@ export function SettingsCategory({
         actions={
           <>
             {hasModel ? (
-              <button className="secondary-button" type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
+              <Button type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
                 {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                 Test connection
-              </button>
+              </Button>
             ) : null}
             {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
             <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
               <RotateCcw size={15} /> Discard
             </Button>
-            <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
+            <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
               <Save size={16} /> Save &amp; apply
-            </button>
+            </Button>
           </>
         }
       />
@@ -203,10 +203,10 @@ export function SettingsCategory({
             ))}
             {hasDiscord && group.section === "Discord" ? (
               <div className="settings-group-actions">
-                <button className="secondary-button" type="button" onClick={() => testDiscord.mutate()} disabled={testDiscord.isPending || save.isPending}>
+                <Button type="button" onClick={() => testDiscord.mutate()} disabled={testDiscord.isPending || save.isPending}>
                   {testDiscord.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
                 <a className="settings-help-link" href={DISCORD_GUIDE_URL} target="_blank" rel="noreferrer">
                   How to create a bot <ExternalLink size={13} />
                 </a>
@@ -214,8 +214,8 @@ export function SettingsCategory({
             ) : null}
             {hasGoogle && group.section === "Google" ? (
               <div className="settings-group-actions">
-                <button
-                  className="secondary-button"
+                <Button
+                 
                   type="button"
                   onClick={() => googleConnect.mutate()}
                   disabled={googleConnect.isPending || save.isPending || dirtyGoogleClient}
@@ -223,7 +223,7 @@ export function SettingsCategory({
                 >
                   {googleConnect.isPending ? <Loader2 className="spin" size={15} /> : <Link2 size={15} />}
                   {googleStatus.data?.connected ? "Reconnect Google" : "Connect Google"}
-                </button>
+                </Button>
                 <span className="settings-inline-status">
                   {googleStatus.data?.connected
                     ? `Connected${googleStatus.data.email ? ` as ${googleStatus.data.email}` : ""}`
@@ -238,15 +238,15 @@ export function SettingsCategory({
             ) : null}
             {group.test ? (
               <div className="settings-group-actions">
-                <button
-                  className="secondary-button"
+                <Button
+                 
                   type="button"
                   onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
                   disabled={(testGroup.isPending && testingSection === group.section) || save.isPending}
                 >
                   {testGroup.isPending && testingSection === group.section ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
               </div>
             ) : null}
           </section>

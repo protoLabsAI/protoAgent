@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+
 import { useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
@@ -83,9 +85,9 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
         title="Skills"
         kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned`}
         actions={
-          <button className="icon-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
+          <Button icon variant="ghost" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
             <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </button>
+          </Button>
         }
       />
 
@@ -135,15 +137,15 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                 <div className="playbook-meta">
                   <span title="confidence">conf {Math.round((p.confidence ?? 1) * 100)}%</span>
                   <span title="last used">used {ago(p.last_used)}</span>
-                  <button
+                  <Button
                     type="button"
-                    className="icon-button danger"
+                    icon variant="danger"
                     title={p.source === "disk" ? "Delete (re-seeds from SKILL.md on restart)" : "Delete skill"}
                     onClick={() => setPending(p)}
                     data-testid={`playbook-delete-${p.id}`}
                   >
                     <Trash2 size={14} />
-                  </button>
+                  </Button>
                 </div>
               </li>
             ))}

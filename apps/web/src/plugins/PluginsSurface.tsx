@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+
 import { Suspense, useState } from "react";
 import { ExternalLink, Github, Loader2, Store } from "lucide-react";
 
@@ -42,15 +44,15 @@ function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: 
           label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
           tone={p.loaded ? "success" : p.error ? "error" : "muted"}
         />
-        <button
+        <Button
           type="button"
-          className="ghost-button"
+          variant="ghost"
           disabled={busy}
           onClick={() => onToggle(p)}
           title={on ? `Disable ${p.name}` : `Enable ${p.name}`}
         >
           {busy ? <Loader2 size={14} className="spin" /> : on ? "Disable" : "Enable"}
-        </button>
+        </Button>
       </div>
     </div>
   );

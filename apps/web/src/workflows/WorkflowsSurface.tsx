@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
@@ -84,12 +86,12 @@ function WorkflowsBody() {
         kicker={`step-by-step recipes the engine runs over subagents · ${workflows.length} recipe${workflows.length === 1 ? "" : "s"}`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
+            <Button icon variant="ghost" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
               <Plus size={16} />
-            </button>
-            <button className="icon-button" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
+            </Button>
+            <Button icon variant="ghost" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
               <RefreshCw size={16} />
-            </button>
+            </Button>
           </>
         }
       />
@@ -163,8 +165,8 @@ function WorkflowsBody() {
                 ) : null}
 
                 <div className="panel-actions">
-                  <button
-                    className="primary-button"
+                  <Button
+                    variant="primary"
                     type="button"
                     onClick={doRun}
                     disabled={run.isPending || missingRequired.length > 0}
@@ -172,15 +174,15 @@ function WorkflowsBody() {
                   >
                     {run.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
                     Run
-                  </button>
-                  <button
-                    className="ghost-button"
+                  </Button>
+                  <Button
+                    variant="ghost"
                     type="button"
                     onClick={() => remove.mutate(current.name)}
                     title="Delete this workflow"
                   >
                     <Trash2 size={14} /> Delete
-                  </button>
+                  </Button>
                 </div>
                 {run.isError ? <p className="workflow-failed">{(run.error as Error).message}</p> : null}
               </>

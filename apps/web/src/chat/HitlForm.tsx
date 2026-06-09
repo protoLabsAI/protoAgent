@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { useState } from "react";
+
 
 import type { HitlFormStep, HitlPayload } from "../lib/types";
 
@@ -111,12 +113,12 @@ export function HitlForm({
         {payload.description && <div className="hitl-prompt">{payload.description}</div>}
         {payload.detail && <pre className="hitl-detail">{payload.detail}</pre>}
         <div className="hitl-actions">
-          <button type="button" className="ghost-button" onClick={() => onSubmit("denied")} disabled={busy}>
+          <Button type="button" variant="ghost" onClick={() => onSubmit("denied")} disabled={busy}>
             Deny
-          </button>
-          <button type="button" className="primary-button" onClick={() => onSubmit("approved")} disabled={busy}>
+          </Button>
+          <Button type="button" variant="primary" onClick={() => onSubmit("approved")} disabled={busy}>
             Approve
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -137,17 +139,17 @@ export function HitlForm({
           onChange={(e) => setText(e.target.value)}
         />
         <div className="hitl-actions">
-          <button type="button" className="ghost-button" onClick={onCancel} disabled={busy}>
+          <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
             Dismiss
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
             onClick={() => onSubmit(text.trim())}
             disabled={busy || !text.trim()}
           >
             Send
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -180,17 +182,17 @@ export function HitlForm({
         </div>
       ))}
       <div className="hitl-actions">
-        <button type="button" className="ghost-button" onClick={onCancel} disabled={busy}>
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
           Dismiss
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className="primary-button"
+          variant="primary"
           onClick={() => onSubmit(values)}
           disabled={busy || missing}
         >
           Submit
-        </button>
+        </Button>
       </div>
     </div>
   );
