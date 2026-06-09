@@ -1,28 +1,28 @@
 import { expect, test } from "@playwright/test";
 
-// The right panel is collapsible (bottom utility-bar toggle) and resizable
-// (drag its left edge); state persists to localStorage. (The rail is fixed.)
+// The right panel (DS AppShell right column) is collapsible (bottom utility-bar
+// toggle) and resizable (drag its left edge / arrow keys); state persists to
+// localStorage. Double-clicking the handle collapses it (DS behavior).
 
 test("right panel collapses + restores via the utility-bar toggle", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  const right = page.locator(".right-panel");
-  // A zero-width (collapsed) element reports a null boundingBox → treat as 0.
-  const widthOf = async (loc) => (await loc.boundingBox())?.width ?? 0;
+  const right = page.locator(".pl-appshell__col--right");
   await expect(right).toBeVisible();
 
+  // The DS collapses by UNMOUNTING the column (the old shell kept it at width 0).
   await page.getByTestId("toggle-right").click();
-  await expect.poll(() => widthOf(right)).toBe(0);
+  await expect(right).toHaveCount(0);
   await page.getByTestId("toggle-right").click();
-  await expect.poll(() => widthOf(right)).toBeGreaterThan(0);
+  await expect(right).toBeVisible();
 });
 
 test("right panel resizes by dragging its handle and the width persists", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const right = page.locator(".right-panel");
+  const right = page.locator(".pl-appshell__col--right");
   const before = (await right.boundingBox())!.width;
 
-  const handle = page.getByTestId("right-resize");
+  const handle = page.getByRole("separator", { name: "Resize right panel" });
   const hb = (await handle.boundingBox())!;
   // Drag the handle left ~120px → the panel grows.
   await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
@@ -35,14 +35,14 @@ test("right panel resizes by dragging its handle and the width persists", async 
 
   // Persists across a reload.
   await page.reload({ waitUntil: "load" });
-  const reloaded = (await page.locator(".right-panel").boundingBox())!.width;
+  const reloaded = (await page.locator(".pl-appshell__col--right").boundingBox())!.width;
   expect(Math.abs(reloaded - after)).toBeLessThan(8);
 });
 
-test("right panel is keyboard-resizable + double-click resets (ADR 0035 S3)", async ({ page }) => {
+test("right panel is keyboard-resizable + double-click collapses (ADR 0035 S3)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const right = page.locator(".right-panel");
-  const handle = page.getByTestId("right-resize");
+  const right = page.locator(".pl-appshell__col--right");
+  const handle = page.getByRole("separator", { name: "Resize right panel" });
   const before = (await right.boundingBox())!.width;
 
   // ArrowLeft widens the panel (handle is on its left edge).
@@ -51,8 +51,7 @@ test("right panel is keyboard-resizable + double-click resets (ADR 0035 S3)", as
   const wider = (await right.boundingBox())!.width;
   expect(wider).toBeGreaterThan(before);
 
-  // Double-click resets toward the default width.
+  // Double-click the handle collapses the panel (DS AppShell behavior — unmounts it).
   await handle.dblclick();
-  const reset = (await right.boundingBox())!.width;
-  expect(reset).toBeLessThan(wider);
+  await expect(right).toHaveCount(0);
 });

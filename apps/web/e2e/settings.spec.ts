@@ -31,7 +31,7 @@ test("central Settings is just the cross-cutting tabs", async ({ page }) => {
 
 test("Agent settings live in the Agent view's Settings tab", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   // Model + Routing render here, not in the central Settings surface.
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
@@ -44,7 +44,7 @@ test("Agent settings live in the Agent view's Settings tab", async ({ page }) =>
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();

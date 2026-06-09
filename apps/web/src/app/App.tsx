@@ -85,8 +85,7 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
-import { SurfaceRail } from "../components/SurfaceRail";
-import { MobileNav } from "../components/MobileNav";
+import { AppShell, UtilityBar } from "@protolabsai/ui/app-shell";
 import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
@@ -242,6 +241,7 @@ export function App() {
   const mobileActive = useUI((s) => s.mobileActive);
   const setMobileActive = useUI((s) => s.setMobileActive);
   const quickBar = useUI((s) => s.quickBar);
+  const setRailOrder = useUI((s) => s.setRailOrder);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -666,127 +666,87 @@ export function App() {
         </div>
       </header>
 
-      {isMobile ? (
-        /* Mobile shell (ADR 0035 S4): one surface at a time + a bottom quick-bar + hamburger; no
-           rails, no split. Chat mounts unconditionally for streaming continuity. */
-        <div className="workspace mobile">
-          <main className="stage">
-            <ChatSurface onError={setError} active={mobileActive === "chat"} />
-            {mobileActive !== "chat" ? renderSurface(mobileActive) : null}
-          </main>
-          <MobileNav
-            items={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
-              ...s,
-              dot: pluginDots[s.id] || undefined,
-            }))}
-            activeId={mobileActive}
-            onSelect={setMobileActive}
-            quickBarIds={quickBar}
+      {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
+          cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all
+          controlled. We own the surface registry + persistence (railOrder/widths/active in the UI
+          store); the shell renders our content + emits callbacks. Chat mounts UNCONDITIONALLY
+          (streaming continuity #613) inside the column content, on whichever rail holds it. */}
+      <AppShell
+        className="app-shell-main"
+        leftItems={railSurfaces("left").map((s) => ({
+          ...s,
+          badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
+          dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
+        }))}
+        rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
+        activeLeft={leftActive}
+        activeRight={rightCollapsed ? "" : rightActive}
+        onSelect={(side, id) => {
+          if (side === "left") setSurface(id);
+          else { setRightPanel(id); setRightCollapsed(false); }
+        }}
+        onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
+        onRailReorder={setRailOrder}
+        rightWidth={rightWidth}
+        onRightWidthChange={setRightWidth}
+        rightCollapsed={rightCollapsed}
+        onCollapse={setRightCollapsed}
+        mobileItems={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
+          ...s,
+          dot: pluginDots[s.id] || undefined,
+        }))}
+        mobileActiveId={mobileActive}
+        onMobileSelect={setMobileActive}
+        quickBarIds={quickBar}
+        leftContent={
+          <>
+            {error ? (
+              <div className="error-strip" role="alert">
+                <CircleAlert size={16} />
+                <span>{error}</span>
+              </div>
+            ) : null}
+            {chatRail === "left" || isMobile ? (
+              <ChatSurface onError={setError} active={(isMobile ? mobileActive : leftActive) === "chat"} />
+            ) : null}
+            {(isMobile ? mobileActive : leftActive) !== "chat"
+              ? renderSurface(isMobile ? mobileActive : leftActive)
+              : null}
+          </>
+        }
+        rightContent={
+          <>
+            {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
+            {rightActive !== "chat" ? renderSurface(rightActive) : null}
+          </>
+        }
+        utilityBar={
+          <UtilityBar
+            start={
+              <>
+                <a className="util-btn" href="https://protolabsai.github.io/protoAgent/" target="_blank" rel="noreferrer" title="Documentation" aria-label="Documentation">
+                  <BookOpen size={14} />
+                </a>
+                <a className="util-btn" href="https://github.com/protoLabsAI/protoAgent" target="_blank" rel="noreferrer" title="GitHub repository" aria-label="GitHub repository">
+                  <Github size={14} />
+                </a>
+              </>
+            }
+            end={
+              <button
+                type="button"
+                className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
+                onClick={() => setRightCollapsed(!rightCollapsed)}
+                title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+                aria-label="Toggle side panel"
+                data-testid="toggle-right"
+              >
+                <PanelRight size={14} />
+              </button>
+            }
           />
-        </div>
-      ) : (
-      <div
-        className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
-        style={{ "--right-width": rightCol } as CSSProperties}
-      >
-        {/* Left rail (ADR 0035/0036) — members + order from railOrder; right-click a surface to
-            reorder or move it across. The rail is the extraction-ready <SurfaceRail>. */}
-        <SurfaceRail
-          side="left"
-          ariaLabel="Workspace surfaces"
-          items={railSurfaces("left").map((s) => ({
-            ...s,
-            badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
-            dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
-          }))}
-          activeId={leftActive}
-          onSelect={(id) => setSurface(id)}
-          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "left" })}
-        />
-
-        <main className="stage">
-          {error ? (
-            <div className="error-strip" role="alert">
-              <CircleAlert size={16} />
-              <span>{error}</span>
-            </div>
-          ) : null}
-
-          {/* Chat mounts UNCONDITIONALLY + hidden via `active` (streaming continuity, #613);
-              it's pinned to the left rail. Every other left-rail surface renders through the
-              shared renderSurface (ADR 0035 S3) — so it can live on either rail. */}
-          {chatRail === "left" ? <ChatSurface onError={setError} active={leftActive === "chat"} /> : null}
-          {leftActive !== "chat" ? renderSurface(leftActive) : null}
-        </main>
-
-        <aside className="right-panel">
-          {!rightCollapsed ? (
-            <div
-              className="resize-handle"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize side panel (arrows to nudge, double-click to reset)"
-              aria-valuenow={rightWidth}
-              aria-valuemin={280}
-              aria-valuemax={720}
-              tabIndex={0}
-              onMouseDown={startRightResize}
-              onKeyDown={onResizeKey}
-              onDoubleClick={() => setRightWidth(RIGHT_DEFAULT_WIDTH)}
-              data-testid="right-resize"
-            />
-          ) : null}
-          {/* The right surface renders through the same renderSurface as the left (ADR 0035 S3).
-              If Chat lives on this rail it mounts unconditionally (continuity), like the stage. */}
-          {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
-          {!rightCollapsed && rightActive !== "chat" ? renderSurface(rightActive) : null}
-        </aside>
-
-        {/* Right rail (ADR 0035/0036) — mirrors the left on the far edge; same <SurfaceRail>. */}
-        <SurfaceRail
-          side="right"
-          ariaLabel="Context surfaces"
-          items={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
-          activeId={rightCollapsed ? "" : rightActive}
-          onSelect={(id) => { setRightPanel(id); setRightCollapsed(false); }}
-          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "right" })}
-        />
-      </div>
-      )}
-
-      <footer className="utility-bar">
-        <a
-          className="util-btn"
-          href="https://protolabsai.github.io/protoAgent/"
-          target="_blank"
-          rel="noreferrer"
-          title="Documentation"
-          aria-label="Documentation"
-        >
-          <BookOpen size={14} />
-        </a>
-        <a
-          className="util-btn"
-          href="https://github.com/protoLabsAI/protoAgent"
-          target="_blank"
-          rel="noreferrer"
-          title="GitHub repository"
-          aria-label="GitHub repository"
-        >
-          <Github size={14} />
-        </a>
-        <div className="util-spacer" />
-        <button
-          type="button"
-          className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
-          onClick={() => setRightCollapsed(!rightCollapsed)}
-          title={rightCollapsed ? "Show side panel" : "Hide side panel"}
-          aria-label="Toggle side panel"
-          data-testid="toggle-right"
-        >
-          <PanelRight size={14} />
-        </button>
-      </footer>
+        }
+      />
 
       <SetupWizard
         open={runtime?.setup_complete === false}

@@ -45,7 +45,7 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
 });
 
 test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) => {
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing tab
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
@@ -57,7 +57,7 @@ test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) 
 });
 
 test("plugins section: Local / Market / Download tabs", async ({ page }) => {
-  await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
 
   // Local (default tab) — both status groups + the enable toggle.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
@@ -79,20 +79,20 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
   await page.goto("/app/", { waitUntil: "load" });
 
   // Move off the defaults: a left surface (Agent) + a right-panel tab (Beads).
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true }).click();
 
   // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
   await page.reload({ waitUntil: "load" });
-  await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });
 
 
 test("right-click a rail surface opens a context menu that moves it (ADR 0036)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const rightRail = page.locator(".rail-right");
-  const leftRail = page.locator(".rail:not(.rail-right)");
+  const rightRail = page.locator(".pl-rail--right");
+  const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
 
   // Beads starts on the right rail.
   await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
@@ -110,8 +110,8 @@ test("right-click a rail surface opens a context menu that moves it (ADR 0036)",
 
 test("Chat is movable too — right-click → move to the right rail (ADR 0036)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const leftRail = page.locator(".rail:not(.rail-right)");
-  const rightRail = page.locator(".rail-right");
+  const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
+  const rightRail = page.locator(".pl-rail--right");
 
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
   await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
@@ -127,8 +127,8 @@ test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({
   await page.goto("/app/", { waitUntil: "load" });
 
   // Below the breakpoint: the desktop rails are gone; a bottom quick-bar appears.
-  await expect(page.locator(".rail")).toHaveCount(0);
-  const bar = page.locator(".mobile-bar");
+  await expect(page.locator(".pl-rail")).toHaveCount(0);
+  const bar = page.locator(".pl-mobilenav");
   await expect(bar).toBeVisible();
 
   // A default quick-bar surface switches the single active surface.
