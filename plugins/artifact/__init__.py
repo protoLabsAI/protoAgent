@@ -100,32 +100,45 @@ def register(registry) -> None:
 # handshake, polls /current, and renders each new artifact into a NESTED sandboxed iframe. The
 # nested frame is sandbox="allow-scripts" with NO allow-same-origin — generated code is isolated.
 _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
-  html,body{margin:0;height:100%;background:#0a0a0c;color:#9aa0aa;
+  :root{ --bg:#0a0a0c; --fg:#ededed; --fg-muted:#9aa0aa; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg-muted);
     font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
   #empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;padding:24px;font-size:14px}
-  #frame{border:0;width:100%;height:100%;display:none;background:#fff}
+  /* No white flash — the artifact frame defaults to the console's dark ground (ADR 0038). */
+  #frame{border:0;width:100%;height:100%;display:none;background:var(--bg)}
 </style></head><body>
 <div id="empty">No artifact yet. Ask the agent to render one — a chart, diagram, or widget.</div>
 <iframe id="frame" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
 <script>
   var token = null, lastTs = 0;
+  // Theme follows the console (ADR 0026 bridge). Dark fallbacks so we never flash white.
+  var theme = { bg: "#0a0a0c", fg: "#ededed", fgMuted: "#9aa0aa" };
   window.addEventListener("message", function (e) {
-    var m = e.data || {}; if (m.type === "protoagent:init") token = m.token || null;
+    var m = e.data || {}; if (m.type !== "protoagent:init") return;
+    token = m.token || null;
+    if (m.theme) {
+      theme = { bg: m.theme.bg || theme.bg, fg: m.theme.fg || theme.fg, fgMuted: m.theme.fgMuted || theme.fgMuted };
+      document.documentElement.style.setProperty("--bg", theme.bg);
+      document.documentElement.style.setProperty("--fg", theme.fg);
+      document.documentElement.style.setProperty("--fg-muted", theme.fgMuted);
+    }
   });
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+  // Base style injected into every artifact so unstyled content inherits the console's dark theme
+  // by default (generated code can still set its own background to override).
+  function base(){ return '<style>html,body{margin:0;background:' + theme.bg + ';color:' + theme.fg + '}</style>'; }
   function srcdoc(kind, code) {
-    if (kind === "html") return code;
-    if (kind === "svg") return '<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh">' + code + '</body>';
-    if (kind === "mermaid") return '<!doctype html><body style="margin:0;background:#fff">' +
-      '<pre class="mermaid">' + esc(code) + '</pre>' +
+    if (kind === "html") return base() + code;
+    if (kind === "svg") return '<!doctype html>' + base() + '<body style="display:grid;place-items:center;min-height:100vh">' + code + '</body>';
+    if (kind === "mermaid") return '<!doctype html>' + base() + '<body><pre class="mermaid">' + esc(code) + '</pre>' +
       '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"><\/script>' +
-      '<script>mermaid.initialize({startOnLoad:false});mermaid.run();<\/script></body>';
-    if (kind === "react") return '<!doctype html><body style="margin:0"><div id="root"></div>' +
+      '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run();<\/script></body>';
+    if (kind === "react") return '<!doctype html>' + base() + '<body><div id="root"></div>' +
       '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"><\/script>' +
       '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"><\/script>' +
       '<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"><\/script>' +
       '<script type="text/babel" data-presets="react">' + code + '<\/script></body>';
-    return "<body style=\"font-family:sans-serif;padding:16px\">unsupported artifact kind</body>";
+    return '<!doctype html>' + base() + '<body style="font-family:sans-serif;padding:16px">unsupported artifact kind</body>';
   }
   async function poll() {
     try {
