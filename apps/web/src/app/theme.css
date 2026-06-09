@@ -83,12 +83,18 @@ h2 {
 }
 
 .app-shell {
-  height: 100%;
-  min-height: 100vh;
-  display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 40px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg);
+}
+/* The DS AppShell (rails + columns + utility bar) fills the height below our topbar.
+   Override the DS frame's height:100% so flex sizing (not 100vh) governs it. */
+.app-shell-main {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
 }
 
 /* Topbar health light — one dot, detail on hover, click to refresh. */
@@ -462,11 +468,6 @@ h2 {
   outline: none;
 }
 
-/* Dim a collapse toggle when its panel is hidden. */
-.icon-button.is-off {
-  color: var(--fg-tertiary, #666);
-}
-
 .panel {
   min-width: 0;
   min-height: 0;
@@ -525,20 +526,9 @@ h2 {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.panel-header {
-  min-height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.panel-header.compact {
-  min-height: 44px;
-  padding: 10px;
-}
+/* .panel-header / .panel-header.compact now live in @protolabsai/ui (.pl-panel-header).
+   The .panel-kicker + .panel-actions classes stay — surfaces use them directly
+   (e.g. telemetry section heads, workflow toolbars), not only via PanelHeader. */
 
 .chat-stage {
   grid-template-rows: auto minmax(0, 1fr);
@@ -692,87 +682,6 @@ h2 {
   color: var(--fg-secondary);
 }
 
-.status-pill {
-  min-height: 22px;
-  max-width: 240px;
-  display: inline-block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 8px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.status-pill.success {
-  border-color: rgba(65, 196, 141, 0.28);
-  background: rgba(65, 196, 141, 0.16);
-  color: #a9e8c9;
-}
-
-.status-pill.warning {
-  border-color: rgba(212, 189, 79, 0.3);
-  background: rgba(212, 189, 79, 0.16);
-  color: #eadf9a;
-}
-
-.status-pill.error {
-  border-color: rgba(240, 116, 88, 0.3);
-  background: rgba(240, 116, 88, 0.16);
-  color: #f4b09f;
-}
-
-.icon-button,
-.primary-button {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
-}
-
-.icon-button {
-  width: 32px;
-  padding: 0;
-}
-
-.primary-button {
-  padding: 0 12px;
-  background: transparent;
-  border-color: var(--fg);
-  color: var(--fg);
-  font-weight: 500;
-}
-
-.icon-button:hover,
-.primary-button:hover {
-  border-color: var(--fg);
-  background: var(--bg-hover);
-}
-
-.primary-button:hover {
-  background: var(--fg);
-  border-color: var(--fg);
-  color: var(--bg);
-}
-
-.icon-button.danger:hover {
-  border-color: var(--error);
-  color: #f4b09f;
-}
-
-.icon-button:disabled,
-.primary-button:disabled,
 input:disabled,
 textarea:disabled,
 select:disabled {
@@ -838,26 +747,6 @@ select:disabled {
   align-items: center;
   gap: 8px;
 }
-.ghost-button {
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--pl-color-border);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.ghost-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
-}
-.ghost-button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
 .plugin-hint {
   margin: 0 0 8px;
   padding: 8px 10px;
@@ -901,40 +790,16 @@ select:disabled {
   line-height: 1.5;
 }
 
-.scroll-area {
-  min-width: 0;
+/* Scroll regions use @protolabsai/ui <ScrollArea> (.pl-scroll). Bridge the bits
+   the DS primitive doesn't carry yet: min-height:0 so it scrolls inside a flex/
+   grid parent, overscroll containment, a stable gutter, and a focus ring for the
+   keyboard-focusable region (role="region" tabIndex=0). Candidate DS upticks. */
+.pl-scroll {
   min-height: 0;
-  overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  -webkit-overflow-scrolling: touch;
 }
-
-.scroll-area::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.scroll-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scroll-area::-webkit-scrollbar-thumb {
-  min-height: 40px;
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
-  background-clip: padding-box;
-}
-
-.scroll-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.34);
-  background-clip: padding-box;
-}
-
-.scroll-area:focus-visible {
+.pl-scroll:focus-visible {
   outline: 1px solid var(--fg);
   outline-offset: -2px;
 }
@@ -1788,55 +1653,9 @@ textarea {
 .activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }
 
 /* In-surface sub-nav (grouped rail surfaces) ------------------------------- */
-.stage-subnav {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 12px 16px 0;
-  margin-bottom: 10px;
-}
-
-.stage-subnav button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.stage-subnav button svg {
-  flex: 0 0 auto;
-}
-
-.stage-subnav button:hover {
-  color: var(--fg);
-}
-
-.stage-subnav button.active {
-  background: color-mix(in srgb, var(--accent, #7c8cff) 14%, transparent);
-  color: var(--accent, #7c8cff);
-  border-color: color-mix(in srgb, var(--accent, #7c8cff) 50%, var(--border));
-}
-
-.subnav-badge {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent, #7c8cff);
-  color: #fff;
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-  font-weight: 600;
-}
+/* The sub-tab strip is now @protolabsai/ui <Tabs> (.pl-tabs/.pl-tab); the inbox
+   unread count rides as the DS `badge` slot (.pl-tab__badge). Local .stage-subnav
+   + .subnav-badge retired. */
 
 /* Inbox panel (ADR 0003) ---------------------------------------------------- */
 .inbox-list {
@@ -2186,7 +2005,6 @@ textarea {
   padding: 12px;
 }
 
-
 .notes-tabbar {
   display: flex;
   gap: 6px;
@@ -2491,11 +2309,6 @@ textarea {
   gap: 6px;
 }
 
-.issue-actions .icon-button {
-  width: 28px;
-  height: 28px;
-}
-
 .empty-state {
   min-height: 96px;
   display: flex;
@@ -2570,12 +2383,6 @@ textarea {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
-}
-
-.primary-button.danger {
-  background: var(--danger, #ff6b6b);
-  border-color: var(--danger, #ff6b6b);
-  color: #fff;
 }
 
 /* New-schedule modal (friendly builder) */
@@ -2814,31 +2621,6 @@ textarea {
   gap: 12px;
   padding: 18px;
   border-top: 1px solid var(--border);
-}
-
-.secondary-button {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg);
-  padding: 0 12px;
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
-}
-
-.secondary-button:hover {
-  border-color: var(--fg);
-  background: var(--bg-hover);
-}
-
-.secondary-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .spin {
@@ -3225,13 +3007,6 @@ textarea {
   font-size: 11.5px; color: var(--fg-muted); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.icon-button {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 4px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: transparent; color: var(--fg-muted); cursor: pointer; margin-top: 2px;
-}
-.icon-button:hover { background: var(--bg-hover); color: var(--fg); }
-.icon-button.danger:hover { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
 .playbook-foot { margin-top: 16px; font-size: 11.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }
 
 /* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
@@ -3326,7 +3101,6 @@ textarea {
   color: var(--fg-muted);
   word-break: break-word;
 }
-
 
 /* Mobile shell (ADR 0035 S4) — single surface + bottom quick-bar + hamburger drawer. The
    --pl-color-overlay / --pl-color-bg-hover tokens land in @protolabsai/design 0.4.0; fallbacks

@@ -11,12 +11,12 @@ async function openSettings(page) {
 }
 
 async function tab(page, name) {
-  await page.locator(".stage-subnav").getByRole("button", { name, exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name, exact: true }).click();
 }
 
 test("central Settings is just the cross-cutting tabs", async ({ page }) => {
   await openSettings(page);
-  expect(await page.locator(".stage-subnav button").allTextContents()).toEqual([
+  expect(await page.locator(".pl-tabs button").allTextContents()).toEqual([
     "Overview",
     "Telemetry",
     "Plugins",
@@ -31,8 +31,8 @@ test("central Settings is just the cross-cutting tabs", async ({ page }) => {
 
 test("Agent settings live in the Agent view's Settings tab", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   // Model + Routing render here, not in the central Settings surface.
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);
@@ -44,8 +44,8 @@ test("Agent settings live in the Agent view's Settings tab", async ({ page }) =>
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/turbo");

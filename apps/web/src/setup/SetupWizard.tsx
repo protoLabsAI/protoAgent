@@ -1,4 +1,7 @@
+import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Button, Callout } from "@protolabsai/ui/primitives";
 import {
+
   AlertTriangle,
   Bot,
   CalendarDays,
@@ -390,11 +393,11 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>Agent name</span>
-                  <input value={state.agentName} onChange={(event) => update({ agentName: event.target.value })} />
+                  <Input value={state.agentName} onChange={(event) => update({ agentName: event.target.value })} />
                 </label>
                 <label className="field">
                   <span>Operator</span>
-                  <input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
+                  <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
                 </label>
               </div>
             </StepBody>
@@ -405,11 +408,11 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>API base</span>
-                  <input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
+                  <Input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
                 </label>
                 <label className="field">
                   <span>API key</span>
-                  <input
+                  <Input
                     type="password"
                     value={state.apiKey}
                     onChange={(event) => update({ apiKey: event.target.value })}
@@ -421,26 +424,26 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Model</span>
-                  <input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                  <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
                   <datalist id="model-options">
                     {models.map((model) => (
                       <option key={model} value={model} />
                     ))}
                   </datalist>
                 </label>
-                <button className="secondary-button" type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
+                <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
                   {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
                   Probe
-                </button>
-                <button
-                  className="secondary-button"
+                </Button>
+                <Button
+                 
                   type="button"
                   onClick={() => void testConnection()}
                   disabled={busy || !state.apiBase.trim() || !state.modelName.trim()}
                 >
                   {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
               </div>
               {tested ? (
                 <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
@@ -455,15 +458,15 @@ export function SetupWizard({
               <div className="setup-grid three">
                 <label className="field">
                   <span>Temperature</span>
-                  <input type="number" min="0" max="2" step="0.1" value={state.temperature} onChange={(event) => update({ temperature: Number(event.target.value) })} />
+                  <Input type="number" min="0" max="2" step="0.1" value={state.temperature} onChange={(event) => update({ temperature: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Max tokens</span>
-                  <input type="number" min="1" value={state.maxTokens} onChange={(event) => update({ maxTokens: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.maxTokens} onChange={(event) => update({ maxTokens: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Max turns</span>
-                  <input type="number" min="1" value={state.maxIterations} onChange={(event) => update({ maxIterations: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.maxIterations} onChange={(event) => update({ maxIterations: Number(event.target.value) })} />
                 </label>
               </div>
             </StepBody>
@@ -474,22 +477,22 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Preset</span>
-                  <select value={state.preset} onChange={(event) => update({ preset: event.target.value })}>
+                  <Select value={state.preset} onChange={(event) => update({ preset: event.target.value })}>
                     {(setupStatus?.presets || []).map((preset) => (
                       <option key={preset} value={preset}>
                         {preset}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
-                <button className="secondary-button" type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
+                <Button type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
                   {busy ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
                   Load
-                </button>
+                </Button>
               </div>
               <label className="field">
                 <span>SOUL.md</span>
-                <textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
+                <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
               </label>
             </StepBody>
           ) : null}
@@ -510,7 +513,7 @@ export function SetupWizard({
               </div>
               <label className="field">
                 <span>Researcher turns</span>
-                <input type="number" min="1" value={state.researcherTurns} onChange={(event) => update({ researcherTurns: Number(event.target.value) })} />
+                <Input type="number" min="1" value={state.researcherTurns} onChange={(event) => update({ researcherTurns: Number(event.target.value) })} />
               </label>
             </StepBody>
           ) : null}
@@ -519,21 +522,21 @@ export function SetupWizard({
             <StepBody icon={<Database size={20} />} title="Workspace" kicker="Storage">
               <label className="field">
                 <span>Knowledge DB</span>
-                <input value={state.knowledgePath} onChange={(event) => update({ knowledgePath: event.target.value })} />
+                <Input value={state.knowledgePath} onChange={(event) => update({ knowledgePath: event.target.value })} />
               </label>
               <div className="setup-grid two">
                 <label className="field">
                   <span>Knowledge top K</span>
-                  <input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Project path</span>
-                  <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
+                  <Input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
                 </label>
               </div>
               <label className="field">
                 <span>Allowed project directories</span>
-                <textarea
+                <Textarea
                   rows={3}
                   value={state.allowedDirs}
                   onChange={(event) => update({ allowedDirs: event.target.value })}
@@ -544,10 +547,12 @@ export function SetupWizard({
                   The protoAgent directory and the project path above are always allowed.
                 </span>
               </label>
-              <label className="checkbox-field setup-checkbox">
-                <input type="checkbox" checked={state.initBeads} onChange={(event) => update({ initBeads: event.target.checked })} />
-                <span>Initialize beads</span>
-              </label>
+              <Checkbox
+                className="checkbox-field setup-checkbox"
+                checked={state.initBeads}
+                onCheckedChange={(c) => update({ initBeads: c })}
+                label="Initialize beads"
+              />
             </StepBody>
           ) : null}
 
@@ -562,7 +567,7 @@ export function SetupWizard({
               </p>
               <label className="field">
                 <span>Bot token</span>
-                <input
+                <Input
                   type="password"
                   value={state.discordToken}
                   onChange={(event) => update({ discordToken: event.target.value })}
@@ -573,21 +578,21 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Your Discord user ID(s)</span>
-                  <input
+                  <Input
                     value={state.discordAdminId}
                     onChange={(event) => update({ discordAdminId: event.target.value })}
                     placeholder="e.g. 249386616806834177 — comma-separated; empty = anyone"
                   />
                 </label>
-                <button
-                  className="secondary-button"
+                <Button
+                 
                   type="button"
                   onClick={() => void testDiscord()}
                   disabled={busy || !state.discordToken.trim()}
                 >
                   {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
                   Test connection
-                </button>
+                </Button>
               </div>
               {discordTested ? (
                 <div className={`setup-test ${discordTested.ok ? "ok" : "err"}`} role="status">
@@ -616,7 +621,7 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>OAuth client ID</span>
-                  <input
+                  <Input
                     value={state.googleClientId}
                     onChange={(event) => update({ googleClientId: event.target.value })}
                     placeholder="…apps.googleusercontent.com"
@@ -624,7 +629,7 @@ export function SetupWizard({
                 </label>
                 <label className="field">
                   <span>OAuth client secret</span>
-                  <input
+                  <Input
                     type="password"
                     value={state.googleClientSecret}
                     onChange={(event) => update({ googleClientSecret: event.target.value })}
@@ -635,7 +640,7 @@ export function SetupWizard({
               </div>
               <label className="field">
                 <span>Timezone (IANA, optional)</span>
-                <input
+                <Input
                   value={state.googleTz}
                   onChange={(event) => update({ googleTz: event.target.value })}
                   placeholder="e.g. America/Los_Angeles — sets the day bounds for “today”"
@@ -652,27 +657,27 @@ export function SetupWizard({
                 <StatusLine icon={<Database size={15} />} label={state.knowledgePath || "knowledge"} />
                 <StatusLine icon={<Network size={15} />} label={`${state.researcherTurns} researcher turns`} />
               </div>
-              {message ? <div className="setup-message">{message}</div> : null}
+              {message ? <Callout>{message}</Callout> : null}
             </StepBody>
           ) : null}
 
-          {error ? <div className="setup-error">{error}</div> : null}
+          {error ? <Callout tone="error">{error}</Callout> : null}
 
           <div className="setup-actions">
-            <button className="secondary-button" type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
+            <Button type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
               <ChevronLeft size={15} />
               Back
-            </button>
+            </Button>
             {step === "finish" ? (
-              <button className="primary-button" type="button" onClick={() => void finishSetup()} disabled={busy}>
+              <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
                 {busy ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
                 Finish
-              </button>
+              </Button>
             ) : (
-              <button className="primary-button" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
                 Next
                 <ChevronRight size={15} />
-              </button>
+              </Button>
             )}
           </div>
         </section>

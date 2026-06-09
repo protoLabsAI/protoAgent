@@ -1,4 +1,7 @@
+import { Input, Select } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
@@ -8,7 +11,7 @@ import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { queryKeys, subagentsQuery, workflowsQuery } from "../lib/queries";
 import type { WorkflowRunResult } from "../lib/types";
@@ -84,12 +87,12 @@ function WorkflowsBody() {
         kicker={`step-by-step recipes the engine runs over subagents · ${workflows.length} recipe${workflows.length === 1 ? "" : "s"}`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
+            <Button icon variant="ghost" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
               <Plus size={16} />
-            </button>
-            <button className="icon-button" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
+            </Button>
+            <Button icon variant="ghost" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
               <RefreshCw size={16} />
-            </button>
+            </Button>
           </>
         }
       />
@@ -117,13 +120,13 @@ function WorkflowsBody() {
             ) : (
               <label className="field">
                 <span>Recipe</span>
-                <select value={selectedName} onChange={(event) => selectRecipe(event.target.value)}>
+                <Select value={selectedName} onChange={(event) => selectRecipe(event.target.value)}>
                   {workflows.map((w) => (
                     <option key={w.name} value={w.name}>
                       {w.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             )}
 
@@ -152,7 +155,7 @@ function WorkflowsBody() {
                           {inp.name}
                           {inp.required ? " *" : ""}
                         </span>
-                        <input
+                        <Input
                           value={inputs[inp.name] ?? ""}
                           onChange={(event) => setInputs((prev) => ({ ...prev, [inp.name]: event.target.value }))}
                           placeholder={inp.default != null ? `default: ${String(inp.default)}` : inp.required ? "required" : "optional"}
@@ -163,8 +166,8 @@ function WorkflowsBody() {
                 ) : null}
 
                 <div className="panel-actions">
-                  <button
-                    className="primary-button"
+                  <Button
+                    variant="primary"
                     type="button"
                     onClick={doRun}
                     disabled={run.isPending || missingRequired.length > 0}
@@ -172,15 +175,15 @@ function WorkflowsBody() {
                   >
                     {run.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
                     Run
-                  </button>
-                  <button
-                    className="ghost-button"
+                  </Button>
+                  <Button
+                    variant="ghost"
                     type="button"
                     onClick={() => remove.mutate(current.name)}
                     title="Delete this workflow"
                   >
                     <Trash2 size={14} /> Delete
-                  </button>
+                  </Button>
                 </div>
                 {run.isError ? <p className="workflow-failed">{(run.error as Error).message}</p> : null}
               </>

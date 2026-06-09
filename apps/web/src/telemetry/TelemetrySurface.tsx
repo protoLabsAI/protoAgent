@@ -1,4 +1,7 @@
+import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
+import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
+
 import {
   Activity,
   AlertTriangle,
@@ -15,7 +18,7 @@ import {
 import { Suspense } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { telemetryQuery } from "../lib/queries";
 
@@ -66,13 +69,13 @@ function TelemetryBody() {
         kicker={`per-turn cost & latency · ${summary?.turns ?? 0} turns recorded`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => void downloadTelemetryCsv()}
+            <Button icon variant="ghost" type="button" onClick={() => void downloadTelemetryCsv()}
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
-            </button>
-            <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            </Button>
+            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
               <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </button>
+            </Button>
           </>
         }
       />
@@ -130,53 +133,53 @@ function TelemetryBody() {
             {summary.by_model.length > 0 ? (
               <div className="telemetry-section">
                 <h2 className="panel-kicker">By model</h2>
-                <table className="telemetry-table">
-                  <thead>
-                    <tr><th>Model</th><th>Turns</th><th>Tokens</th><th>Cost</th></tr>
-                  </thead>
-                  <tbody>
+                <Table className="telemetry-table">
+                  <THead>
+                    <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th></Tr>
+                  </THead>
+                  <TBody>
                     {summary.by_model.map((m) => (
-                      <tr key={m.model || "unknown"}>
-                        <td>{m.model || "—"}</td>
-                        <td>{m.turns}</td>
-                        <td>{tokens(m.total_tokens)}</td>
-                        <td>{usd(m.cost_usd)}</td>
-                      </tr>
+                      <Tr key={m.model || "unknown"}>
+                        <Td>{m.model || "—"}</Td>
+                        <Td>{m.turns}</Td>
+                        <Td>{tokens(m.total_tokens)}</Td>
+                        <Td>{usd(m.cost_usd)}</Td>
+                      </Tr>
                     ))}
-                  </tbody>
-                </table>
+                  </TBody>
+                </Table>
               </div>
             ) : null}
 
             <div className="telemetry-section">
               <h2 className="panel-kicker">Recent turns</h2>
-              <table className="telemetry-table">
-                <thead>
-                  <tr>
-                    <th>Ended</th><th>Model</th><th>Tokens (in→out)</th>
-                    <th>Cache</th><th>Cost</th><th>Duration</th><th>LLM/Tool</th><th>State</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="telemetry-table">
+                <THead>
+                  <Tr>
+                    <Th>Ended</Th><Th>Model</Th><Th>Tokens (in→out)</Th>
+                    <Th>Cache</Th><Th>Cost</Th><Th>Duration</Th><Th>LLM/Tool</Th><Th>State</Th>
+                  </Tr>
+                </THead>
+                <TBody>
                   {turns.map((t) => (
-                    <tr key={t.task_id} className={t.success ? "" : "turn-failed"}>
-                      <td title={t.ended_at}>{(t.ended_at || "").replace("T", " ").slice(5, 19)}</td>
-                      <td title={t.models || t.model}>
+                    <Tr key={t.task_id} className={t.success ? "" : "turn-failed"}>
+                      <Td title={t.ended_at}>{(t.ended_at || "").replace("T", " ").slice(5, 19)}</Td>
+                      <Td title={t.models || t.model}>
                         {t.model || "—"}
                         {t.models && t.models.split(",").filter(Boolean).length > 1
                           ? ` +${t.models.split(",").filter(Boolean).length - 1}`
                           : ""}
-                      </td>
-                      <td>{tokens(t.input_tokens)}→{tokens(t.output_tokens)}</td>
-                      <td>{t.cache_read_input_tokens ? tokens(t.cache_read_input_tokens) : "—"}</td>
-                      <td>{usd(t.cost_usd)}</td>
-                      <td>{ms(t.duration_ms)}</td>
-                      <td>{t.llm_calls}/{t.tool_calls}</td>
-                      <td><span className={`turn-state turn-state-${t.state}`}>{t.state}</span></td>
-                    </tr>
+                      </Td>
+                      <Td>{tokens(t.input_tokens)}→{tokens(t.output_tokens)}</Td>
+                      <Td>{t.cache_read_input_tokens ? tokens(t.cache_read_input_tokens) : "—"}</Td>
+                      <Td>{usd(t.cost_usd)}</Td>
+                      <Td>{ms(t.duration_ms)}</Td>
+                      <Td>{t.llm_calls}/{t.tool_calls}</Td>
+                      <Td><span className={`turn-state turn-state-${t.state}`}>{t.state}</span></Td>
+                    </Tr>
                   ))}
-                </tbody>
-              </table>
+                </TBody>
+              </Table>
             </div>
           </>
         )}

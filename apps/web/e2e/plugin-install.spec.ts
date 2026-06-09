@@ -5,9 +5,9 @@ import { expect, test } from "@playwright/test";
 
 async function openPluginsPanel(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
   // Install lives on the Download tab.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Download", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Download", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 }
 

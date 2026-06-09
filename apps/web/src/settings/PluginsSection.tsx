@@ -1,3 +1,4 @@
+import { Input } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Package, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -57,14 +58,14 @@ export function PluginsSection() {
 
       {/* Install form */}
       <div className="plugin-install-form">
-        <input
+        <Input
           type="text"
           placeholder="https://github.com/owner/protoagent-plugin-x"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           aria-label="plugin git URL"
         />
-        <input
+        <Input
           type="text"
           placeholder="ref (tag / sha — optional)"
           value={ref}

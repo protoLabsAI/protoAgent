@@ -1,8 +1,11 @@
+import { Input } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+
 import { useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog } from "../app/ConfirmDialog";
-import { PanelHeader } from "../app/PanelHeader";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import type { Playbook } from "../lib/types";
 
@@ -83,14 +86,14 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
         title="Skills"
         kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned`}
         actions={
-          <button className="icon-button" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
+          <Button icon variant="ghost" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
             <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </button>
+          </Button>
         }
       />
 
       <div className="stage-body">
-        <input
+        <Input
           className="playbook-search"
           type="search"
           placeholder="Search skills (name, description, tools)…"
@@ -135,15 +138,15 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                 <div className="playbook-meta">
                   <span title="confidence">conf {Math.round((p.confidence ?? 1) * 100)}%</span>
                   <span title="last used">used {ago(p.last_used)}</span>
-                  <button
+                  <Button
                     type="button"
-                    className="icon-button danger"
+                    icon variant="danger"
                     title={p.source === "disk" ? "Delete (re-seeds from SKILL.md on restart)" : "Delete skill"}
                     onClick={() => setPending(p)}
                     data-testid={`playbook-delete-${p.id}`}
                   >
                     <Trash2 size={14} />
-                  </button>
+                  </Button>
                 </div>
               </li>
             ))}
@@ -154,15 +157,15 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
       <ConfirmDialog
         open={pending !== null}
         title="Delete skill?"
-        message={
-          pending
-            ? `Remove "${pending.name}"${pending.source === "disk" ? " — note: a pinned SKILL.md re-seeds on the next restart." : "."}`
-            : undefined
-        }
         confirmLabel="Delete"
+        destructive
         onConfirm={() => void confirmDelete()}
-        onCancel={() => setPending(null)}
-      />
+        onClose={() => setPending(null)}
+      >
+        {pending
+          ? `Remove "${pending.name}"${pending.source === "disk" ? " — note: a pinned SKILL.md re-seeds on the next restart." : "."}`
+          : undefined}
+      </ConfirmDialog>
 
       <p className="playbook-foot">
         <BookMarked size={13} /> Skills (`SKILL.md`) are methodology the agent <strong>retrieves</strong> into

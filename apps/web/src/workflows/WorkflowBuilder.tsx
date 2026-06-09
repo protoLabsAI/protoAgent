@@ -1,8 +1,11 @@
+import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
+
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 
 // Author a workflow recipe from the console (Sprint C): name + inputs + steps
 // (id, subagent, prompt, depends_on) + output → POST /api/workflows, which
@@ -86,46 +89,44 @@ export function WorkflowBuilder({
         compact
         title="New workflow"
         actions={
-          <button className="icon-button" type="button" onClick={onCancel} title="Cancel">
+          <Button icon variant="ghost" type="button" onClick={onCancel} title="Cancel">
             <X size={16} />
-          </button>
+          </Button>
         }
       />
 
       <label className="field">
         <span>Name *</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
       </label>
       <label className="field">
         <span>Description</span>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
       </label>
 
       <div className="builder-section">
         <div className="builder-section-head">
           <span>Inputs</span>
-          <button className="ghost-button" type="button" onClick={() => setInputs((x) => [...x, { name: "", required: false }])}>
+          <Button variant="ghost" type="button" onClick={() => setInputs((x) => [...x, { name: "", required: false }])}>
             <Plus size={13} /> add input
-          </button>
+          </Button>
         </div>
         {inputs.map((inp, i) => (
           <div className="builder-row" key={i}>
-            <input
+            <Input
               value={inp.name}
               placeholder="input name"
               onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, name: e.target.value } : v)))}
             />
-            <label className="checkbox-field">
-              <input
-                type="checkbox"
-                checked={inp.required}
-                onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, required: e.target.checked } : v)))}
-              />
-              <span>required</span>
-            </label>
-            <button className="icon-button" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
+            <Checkbox
+              className="checkbox-field"
+              checked={inp.required}
+              onCheckedChange={(c) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, required: c } : v)))}
+              label="required"
+            />
+            <Button icon variant="ghost" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
               <Trash2 size={14} />
-            </button>
+            </Button>
           </div>
         ))}
       </div>
@@ -133,32 +134,32 @@ export function WorkflowBuilder({
       <div className="builder-section">
         <div className="builder-section-head">
           <span>Steps</span>
-          <button className="ghost-button" type="button" onClick={addStep}>
+          <Button variant="ghost" type="button" onClick={addStep}>
             <Plus size={13} /> add step
-          </button>
+          </Button>
         </div>
         {steps.map((step, i) => (
           <div className="builder-step" key={i}>
             <div className="builder-row">
-              <input
+              <Input
                 value={step.id}
                 placeholder="step id"
                 onChange={(e) => setStep(i, { id: e.target.value })}
               />
-              <select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
+              <Select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
                 {(subagents.length ? subagents : [fallback]).map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
               {steps.length > 1 && (
-                <button className="icon-button" type="button" onClick={() => removeStep(i)} title="Remove step">
+                <Button icon variant="ghost" type="button" onClick={() => removeStep(i)} title="Remove step">
                   <Trash2 size={14} />
-                </button>
+                </Button>
               )}
             </div>
-            <textarea
+            <Textarea
               className="builder-prompt"
               value={step.prompt}
               rows={2}
@@ -171,14 +172,13 @@ export function WorkflowBuilder({
                 {steps
                   .filter((_, j) => j !== i)
                   .map((other) => (
-                    <label className="checkbox-field" key={other.id}>
-                      <input
-                        type="checkbox"
-                        checked={step.dependsOn.includes(other.id)}
-                        onChange={() => toggleDep(i, other.id)}
-                      />
-                      <span>{other.id || "(unnamed)"}</span>
-                    </label>
+                    <Checkbox
+                      key={other.id}
+                      className="checkbox-field"
+                      checked={step.dependsOn.includes(other.id)}
+                      onCheckedChange={() => toggleDep(i, other.id)}
+                      label={other.id || "(unnamed)"}
+                    />
                   ))}
               </div>
             )}
@@ -188,7 +188,7 @@ export function WorkflowBuilder({
 
       <label className="field">
         <span>Output</span>
-        <input
+        <Input
           value={output}
           onChange={(e) => setOutput(e.target.value)}
           placeholder={`default: {{steps.${steps[steps.length - 1].id.trim() || "lastStep"}.output}}`}
@@ -198,13 +198,13 @@ export function WorkflowBuilder({
       {error && <p className="workflow-failed">{error}</p>}
 
       <div className="panel-actions">
-        <button className="ghost-button" type="button" onClick={onCancel} disabled={saving}>
+        <Button variant="ghost" type="button" onClick={onCancel} disabled={saving}>
           Cancel
-        </button>
-        <button className="primary-button" type="button" onClick={() => void save()} disabled={!valid || saving}>
+        </Button>
+        <Button variant="primary" type="button" onClick={() => void save()} disabled={!valid || saving}>
           {saving ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
           Save workflow
-        </button>
+        </Button>
       </div>
     </div>
   );

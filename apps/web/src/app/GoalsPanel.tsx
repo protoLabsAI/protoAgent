@@ -1,4 +1,6 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
+
   QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
@@ -8,10 +10,10 @@ import { Trash2 } from "lucide-react";
 import { Suspense } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { ScrollArea } from "./ScrollArea";
+import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
 
 // The agent's goals (autonomy layer), in the right sidebar. First surface on
@@ -75,15 +77,15 @@ function GoalsList() {
             )}
             {goal.last_reason ? ` · ${trunc(goal.last_reason)}` : ""}
           </span>
-          <button
-            className="icon-button goal-row-clear"
+          <Button
+            icon variant="ghost" className="goal-row-clear"
             type="button"
             onClick={() => clear.mutate(goal.session_id)}
             disabled={clear.isPending}
             title="Clear goal"
           >
             <Trash2 size={15} />
-          </button>
+          </Button>
         </div>
       ))}
     </>
@@ -98,7 +100,7 @@ export function GoalsPanel() {
         title="Goals"
         kicker={<>the agent's standing goals · set with <code>/goal</code> in chat</>}
       />
-      <ScrollArea className="goals-list" ariaLabel="Goals">
+      <ScrollArea className="goals-list" role="region" aria-label="Goals" tabIndex={0}>
         <QueryErrorResetBoundary>
           {({ reset }) => (
             <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="goals" />}>

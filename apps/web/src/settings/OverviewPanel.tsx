@@ -3,7 +3,7 @@ import { Bot, Database, HardDrive, Settings2, Sparkles } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 

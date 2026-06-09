@@ -21,7 +21,7 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await page.getByRole("button", { name: "Studio", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
   // The old Run sub-tab is gone.
-  await expect(page.locator(".stage-subnav").getByRole("button", { name: "Run", exact: true })).toHaveCount(0);
+  await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
 test("schedule is a right-rail panel that lists scheduled jobs", async ({ page }) => {
@@ -45,19 +45,19 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
 });
 
 test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) => {
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing tab
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
-  await page.locator(".stage-subnav").getByRole("button", { name: "Tools", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Tools", exact: true }).click();
   await expect(page.getByText("web_search")).toBeVisible();
 
-  await page.locator(".stage-subnav").getByRole("button", { name: "MCP", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "MCP", exact: true }).click();
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
 test("plugins section: Local / Market / Download tabs", async ({ page }) => {
-  await page.locator(".rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
 
   // Local (default tab) — both status groups + the enable toggle.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
@@ -67,11 +67,11 @@ test("plugins section: Local / Market / Download tabs", async ({ page }) => {
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
   // Market tab — discovery links.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Market", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Market", exact: true }).click();
   await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
 
   // Download tab — install from a git URL.
-  await page.locator(".stage-subnav").getByRole("button", { name: "Download", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Download", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
 
@@ -79,27 +79,27 @@ test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async 
   await page.goto("/app/", { waitUntil: "load" });
 
   // Move off the defaults: a left surface (Agent) + a right-panel tab (Beads).
-  await page.locator(".rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true }).click();
 
   // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
   await page.reload({ waitUntil: "load" });
-  await expect(page.locator(".rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".rail-right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
 });
 
 
 test("right-click a rail surface opens a context menu that moves it (ADR 0036)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const rightRail = page.locator(".rail-right");
-  const leftRail = page.locator(".rail:not(.rail-right)");
+  const rightRail = page.locator(".pl-rail--right");
+  const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
 
   // Beads starts on the right rail.
   await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
 
   // Right-click it → the context menu opens with the move item.
   await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
-  const menu = page.getByTestId("context-menu");
+  const menu = page.locator(".pl-menu");
   await expect(menu).toBeVisible();
   await menu.getByText("Move to left rail").click();
 
@@ -110,12 +110,12 @@ test("right-click a rail surface opens a context menu that moves it (ADR 0036)",
 
 test("Chat is movable too — right-click → move to the right rail (ADR 0036)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  const leftRail = page.locator(".rail:not(.rail-right)");
-  const rightRail = page.locator(".rail-right");
+  const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
+  const rightRail = page.locator(".pl-rail--right");
 
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
   await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
-  await page.getByTestId("context-menu").getByText("Move to right rail").click();
+  await page.locator(".pl-menu").getByText("Move to right rail").click();
 
   // Chat now lives on the right rail (no longer pinned left).
   await expect(rightRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
@@ -127,8 +127,8 @@ test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({
   await page.goto("/app/", { waitUntil: "load" });
 
   // Below the breakpoint: the desktop rails are gone; a bottom quick-bar appears.
-  await expect(page.locator(".rail")).toHaveCount(0);
-  const bar = page.locator(".mobile-bar");
+  await expect(page.locator(".pl-rail")).toHaveCount(0);
+  const bar = page.locator(".pl-mobilenav");
   await expect(bar).toBeVisible();
 
   // A default quick-bar surface switches the single active surface.

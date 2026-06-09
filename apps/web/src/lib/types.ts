@@ -17,6 +17,7 @@ export type RuntimeStatus = {
   identity: null | {
     name: string;
     operator: string;
+    org?: string;
   };
   middleware: Record<string, boolean>;
   knowledge: {

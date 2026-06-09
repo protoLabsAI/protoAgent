@@ -1,3 +1,5 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -8,7 +10,7 @@ import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import {
@@ -80,9 +82,9 @@ function ScheduleModal({
         <div className="confirm-head">
           <CalendarClock size={16} />
           <h2>New schedule</h2>
-          <button className="icon-button schedule-close" type="button" onClick={onClose} title="Close">
+          <Button icon variant="ghost" className="schedule-close" type="button" onClick={onClose} title="Close">
             <X size={16} />
-          </button>
+          </Button>
         </div>
 
         <div className="schedule-modes" role="tablist">
@@ -97,7 +99,7 @@ function ScheduleModal({
         {mode === "once" && (
           <label className="field">
             <span>Date &amp; time</span>
-            <input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)}
+            <Input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)}
                    data-testid="schedule-once" />
           </label>
         )}
@@ -106,24 +108,24 @@ function ScheduleModal({
           <div className="schedule-repeat">
             <label className="field">
               <span>Frequency</span>
-              <select value={freq} onChange={(e) => setFreq(e.target.value as RepeatFreq)} data-testid="schedule-freq">
+              <Select value={freq} onChange={(e) => setFreq(e.target.value as RepeatFreq)} data-testid="schedule-freq">
                 <option value="hourly">Every hour</option>
                 <option value="daily">Every day</option>
                 <option value="weekdays">Every weekday (Mon–Fri)</option>
                 <option value="weekly">Every week</option>
-              </select>
+              </Select>
             </label>
             {freq === "weekly" && (
               <label className="field">
                 <span>Day</span>
-                <select value={dow} onChange={(e) => setDow(Number(e.target.value))}>
+                <Select value={dow} onChange={(e) => setDow(Number(e.target.value))}>
                   {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                </select>
+                </Select>
               </label>
             )}
             <label className="field">
               <span>{freq === "hourly" ? "Minute" : "Time"}</span>
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
+              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
             </label>
           </div>
         )}
@@ -131,7 +133,7 @@ function ScheduleModal({
         {mode === "cron" && (
           <label className="field">
             <span>Cron expression (5 fields)</span>
-            <input value={cronRaw} onChange={(e) => setCronRaw(e.target.value)}
+            <Input value={cronRaw} onChange={(e) => setCronRaw(e.target.value)}
                    placeholder='e.g. "0 9 * * 1-5"' data-testid="schedule-cron" />
           </label>
         )}
@@ -139,10 +141,10 @@ function ScheduleModal({
         {mode !== "once" && (
           <label className="field">
             <span>Timezone</span>
-            <select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
+            <Select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
               <option value="">UTC (default)</option>
               {tzOptions.map((z) => <option key={z} value={z}>{z}</option>)}
-            </select>
+            </Select>
           </label>
         )}
 
@@ -152,20 +154,20 @@ function ScheduleModal({
 
         <label className="field">
           <span>Prompt (delivered to the agent when it fires)</span>
-          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4}
+          <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4}
                     placeholder="What the agent should do when this fires" data-testid="schedule-prompt" />
         </label>
         <label className="field">
           <span>Job id (optional)</span>
-          <input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
+          <Input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
         </label>
 
         <div className="confirm-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
-          <button type="button" className="primary-button" disabled={!canSubmit} data-testid="schedule-submit"
+          <Button type="button"  onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
                   onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
             <Plus size={16} /> Schedule
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -196,13 +198,13 @@ function ScheduleBody() {
         kicker={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${backend}`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
               <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </button>
-            <button className="primary-button" type="button" onClick={() => setModalOpen(true)}
+            </Button>
+            <Button variant="primary" type="button" onClick={() => setModalOpen(true)}
                     disabled={backend === "disabled"} data-testid="schedule-new">
               <Plus size={16} /> New schedule
-            </button>
+            </Button>
           </>
         }
       />
@@ -222,10 +224,10 @@ function ScheduleBody() {
                     {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
                   </span>
                 </div>
-                <button className="icon-button" type="button" onClick={() => cancel.mutate(job.id)}
+                <Button icon variant="ghost" type="button" onClick={() => cancel.mutate(job.id)}
                         disabled={busy} title="Cancel job">
                   <Trash2 size={16} />
-                </button>
+                </Button>
               </div>
             ))
           ) : (

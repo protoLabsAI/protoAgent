@@ -60,12 +60,12 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { ComponentType, CSSProperties, LazyExoticComponent, ReactNode } from "react";
+import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSurface } from "../chat/ChatSurface";
 import { useAnyChatStreaming } from "../chat/chat-store";
@@ -85,16 +85,15 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
-import { SurfaceRail } from "../components/SurfaceRail";
-import { MobileNav } from "../components/MobileNav";
+import { AppShell, UtilityBar } from "@protolabsai/ui/app-shell";
 import { useIsMobile } from "../lib/useIsMobile";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
-import { StageSubnav } from "./StageSubnav";
-import { PanelHeader } from "./PanelHeader";
+import { Tabs } from "@protolabsai/ui/navigation";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
-import { useToast } from "@protolabsai/ui";
+import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
@@ -204,6 +203,14 @@ function useLocalStorageState(key: string, fallback: string) {
   return [value, setValue] as const;
 }
 
+// Adapt the app's sub-tab shape (Lucide icon *component* + optional badge) to the
+// DS `Tabs` `TabItem` (icon as a rendered ReactNode) — so call sites keep passing
+// `icon: SomeLucideIcon` while the strip renders through @protolabsai/ui.
+function toTab(t: { id: string; label: string; icon?: LucideIcon; badge?: ReactNode }) {
+  const Icon = t.icon;
+  return { id: t.id, label: t.label, icon: Icon ? <Icon size={15} /> : undefined, badge: t.badge };
+}
+
 export function App() {
   // Navigation/layout state lives in the persisted UI store (ADR 0035 D5) — a refresh
   // restores the active surface, sub-tabs, and right-panel width/collapse.
@@ -234,6 +241,7 @@ export function App() {
   const mobileActive = useUI((s) => s.mobileActive);
   const setMobileActive = useUI((s) => s.setMobileActive);
   const quickBar = useUI((s) => s.quickBar);
+  const setRailOrder = useUI((s) => s.setRailOrder);
   const [live, setLive] = useState(false);
   // Shared custom confirm for destructive actions (notes/beads delete).
   const [confirmState, setConfirmState] = useState<
@@ -365,41 +373,8 @@ export function App() {
     if (viewingInbox()) setInboxUnread(0);
   }, [surface, activityTab]);
 
-  // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
-  function startRightResize(e: React.MouseEvent) {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = rightWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.min(720, Math.max(280, startW + (startX - ev.clientX)));
-      setRightWidth(next);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-    };
-    document.body.style.userSelect = "none";
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }
-
-  // Keyboard-resizable (ADR 0035 S3): arrows nudge, Home/End jump to max/min, double-click
-  // resets. The handle sits on the right panel's LEFT edge, so ← widens / → narrows.
-  const RIGHT_DEFAULT_WIDTH = 360;
-  function onResizeKey(e: React.KeyboardEvent) {
-    const step = e.shiftKey ? 48 : 16;
-    if (e.key === "ArrowLeft") { setRightWidth(rightWidth + step); e.preventDefault(); }
-    else if (e.key === "ArrowRight") { setRightWidth(rightWidth - step); e.preventDefault(); }
-    else if (e.key === "Home") { setRightWidth(720); e.preventDefault(); }
-    else if (e.key === "End") { setRightWidth(280); e.preventDefault(); }
-  }
-
-  // Drive only the right column's WIDTH via a CSS var — the grid template
-  // itself lives in CSS (.workspace), so the responsive media query can
-  // collapse to two columns below the breakpoint. Setting the full template
-  // inline here would beat the media query and leave a blank reserved column.
-  const rightCol = rightCollapsed ? "0px" : `${rightWidth}px`;
+  // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
+  // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.
 
   // One glanceable health light for the topbar (detail on hover; full status in
   // System → Runtime). Worst-state wins. Derived from the runtime query — while
@@ -474,10 +449,10 @@ export function App() {
       case "activity":
         return (
           <>
-            <StageSubnav active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} tabs={[
+            <Tabs active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
               { id: "thread", label: "Thread", icon: Activity },
-              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span className="subnav-badge" data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
-            ]} />
+              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
+            ].map(toTab)} />
             {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
           </>
         );
@@ -486,7 +461,7 @@ export function App() {
       case "agent":
         return (
           <>
-            <StageSubnav active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} tabs={[
+            <Tabs active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} items={[
               { id: "identity", label: "Identity", icon: Sparkles },
               { id: "settings", label: "Settings", icon: Settings2 },
               { id: "tools", label: "Tools", icon: Wrench },
@@ -494,7 +469,7 @@ export function App() {
               { id: "subagents", label: "Subagents", icon: Bot },
               { id: "skills", label: "Skills", icon: BookMarked },
               { id: "middleware", label: "Middleware", icon: Layers },
-            ]} />
+            ].map(toTab)} />
             {agentTab === "identity" ? <IdentityPanel /> : null}
             {agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
             {agentTab === "tools" ? <ToolsPanel /> : null}
@@ -507,28 +482,28 @@ export function App() {
       case "plugins":
         return (
           <>
-            <StageSubnav active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} tabs={[
+            <Tabs active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
               { id: "local", label: "Local", icon: Boxes },
               { id: "market", label: "Market", icon: Store },
               { id: "download", label: "Download", icon: Download },
-            ]} />
+            ].map(toTab)} />
             <PluginsSurface tab={pluginsTab} />
           </>
         );
       case "knowledge":
         return (
           <>
-            <StageSubnav active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} tabs={[
+            <Tabs active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} items={[
               { id: "store", label: "Store", icon: Database },
               { id: "settings", label: "Settings", icon: Settings2 },
-            ]} />
+            ].map(toTab)} />
             {knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : <SettingsCategoryPanel category="Memory" title="Settings" />}
           </>
         );
       case "settings":
         return (
           <>
-            <StageSubnav active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} tabs={SETTINGS_TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))} />
+            <Tabs active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
             <SettingsSurface tab={settingsTab} />
           </>
         );
@@ -607,10 +582,9 @@ export function App() {
   }, [leftActive, rightActive, mobileActive, rightCollapsed, setPluginDot]);
 
   return (
+    <>
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
-      {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry. */}
-      <ContextMenuRenderer />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}
@@ -634,7 +608,7 @@ export function App() {
                 (Settings → Identity), defaulting to protoAgent for the template.
                 A fork sets its name once and the whole UI follows. */}
             <div className="brand-name">{brandName(runtime?.identity?.name)}</div>
-            <div className="brand-subline">protoLabs.studio</div>
+            <div className="brand-subline">{runtime?.identity?.org || "protoLabs.studio"}</div>
           </div>
         </div>
         <div className="topbar-status">
@@ -659,127 +633,87 @@ export function App() {
         </div>
       </header>
 
-      {isMobile ? (
-        /* Mobile shell (ADR 0035 S4): one surface at a time + a bottom quick-bar + hamburger; no
-           rails, no split. Chat mounts unconditionally for streaming continuity. */
-        <div className="workspace mobile">
-          <main className="stage">
-            <ChatSurface onError={setError} active={mobileActive === "chat"} />
-            {mobileActive !== "chat" ? renderSurface(mobileActive) : null}
-          </main>
-          <MobileNav
-            items={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
-              ...s,
-              dot: pluginDots[s.id] || undefined,
-            }))}
-            activeId={mobileActive}
-            onSelect={setMobileActive}
-            quickBarIds={quickBar}
+      {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
+          cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all
+          controlled. We own the surface registry + persistence (railOrder/widths/active in the UI
+          store); the shell renders our content + emits callbacks. Chat mounts UNCONDITIONALLY
+          (streaming continuity #613) inside the column content, on whichever rail holds it. */}
+      <AppShell
+        className="app-shell-main"
+        leftItems={railSurfaces("left").map((s) => ({
+          ...s,
+          badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
+          dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
+        }))}
+        rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
+        activeLeft={leftActive}
+        activeRight={rightCollapsed ? "" : rightActive}
+        onSelect={(side, id) => {
+          if (side === "left") setSurface(id);
+          else { setRightPanel(id); setRightCollapsed(false); }
+        }}
+        onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
+        onRailReorder={setRailOrder}
+        rightWidth={rightWidth}
+        onRightWidthChange={setRightWidth}
+        rightCollapsed={rightCollapsed}
+        onCollapse={setRightCollapsed}
+        mobileItems={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
+          ...s,
+          dot: pluginDots[s.id] || undefined,
+        }))}
+        mobileActiveId={mobileActive}
+        onMobileSelect={setMobileActive}
+        quickBarIds={quickBar}
+        leftContent={
+          <>
+            {error ? (
+              <div className="error-strip" role="alert">
+                <CircleAlert size={16} />
+                <span>{error}</span>
+              </div>
+            ) : null}
+            {chatRail === "left" || isMobile ? (
+              <ChatSurface onError={setError} active={(isMobile ? mobileActive : leftActive) === "chat"} />
+            ) : null}
+            {(isMobile ? mobileActive : leftActive) !== "chat"
+              ? renderSurface(isMobile ? mobileActive : leftActive)
+              : null}
+          </>
+        }
+        rightContent={
+          <>
+            {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
+            {rightActive !== "chat" ? renderSurface(rightActive) : null}
+          </>
+        }
+        utilityBar={
+          <UtilityBar
+            start={
+              <>
+                <a className="util-btn" href="https://protolabsai.github.io/protoAgent/" target="_blank" rel="noreferrer" title="Documentation" aria-label="Documentation">
+                  <BookOpen size={14} />
+                </a>
+                <a className="util-btn" href="https://github.com/protoLabsAI/protoAgent" target="_blank" rel="noreferrer" title="GitHub repository" aria-label="GitHub repository">
+                  <Github size={14} />
+                </a>
+              </>
+            }
+            end={
+              <button
+                type="button"
+                className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
+                onClick={() => setRightCollapsed(!rightCollapsed)}
+                title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+                aria-label="Toggle side panel"
+                data-testid="toggle-right"
+              >
+                <PanelRight size={14} />
+              </button>
+            }
           />
-        </div>
-      ) : (
-      <div
-        className={`workspace ${rightCollapsed ? "right-collapsed" : ""}`}
-        style={{ "--right-width": rightCol } as CSSProperties}
-      >
-        {/* Left rail (ADR 0035/0036) — members + order from railOrder; right-click a surface to
-            reorder or move it across. The rail is the extraction-ready <SurfaceRail>. */}
-        <SurfaceRail
-          side="left"
-          ariaLabel="Workspace surfaces"
-          items={railSurfaces("left").map((s) => ({
-            ...s,
-            badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
-            dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
-          }))}
-          activeId={leftActive}
-          onSelect={(id) => setSurface(id)}
-          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "left" })}
-        />
-
-        <main className="stage">
-          {error ? (
-            <div className="error-strip" role="alert">
-              <CircleAlert size={16} />
-              <span>{error}</span>
-            </div>
-          ) : null}
-
-          {/* Chat mounts UNCONDITIONALLY + hidden via `active` (streaming continuity, #613);
-              it's pinned to the left rail. Every other left-rail surface renders through the
-              shared renderSurface (ADR 0035 S3) — so it can live on either rail. */}
-          {chatRail === "left" ? <ChatSurface onError={setError} active={leftActive === "chat"} /> : null}
-          {leftActive !== "chat" ? renderSurface(leftActive) : null}
-        </main>
-
-        <aside className="right-panel">
-          {!rightCollapsed ? (
-            <div
-              className="resize-handle"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize side panel (arrows to nudge, double-click to reset)"
-              aria-valuenow={rightWidth}
-              aria-valuemin={280}
-              aria-valuemax={720}
-              tabIndex={0}
-              onMouseDown={startRightResize}
-              onKeyDown={onResizeKey}
-              onDoubleClick={() => setRightWidth(RIGHT_DEFAULT_WIDTH)}
-              data-testid="right-resize"
-            />
-          ) : null}
-          {/* The right surface renders through the same renderSurface as the left (ADR 0035 S3).
-              If Chat lives on this rail it mounts unconditionally (continuity), like the stage. */}
-          {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
-          {!rightCollapsed && rightActive !== "chat" ? renderSurface(rightActive) : null}
-        </aside>
-
-        {/* Right rail (ADR 0035/0036) — mirrors the left on the far edge; same <SurfaceRail>. */}
-        <SurfaceRail
-          side="right"
-          ariaLabel="Context surfaces"
-          items={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
-          activeId={rightCollapsed ? "" : rightActive}
-          onSelect={(id) => { setRightPanel(id); setRightCollapsed(false); }}
-          onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "right" })}
-        />
-      </div>
-      )}
-
-      <footer className="utility-bar">
-        <a
-          className="util-btn"
-          href="https://protolabsai.github.io/protoAgent/"
-          target="_blank"
-          rel="noreferrer"
-          title="Documentation"
-          aria-label="Documentation"
-        >
-          <BookOpen size={14} />
-        </a>
-        <a
-          className="util-btn"
-          href="https://github.com/protoLabsAI/protoAgent"
-          target="_blank"
-          rel="noreferrer"
-          title="GitHub repository"
-          aria-label="GitHub repository"
-        >
-          <Github size={14} />
-        </a>
-        <div className="util-spacer" />
-        <button
-          type="button"
-          className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
-          onClick={() => setRightCollapsed(!rightCollapsed)}
-          title={rightCollapsed ? "Show side panel" : "Hide side panel"}
-          aria-label="Toggle side panel"
-          data-testid="toggle-right"
-        >
-          <PanelRight size={14} />
-        </button>
-      </footer>
+        }
+      />
 
       <SetupWizard
         open={runtime?.setup_complete === false}
@@ -793,15 +727,22 @@ export function App() {
       <ConfirmDialog
         open={confirmState !== null}
         title={confirmState?.title ?? ""}
-        message={confirmState?.message}
-        confirmLabel={confirmState?.confirmLabel}
+        confirmLabel={confirmState?.confirmLabel ?? "Delete"}
+        destructive
         onConfirm={() => {
           confirmState?.onConfirm();
           setConfirmState(null);
         }}
-        onCancel={() => setConfirmState(null)}
-      />
+        onClose={() => setConfirmState(null)}
+      >
+        {confirmState?.message}
+      </ConfirmDialog>
     </div>
+    {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry.
+        Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
+        its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
+    <ContextMenuRenderer />
+    </>
   );
 }
 

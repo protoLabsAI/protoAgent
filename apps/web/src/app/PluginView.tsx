@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
 import { onTopic, topicMatches } from "../lib/events";
-import { StageSubnav } from "./StageSubnav";
+import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
 
 // Derive the plugin id from a view path (`/api/plugins/<id>/...`) — used to namespace-stamp
@@ -124,9 +124,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // Federation + the in-process `ui: react` path were retired; rich plugins serve their own UI.
   return (
     <>
-      {/* Sub-tab strip above the panel card — shared StageSubnav (single source of truth). */}
-      <StageSubnav active={activeTab} onSelect={setActiveTab}
-                   tabs={tabs.map((t) => ({ id: t.id, label: t.label }))} />
+      {/* Sub-tab strip above the panel card — shared DS Tabs (single source of truth). */}
+      <Tabs active={activeTab} onSelect={setActiveTab}
+            items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
       <section className="panel stage-panel plugin-view">
       <div className="plugin-view-body">
         {failed ? (

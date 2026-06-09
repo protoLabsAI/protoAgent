@@ -1,3 +1,5 @@
+import { Input } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import {
   Loader2,
   Plus,
@@ -9,7 +11,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { ConfirmDialog } from "../app/ConfirmDialog";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
@@ -90,7 +92,7 @@ export function ChatSurface({
             <div className={`chat-tab ${active ? "active" : ""}`} role="tab" aria-selected={active} key={session.id}>
               <span className={`session-dot ${status}`} title={status} />
               {editingId === session.id ? (
-                <input
+                <Input
                   className="chat-tab-edit"
                   autoFocus
                   defaultValue={session.title}
@@ -152,18 +154,18 @@ export function ChatSurface({
       <ConfirmDialog
         open={pendingClose !== null}
         title="Delete this chat?"
-        message={
-          pendingCloseSession
-            ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
-            : undefined
-        }
         confirmLabel="Delete chat"
+        destructive
         onConfirm={() => {
           if (pendingClose) closeSession(pendingClose);
           setPendingClose(null);
         }}
-        onCancel={() => setPendingClose(null)}
-      />
+        onClose={() => setPendingClose(null)}
+      >
+        {pendingCloseSession
+          ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
+          : undefined}
+      </ConfirmDialog>
     </section>
   );
 }
@@ -635,15 +637,15 @@ function ChatSessionSlot({
           rows={3}
         />
         {status === "streaming" ? (
-          <button className="secondary-button" type="button" onClick={() => void stop()}>
+          <Button type="button" onClick={() => void stop()}>
             <Square size={15} />
             Stop
-          </button>
+          </Button>
         ) : (
-          <button className="primary-button" type="submit" disabled={!canSend}>
+          <Button variant="primary" type="submit" disabled={!canSend}>
             <Send size={16} />
             Send
-          </button>
+          </Button>
         )}
         </form>
       </div>

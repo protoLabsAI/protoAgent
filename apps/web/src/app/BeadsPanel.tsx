@@ -1,3 +1,5 @@
+import { Input, Select } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -17,7 +19,7 @@ import {
 import { Suspense, useState } from "react";
 
 import { api } from "../lib/api";
-import { PanelHeader } from "./PanelHeader";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { beadsIssuesQuery, queryKeys } from "../lib/queries";
 import type { BeadsIssue } from "../lib/types";
 import {
@@ -34,7 +36,7 @@ import {
   type IssueDraft,
 } from "./beads";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
-import { ScrollArea } from "./ScrollArea";
+import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
 
 // The agent's task board (in-process beads store), on the TanStack Query data
@@ -103,17 +105,17 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           if (draft.title.trim()) create.mutate(draft);
         }}
       >
-        <input
+        <Input
           value={draft.title}
           onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
           placeholder="New issue title"
         />
-        <button className="primary-button" type="submit" disabled={!draft.title.trim() || busy}>
+        <Button variant="primary" type="submit" disabled={!draft.title.trim() || busy}>
           {create.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
           Add
-        </button>
+        </Button>
         <div className="issue-create-meta">
-          <select
+          <Select
             value={draft.type}
             onChange={(event) => setDraft((d) => ({ ...d, type: event.target.value }))}
             aria-label="Issue type"
@@ -122,8 +124,8 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
             <option value="bug">bug</option>
             <option value="feature">feature</option>
             <option value="chore">chore</option>
-          </select>
-          <select
+          </Select>
+          <Select
             value={draft.priority}
             onChange={(event) => setDraft((d) => ({ ...d, priority: Number(event.target.value) }))}
             aria-label="Issue priority"
@@ -133,8 +135,8 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
             <option value={2}>P2</option>
             <option value={3}>P3</option>
             <option value={4}>P4</option>
-          </select>
-          <input
+          </Select>
+          <Input
             value={draft.description}
             onChange={(event) => setDraft((d) => ({ ...d, description: event.target.value }))}
             placeholder="Description"
@@ -145,7 +147,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         ) : null}
       </form>
 
-      <ScrollArea className="issue-list" ariaLabel="Beads tasks">
+      <ScrollArea className="issue-list" role="region" aria-label="Beads tasks" tabIndex={0}>
         {issues.length === 0 ? (
           <div className="empty-state stacked">
             <Boxes size={18} />
@@ -199,18 +201,16 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
                               </div>
                               <div className="issue-actions">
                                 {!isClosed ? (
-                                  <button
-                                    className="icon-button"
+                                  <Button icon variant="ghost"
                                     type="button"
                                     onClick={() => update.mutate({ id: issue.id, status: isActive ? "open" : "in_progress" })}
                                     disabled={busy}
                                     title={isActive ? "Mark open" : "Start issue"}
                                   >
                                     {isActive ? <CircleAlert size={15} /> : <Play size={15} />}
-                                  </button>
+                                  </Button>
                                 ) : null}
-                                <button
-                                  className="icon-button"
+                                <Button icon variant="ghost"
                                   type="button"
                                   onClick={() =>
                                     isClosed ? update.mutate({ id: issue.id, status: "open" }) : close.mutate(issue.id)
@@ -219,16 +219,15 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
                                   title={isClosed ? "Reopen issue" : "Close issue"}
                                 >
                                   {isClosed ? <Play size={15} /> : <CheckCircle2 size={15} />}
-                                </button>
-                                <button
-                                  className="icon-button danger"
+                                </Button>
+                                <Button icon variant="danger"
                                   type="button"
                                   onClick={() => askDelete(issue)}
                                   disabled={busy}
                                   title="Delete issue"
                                 >
                                   <Trash2 size={15} />
-                                </button>
+                                </Button>
                               </div>
                             </div>
                             {issue.description ? (

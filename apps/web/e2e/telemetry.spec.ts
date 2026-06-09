@@ -7,8 +7,8 @@ test("Settings → Telemetry shows the telemetry summary cards and recent turns"
   await page.goto("/app/", { waitUntil: "load" });
 
   // Telemetry is its own tab under Settings now (split out of Overview).
-  await page.locator(".rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".stage-subnav").getByRole("button", { name: "Telemetry", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Telemetry", exact: true }).click();
 
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();

@@ -1,5 +1,8 @@
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { Button } from "@protolabsai/ui/primitives";
+import { AlertTriangle, RefreshCw } from "lucide-react";
+
 import { Component, type ReactNode } from "react";
+import { Spinner } from "@protolabsai/ui/data";
 
 // A small render-prop error boundary (ADR 0013). Pairs with TanStack Query's
 // <QueryErrorResetBoundary> so a failed `useSuspenseQuery` surfaces a contained
@@ -59,9 +62,9 @@ export function PanelError({ error, reset, label = "panel" }: FallbackArgs & { l
         <strong>Couldn't load the {label}</strong>
         <span>{error.message}</span>
       </div>
-      <button className="secondary-button" type="button" onClick={reset}>
+      <Button type="button" onClick={reset}>
         <RefreshCw size={14} /> Retry
-      </button>
+      </Button>
     </div>
   );
 }
@@ -70,7 +73,7 @@ export function PanelError({ error, reset, label = "panel" }: FallbackArgs & { l
 export function PanelSkeleton({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="panel-skeleton" aria-busy="true">
-      <Loader2 className="spin" size={18} />
+      <Spinner size={18} />
       <span>{label}</span>
     </div>
   );

@@ -144,6 +144,7 @@ FIELDS: list[Field] = [
     # ── Identity / operator ──────────────────────────────────────────────────
     Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
+    Field("identity.org", "identity_org", "Organization", "string", "Identity"),
     Field("operator.allowed_dirs", "operator_allowed_dirs", "Allowed project dirs", "string_list",
           "Identity", "Directories the beads/notes APIs may touch."),
     Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",
