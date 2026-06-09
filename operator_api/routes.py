@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -75,18 +75,21 @@ class BeadsCloseRequest(BaseModel):
 
 
 async def _sse_event_stream(
-    subscribe: Callable[[], AsyncIterator[dict[str, Any]]],
+    subscribe: Callable[..., AsyncIterator[dict[str, Any]]],
     *,
+    since: int | None = None,
     keepalive_s: float = 15.0,
 ) -> AsyncIterator[str]:
     """Frame bus events as SSE text for the ``/api/events`` response.
 
     Emits a ``: connected`` comment up front (so the client's ``onopen`` fires),
-    then one ``event:``/``data:`` frame per published event, with periodic
-    ``: keepalive`` comments to hold the connection open through idle stretches.
+    then one ``id:``/``event:``/``data:`` frame per published event, with periodic
+    ``: keepalive`` comments to hold the connection open through idle stretches. The
+    ``id:`` is the bus seq — a reconnecting client passes it back as ``?since=`` to
+    replay events it missed from the ring buffer (ADR 0039).
     """
     yield ": connected\n\n"
-    agen = subscribe()
+    agen = subscribe(since) if since is not None else subscribe()
     try:
         while True:
             try:
@@ -96,7 +99,9 @@ async def _sse_event_stream(
                 continue
             except StopAsyncIteration:
                 break
-            yield f"event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+            seq = evt.get("seq")
+            prefix = f"id: {seq}\n" if seq is not None else ""
+            yield f"{prefix}event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
     finally:
         await agen.aclose()
 
@@ -182,7 +187,8 @@ def register_operator_routes(
     workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     workflows_save: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     workflows_delete: Callable[[str], dict[str, Any]] | None = None,
-    events_subscribe: Callable[[], AsyncIterator[dict[str, Any]]] | None = None,
+    events_subscribe: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
+    events_publish: Callable[[str, dict[str, Any]], None] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     inbox_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     inbox_authorized: Callable[[str | None], bool] | None = None,
@@ -464,7 +470,37 @@ def register_operator_routes(
     if events_subscribe is not None:
 
         @app.get("/api/events")
-        async def _events():
+        async def _events(request: Request):
+            # ?since=<seq> (or the SSE Last-Event-ID header) replays missed events
+            # from the ring buffer on reconnect (ADR 0039).
+            raw = request.query_params.get("since") or request.headers.get("last-event-id")
+            try:
+                since = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                since = None
             return StreamingResponse(
-                _sse_event_stream(events_subscribe), media_type="text/event-stream"
+                _sse_event_stream(events_subscribe, since=since), media_type="text/event-stream"
             )
+
+    if events_publish is not None:
+
+        @app.post("/api/events/publish")
+        async def _events_publish(body: dict = Body(...)):
+            """Publish an event to the bus from a client / plugin iframe (ADR 0039).
+
+            The console relays sandboxed-iframe ``protoagent:publish`` messages here. Light
+            guard (the no-cross-dependency clause): the topic must be namespaced (``<plugin>.<event>``)
+            and must not contain subscription wildcards; payloads are size-capped. Bearer-gated
+            like all of ``/api/*``."""
+            topic = str(body.get("topic", "")).strip()
+            data = body.get("data") or {}
+            if not topic or "." not in topic:
+                raise HTTPException(status_code=400, detail="topic must be namespaced as <plugin>.<event>")
+            if "*" in topic or "#" in topic:
+                raise HTTPException(status_code=400, detail="published topic cannot contain wildcards")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=400, detail="data must be an object")
+            if len(json.dumps(data)) > 64 * 1024:
+                raise HTTPException(status_code=413, detail="event payload too large (64KB cap)")
+            events_publish(topic, data)
+            return {"ok": True}

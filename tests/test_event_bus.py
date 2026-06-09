@@ -23,8 +23,9 @@ def test_publish_fans_out_to_all_subscribers():
         return ra, rb
 
     ra, rb = asyncio.run(run())
-    assert ra == {"event": "hello", "data": {"n": 1}}
-    assert rb == {"event": "hello", "data": {"n": 1}}
+    # Payload carries a monotonic seq (ADR 0039) alongside event/data.
+    assert ra["event"] == "hello" and ra["data"] == {"n": 1} and ra["seq"] == 1
+    assert rb["event"] == "hello" and rb["data"] == {"n": 1} and rb["seq"] == 1
 
 
 def test_publish_defaults_empty_data():
@@ -38,7 +39,8 @@ def test_publish_defaults_empty_data():
         await sub.aclose()
         return evt
 
-    assert asyncio.run(run()) == {"event": "ping", "data": {}}
+    evt = asyncio.run(run())
+    assert evt["event"] == "ping" and evt["data"] == {}
 
 
 def test_drop_oldest_on_overflow():
@@ -61,7 +63,7 @@ def test_drop_oldest_on_overflow():
         return first, drained
 
     first, drained = asyncio.run(run())
-    assert first == {"event": "e", "data": {"i": 0}}
+    assert first["event"] == "e" and first["data"] == {"i": 0}
     # Oldest (i=1, i=2) were dropped; newest two survive.
     assert [d["data"]["i"] for d in drained] == [3, 4]
 
@@ -100,7 +102,8 @@ def test_sse_event_stream_preamble_and_frame():
 
     preamble, frame = asyncio.run(run())
     assert preamble == ": connected\n\n"
-    assert frame == 'event: activity.message\ndata: {"text": "hi"}\n\n'
+    # Frame now carries the seq as the SSE id (ADR 0039 — reconnect catch-up).
+    assert frame == 'id: 1\nevent: activity.message\ndata: {"text": "hi"}\n\n'
 
 
 def test_sse_event_stream_emits_keepalive_when_idle():
@@ -116,3 +119,85 @@ def test_sse_event_stream_emits_keepalive_when_idle():
         return ka
 
     assert asyncio.run(run()) == ": keepalive\n\n"
+
+
+# --- ADR 0039: topics, in-process handlers, ring replay, namespace guard ---
+
+
+def test_topic_matches_wildcards():
+    from events.bus import topic_matches
+
+    assert topic_matches("#", "anything.at.all")
+    assert topic_matches("artifact.created", "artifact.created")
+    assert topic_matches("artifact.*", "artifact.created")
+    assert not topic_matches("artifact.*", "artifact.created.again")  # * is one segment
+    assert topic_matches("artifact.#", "artifact.created.again")      # # is the tail
+    assert topic_matches("artifact.#", "artifact")                    # # matches empty tail
+    assert not topic_matches("notes.*", "artifact.created")           # different namespace
+
+
+def test_subscribe_handler_topic_filtered():
+    """A handler only fires for matching topics; the seq/data arrive intact."""
+    bus = EventBus()
+    seen: list[dict] = []
+    bus.subscribe_handler("artifact.*", lambda p: seen.append(p))
+    bus.publish("artifact.created", {"id": "a1"})
+    bus.publish("notes.changed", {"id": "n1"})  # different namespace — ignored
+    assert [p["event"] for p in seen] == ["artifact.created"]
+    assert seen[0]["data"] == {"id": "a1"} and seen[0]["seq"] == 1
+
+
+def test_handler_exception_is_isolated():
+    """A handler that raises can't break the publisher or other handlers."""
+    bus = EventBus()
+    good: list[str] = []
+
+    def boom(_):
+        raise RuntimeError("nope")
+
+    bus.subscribe_handler("#", boom)
+    bus.subscribe_handler("#", lambda p: good.append(p["event"]))
+    bus.publish("x.y", {})  # must not raise
+    assert good == ["x.y"]
+
+
+def test_unsubscribe_handler():
+    bus = EventBus()
+    seen: list[str] = []
+    off = bus.subscribe_handler("#", lambda p: seen.append(p["event"]))
+    bus.publish("a.b")
+    off()
+    bus.publish("a.c")
+    assert seen == ["a.b"]
+    assert bus.handler_count() == 0
+
+
+def test_ring_replay_since():
+    """A reconnecting subscriber with ?since= replays missed events then streams live."""
+    async def run():
+        bus = EventBus()
+        bus.publish("a.1", {"i": 1})
+        bus.publish("a.2", {"i": 2})
+        bus.publish("a.3", {"i": 3})
+        sub = bus.subscribe(since=1)  # missed everything after seq 1
+        replayed = [await asyncio.wait_for(sub.__anext__(), timeout=1) for _ in range(2)]
+        await sub.aclose()
+        return replayed
+
+    replayed = asyncio.run(run())
+    assert [p["seq"] for p in replayed] == [2, 3]
+
+
+def test_registry_emit_namespaces_topic():
+    """registry.emit auto-prefixes the plugin namespace (the no-cross-dep clause)."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from graph.plugins.registry import PluginRegistry
+
+    sent: list[tuple[str, dict]] = []
+    reg = PluginRegistry("artifact", Path("."))
+    reg.host = SimpleNamespace(publish=lambda t, d: sent.append((t, d)), on=None)  # isolate from HOST
+    reg.emit("created", {"id": "a1"})            # bare → namespaced
+    reg.emit("artifact.deleted", {"id": "x"})    # already namespaced → unchanged
+    assert sent == [("artifact.created", {"id": "a1"}), ("artifact.deleted", {"id": "x"})]

@@ -50,6 +50,13 @@ class PluginManifest:
     # data so it's known without importing the plugin, and surfaced to the
     # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?}.
     views: list[dict] = field(default_factory=list)
+    # Event contract (ADR 0039) — the topics this plugin broadcasts / listens for.
+    # Declarative for discoverability (surfaced in /api/runtime/status): a plugin
+    # "ships" its events as its public API so others subscribe by topic without
+    # importing it. Not enforced — publish is auto-namespaced + guarded at runtime;
+    # subscribing to any topic is allowed.
+    emits: list[str] = field(default_factory=list)
+    subscribes: list[str] = field(default_factory=list)
     # Distribution (ADR 0027) — for plugins installed from a git URL.
     #   requires_pip: declared pip deps. NOT auto-installed (install ≠ code exec);
     #     the operator installs them explicitly. Missing → clear error on enable.
@@ -94,6 +101,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     secrets = data.get("secrets")
     settings = data.get("settings")
     views = data.get("views")
+    emits = data.get("emits")
+    subscribes = data.get("subscribes")
     requires_pip = data.get("requires_pip")
     return PluginManifest(
         id=pid,
@@ -112,6 +121,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         test=bool(data.get("test", False)),
         views=[v for v in views if isinstance(v, dict) and v.get("id") and v.get("path")]
         if isinstance(views, (list, tuple)) else [],
+        emits=[str(x) for x in emits] if isinstance(emits, (list, tuple)) else [],
+        subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
         requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],
         repository=str(data.get("repository", "")).strip(),
         homepage=str(data.get("homepage", "")).strip(),

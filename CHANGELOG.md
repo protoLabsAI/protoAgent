@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Plugin event bus (ADR 0039)** — promotes the ADR 0003 bus into a decoupled topic pub/sub:
+  dot-namespaced topics with `*`/`#` wildcards, in-process handler subscriptions (`registry.on`),
+  namespace-guarded publish (`registry.emit` auto-prefixes `<plugin>.`), a ring buffer for SSE
+  reconnect catch-up (`GET /api/events?since=`, frames carry `id:`/seq), and a gated
+  `POST /api/events/publish` for client/iframe publishes. Plugins declare their contract via
+  `emits:`/`subscribes:` in the manifest. The no-cross-plugin-dependency clause: the bus is the only
+  inter-plugin channel; nobody imports anyone.
 - **Fork extension seam (ADR 0038 slice 3)** — a build-time **`src/ext/`** seam: a fork drops a
   `*.tsx` that calls `registerSurface()` / `registerContextMenu()`; the console auto-loads it via
   `import.meta.glob`. **Core ships the directory empty**, so `git pull upstream` never conflicts on

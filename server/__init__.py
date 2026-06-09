@@ -456,6 +456,7 @@ def _main():
         workflows_save=_console._operator_workflow_save,
         workflows_delete=_console._operator_workflow_delete,
         events_subscribe=_event_bus.subscribe,
+        events_publish=_event_bus.publish,
         activity_list=_console._operator_activity_list,
         inbox_add=_console._operator_inbox_add,
         inbox_authorized=_console._inbox_authorized,
