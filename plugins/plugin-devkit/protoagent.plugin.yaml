@@ -1,13 +1,13 @@
 id: plugin-devkit
 name: Plugin Devkit
-version: 0.1.0
+version: 0.2.0
 description: >-
   The plugin-authoring kit + the canonical reference plugin. It demonstrates EVERY
   contribution type in one repo — a tool (`scaffold_plugin`), a subagent
   (`plugin-architect`), a bundled `SKILL.md` skill, a workflow (`design-plugin`),
-  a console view, and config/settings — and it gives the agent what it needs to
-  build its own plugins: the building-plugins skill (the how) + the scaffold tool
-  (the doing). Enable it, then ask the agent to build a plugin.
+  a console view, config/settings, and an event-bus emit (ADR 0039) — and it gives
+  the agent what it needs to build its own plugins: the building-plugins skill (the
+  how) + the scaffold tool (the doing). Enable it, then ask the agent to build a plugin.
 enabled: false
 
 # Declarative (surfaced, not enforced): scaffold_plugin writes plugin skeletons
@@ -23,6 +23,11 @@ config:
 settings:
   - { key: target_dir, label: "Scaffold target dir", type: string, description: "Where scaffold_plugin writes new plugins (blank = the live plugins dir)." }
 
-# Console view (ADR 0026) — a quick-reference card for the plugin contract.
+# Event bus (ADR 0039) — the topics this plugin broadcasts (declared for discovery).
+emits:
+  - plugin-devkit.scaffolded
+
+# Console view (ADR 0026/0038) — a quick-reference card, served under /api/plugins/* so it
+# inherits the operator bearer gate; the console iframes it.
 views:
-  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /plugins/plugin-devkit/guide }
+  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /api/plugins/plugin-devkit/guide }

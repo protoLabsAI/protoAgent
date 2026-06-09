@@ -36,6 +36,19 @@ def _target_root(config: dict | None) -> Path:
     return live_plugins_dir()
 
 
+# Captured at register() so the scaffold tool can broadcast on the event bus (ADR 0039) —
+# the devkit dogfoods its own lesson.
+_REGISTRY = None
+
+
+def _emit_scaffolded(pid: str, kind: str) -> None:
+    try:
+        if _REGISTRY is not None:
+            _REGISTRY.emit("scaffolded", {"id": pid, "kind": kind})  # → "plugin-devkit.scaffolded"
+    except Exception:  # noqa: BLE001 — a bus hiccup must never fail the scaffold
+        pass
+
+
 _INIT_STUB = '''"""{name} — a protoAgent plugin (scaffolded by plugin-devkit)."""
 
 from __future__ import annotations
@@ -46,6 +59,9 @@ from langchain_core.tools import tool
 def register(registry):
     """Wire this plugin's contributions into the agent (ADR 0018)."""
 {registrations}
+    # Event bus (ADR 0039) — coordinate without importing other plugins:
+    #   registry.emit("did_something", {{"id": 1}})   # → "{id_us}.did_something" on the bus
+    #   registry.on("other-plugin.*", lambda evt: ...) # react to anyone's events
 '''
 
 _TOOL_STUB = '''
@@ -63,10 +79,14 @@ _VIEW_STUB = '''
 
     @router.get("/view")
     async def _view():
+        # The console iframes this page (ADR 0038) and postMessages it the operator
+        # bearer + theme (ADR 0026). Serve a sandboxed page; for untrusted/generated
+        # content keep the inner frame sandbox="allow-scripts" with no same-origin.
         return HTMLResponse("<!doctype html><body style='background:#0a0a0c;color:#ededed;"
                             "font-family:system-ui;padding:32px'><h1>{name}</h1>"
                             "<p>Your plugin view — replace this page.</p></body>")
-    registry.register_router(router)  # mounted at /plugins/{id}
+    # Mounted under /api/plugins/{id} so it inherits the operator bearer gate (ADR 0026).
+    registry.register_router(router, prefix="/api/plugins/{id}")
 '''
 
 _MANIFEST_STUB = """id: {id}
@@ -76,6 +96,9 @@ description: >-
   {summary}
 enabled: false
 config_section: {id_us}
+# Event bus (ADR 0039) — topics this plugin broadcasts / listens for (optional, for discovery):
+# emits: ["{id_us}.something"]
+# subscribes: ["other-plugin.*"]
 {views_block}"""
 
 _SKILL_STUB = """---
@@ -215,6 +238,7 @@ def _build_scaffold_tool(config: dict | None):
                 sk.mkdir(parents=True)
                 (sk / "SKILL.md").write_text(_SKILL_STUB.format(id=pid, name=name))
                 made.append("skills/")
+            _emit_scaffolded(pid, "comms")
             return (
                 f"✓ scaffolded communication plugin {pid!r} at {target}\n"
                 f"  wrote: {', '.join(made)}\n"
@@ -224,7 +248,7 @@ def _build_scaffold_tool(config: dict | None):
             )
 
         views_block = (
-            f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /plugins/{pid}/view }}\n"
+            f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /api/plugins/{pid}/view }}\n"
             if with_view else ""
         )
         (target / "protoagent.plugin.yaml").write_text(
@@ -239,7 +263,7 @@ def _build_scaffold_tool(config: dict | None):
         if not registrations.strip():
             registrations = "    pass  # add registry.register_* calls here\n"
         (target / "__init__.py").write_text(
-            _INIT_STUB.format(name=name, view_import="", registrations=registrations)
+            _INIT_STUB.format(name=name, view_import="", registrations=registrations, id_us=id_us)
         )
 
         made = ["protoagent.plugin.yaml", "__init__.py"]
@@ -253,6 +277,7 @@ def _build_scaffold_tool(config: dict | None):
             (target / "workflows" / f"{pid}.yaml").write_text(_WORKFLOW_STUB.format(id=pid))
             made.append("workflows/")
 
+        _emit_scaffolded(pid, "plugin")
         return (
             f"✓ scaffolded plugin {pid!r} at {target}\n"
             f"  wrote: {', '.join(made)}\n"
@@ -276,12 +301,15 @@ def _plugin_architect() -> SubagentConfig:
         system_prompt=(
             "You design protoAgent plugins. Given a request, output: (1) the plugin "
             "id + name, (2) which contributions it needs (tools / subagents / "
-            "SKILL.md skills / workflows / console views / config+secrets), (3) a "
-            "complete `protoagent.plugin.yaml`, and (4) a `register(registry)` "
-            "sketch. Follow the plugin contract: the manifest is data; code runs "
-            "only on enable; config_section is a string; skills/ and workflows/ "
-            "subdirs auto-load; declare requires_pip, don't assume it's installed. "
-            "Keep it to the smallest plugin that satisfies the request."
+            "SKILL.md skills / workflows / console views / config+secrets / event-bus "
+            "emits+subscribes), (3) a complete `protoagent.plugin.yaml`, and (4) a "
+            "`register(registry)` sketch. Follow the plugin contract: the manifest is "
+            "data; code runs only on enable; config_section is a string; skills/ and "
+            "workflows/ subdirs auto-load; declare requires_pip, don't assume it's "
+            "installed; console views are sandboxed iframes served under /api/plugins/<id> "
+            "(ADR 0038); plugins coordinate via the event bus (registry.emit/on), never "
+            "by importing each other (ADR 0039). Keep it to the smallest plugin that "
+            "satisfies the request."
         ),
         tools=[],  # pure reasoning — it produces a spec, it doesn't act
     )
@@ -311,15 +339,26 @@ def _build_guide_router():
             <li><code>plugin-architect</code> subagent + <code>design-plugin</code> workflow — request → spec</li>
             <li>the <code>building-plugins</code> skill — the authoring contract</li>
             <li>this console view + config/settings</li>
+            <li>emits <code>plugin-devkit.scaffolded</code> on the bus when it scaffolds (ADR 0039)</li>
           </ul>
           <h2>The plugin contract</h2>
           <ul>
             <li><code>protoagent.plugin.yaml</code> — manifest (data; read without importing)</li>
             <li><code>__init__.py</code> — <code>register(registry)</code> (tools, subagents, routes, MCP)</li>
             <li><code>skills/</code> + <code>workflows/</code> — auto-discovered data</li>
-            <li><code>views:</code> in the manifest — console rail views</li>
+            <li><code>views:</code> — a rail icon → a <strong>sandboxed iframe</strong> of a page your plugin
+                serves (ADR 0038). Mount its router under <code>/api/plugins/&lt;id&gt;</code> so it's
+                bearer-gated; the console hands it the token + theme (ADR 0026).</li>
           </ul>
-          <p>Full guide: <code>/guides/plugin-registry</code> · install ≠ enable ≠ trust.</p>
+          <h2>Events (ADR 0039)</h2>
+          <ul>
+            <li><code>registry.emit("x", data)</code> → <code>&lt;id&gt;.x</code> on the bus · <code>registry.on("other.*", fn)</code> to react</li>
+            <li>declare <code>emits:</code> / <code>subscribes:</code> in the manifest (discovery)</li>
+            <li>an event under <code>&lt;id&gt;.*</code> lights your plugin's rail icon (notification dot)</li>
+            <li>plugins coordinate <em>only</em> via the bus — never import each other</li>
+          </ul>
+          <p>Fork components (compiled in, not sandboxed) use the build-time <code>src/ext</code> seam (ADR 0038).</p>
+          <p>Full guides: <code>/guides/plugins</code> · <code>/guides/plugin-registry</code> · install ≠ enable ≠ trust.</p>
         </div></body></html>"""
         return HTMLResponse(html)
 
@@ -328,7 +367,10 @@ def _build_guide_router():
 
 def register(registry) -> None:
     """Every contribution type, in one plugin (the point of the devkit)."""
+    global _REGISTRY
+    _REGISTRY = registry                                            # for the bus emit (ADR 0039)
     registry.register_tool(_build_scaffold_tool(registry.config))  # a tool
     registry.register_subagent(_plugin_architect())                # a subagent
-    registry.register_router(_build_guide_router())                # routes + the view page
+    # Gated under /api/plugins/plugin-devkit (ADR 0026) — the console iframes /guide.
+    registry.register_router(_build_guide_router(), prefix="/api/plugins/plugin-devkit")
     # skills/ + workflows/ auto-discover — no call needed (ADR 0027).
