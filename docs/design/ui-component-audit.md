@@ -107,6 +107,8 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 
 ## Filed upstream (protoContent)
 
+**Coordination thread:** [protoContent #137](https://github.com/protoLabsAI/protoContent/issues/137) — the umbrella discussion where both teams work through priorities, API shapes, and AppShell convergence. The rows below are its actionable children.
+
 | # | Request | Priority | Status |
 |---|---|---|---|
 | [#131](https://github.com/protoLabsAI/protoContent/issues/131) | `Menu` / `DropdownMenu` (Radix, open-at-coords) | P0 | Filed |
