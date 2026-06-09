@@ -1,4 +1,4 @@
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
 
@@ -547,10 +547,12 @@ export function SetupWizard({
                   The protoAgent directory and the project path above are always allowed.
                 </span>
               </label>
-              <label className="checkbox-field setup-checkbox">
-                <input type="checkbox" checked={state.initBeads} onChange={(event) => update({ initBeads: event.target.checked })} />
-                <span>Initialize beads</span>
-              </label>
+              <Checkbox
+                className="checkbox-field setup-checkbox"
+                checked={state.initBeads}
+                onCheckedChange={(c) => update({ initBeads: c })}
+                label="Initialize beads"
+              />
             </StepBody>
           ) : null}
 

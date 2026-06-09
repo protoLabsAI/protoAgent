@@ -1,4 +1,4 @@
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 
@@ -118,14 +118,12 @@ export function WorkflowBuilder({
               placeholder="input name"
               onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, name: e.target.value } : v)))}
             />
-            <label className="checkbox-field">
-              <input
-                type="checkbox"
-                checked={inp.required}
-                onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, required: e.target.checked } : v)))}
-              />
-              <span>required</span>
-            </label>
+            <Checkbox
+              className="checkbox-field"
+              checked={inp.required}
+              onCheckedChange={(c) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, required: c } : v)))}
+              label="required"
+            />
             <Button icon variant="ghost" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
               <Trash2 size={14} />
             </Button>
@@ -174,14 +172,13 @@ export function WorkflowBuilder({
                 {steps
                   .filter((_, j) => j !== i)
                   .map((other) => (
-                    <label className="checkbox-field" key={other.id}>
-                      <input
-                        type="checkbox"
-                        checked={step.dependsOn.includes(other.id)}
-                        onChange={() => toggleDep(i, other.id)}
-                      />
-                      <span>{other.id || "(unnamed)"}</span>
-                    </label>
+                    <Checkbox
+                      key={other.id}
+                      className="checkbox-field"
+                      checked={step.dependsOn.includes(other.id)}
+                      onCheckedChange={() => toggleDep(i, other.id)}
+                      label={other.id || "(unnamed)"}
+                    />
                   ))}
               </div>
             )}

@@ -1,4 +1,4 @@
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useState } from "react";
 
@@ -46,10 +46,12 @@ function Field({
 
   if (schema.type === "boolean") {
     return (
-      <label className="hitl-field hitl-field-bool">
-        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
-        <span>{label}</span>
-      </label>
+      <Checkbox
+        className="hitl-field hitl-field-bool"
+        checked={Boolean(value)}
+        onCheckedChange={onChange}
+        label={label}
+      />
     );
   }
 
