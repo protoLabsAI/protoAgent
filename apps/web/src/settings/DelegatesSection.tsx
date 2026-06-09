@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -123,15 +124,15 @@ export function DelegatesSection() {
                 <span>{p ? probeLine(p) : d.description || d.error || ""}</span>
               </div>
               <div className="issue-actions">
-                <button className="icon-button" title="Test" onClick={() => testRow.mutate(d)} disabled={testRow.isPending}>
+                <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} disabled={testRow.isPending}>
                   {testRow.isPending && testRow.variables?.name === d.name ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                </button>
-                <button className="icon-button" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
+                </Button>
+                <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
                   <Pencil size={15} />
-                </button>
-                <button className="icon-button" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
+                </Button>
+                <Button icon variant="ghost" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
                   <Trash2 size={15} />
-                </button>
+                </Button>
               </div>
             </div>
           );
@@ -158,9 +159,9 @@ export function DelegatesSection() {
         />
       ) : (
         <div className="settings-group-actions">
-          <button className="secondary-button" type="button" onClick={() => setAdding(true)} disabled={!typeSpecs.length}>
+          <Button type="button" onClick={() => setAdding(true)} disabled={!typeSpecs.length}>
             <Plus size={15} /> Add delegate
-          </button>
+          </Button>
         </div>
       )}
     </section>
@@ -216,7 +217,7 @@ function DelegateForm({
     <div className="delegate-form">
       <div className="delegate-form-head">
         <strong>{editing ? `Edit ${initial?.name}` : "New delegate"}</strong>
-        <button className="icon-button" title="Cancel" onClick={onClose}><X size={15} /></button>
+        <Button icon variant="ghost" title="Cancel" onClick={onClose}><X size={15} /></Button>
       </div>
 
       {!editing ? (
@@ -258,13 +259,13 @@ function DelegateForm({
       {err ? <p className="settings-status">{err}</p> : null}
 
       <div className="settings-group-actions">
-        <button className="secondary-button" type="button" onClick={() => test.mutate()} disabled={test.isPending}>
+        <Button type="button" onClick={() => test.mutate()} disabled={test.isPending}>
           {test.isPending ? <Loader2 className="spin" size={15} /> : <Plug size={15} />} Test
-        </button>
-        <button className="secondary-button" type="button" onClick={onClose}>Cancel</button>
-        <button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
+        </Button>
+        <Button type="button" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
           {save.isPending ? <Loader2 className="spin" size={15} /> : null} Save
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -80,9 +81,9 @@ function ScheduleModal({
         <div className="confirm-head">
           <CalendarClock size={16} />
           <h2>New schedule</h2>
-          <button className="icon-button schedule-close" type="button" onClick={onClose} title="Close">
+          <Button icon variant="ghost" className="schedule-close" type="button" onClick={onClose} title="Close">
             <X size={16} />
-          </button>
+          </Button>
         </div>
 
         <div className="schedule-modes" role="tablist">
@@ -161,11 +162,11 @@ function ScheduleModal({
         </label>
 
         <div className="confirm-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
-          <button type="button" className="primary-button" disabled={!canSubmit} data-testid="schedule-submit"
+          <Button type="button"  onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
                   onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
             <Plus size={16} /> Schedule
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -196,13 +197,13 @@ function ScheduleBody() {
         kicker={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${backend}`}
         actions={
           <>
-            <button className="icon-button" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
+            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
               <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </button>
-            <button className="primary-button" type="button" onClick={() => setModalOpen(true)}
+            </Button>
+            <Button variant="primary" type="button" onClick={() => setModalOpen(true)}
                     disabled={backend === "disabled"} data-testid="schedule-new">
               <Plus size={16} /> New schedule
-            </button>
+            </Button>
           </>
         }
       />
@@ -222,10 +223,10 @@ function ScheduleBody() {
                     {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
                   </span>
                 </div>
-                <button className="icon-button" type="button" onClick={() => cancel.mutate(job.id)}
+                <Button icon variant="ghost" type="button" onClick={() => cancel.mutate(job.id)}
                         disabled={busy} title="Cancel job">
                   <Trash2 size={16} />
-                </button>
+                </Button>
               </div>
             ))
           ) : (

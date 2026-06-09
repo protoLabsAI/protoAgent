@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -108,10 +109,10 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
           placeholder="New issue title"
         />
-        <button className="primary-button" type="submit" disabled={!draft.title.trim() || busy}>
+        <Button variant="primary" type="submit" disabled={!draft.title.trim() || busy}>
           {create.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
           Add
-        </button>
+        </Button>
         <div className="issue-create-meta">
           <select
             value={draft.type}
@@ -199,18 +200,16 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
                               </div>
                               <div className="issue-actions">
                                 {!isClosed ? (
-                                  <button
-                                    className="icon-button"
+                                  <Button icon variant="ghost"
                                     type="button"
                                     onClick={() => update.mutate({ id: issue.id, status: isActive ? "open" : "in_progress" })}
                                     disabled={busy}
                                     title={isActive ? "Mark open" : "Start issue"}
                                   >
                                     {isActive ? <CircleAlert size={15} /> : <Play size={15} />}
-                                  </button>
+                                  </Button>
                                 ) : null}
-                                <button
-                                  className="icon-button"
+                                <Button icon variant="ghost"
                                   type="button"
                                   onClick={() =>
                                     isClosed ? update.mutate({ id: issue.id, status: "open" }) : close.mutate(issue.id)
@@ -219,16 +218,15 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
                                   title={isClosed ? "Reopen issue" : "Close issue"}
                                 >
                                   {isClosed ? <Play size={15} /> : <CheckCircle2 size={15} />}
-                                </button>
-                                <button
-                                  className="icon-button danger"
+                                </Button>
+                                <Button icon variant="danger"
                                   type="button"
                                   onClick={() => askDelete(issue)}
                                   disabled={busy}
                                   title="Delete issue"
                                 >
                                   <Trash2 size={15} />
-                                </button>
+                                </Button>
                               </div>
                             </div>
                             {issue.description ? (

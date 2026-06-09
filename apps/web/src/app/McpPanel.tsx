@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
@@ -51,9 +52,9 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
 
   if (!open) {
     return (
-      <button type="button" className="ghost-button" onClick={() => setOpen(true)}>
+      <Button type="button" variant="ghost" onClick={() => setOpen(true)}>
         <Plus size={14} /> Add server
-      </button>
+      </Button>
     );
   }
   return (
@@ -100,10 +101,10 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
       )}
 
       <div className="mcp-add-actions">
-        <button type="submit" className="ghost-button" disabled={busy || (mode === "json" ? !json.trim() : !formValid)}>
+        <Button type="submit" variant="ghost" disabled={busy || (mode === "json" ? !json.trim() : !formValid)}>
           {busy ? <Loader2 size={14} className="spin" /> : mode === "json" ? "Import" : "Connect"}
-        </button>
-        <button type="button" className="ghost-button" onClick={() => { reset(); setOpen(false); }}>Cancel</button>
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => { reset(); setOpen(false); }}>Cancel</Button>
       </div>
     </form>
   );
@@ -142,15 +143,14 @@ function McpBody() {
                 <span>{server.name} · {server.transport}</span>
                 <div className="plugin-row-actions">
                   <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
-                  <button
-                    type="button"
-                    className="ghost-button"
+                  <Button type="button"
+                    variant="ghost"
                     disabled={removingName === server.name}
                     onClick={() => { setHint(null); remove.mutate(server.name); }}
                     title={`Remove ${server.name}`}
                   >
                     {removingName === server.name ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))
