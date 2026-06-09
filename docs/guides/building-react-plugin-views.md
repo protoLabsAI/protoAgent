@@ -1,70 +1,100 @@
-# Building a React plugin view
+# Building a plugin view
 
-A plugin can ship a **first-class React view** (ADR 0034) that mounts directly into the console's
-React tree — sharing the host's React, query cache, and auth — instead of a sandboxed iframe. The
-bundled **`notes` plugin** (`plugins/notes/`) is the reference implementation. This guide walks the
-four moving parts.
+A plugin can add a **console surface** — a rail icon that opens a view (a chart, an editor, a
+dashboard, a generative-UI panel). The model is simple and **sandboxed**: the plugin **serves its
+own page**, and the console renders it in an **iframe**. No host build, no shared bundle — so the
+same plugin works whether it's bundled in the repo or **installed from a git URL** (ADR 0027).
 
-## 1. Declare a `ui: react` view in the manifest
+> **Why iframes, not in-process React?** A plugin's UI is third-party code. The whole field
+> sandboxes generated/third-party UI in iframes (Claude Artifacts, Open WebUI, CodePen). It's the
+> right security boundary *and* it keeps plugins trivially distributable. (We tried Module
+> Federation for in-process React; ADR 0038 retired it — heavier than a fork needs, less safe than
+> untrusted code requires.)
+
+## The shape
+
+A plugin is a directory with a `protoagent.plugin.yaml` manifest and an `__init__.py` exposing
+`register(registry)`. To add a view:
 
 ```yaml
 # protoagent.plugin.yaml
+id: mychart
+name: My Chart
+enabled: true
 views:
-  - {
-      id: notes, label: "Notes", icon: "FileText", placement: right,
-      ui: react, path: "/api/plugins/<id>/view",   # iframe fallback for untrusted hosts
-      remote: { url: "/app/remotes/<name>/assets/remoteEntry.js", module: "./Panel" },
-    }
+  # A rail icon → an iframe of the page your plugin serves. placement: "right" docks it.
+  - { id: mychart, label: "My Chart", icon: "BarChart3", placement: right, path: "/api/plugins/mychart/view" }
 ```
 
-`remote.url` is the built remoteEntry; `module` is the exposed component. `path` is the iframe the
-host falls back to if the plugin isn't trusted (see step 4).
+```python
+# __init__.py
+def _build_router():
+    from fastapi import APIRouter
+    from fastapi.responses import HTMLResponse
+    router = APIRouter()
 
-## 2. Build the remote (Module Federation)
+    @router.get("/data")          # your data API (gated, because it's under /api/*)
+    async def _data() -> dict:
+        return {"points": [1, 2, 3]}
 
-A small Vite build that exposes your component and **shares** the host singletons — never bundle
-your own React/query or you'll dual-load (broken hooks). Mirror `apps/web/remotes/notes/vite.config.ts`:
+    @router.get("/view")          # the page the console iframes
+    async def _view():
+        return HTMLResponse(_PAGE)
 
-```ts
-federation({
-  name: "notes_panel",
-  filename: "remoteEntry.js",
-  exposes: { "./Panel": `${here}/Panel.tsx` },
-  shared: {
-    react: { requiredVersion: false },
-    "react-dom": { requiredVersion: false },
-    "@tanstack/react-query": { requiredVersion: false },
-    "@protoagent/plugin-ui": { requiredVersion: false }, // the host bridge + context-menu registry
-  },
-})
+    return router
+
+def register(registry):
+    registry.register_router(_build_router(), prefix="/api/plugins/mychart")  # under /api → bearer-gated
+
+_PAGE = """<!doctype html><html><body>...your UI...</body></html>"""
 ```
 
-Add it to `apps/web` `build:remotes` so it builds into `public/remotes/<name>/`.
+That's it. Drop the directory in `plugins/` (or `git`-install it) → the router mounts, the rail icon
+appears, the iframe loads your page. **No host rebuild.**
 
-## 3. Talk to the host via `@protoagent/plugin-ui`
+## The console ↔ page bridge (ADR 0026)
 
-The SDK is the only thing your component imports from the host. The **host bridge** gives you the
-authed API client + context without importing host internals:
+After the iframe loads, the console `postMessage`s it `{ type: "protoagent:init", token, theme }`:
 
-```tsx
-import { getHostBridge, registerContextMenu } from "@protoagent/plugin-ui";
+- **`token`** — the operator bearer. Send it on your fetches so authed `/api/*` calls work:
+  `fetch(url, { headers: { Authorization: "Bearer " + token } })`.
+- **`theme`** — console tokens (`bg`, `fg`, `fgMuted`, `border`, …). Apply them so your page matches
+  the console — and default to dark so you never flash white.
 
-const { apiUrl, authToken, brandName } = getHostBridge();
-// fetch a plugin route with the operator bearer:
-fetch(apiUrl("/api/plugins/notes/note"), { headers: { Authorization: `Bearer ${authToken()}` } });
-
-// contribute to the console's right-click menus (merged into the host's, deduped):
-registerContextMenu({ type: "rail-surface", items: [{ id: "x", label: "…", run: () => {} }] });
+```js
+window.addEventListener("message", (e) => {
+  if (e.data?.type !== "protoagent:init") return;
+  const { token, theme } = e.data;        // use token for fetches; apply theme to your page
+});
 ```
 
-Your backend (`register_tools` for the agent, `register_router(prefix="/api/plugins/<id>")` for the
-UI's data — under `/api/` so it inherits the operator bearer gate) owns the data. See
-`plugins/notes/__init__.py`.
+## Want React (or any framework)?
 
-## 4. Trust (ADR 0034 D5)
+Build your UI however you like and **serve the built files** — inline (a single `_PAGE` string),
+as static assets your plugin serves, or pull libs from a CDN at runtime (the **`artifact`** plugin
+loads React + Babel from a CDN inside its sandbox). The console just iframes your `path`. For
+untrusted code (generated artifacts, third-party views) keep the iframe `sandbox="allow-scripts"`
+with **no** `allow-same-origin`.
 
-A `ui: react` view mounts **in-process** with full access to the host — so it only does so if the
-plugin is **host-trusted**: in the shipped allowlist (`graph/plugins/loader.py`
-`_SHIPPED_TRUSTED_PLUGINS`, first-party) **or** added to `plugins.trusted` by the operator (the
-"Trust React" toggle in the Plugins surface). Untrusted? The view degrades to the sandboxed iframe
-of `path`. Trust is **host-decided, never declared by the plugin manifest.**
+## Reference plugins (in `plugins/`)
+
+- **`artifact`** — generative UI: the agent calls `show_artifact(kind, code)`; the page renders
+  HTML / SVG / Mermaid / React in a **nested sandboxed iframe**. The template for "render on demand."
+- **`notes`** — a self-contained markdown editor: tools (`read_note`/`write_note`/`append_note`) +
+  a `/note` data route + a `/view` editor page. The template for "a plugin that owns its vertical."
+
+Both are pure Python + a served page + (optionally) a bundled `SKILL.md`, and both are fully
+distributable from a git URL.
+
+## Fork components (no plugin, no iframe)
+
+If you're a **fork** and want first-party components compiled *into* the console (not sandboxed),
+that's the build-time `src/ext/` seam — see ADR 0038 D3. Different from plugins, which are runtime +
+sandboxed.
+
+## References
+
+- [Security & trust model](../explanation/security-and-trust.md) — why plugin UIs are sandboxed
+  iframes, and the "installing a plugin runs its code" trust posture.
+- ADR 0026 (plugin console surfaces + the bridge), ADR 0027 (git-URL install), ADR 0038
+  (the two-mode model + why federation was retired).
