@@ -116,10 +116,19 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 | [#131](https://github.com/protoLabsAI/protoContent/issues/131) | `Menu` / `DropdownMenu` (Radix, open-at-coords) | P0 | ✅ **Shipped 0.5.0** — `Menu` forwardRef + `MenuHandle.open({x,y})`, `MenuItem/Separator/Label/Sub` |
 | [#132](https://github.com/protoLabsAI/protoContent/issues/132) | `PanelHeader` composite | P1 | ✅ **Shipped 0.5.0** — exact `{title,kicker,actions,compact}` API |
 | [#133](https://github.com/protoLabsAI/protoContent/issues/133) | `Tabs` icon+badge slots | P1 | ✅ **Shipped 0.5.0** — `TabItem.icon?` + `.badge?` |
-| [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | ⏳ Open (our `.pl-scroll` bridge stays) |
-| [#135](https://github.com/protoLabsAI/protoContent/issues/135) | `Button` variants (ghost/danger) + icon-only + size | P1 | ⏳ Open |
-| [#136](https://github.com/protoLabsAI/protoContent/issues/136) | `Skeleton` loading-placeholder primitive | P1 | ⏳ Open |
-| — | **AppShell** dual-rail convergence | P0 | 🔶 In design (0.5.0 has `AppShell`/`Surface` stories, no export yet) — coordinate via #137 |
+| [#134](https://github.com/protoLabsAI/protoContent/issues/134) | `ScrollArea` min-height:0 + overscroll + focus ring | P2 | ✅ **Shipped 0.6.0** |
+| [#135](https://github.com/protoLabsAI/protoContent/issues/135) | `Button` variants (ghost/danger) + icon-only + size | P1 | ✅ **Shipped 0.6.0** |
+| [#136](https://github.com/protoLabsAI/protoContent/issues/136) | `Skeleton` loading-placeholder primitive | P1 | ✅ **Shipped 0.6.0** |
+
+**Entire original wishlist (#131–#136) delivered across 0.5.0 + 0.6.0.** AppShell convergence agreed (#137); sub-pieces now filed as children:
+
+| # | AppShell sub-piece | Status |
+|---|---|---|
+| [#142](https://github.com/protoLabsAI/protoContent/issues/142) | `SurfaceRail` (icon rail + tab strip) | Filed — source handed over; offered to PR |
+| [#143](https://github.com/protoLabsAI/protoContent/issues/143) | `MobileNav` (bottom quick-bar + drawer) | Filed — source handed over; offered to PR |
+| [#144](https://github.com/protoLabsAI/protoContent/issues/144) | `AppShell` composite (controlled; app keeps persistence) | Filed |
+
+Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu now; Popover/Combobox/Select later) styled with `--pl-*`; everything else className-only; no Tailwind.** Segmented Tabs variant spec'd on #137 (UI team to add).
 
 ## Full-sweep classification (all 323 `theme.css` class groups triaged)
 
