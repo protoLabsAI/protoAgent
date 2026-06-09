@@ -12,16 +12,31 @@ import { ProtoLabsIcon } from "./ProtoLabsIcon";
  */
 
 const HOLD_MS = 2500; // entrance + hold before handing off to the app
+const SEEN_KEY = "protoagent.introSeen"; // sessionStorage — show the bumper once per tab session
+
+// Skip the splash when: (a) under automation (Playwright sets navigator.webdriver) so the 2.5s
+// overlay doesn't intercept E2E, or (b) it's already played this session — so a refresh doesn't
+// replay it. sessionStorage clears when the tab closes, so a fresh session sees it once.
+function alreadySeen(): boolean {
+  if (typeof navigator !== "undefined" && (navigator as Navigator).webdriver === true) return true;
+  try {
+    return sessionStorage.getItem(SEEN_KEY) === "1";
+  } catch {
+    return false; // private mode / storage blocked — fall through and show it
+  }
+}
 
 export function IntroSplash() {
-  // Skip under automation (Playwright/Selenium set navigator.webdriver) so the
-  // 2.5s overlay doesn't intercept E2E interactions. Real users see it.
-  const [gone, setGone] = useState(
-    () => typeof navigator !== "undefined" && (navigator as Navigator).webdriver === true,
-  );
+  const [gone, setGone] = useState(alreadySeen);
 
   useEffect(() => {
-    if (gone) return; // skipped (automation) — no timer, nothing to unmount
+    if (gone) return; // skipped (automation or already seen) — no timer, nothing to unmount
+    // Mark it seen immediately so a refresh *during* the hold also skips it.
+    try {
+      sessionStorage.setItem(SEEN_KEY, "1");
+    } catch {
+      /* storage blocked — it'll just replay next refresh */
+    }
     const t = window.setTimeout(() => {
       const doc = document as Document & {
         startViewTransition?: (cb: () => void) => unknown;

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Intro splash shows once per session** — the launch bumper is gated by `sessionStorage`, so a
+  refresh no longer replays the 2.5s splash; a fresh tab session sees it once. (Automation still skips it.)
 - **Plugin devkit refreshed (v0.2.0)** — the reference plugin + scaffolder now models current best
   practice: console views are sandboxed iframes served under `/api/plugins/<id>` (bearer-gated, ADR
   0038/0026), and the event bus (ADR 0039) is first-class — the scaffold stubs + the `building-plugins`
