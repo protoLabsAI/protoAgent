@@ -11,7 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Retired Module Federation (ADR 0038)** — plugin UI is now **sandboxed iframes** only
+  (the right model for untrusted third-party + generative code, and trivially git-installable).
+  Removed the in-process `ui: react`/federation path, the `@protoagent/plugin-ui` federation SDK,
+  the react-vs-iframe **trust gate** (`plugins.trusted`, the allowlist, the "Trust React" toggle),
+  `FederatedView`, and the host remotes. **Notes** is now a self-contained iframe plugin (serves
+  its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
+
 ### Added
+- **Generative-UI artifacts (ADR 0038)** — a first-party `artifact` plugin: the agent calls
+  `show_artifact(kind, code)` to render HTML / SVG / Mermaid / React on demand into a sandboxed
+  iframe (the Claude Artifacts / Open WebUI model). Plus a `rendering-artifacts` skill so the
+  agent reaches for it over writing files.
 - **Generative-UI artifacts (ADR 0038)** — a first-party **`artifact`** plugin: the agent calls
   `show_artifact(kind, code)` to render **HTML / SVG / Mermaid / React on demand** into a
   **sandboxed iframe** (`sandbox="allow-scripts"`, no same-origin) — the Claude Artifacts / Open

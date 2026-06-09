@@ -10,12 +10,7 @@ enabled: true            # first-party — shipped on
 capabilities:
   network: []
   filesystem: scoped     # one note file in the instance data dir
-# A first-class React view (ADR 0034) mounted in the right rail. `path` is the
-# iframe fallback for untrusted hosts; `notes` is on the shipped trust allowlist
-# (graph/plugins/loader.py) so it mounts in-process.
+# The plugin self-serves its editor page (ADR 0038) — a sandboxed iframe, no host build, so it's
+# git-installable like any plugin. (Was a federated `ui: react` remote; federation retired.)
 views:
-  - {
-      id: notes, label: "Notes", icon: "FileText", placement: right,
-      ui: react, path: "/api/plugins/notes/view",
-      remote: { url: "/app/remotes/notes/assets/remoteEntry.js", module: "./Panel" },
-    }
+  - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/api/plugins/notes/view" }

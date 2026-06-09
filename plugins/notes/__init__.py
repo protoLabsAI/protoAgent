@@ -84,9 +84,11 @@ def append_note(text: str) -> str:
 
 
 def _build_router():
-    """The UI's data route — mounted under ``/api/plugins/notes`` so it inherits the
-    operator bearer gate (P0 auth). The React panel reads/writes the note here."""
+    """The Notes routes — mounted under ``/api/plugins/notes`` so they inherit the operator bearer
+    gate (P0 auth). ``/note`` is the data API; ``/view`` is the editor page the console iframes
+    (ADR 0038 — the plugin self-serves its UI; no host build, git-installable)."""
     from fastapi import APIRouter, Body
+    from fastapi.responses import HTMLResponse
 
     router = APIRouter()
 
@@ -99,6 +101,10 @@ def _build_router():
         _write(str(body.get("content", "")))
         return {"ok": True, "updated_at": _updated_at()}
 
+    @router.get("/view")
+    async def _view():
+        return HTMLResponse(_EDITOR_HTML)
+
     return router
 
 
@@ -107,3 +113,51 @@ def register(registry) -> None:
     registry.register_tools([read_note, write_note, append_note])
     # Mounted at /api/plugins/notes (gated) — not the default /plugins/notes.
     registry.register_router(_build_router(), prefix="/api/plugins/notes")
+
+
+# The editor page the console iframes (ADR 0026 bridge → bearer + theme). A self-contained markdown
+# editor: debounced autosave (PUT /note), an edit↔preview toggle (marked from CDN), and a poll that
+# adopts the agent's writes. Dark by default, following the console theme. No host build — the
+# plugin serves its own UI, so it works installed from a git URL (ADR 0038).
+_EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
+  :root{ --bg:#0a0a0c; --bg-raised:#161616; --fg:#ededed; --fg-muted:#9aa0aa; --border:#2a2a30; --brand:#a78bfa; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+  #wrap{display:flex;flex-direction:column;height:100%}
+  #bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg-muted)}
+  #bar button{background:transparent;border:1px solid var(--border);color:var(--fg-muted);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
+  #ed{flex:1;min-height:0;resize:none;border:0;outline:none;padding:12px;background:transparent;color:var(--fg);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.6}
+  #pv{flex:1;min-height:0;overflow:auto;padding:12px;display:none}
+  #pv :is(h1,h2,h3){color:var(--fg)} #pv code{background:var(--bg-raised);padding:2px 5px;border-radius:5px}
+</style></head><body>
+<div id="wrap">
+  <div id="bar"><span id="status">Notes</span><button id="toggle" type="button">Preview</button></div>
+  <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false"></textarea>
+  <div id="pv"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script>
+  var token=null, lastSynced="", dirty=false, preview=false, t=null;
+  var ed=document.getElementById("ed"), pv=document.getElementById("pv"), st=document.getElementById("status"), tg=document.getElementById("toggle");
+  window.addEventListener("message", function(e){
+    var m=e.data||{}; if(m.type!=="protoagent:init") return; token=m.token||null;
+    if(m.theme){ var r=document.documentElement.style;
+      if(m.theme.bg)r.setProperty("--bg",m.theme.bg); if(m.theme.fg)r.setProperty("--fg",m.theme.fg);
+      if(m.theme.fgMuted)r.setProperty("--fg-muted",m.theme.fgMuted); if(m.theme.border)r.setProperty("--border",m.theme.border); }
+  });
+  function hdr(extra){ var h=extra||{}; if(token)h["Authorization"]="Bearer "+token; return h; }
+  function renderPreview(){ pv.innerHTML = window.marked ? marked.parse(ed.value||"") : ed.value; }
+  tg.onclick=function(){ preview=!preview; if(preview){renderPreview();pv.style.display="block";ed.style.display="none";tg.textContent="Edit";}
+    else{pv.style.display="none";ed.style.display="block";tg.textContent="Preview";} };
+  ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,700); });
+  async function save(){ try{
+      var r=await fetch("/api/plugins/notes/note",{method:"PUT",headers:hdr({"Content-Type":"application/json"}),body:JSON.stringify({content:ed.value})});
+      if(!r.ok)throw 0; lastSynced=ed.value; dirty=false; st.textContent="Saved ✓";
+    }catch(e){ st.textContent="Save failed"; } }
+  async function load(){ try{
+      var a=await fetch("/api/plugins/notes/note",{headers:hdr()}).then(function(r){return r.json();});
+      if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; if(preview)renderPreview(); }
+    }catch(e){} }
+  load(); setInterval(function(){ if(!dirty) load(); }, 4000);
+</script></body></html>"""
