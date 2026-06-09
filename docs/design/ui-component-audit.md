@@ -140,10 +140,12 @@ Sharing standard: **`docs/design/component-sharing-standard.md`** (the contract)
 - Bumped `@protolabsai/ui` `^0.4.0` → **`^0.8.0`**; all imports on domain **subpaths** (root barrel gone).
 - Fixed: always-mounted DS `Menu` must render **outside** the `.app-shell` grid (stray anchor row → footer overlap).
 
-**Remaining — deliberate held slices, each locally reviewed at `:7901`:**
-- **Forms** (56 `input` / 12 `select` / 12 `textarea` / 6 `checkbox`): → DS `Field`/`Input`/`Select`/`Textarea`/`Switch`/`Checkbox`. **NOT a safe bulk swap** — DS `Input` (`.pl-input`) forces `width:100%`, which breaks the app's many *inline* inputs (issue-title, tab-rename, search boxes); needs per-board judgment (full-width settings fields are a clean fit; inline inputs need care). `Switch`/`Checkbox` also flip `onChange`→`onCheckedChange`.
-- **`Callout`/`Table`/`Tooltip`** where apt (panel-error/settings-banner → `Callout`; telemetry table → `Table`; native `title=` → `Tooltip`).
-- **`SurfaceRail`/`MobileNav`/`AppShell`**: **deferred by design** — the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137), not a rushed swap.
+- **Forms — DONE:** `Input`/`Select`/`Textarea` (16 files) + `Checkbox` (4 inline bool fields) + `Table` (telemetry) + `Callout` (bare-text setup notices). All 68/68 green.
+
+**Componentization complete to the extent the DS supports it.** Every component with a clean DS mapping is adopted. The remainder is documented exceptions, not unfinished work:
+- **Acceptable native patterns** (per the sharing standard): ~89 simple `title=` tooltips stay native (DS `Tooltip` is for rich content); structured alert composites (panel-error retry card, settings-banner icon+restart) stay app-side (DS `Callout` has no icon/action slot — swapping is a redesign); the chat composer `<textarea>` stays raw (needs a `ref`; DS forms aren't `forwardRef`).
+- **Blocked on a DS gap** (filed): 2 external-label `<label htmlFor>` toggles stay raw — DS `Checkbox`/`Switch` take no `id`/`...rest` → [protoContent #155](https://github.com/protoLabsAI/protoContent/issues/155).
+- **`SurfaceRail`/`MobileNav`/`AppShell` — deferred by design:** the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137) — and the new pluggable utility-bar (ADR 0040) lands there too.
 
 ## Full-sweep classification (all 323 `theme.css` class groups triaged)
 
