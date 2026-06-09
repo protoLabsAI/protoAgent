@@ -62,6 +62,10 @@ type UIState = {
   setActivityTab: (t: ActivityTab) => void;
   setRightCollapsed: (b: boolean) => void;
   setRightWidth: (w: number) => void;
+  // Notification dots (ADR 0039) — a plugin surface key (`plugin:<id>:<view>`) with unseen
+  // bus activity shows a rail dot until opened. Persisted so the dot survives a refresh.
+  pluginDots: Record<string, boolean>;
+  setPluginDot: (key: string, on: boolean) => void;
 };
 
 export const useUI = create<UIState>()(
@@ -128,6 +132,15 @@ export const useUI = create<UIState>()(
       setActivityTab: (activityTab) => set({ activityTab }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setRightWidth: (w) => set({ rightWidth: clampWidth(w) }),
+      pluginDots: {},
+      setPluginDot: (key, on) =>
+        set((s) => {
+          if (Boolean(s.pluginDots[key]) === on) return s; // no-op → no rerender
+          const next = { ...s.pluginDots };
+          if (on) next[key] = true;
+          else delete next[key];
+          return { pluginDots: next };
+        }),
     }),
     {
       name: "protoagent.ui", // localStorage key — the single source of truth (ADR 0035 D5)

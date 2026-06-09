@@ -236,11 +236,15 @@ const server = createServer(async (req, res) => {
       connection: "keep-alive",
     });
     res.write(": connected\n\n");
-    // Push an activity.message periodically so both the unread badge (while off
-    // the surface) and live append (while on it) are deterministically testable.
+    // Frames are unnamed SSE events carrying the topic in the payload (ADR 0039) — the
+    // client routes by topic with wildcard matching.
+    const frame = (topic, data) => res.write(`data: ${JSON.stringify({ topic, data })}\n\n`);
+    // Push periodically so the unread badge (off-surface), live append (on-surface), and
+    // the plugin notification dot (a `boardy.*` event) are all deterministically testable.
     const t = setInterval(() => {
-      res.write('event: activity.message\ndata: {"text":"live activity ping","origin":"scheduler","trigger":"heartbeat"}\n\n');
-      res.write('event: inbox.item\ndata: {"id":99,"priority":"next","source":"mock","text":"live inbox ping"}\n\n');
+      frame("activity.message", { text: "live activity ping", origin: "scheduler", trigger: "heartbeat" });
+      frame("inbox.item", { id: 99, priority: "next", source: "mock", text: "live inbox ping" });
+      frame("boardy.created", { id: "b1" }); // ADR 0039 — exercises the rail notification dot
     }, 500);
     req.on("close", () => clearInterval(t));
     return;

@@ -43,6 +43,8 @@ requires_env: []          # env vars the plugin needs (missing → skipped + log
 capabilities:             # declarative, for transparency (not yet enforced)
   network: []
   filesystem: none
+emits: []                 # event-bus topics this plugin broadcasts (ADR 0039) — its public API
+subscribes: []            # topics it listens for (declarative — for discoverability)
 ```
 
 ### Entry — `register(registry)`
@@ -67,6 +69,7 @@ a fork adds any of them as a plugin, never editing the core `server/` package:
 | Method | Contributes | Lifecycle |
 |---|---|---|
 | `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
+| `emit(topic, data)` / `on(topic, handler)` | Broadcast / subscribe on the **event bus** (ADR 0039) — `emit` auto-namespaces to `<plugin>.<topic>`; `on` takes `*`/`#` wildcards | any time (publish is fire-and-forget) |
 | `register_skill_dir(path)` | A `SKILL.md` directory (procedural memory) | graph build |
 | `register_workflow_dir(path)` | A directory of `*.yaml` workflow recipes | workflow-registry build |
 | `register_a2a_skill(spec)` | An A2A **card** skill (what the card advertises; optional structured output) | agent-card build |
@@ -141,6 +144,8 @@ before any surface starts; guard for `None`):
 - `host.invoke(prompt, session_id)` — run a chat turn (one conversation per
   `session_id`), returns the assistant text.
 - `host.publish(event, data)` / `host.subscribe()` — the server→client event bus.
+- `host.on(topic, handler)` — subscribe an in-process handler to bus topics (ADR 0039); prefer the
+  `registry.emit` / `registry.on` wrappers, which namespace + guard for you.
 - `host.config()` — the live `LangGraphConfig` (current resolved values, incl.
   `plugin_config`), so a route reads fresh config instead of a load-time snapshot.
 - `host.apply_settings(patch)` — persist a nested config patch + reload once
@@ -154,6 +159,51 @@ def register(registry):
         return await host.invoke(text, sid)        # call the agent
     registry.register_surface(lambda: _gateway(_on_message), name="my-gateway")
 ```
+
+## Events — the plugin bus (ADR 0039)
+
+Plugins coordinate by **broadcasting events**, never by importing each other. You publish under your
+own namespace and forget; anyone who cares subscribes by topic. This is the only inter-plugin
+channel — the **no-cross-dependency** rule.
+
+```python
+def register(registry):
+    registry.emit("created", {"id": "a1"})    # → publishes "<plugin_id>.created"
+    registry.on("notes.*", on_notes)          # subscribe to ANY topic; * / # wildcards
+```
+
+- **Publish is namespace-guarded** — `emit("created")` becomes `<plugin_id>.created`; you can only
+  publish under your own namespace. **Subscribing is read-only** and may match any topic.
+- **Declare your contract** in the manifest (`emits:` / `subscribes:`) — your events are your public
+  API, discoverable in `/api/runtime/status`.
+- A console **view** (sandboxed iframe) talks to the bus over the bridge — see
+  [Plugin console views](/guides/plugin-views). Any event under `<plugin_id>.*` lights your plugin's
+  rail icon (a **notification dot**) until the user opens that surface.
+- Fire-and-forget + topic-filtered + exception-isolated: a slow or broken subscriber can't affect the
+  publisher or other subscribers. Ephemeral (a ring buffer covers SSE reconnects; no durable log).
+
+> Cross-process note: under the **ACP runtime**, a tool runs in the operator-MCP process where the
+> bus isn't wired, so `emit` from a tool won't reach the server bus there. Under the default runtime
+> (tool runs in-server) it does.
+
+## Performance — keep the burden in your plugin
+
+The core console is deliberately lean: one push-based SSE connection, no always-on polling (its
+react-query refetches pause when the window is backgrounded). A plugin should be just as
+well-behaved — the *only* extra cost should be the one your plugin chooses to add, and it should
+go quiet when nobody's looking. This matters doubly for the desktop build.
+
+- **Prefer events over polling.** Subscribe to the bus (`registry.on` / `protoagent:event`) instead
+  of polling an endpoint on a timer where you can.
+- **If you must poll, pause when hidden.** In a served view, guard the loop with the Page Visibility
+  API and refresh on return — don't poll a minimized window:
+  ```js
+  setInterval(() => { if (!document.hidden) refresh(); }, 1500);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  ```
+- **Clean up on unmount.** The console unmounts a plugin view's iframe the moment you tab/collapse
+  away — your in-iframe timers/listeners die with it for free. For host-side work (a `registry.on`
+  handler, a background surface), return/register a teardown so nothing lingers.
 
 ## Config, secrets & settings (ADR 0019)
 

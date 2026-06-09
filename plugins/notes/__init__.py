@@ -159,5 +159,8 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
       var a=await fetch("/api/plugins/notes/note",{headers:hdr()}).then(function(r){return r.json();});
       if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; if(preview)renderPreview(); }
     }catch(e){} }
-  load(); setInterval(function(){ if(!dirty) load(); }, 4000);
+  load();
+  // Be a good desktop citizen: don't poll while the window is hidden/minimized; refresh on return.
+  setInterval(function(){ if(!document.hidden && !dirty) load(); }, 4000);
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty) load(); });
 </script></body></html>"""

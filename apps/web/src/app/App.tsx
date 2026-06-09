@@ -93,7 +93,7 @@ import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { StageSubnav } from "./StageSubnav";
 import { PanelHeader } from "./PanelHeader";
 import { brandName } from "../lib/brand";
-import { onConnectionChange, onServerEvent } from "../lib/events";
+import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
@@ -554,6 +554,42 @@ export function App() {
   // Chat mounts unconditionally on whichever side it's on (streaming continuity, #613).
   const chatRail: "left" | "right" = railOrder.right.includes("chat") ? "right" : "left";
 
+  // Notification dots (ADR 0039): a bus event under `<pluginId>.*` lights that plugin's rail
+  // icon until its surface is opened. Subscribe once; refs avoid resubscribing each render.
+  const pluginDots = useUI((s) => s.pluginDots);
+  const setPluginDot = useUI((s) => s.setPluginDot);
+  const pluginKeysRef = useRef<string[]>([]);
+  pluginKeysRef.current = allPluginViews.map((v) => v.key);
+  // Which plugin surfaces are actually ON SCREEN — so we never dot what the user is looking at, and
+  // we clear a dot only when its surface becomes visible. A COLLAPSED right panel is NOT visible
+  // even though `rightActive` still names the last-selected panel (and it's persisted), so it must
+  // be excluded — otherwise that panel could never light a dot.
+  const visibleKeys: string[] = [leftActive, mobileActive];
+  if (!rightCollapsed) visibleKeys.push(rightActive);
+  const activeKeysRef = useRef<Set<string>>(new Set());
+  activeKeysRef.current = new Set(visibleKeys);
+  useEffect(
+    () =>
+      onTopic("#", (_data, topic) => {
+        const pid = topic.split(".")[0];
+        if (!pid) return;
+        for (const key of pluginKeysRef.current) {
+          // key === `plugin:<pid>:<viewId>`; dot it unless its surface is already on screen.
+          if (key.startsWith(`plugin:${pid}:`) && !activeKeysRef.current.has(key)) {
+            setPluginDot(key, true);
+          }
+        }
+      }),
+    [setPluginDot],
+  );
+  // Clear a plugin surface's dot once it's actually visible on screen.
+  useEffect(() => {
+    for (const key of visibleKeys) {
+      if (key && key.startsWith("plugin:")) setPluginDot(key, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftActive, rightActive, mobileActive, rightCollapsed, setPluginDot]);
+
   return (
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
@@ -616,7 +652,10 @@ export function App() {
             {mobileActive !== "chat" ? renderSurface(mobileActive) : null}
           </main>
           <MobileNav
-            items={[...railSurfaces("left"), ...railSurfaces("right")]}
+            items={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
+              ...s,
+              dot: pluginDots[s.id] || undefined,
+            }))}
             activeId={mobileActive}
             onSelect={setMobileActive}
             quickBarIds={quickBar}
@@ -635,7 +674,7 @@ export function App() {
           items={railSurfaces("left").map((s) => ({
             ...s,
             badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
-            dot: s.id === "chat" ? chatStreaming && surface !== "chat" : undefined,
+            dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
           }))}
           activeId={leftActive}
           onSelect={(id) => setSurface(id)}
@@ -684,7 +723,7 @@ export function App() {
         <SurfaceRail
           side="right"
           ariaLabel="Context surfaces"
-          items={railSurfaces("right")}
+          items={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
           activeId={rightCollapsed ? "" : rightActive}
           onSelect={(id) => { setRightPanel(id); setRightCollapsed(false); }}
           onContextMenu={(e, id) => openContextMenu("rail-surface", e, { id, side: "right" })}

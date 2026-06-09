@@ -101,7 +101,14 @@ async def _sse_event_stream(
                 break
             seq = evt.get("seq")
             prefix = f"id: {seq}\n" if seq is not None else ""
-            yield f"{prefix}event: {evt['event']}\ndata: {json.dumps(evt['data'])}\n\n"
+            # Default (unnamed) SSE frame carrying the topic in the payload, so the client
+            # routes by topic with wildcard matching (ADR 0039) — one catch-all `onmessage`
+            # instead of per-name listeners. The `id:` lets EventSource auto-send Last-Event-ID
+            # on reconnect → the route replays missed events from the ring buffer.
+            frame = {"topic": evt["event"], "data": evt["data"]}
+            if seq is not None:
+                frame["seq"] = seq
+            yield f"{prefix}data: {json.dumps(frame)}\n\n"
     finally:
         await agen.aclose()
 
