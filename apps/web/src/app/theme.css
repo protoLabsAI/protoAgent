@@ -489,9 +489,28 @@ h2 {
 }
 
 .stage-panel {
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/* A tabbed surface renders the DS <Tabs> strip + the .panel card as siblings in the
+   AppShell column. Style the strip as the card's TOP edge and drop the panel's top
+   border/radius, so the two read as ONE full-height card — its top aligns with the
+   non-tabbed panels (which have no strip). */
+.pl-appshell__col > .pl-tabs {
+  flex: 0 0 auto;
+  padding: 8px 12px 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--bg-panel);
+}
+.pl-appshell__col > .pl-tabs + .panel {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The
@@ -508,8 +527,10 @@ h2 {
 .stage-body {
   min-height: 0;
   overflow-y: auto;
-  /* Breathing room so the last row never sits flush against the utility bar. */
-  padding-bottom: 12px;
+  /* Horizontal inset matches the DS PanelHeader (--pl-space-4) so body content lines
+     up with the header instead of sitting flush against the panel edge; bottom gives
+     breathing room above the utility bar. */
+  padding: 0 var(--pl-space-4) 12px;
 }
 
 /* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
