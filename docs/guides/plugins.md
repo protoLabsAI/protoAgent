@@ -186,6 +186,25 @@ def register(registry):
 > bus isn't wired, so `emit` from a tool won't reach the server bus there. Under the default runtime
 > (tool runs in-server) it does.
 
+## Performance — keep the burden in your plugin
+
+The core console is deliberately lean: one push-based SSE connection, no always-on polling (its
+react-query refetches pause when the window is backgrounded). A plugin should be just as
+well-behaved — the *only* extra cost should be the one your plugin chooses to add, and it should
+go quiet when nobody's looking. This matters doubly for the desktop build.
+
+- **Prefer events over polling.** Subscribe to the bus (`registry.on` / `protoagent:event`) instead
+  of polling an endpoint on a timer where you can.
+- **If you must poll, pause when hidden.** In a served view, guard the loop with the Page Visibility
+  API and refresh on return — don't poll a minimized window:
+  ```js
+  setInterval(() => { if (!document.hidden) refresh(); }, 1500);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  ```
+- **Clean up on unmount.** The console unmounts a plugin view's iframe the moment you tab/collapse
+  away — your in-iframe timers/listeners die with it for free. For host-side work (a `registry.on`
+  handler, a background surface), return/register a teardown so nothing lingers.
+
 ## Config, secrets & settings (ADR 0019)
 
 A configurable plugin **declares its config in the manifest** (data, so it's known
