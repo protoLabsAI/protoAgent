@@ -615,6 +615,11 @@ def _main():
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.
     from operator_api.fleet_routes import register_fleet_routes
     register_fleet_routes(fastapi_app)
+
+    # Per-agent theme (ADR 0042) — each agent saves its own look; the switch repaints
+    # to the active agent's theme (proxied via /active/api/theme).
+    from operator_api.theme_routes import register_theme_routes
+    register_theme_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
