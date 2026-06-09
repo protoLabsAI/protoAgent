@@ -178,6 +178,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
+    announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
         graph_input,
         config=config,
@@ -191,24 +192,35 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
             if rid:
                 _llm_started[rid] = time.monotonic()
         elif kind == "on_tool_start":
-            tool_input = event.get("data", {}).get("input", "")
-            # Structured frame (id pairs start↔end) so consumers can render a
-            # per-tool card; the A2A handler also derives a text status from it.
-            yield ("tool_start", {
-                "id": event.get("run_id") or name,
-                "name": name,
-                "input": _coerce_tool_value(tool_input),
-            })
+            # No frame here: the tool card is surfaced earlier — on the model's first
+            # streamed tool-call token (on_chat_model_stream) and finalized with full
+            # args on on_chat_model_end, both keyed by the tool_call id so on_tool_end
+            # closes the same card. Execution-start carries only a run_id (no
+            # tool_call id to correlate), so it would just make a duplicate card.
+            pass
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
+            # Close the card keyed by the tool_call id (the ToolMessage carries it);
+            # fall back to run_id/name for non-tool-message producers.
             yield ("tool_end", {
-                "id": event.get("run_id") or name,
+                "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
                 "name": name,
                 "output": _coerce_tool_output(output),
             })
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
-            if chunk and hasattr(chunk, "content") and chunk.content:
+            if chunk is None:
+                continue
+            # Surface the tool card the moment the model streams a tool *name* —
+            # before the call is fully formed or executed — so the UI shows
+            # "<tool> · running" instead of a bare loading wheel. Keyed by the
+            # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
+            for tcc in (getattr(chunk, "tool_call_chunks", None) or []):
+                tcid, tcname = tcc.get("id"), tcc.get("name")
+                if tcid and tcname and tcid not in announced_tools:
+                    announced_tools.add(tcid)
+                    yield ("tool_start", {"id": tcid, "name": tcname, "input": ""})
+            if hasattr(chunk, "content") and chunk.content:
                 accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
                 # Stream only the user-facing <output> region, token by token —
                 # never the scratch_pad. The terminal artifact (extract_output)
@@ -219,6 +231,16 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                     streamed_len = len(visible)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
+            # Finalize each tool card with its full args, keyed by the tool_call id.
+            # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
+            # for any tool the stream path didn't announce (e.g. a non-streaming model)
+            # without re-emitting an early start already sent earlier this turn.
+            for tc in (getattr(output, "tool_calls", None) or []):
+                tcid = tc.get("id")
+                if tcid:
+                    announced_tools.add(tcid)
+                    yield ("tool_start", {"id": tcid, "name": tc.get("name", ""),
+                                          "input": _coerce_tool_value(tc.get("args", ""))})
             usage = getattr(output, "usage_metadata", None) if output else None
             rid = event.get("run_id")
             latency_s = max(0.0, time.monotonic() - _llm_started.pop(rid, time.monotonic())) if rid else 0.0
