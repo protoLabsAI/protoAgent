@@ -610,6 +610,11 @@ def _main():
     # operator_api/knowledge_routes.py (ADR 0023 phase 3).
     register_knowledge_routes(fastapi_app)
     register_plugin_routes(fastapi_app)
+
+    # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
+    # /api/archetypes. The CLI + the desktop GUI panels both drive these.
+    from operator_api.fleet_routes import register_fleet_routes
+    register_fleet_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
