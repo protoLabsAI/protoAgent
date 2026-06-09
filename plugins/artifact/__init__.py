@@ -16,20 +16,29 @@ from langchain_core.tools import tool
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
-_KINDS = {"html", "svg", "mermaid", "react"}
+# html is the workhorse (charts via a CDN lib, tables, dashboards, mock-ups); mermaid for diagrams;
+# svg for vector. (React is intentionally omitted for now — it needs a starter/harness; ADR 0038.)
+_KINDS = {"html", "svg", "mermaid"}
 # The latest artifact the agent rendered (transient — "what's on screen now").
 _current: dict = {"kind": "", "code": "", "title": "", "ts": 0}
 
 
 @tool
 def show_artifact(kind: str, code: str, title: str = "") -> str:
-    """Render a generative-UI artifact into the console's Artifact panel.
+    """Render a visual artifact INLINE for the user to see — a chart, diagram, table, dashboard, or
+    mock-up. Reach for this whenever the user asks you to *show*, *render*, *draw*, *visualize*,
+    *chart*, *graph*, *plot*, or *mock up* something. Render it here — do NOT write project files to
+    disk for these requests; the user wants to SEE the result in the console, not get a repo.
 
-    ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
-    "mermaid" (a Mermaid diagram definition), or "react" (a self-contained React component script
-    that renders into ``#root``; React, ReactDOM and Babel are provided). ``code`` is the source;
-    ``title`` is an optional label. The artifact runs sandboxed — it cannot access the console.
-    Use this to show charts, diagrams, mock-ups, or interactive widgets you generate.
+    ``kind``:
+      - "html"    — a self-contained HTML document (the workhorse). For DATA CHARTS, include a chart
+                    library from https://cdnjs.cloudflare.com (e.g. Chart.js) and draw into a
+                    <canvas>. For tables / dashboards / mock-ups, write the HTML + inline CSS directly.
+      - "mermaid" — a Mermaid diagram definition (flowchart, sequence, ER, gantt, state).
+      - "svg"     — inline SVG markup.
+
+    ``code`` is the source; ``title`` an optional label. The artifact renders in a sandbox with no
+    access to the console — scripts and CDN libraries work, but it can't reach your files or data.
     """
     k = (kind or "").strip().lower()
     if k not in _KINDS:
@@ -83,11 +92,6 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
       '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"><\/script>' +
       '<pre class="mermaid">' + code.replace(/</g, "&lt;") + '<\/pre>' +
       '<script>mermaid.initialize({startOnLoad:true});<\/script></body>';
-    if (kind === "react") return '<!doctype html><body style="margin:0"><div id="root"></div>' +
-      '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"><\/script>' +
-      '<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"><\/script>' +
-      '<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"><\/script>' +
-      '<script type="text/babel">' + code + '<\/script></body>';
     return "<body>unsupported artifact kind</body>";
   }
   async function poll() {
