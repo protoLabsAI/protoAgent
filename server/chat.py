@@ -231,8 +231,10 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                     streamed_len = len(visible)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
-            # Finalize each tool card with its full args, keyed by the tool_call id
-            # (and announce any the stream didn't catch — e.g. a non-streaming model).
+            # Finalize each tool card with its full args, keyed by the tool_call id.
+            # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
+            # for any tool the stream path didn't announce (e.g. a non-streaming model)
+            # without re-emitting an early start already sent earlier this turn.
             for tc in (getattr(output, "tool_calls", None) or []):
                 tcid = tc.get("id")
                 if tcid:
