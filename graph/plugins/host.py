@@ -25,6 +25,10 @@ class PluginHost:
     publish: Optional[Callable[[str, dict], Any]] = None
     # () -> subscription — subscribe to the event bus (e.g. return-address delivery).
     subscribe: Optional[Callable[[], Any]] = None
+    # (topic, handler) -> unsubscribe — register an in-process handler for bus topics
+    # (ADR 0039). Lets a server-side plugin react to events (topic-filtered, sync/async)
+    # without ever importing the plugin that emitted them.
+    on: Optional[Callable[[str, Callable], Any]] = None
     # () -> LangGraphConfig — the *live* server config. A route handler reads this
     # for the current resolved values (incl. plugin_config) rather than closing
     # over a load-time snapshot, so it sees Settings changes without a restart.

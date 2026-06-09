@@ -72,6 +72,35 @@ class PluginRegistry:
         for tool in tools or []:
             self.register_tool(tool)
 
+    def emit(self, topic: str, data: dict | None = None) -> None:
+        """Broadcast an event on the bus (ADR 0039) — fire-and-forget.
+
+        Topics are namespaced to this plugin: ``emit("created")`` publishes
+        ``"<plugin_id>.created"``. A topic not already under this plugin's namespace is
+        auto-prefixed — a plugin may only publish under its own namespace (the
+        no-cross-dependency clause). Consumers subscribe by topic; nobody imports this
+        plugin to hear it."""
+        pid = self.plugin_id
+        if topic != pid and not topic.startswith(f"{pid}."):
+            topic = f"{pid}.{topic}"
+        if self.host and self.host.publish:
+            self.host.publish(topic, data or {})
+        else:  # non-server context (tests, headless) — no bus wired
+            log.debug("[plugins] %s: emit(%s) dropped — no bus", pid, topic)
+
+    def on(self, topic: str, handler) -> None:
+        """Subscribe an in-process handler to bus topics (ADR 0039). ``topic`` may use
+        ``*`` (one segment) / ``#`` (tail) wildcards and match ANY plugin's namespace —
+        subscribing is read-only and safe. ``handler(payload)`` gets ``{event, data, seq}``,
+        may be sync or async; exceptions are isolated by the bus."""
+        if not callable(handler):
+            log.warning("[plugins] %s: on(%s) needs a callable handler", self.plugin_id, topic)
+            return
+        if self.host and self.host.on:
+            self.host.on(topic, handler)
+        else:
+            log.debug("[plugins] %s: on(%s) dropped — no bus", self.plugin_id, topic)
+
     def register_skill_dir(self, path: str | Path) -> None:
         """Add a directory of ``SKILL.md`` skills bundled with the plugin.
 

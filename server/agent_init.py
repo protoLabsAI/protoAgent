@@ -1090,6 +1090,7 @@ def _populate_plugin_host() -> None:
         HOST.invoke = _plugin_agent_invoke
         HOST.publish = _event_bus.publish
         HOST.subscribe = _event_bus.subscribe
+        HOST.on = _event_bus.subscribe_handler  # ADR 0039 — in-process topic subscriptions
         HOST.config = lambda: STATE.graph_config
         HOST.apply_settings = lambda patch: _apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001

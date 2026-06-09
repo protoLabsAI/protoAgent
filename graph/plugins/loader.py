@@ -164,6 +164,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Views
             # are sandboxed iframes (ADR 0038); the plugin serves its own page at `path`.
             "views": list(manifest.views) if enabled else [],
+            # Event contract (ADR 0039) — declared topics this plugin emits / subscribes to,
+            # surfaced for discoverability (the console can show a plugin's event catalog).
+            "emits": list(manifest.emits) if enabled else [],
+            "subscribes": list(manifest.subscribes) if enabled else [],
         }
 
         if not enabled:
