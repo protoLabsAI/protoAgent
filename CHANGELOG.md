@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-06-09
+
 ### Added
 - **Notes plugin — the first-class React reference plugin (ADR 0034 slice 4)** — a greenfield
   `notes` plugin replaces the legacy native Notes: one shared markdown doc (no tabs/undo/

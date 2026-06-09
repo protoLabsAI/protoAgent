@@ -1,5 +1,27 @@
 [
   {
+    "version": "v0.30.0",
+    "date": "2026-06-09",
+    "changes": [
+      "Notes plugin — the first-class React reference plugin",
+      "Plugin trust gate",
+      "Plugin-UI SDK: host bridge + reference remote",
+      "Plugin-UI SDK foundation",
+      "Mobile shell",
+      "Everything-swappable rails",
+      "Right-click context menus",
+      "Design-system foundation",
+      "Swap surfaces between rails",
+      "Resizable right panel — real handle",
+      "Symmetric dual rails",
+      "Persisted UI state",
+      "Plugin UI — first-class React",
+      "ACP persona reaches GitHub Copilot",
+      "ACP turns attributed correctly in telemetry",
+      "Console upgraded to React 19"
+    ]
+  },
+  {
     "version": "v0.29.0",
     "date": "2026-06-08",
     "changes": [
