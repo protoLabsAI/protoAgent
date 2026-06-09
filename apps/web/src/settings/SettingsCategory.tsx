@@ -1,11 +1,11 @@
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
-import { Button } from "@protolabsai/ui";
+import { Button } from "@protolabsai/ui/primitives";
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";

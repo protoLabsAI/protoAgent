@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Menu, MenuItem, MenuSeparator, type MenuHandle } from "@protolabsai/ui";
+import { Menu, MenuItem, MenuSeparator, type MenuHandle } from "@protolabsai/ui/menu";
 import { resolveMenu } from "./registry";
 import { useContextMenuStore } from "./store";
 

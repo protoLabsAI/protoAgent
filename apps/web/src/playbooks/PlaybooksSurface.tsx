@@ -1,8 +1,8 @@
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog } from "@protolabsai/ui";
-import { PanelHeader } from "@protolabsai/ui";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import type { Playbook } from "../lib/types";
 

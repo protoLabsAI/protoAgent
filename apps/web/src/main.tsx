@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { ToastProvider } from "@protolabsai/ui";
+import { ToastProvider } from "@protolabsai/ui/overlays";
 import React from "react";
 import ReactDOM from "react-dom/client";
 

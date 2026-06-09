@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 

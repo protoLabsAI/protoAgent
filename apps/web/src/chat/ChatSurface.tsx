@@ -9,7 +9,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { ConfirmDialog } from "@protolabsai/ui";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";

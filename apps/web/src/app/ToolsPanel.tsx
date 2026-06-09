@@ -1,7 +1,7 @@
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useState } from "react";
 
-import { PanelHeader } from "@protolabsai/ui";
+import { PanelHeader } from "@protolabsai/ui/navigation";
 import { toolsQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
