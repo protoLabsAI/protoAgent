@@ -83,12 +83,18 @@ h2 {
 }
 
 .app-shell {
-  height: 100%;
-  min-height: 100vh;
-  display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 40px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--bg);
+}
+/* The DS AppShell (rails + columns + utility bar) fills the height below our topbar.
+   Override the DS frame's height:100% so flex sizing (not 100vh) governs it. */
+.app-shell-main {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
 }
 
 /* Topbar health light — one dot, detail on hover, click to refresh. */

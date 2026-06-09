@@ -45,6 +45,7 @@ type UIState = {
   railOrder: { left: string[]; right: string[] };
   moveSurface: (id: string, side: "left" | "right") => void; // splice out → append to side's bottom
   reorderSurface: (id: string, dir: -1 | 1) => void; // swap with the neighbour within its rail
+  setRailOrder: (next: { left: string[]; right: string[] }) => void; // DS AppShell DnD — whole new order
   // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
   // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
   reconcilePluginViews: (views: { id: string; side: "left" | "right" }[]) => void;
@@ -103,6 +104,7 @@ export const useUI = create<UIState>()(
           };
           return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right) } };
         }),
+      setRailOrder: (railOrder) => set({ railOrder }),
       mobileActive: "chat",
       setMobileActive: (mobileActive) => set({ mobileActive }),
       quickBar: ["chat", "activity", "knowledge", "plugins"],
