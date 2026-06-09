@@ -319,68 +319,6 @@ async def run_manual_subagent(
     )
 
 
-async def run_manual_workflow(
-    config: LangGraphConfig,
-    registry,
-    *,
-    knowledge_store=None,
-    scheduler=None,
-    name: str,
-    inputs: dict | None = None,
-    on_step=None,
-    extra_tools=None,
-) -> dict:
-    """Run a saved workflow recipe outside the lead agent's tool (operator UI).
-
-    Returns the engine result ``{"output", "steps", "failed"}``. Raises
-    ``ValueError`` for an unknown / invalid recipe or missing required inputs.
-
-    ``on_step`` (optional async callback) is invoked with
-    ``{"phase": "start"|"end", "step_id", "subagent", "output"?}`` around each
-    step so a caller can stream per-step progress (e.g. the chat slash command's
-    tool cards). Errors in the callback never interrupt the run.
-    """
-    from graph.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
-
-    if registry is None:
-        raise ValueError("workflows are not enabled")
-    recipe = registry.get(name)
-    if recipe is None:
-        raise ValueError(f"no workflow named {name!r}")
-    errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
-    if errs:
-        raise ValueError("invalid workflow: " + "; ".join(errs))
-    resolved, missing = resolve_inputs(recipe, inputs or {})
-    if missing:
-        raise ValueError(f"missing required input(s): {', '.join(missing)}")
-
-    async def _emit(event: dict) -> None:
-        if on_step is None:
-            return
-        try:
-            await on_step(event)
-        except Exception:  # noqa: BLE001 — progress is best-effort, never fatal
-            pass
-
-    async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
-        await _emit({"phase": "start", "step_id": step_id, "subagent": subagent_type})
-        out = await run_manual_subagent(
-            config,
-            knowledge_store=knowledge_store,
-            scheduler=scheduler,
-            description=f"workflow {name}:{step_id}",
-            prompt=prompt,
-            subagent_type=subagent_type,
-            extra_tools=extra_tools,
-        )
-        await _emit({"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
-        return out
-
-    return await execute_workflow(
-        recipe, resolved, run_step=_run_step, max_concurrency=config.subagent_max_concurrency,
-    )
-
-
 async def run_manual_subagent_batch(
     config: LangGraphConfig,
     knowledge_store=None,
@@ -433,7 +371,7 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None, workflow_registry=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -545,108 +483,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
             parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
         return "\n\n".join(parts)
 
+    # Declarative multi-step workflows (ADR 0002) are now an opt-in plugin
+    # (plugins/workflows) — its run_workflow/save_workflow tools come in via the
+    # plugin tool path, not here. Core no longer ships the workflow engine.
     tools = [task, task_batch]
-
-    # Reusable declarative workflows (ADR 0002) — run a saved multi-step recipe
-    # over subagents. Only the lead agent gets this; subagents don't, so
-    # workflows can't recurse.
-    if getattr(config, "workflows_enabled", False) and workflow_registry is not None:
-        from graph.workflows.engine import execute_workflow, resolve_inputs, validate_recipe
-
-        @tool
-        async def run_workflow(name: str = "", inputs: dict | None = None) -> str:
-            """Run a saved multi-step workflow recipe over subagents.
-
-            Workflows chain subagent steps (some in parallel), threading each
-            step's output into the next — for repeatable jobs like
-            research→synthesize→write. Pass an empty ``name`` to list the
-            available workflows and their inputs.
-
-            Args:
-                name: The workflow name (see the list with an empty name).
-                inputs: Mapping of the workflow's declared inputs to values.
-            """
-            if not name.strip():
-                summaries = workflow_registry.list()
-                if not summaries:
-                    return "No workflows are available."
-                lines = ["Available workflows:"]
-                for s in summaries:
-                    req = [i["name"] for i in s["inputs"] if i["required"]]
-                    lines.append(f"- {s['name']}: {s['description']} (inputs: {', '.join(req) or 'none required'})")
-                return "\n".join(lines)
-            recipe = workflow_registry.get(name)
-            if recipe is None:
-                return f"No workflow named {name!r}. Available: {', '.join(workflow_registry.names()) or '(none)'}."
-            errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
-            if errs:
-                return f"Workflow {name!r} is invalid: " + "; ".join(errs)
-            resolved, missing = resolve_inputs(recipe, inputs or {})
-            if missing:
-                return f"Workflow {name!r} needs input(s): {', '.join(missing)}."
-
-            async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
-                return await _run_subagent(
-                    config=config,
-                    tool_map=tool_map,
-                    available_subagents=available_subagents,
-                    description=f"workflow {name}:{step_id}",
-                    prompt=prompt,
-                    subagent_type=subagent_type,
-                    emit_skill=False,
-                    truncate=truncate,
-                    skills_index=skills_index,
-                )
-
-            result = await execute_workflow(recipe, resolved, run_step=_run_step, max_concurrency=max_concurrency)
-            return result["output"]
-
-        tools.append(run_workflow)
-
-        @tool
-        async def save_workflow(
-            name: str,
-            description: str,
-            steps: list[dict],
-            inputs: list[dict] | None = None,
-            output: str = "",
-        ) -> str:
-            """Save a reusable multi-step workflow so it can be re-run later with
-            run_workflow — capture a multi-step subagent process you just worked
-            out (the closed loop). Saving overwrites any existing workflow of the
-            same name.
-
-            Args:
-                name: Unique slug for the workflow.
-                description: One-line summary of what it does.
-                steps: Ordered list of step objects, each with ``id`` (str),
-                    ``subagent`` (a configured subagent type), ``prompt`` (str,
-                    may reference {{inputs.x}} and {{steps.<id>.output}}), and
-                    optional ``depends_on`` (list of earlier step ids that run
-                    first — independent steps run in parallel).
-                inputs: Optional list of {name, required?, default?} the workflow
-                    accepts (referenced as {{inputs.name}} in prompts).
-                output: Optional final-output template (default = last step's output).
-            """
-            recipe: dict = {"name": name, "description": description, "version": 1, "steps": steps}
-            if inputs:
-                recipe["inputs"] = inputs
-            if output:
-                recipe["output"] = output
-            errs = validate_recipe(recipe, known_subagents=set(SUBAGENT_REGISTRY))
-            if errs:
-                return "Cannot save — the workflow is invalid: " + "; ".join(errs)
-            try:
-                path = workflow_registry.save(recipe)
-            except Exception as exc:  # noqa: BLE001 — readable tool error
-                return f"Error saving workflow: {exc}"
-            return (
-                f"Saved workflow {name!r} ({len(steps)} step(s)) to {path}. "
-                f"Run it with run_workflow({name!r}, ...)."
-            )
-
-        tools.append(save_workflow)
-
     return tools
 
 
@@ -659,7 +499,6 @@ def create_agent_graph(
     extra_middleware=None,
     include_subagents: bool = True,
     checkpointer=None,
-    workflow_registry=None,
     inbox_store=None,
     beads_store=None,
 ):
@@ -690,7 +529,7 @@ def create_agent_graph(
 
     if include_subagents:
         all_tools.extend(_build_task_tools(
-            config, all_tools, skills_index=skills_index, workflow_registry=workflow_registry,
+            config, all_tools, skills_index=skills_index,
         ))
 
     # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).

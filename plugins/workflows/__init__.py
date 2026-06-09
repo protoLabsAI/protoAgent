@@ -83,6 +83,17 @@ def register(registry: Any) -> None:
     # Other enabled plugins' recipe dirs are collected on the shared registry (ADR 0027).
     reg = _build_registry(getattr(registry, "workflow_dirs", None))
 
+    # Publish the registry + a runner onto runtime state so core surfaces that predate
+    # the plugin (the chat `/<recipe>` slash-command) can use workflows WITHOUT importing
+    # this plugin — both are None when the plugin is disabled, which gates those paths.
+    from runtime.state import STATE
+
+    async def _run(name: str, inputs: dict | None = None, on_step=None) -> dict:
+        return await _execute(reg, name, inputs or {}, on_step)
+
+    STATE.workflow_registry = reg
+    STATE.workflow_run = _run
+
     @tool
     async def run_workflow(name: str = "", inputs: dict | None = None) -> str:
         """Run a saved multi-step workflow recipe over subagents.
@@ -149,7 +160,7 @@ def register(registry: Any) -> None:
     registry.register_workflow_dir(str(_RECIPES))
 
     # Operator API — the console Studio surface calls these.
-    from fastapi import APIRouter, Body
+    from fastapi import APIRouter, Body, HTTPException
 
     router = APIRouter()
 
@@ -159,13 +170,16 @@ def register(registry: Any) -> None:
 
     @router.post("/{name}/run")
     async def _run(name: str, body: dict = Body(default={})) -> dict:
-        return await _execute(reg, name, (body or {}).get("inputs") or {})
+        try:
+            return await _execute(reg, name, (body or {}).get("inputs") or {})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/save")
     async def _save(body: dict = Body(...)) -> dict:
         errs = validate_recipe(body, known_subagents=sdk.subagent_types())
         if errs:
-            raise ValueError("invalid recipe: " + "; ".join(errs))
+            raise HTTPException(status_code=400, detail="invalid recipe: " + "; ".join(errs))
         path = reg.save(body)
         return {"saved": True, "name": body.get("name"), "path": path}
 

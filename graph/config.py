@@ -331,9 +331,9 @@ class LangGraphConfig:
 
     # Workflows — declarative multi-step subagent recipes (see ADR 0002),
     # exposed via the run_workflow tool. Bundled examples ship in the repo
-    # ``workflows/`` dir; ``dir`` is the writable root for user/agent-emitted
-    # recipes (same /sandbox→~/.protoagent fallback, resolved in server.py).
-    workflows_enabled: bool = True
+    # ``dir`` is the writable root for user/agent-emitted recipes (same
+    # /sandbox→~/.protoagent fallback, resolved in server.py). Read by the
+    # workflows plugin (lean core — the engine/tools live there now).
     workflow_dir: str = "/sandbox/workflows"
 
     # MCP — Model Context Protocol client. Connect to external MCP servers
@@ -587,7 +587,6 @@ class LangGraphConfig:
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),
             checkpoint_harvest_enabled=data.get("checkpoint", {}).get("harvest_enabled", cls.checkpoint_harvest_enabled),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
-            workflows_enabled=data.get("workflows", {}).get("enabled", cls.workflows_enabled),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),

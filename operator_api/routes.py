@@ -34,10 +34,6 @@ class ScheduleAddRequest(BaseModel):
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
-class WorkflowRunRequest(BaseModel):
-    inputs: dict[str, Any] = {}
-
-
 class InboxAddRequest(BaseModel):
     text: str
     priority: str = "next"  # now | next | later
@@ -190,10 +186,6 @@ def register_operator_routes(
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
-    workflows_list: Callable[[], dict[str, Any]] | None = None,
-    workflows_run: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
-    workflows_save: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    workflows_delete: Callable[[str], dict[str, Any]] | None = None,
     events_subscribe: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
     events_publish: Callable[[str, dict[str, Any]], None] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
@@ -379,44 +371,8 @@ def register_operator_routes(
                 raise _http_error(exc) from exc
 
     # --- Workflows -----------------------------------------------------------
-    # List the registered workflow recipes and run one with inputs (ADR 0002).
-    if workflows_list is not None:
-
-        @app.get("/api/workflows")
-        async def _workflows():
-            try:
-                return workflows_list()
-            except Exception as exc:
-                raise _http_error(exc) from exc
-
-    if workflows_run is not None:
-
-        @app.post("/api/workflows/{name}/run")
-        async def _workflow_run(name: str, req: WorkflowRunRequest):
-            try:
-                return await workflows_run(name, req.inputs)
-            except Exception as exc:
-                raise _http_error(exc) from exc
-
-    # Author a workflow from the console (validates, then saves to the writable
-    # workflows dir; immediately runnable). The body is the recipe dict.
-    if workflows_save is not None:
-
-        @app.post("/api/workflows")
-        async def _workflow_save(recipe: dict[str, Any]):
-            try:
-                return workflows_save(recipe)
-            except Exception as exc:
-                raise _http_error(exc) from exc
-
-    if workflows_delete is not None:
-
-        @app.delete("/api/workflows/{name}")
-        async def _workflow_delete(name: str):
-            try:
-                return workflows_delete(name)
-            except Exception as exc:
-                raise _http_error(exc) from exc
+    # Workflows are an opt-in plugin (plugins/workflows) — it self-registers its
+    # /api/plugins/workflows router; core no longer serves /api/workflows.
 
     # --- Activity thread -----------------------------------------------------
     # The durable Activity thread's history (ADR 0003). Agent-initiated turns
