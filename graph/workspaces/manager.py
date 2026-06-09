@@ -189,7 +189,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     new = load_yaml_doc(cfg)
     if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
         new["model"] = host["model"]
-        save_yaml_doc(cfg, new)
+        save_yaml_doc(new, cfg)
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
     if src_sec.exists():  # carries the api_key so the gateway actually works
         shutil.copyfile(src_sec, ws / "secrets.yaml")
