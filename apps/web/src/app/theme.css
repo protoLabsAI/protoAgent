@@ -3276,3 +3276,223 @@ textarea {
 .mobile-drawer-list button:hover {
   background: var(--pl-color-bg-hover, rgba(255, 255, 255, 0.06));
 }
+
+/* Fleet manager + archetype picker (Settings → Agents, ADR 0042) */
+.fleet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-row.active {
+  background: var(--bg-hover);
+}
+.fleet-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.fleet-dot.running {
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
+}
+.fleet-dot.stopped {
+  opacity: 0.45;
+}
+.fleet-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fleet-name {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fleet-active-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.fleet-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+.fleet-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+.fleet-empty,
+.fleet-section-label {
+  color: var(--fg-muted);
+}
+.fleet-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 4px 0 8px;
+}
+.fleet-error {
+  color: #f87171;
+  margin-bottom: 10px;
+}
+.fleet-purge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.fleet-purge input {
+  width: auto;
+}
+
+.archetype-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.archetype-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+.archetype-card:hover {
+  border-color: var(--fg-muted);
+}
+.archetype-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.archetype-icon {
+  color: var(--accent);
+  display: inline-flex;
+}
+.archetype-label {
+  font-weight: 600;
+}
+.archetype-blurb {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+.archetype-name-field {
+  max-width: 380px;
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Topbar fleet switcher (ADR 0042) — the agent name as a dropdown */
+.fleet-switcher {
+  position: relative;
+  display: inline-flex;
+}
+.fleet-switcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: var(--radius);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fleet-switcher-trigger:hover {
+  background: var(--bg-hover);
+}
+.fleet-switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.fleet-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fleet-switcher-item:hover {
+  background: var(--bg-hover);
+}
+.fleet-switcher-item.active {
+  color: var(--accent);
+}
+.fleet-switcher-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fleet-switcher-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+/* The host (this instance) tag in the fleet manager + switcher (ADR 0042) */
+.fleet-host-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 8px;
+}
+
+/* Theme crossfade (ADR 0042) — applyAgentTheme() applies the focused agent's look inside a
+   View Transition (when supported), so switching agents snapshots before/after and crossfades
+   instead of hard-cutting. Ease the root transition so it glides. (Live picker drags bypass
+   this — they set --pl-* directly for instant feedback.) */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.35s;
+  animation-timing-function: ease;
+}

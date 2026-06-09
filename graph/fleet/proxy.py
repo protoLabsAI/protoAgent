@@ -50,6 +50,16 @@ def set_active(name: str) -> dict:
     return {"active": name}
 
 
+def clear_active() -> dict:
+    """Focus the host (this instance) — drop the proxy pointer so the console talks to
+    ``/api`` directly again, with no peer focused (ADR 0042)."""
+    f = _active_path()
+    if f.exists():
+        f.unlink()
+    log.info("[fleet] active agent → host (cleared)")
+    return {"active": None}
+
+
 def _active_port() -> int | None:
     name = get_active()
     if not name:

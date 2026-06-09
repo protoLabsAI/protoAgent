@@ -10,9 +10,41 @@
 // with no visible change.
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { SettingsTab } from "../settings/SettingsSurface";
+
+// Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
+// active surface, plugins out. In the single-agent product that fell out for free (each agent
+// is its own origin → its own localStorage); the unified console (one origin + the /active
+// proxy) collapses that, so we namespace the persisted key by the active agent instead. The
+// switcher calls setLayoutAgent(name) + useUI.persist.rehydrate() on a switch, so flipping
+// agents loads that agent's saved layout. Empty = single-agent (the legacy un-suffixed key).
+const _ACTIVE_AGENT_KEY = "protoagent.activeAgent";
+// Read synchronously at module load so the store hydrates from the right agent's key on
+// reload (no flash / no race with the async fleet fetch).
+let _layoutAgent = (() => {
+  try {
+    return globalThis.localStorage.getItem(_ACTIVE_AGENT_KEY) || "";
+  } catch {
+    return "";
+  }
+})();
+export function setLayoutAgent(name: string) {
+  _layoutAgent = name || "";
+  try {
+    if (_layoutAgent) globalThis.localStorage.setItem(_ACTIVE_AGENT_KEY, _layoutAgent);
+    else globalThis.localStorage.removeItem(_ACTIVE_AGENT_KEY);
+  } catch {
+    /* no-op */
+  }
+}
+const _layoutStorage = createJSONStorage(() => ({
+  getItem: (name: string) => globalThis.localStorage.getItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
+  setItem: (name: string, value: string) =>
+    globalThis.localStorage.setItem(_layoutAgent ? `${name}:${_layoutAgent}` : name, value),
+  removeItem: (name: string) => globalThis.localStorage.removeItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
+}));
 
 // Core surfaces are fixed literals; plugin views (ADR 0026) add dynamic surfaces keyed
 // `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal autocomplete while allowing
@@ -145,7 +177,8 @@ export const useUI = create<UIState>()(
         }),
     }),
     {
-      name: "protoagent.ui", // localStorage key — the single source of truth (ADR 0035 D5)
+      name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
+      storage: _layoutStorage,
       version: 2, // v2: railOf (side map) → railOrder (ordered lists per rail)
       migrate: (persisted: unknown) => {
         // Drop the obsolete railOf; railOrder falls back to the default via merge.

@@ -47,7 +47,8 @@ def test_create_list_start_stop_remove(client):
     assert not next(x for x in client.get("/api/fleet").json()["agents"] if x["name"] == "alpha")["running"]
 
     assert client.delete("/api/fleet/alpha").json()["ok"]
-    assert not client.get("/api/fleet").json()["agents"]
+    # The host (this instance) always self-registers, so only the peers are gone.
+    assert not [a for a in client.get("/api/fleet").json()["agents"] if not a.get("host")]
 
 
 def test_create_bad_name_is_400(client):
@@ -76,4 +77,5 @@ def test_stop_entire_fleet(client):
     client.post("/api/fleet", json={"name": "x", "port": 7895})
     client.post("/api/fleet", json={"name": "y", "port": 7896})
     assert client.post("/api/fleet/down").json()["ok"]
-    assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"])
+    # The host can't stop itself; every peer is down.
+    assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"] if not a.get("host"))

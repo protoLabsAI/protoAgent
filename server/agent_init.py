@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from paths import scope_leaf
 from runtime.state import STATE
-from server import AGENT_NAME_ENV, _bundle_root, _event_bus, agent_name
+from server import AGENT_NAME_ENV, _event_bus, agent_name
 from server.chat import chat
 
 if TYPE_CHECKING:

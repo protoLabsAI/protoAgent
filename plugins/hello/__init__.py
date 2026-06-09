@@ -68,14 +68,22 @@ def _build_router(greeting: str):
   <p id="bridge">awaiting console handshake…</p>
 </div>
 <script>
+  function applyTheme(t) {{
+    if (!t) return;
+    if (t.bg) document.body.style.background = t.bg;
+    if (t.fg) document.body.style.color = t.fg;
+  }}
   window.addEventListener("message", function (e) {{
     var m = e.data || {{}};
-    if (m.type !== "protoagent:init") return;
-    document.getElementById("bridge").textContent =
-      (m.token ? "✓ authed by the console" : "no token (open API)") +
-      (m.theme ? " · theme received" : "");
-    if (m.theme && m.theme.bg) document.body.style.background = m.theme.bg;
-    if (m.theme && m.theme.fg) document.body.style.color = m.theme.fg;
+    if (m.type === "protoagent:init") {{
+      document.getElementById("bridge").textContent =
+        (m.token ? "✓ authed by the console" : "no token (open API)") +
+        (m.theme ? " · theme received" : "");
+      applyTheme(m.theme);
+    }} else if (m.type === "protoagent:theme") {{
+      // Live theme update — the console re-posts on any edit / agent switch.
+      applyTheme(m.theme);
+    }}
   }});
 </script>
 </body></html>"""

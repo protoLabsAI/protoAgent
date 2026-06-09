@@ -1,12 +1,15 @@
 import type {
   ActivityHistory,
   AgentConfig,
+  Archetype,
   BeadsIssue,
   ChatMessage,
   ConfigPayload,
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
+  FleetAgent,
+  FleetStatus,
   GoalState,
   HitlPayload,
   InboxItem,
@@ -115,10 +118,31 @@ function defaultApiBase() {
   return "";
 }
 
+// Fleet in-place switch (ADR 0042). When an agent is "active", agent-level /api/* calls
+// route through the hub's reverse proxy (/active/api/*) so the whole console reads/writes
+// the focused agent — one flag, no per-call change. Hub control-plane paths (the fleet
+// itself) are served by the supervisor and must NOT be proxied to an agent.
+let _activePrefix = "";
+
+export function setActivePrefix(prefix: string) {
+  _activePrefix = prefix; // "" = talk to /api directly; "/active" = via the active-agent proxy
+}
+export function getActivePrefix() {
+  return _activePrefix;
+}
+function isHubPath(path: string) {
+  return path.startsWith("/api/fleet") || path.startsWith("/api/archetypes");
+}
+
 export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
+  // Agent-level /api/* routes through the active agent's proxy in fleet mode.
+  let p = path;
+  if (_activePrefix && path.startsWith("/api/") && !isHubPath(path)) {
+    p = `${_activePrefix}${path}`;
+  }
   const base = defaultApiBase();
-  return base ? `${base}${path.startsWith("/") ? path : `/${path}`}` : path;
+  return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;
 }
 
 /** True inside the desktop (Tauri/WKWebView) shell. WKWebView does NOT deliver a
@@ -591,6 +615,57 @@ export const api = {
       method: "POST",
       body: { updates },
     });
+  },
+
+  // --- Fleet (ADR 0042) — many workspace agents on one host ------------------
+  fleet() {
+    return request<FleetStatus>("/api/fleet");
+  },
+  archetypes() {
+    return request<{ archetypes: Archetype[] }>("/api/archetypes");
+  },
+  createAgent(body: { name: string; bundle?: string | null; port?: number; start?: boolean; shared_skills?: boolean }) {
+    return request<{ ok: boolean; agent: FleetAgent; installed: string[] }>("/api/fleet", {
+      method: "POST",
+      body,
+    });
+  },
+  startAgent(name: string) {
+    return request<{ ok: boolean; agent: FleetAgent }>(`/api/fleet/${encodeURIComponent(name)}/start`, {
+      method: "POST",
+    });
+  },
+  stopAgent(name: string) {
+    return request<{ ok: boolean; name: string; stopped: boolean }>(`/api/fleet/${encodeURIComponent(name)}/stop`, {
+      method: "POST",
+    });
+  },
+  removeAgent(name: string, purge = false) {
+    return request<{ ok: boolean; name: string; removed: string[] }>(
+      `/api/fleet/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`,
+      { method: "DELETE" },
+    );
+  },
+  activateAgent(name: string) {
+    return request<{ ok: boolean; active: string; evicted: string[] }>(`/api/fleet/${encodeURIComponent(name)}/activate`, {
+      method: "POST",
+    });
+  },
+  fleetDown() {
+    return request<{ ok: boolean; stopped: string[] }>("/api/fleet/down", { method: "POST" });
+  },
+
+  // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the
+  // server just round-trips JSON. These auto-route to the focused agent via the active prefix
+  // (host → /api/theme, peer → /active/api/theme).
+  getTheme() {
+    return request<{ theme: unknown | null }>("/api/theme");
+  },
+  saveTheme(theme: unknown) {
+    return request<{ ok: boolean }>("/api/theme", { method: "PUT", body: { theme } });
+  },
+  resetTheme() {
+    return request<{ ok: boolean }>("/api/theme", { method: "DELETE" });
   },
 
   chat(message: string, sessionId: string) {

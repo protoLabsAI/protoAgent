@@ -18,6 +18,8 @@ test("central Settings is just the cross-cutting tabs", async ({ page }) => {
   await openSettings(page);
   expect(await page.locator(".pl-tabs button").allTextContents()).toEqual([
     "Overview",
+    "Agents",
+    "Theme",
     "Telemetry",
     "Plugins",
     "System",

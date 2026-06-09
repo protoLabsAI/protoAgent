@@ -134,6 +134,50 @@ and headless never diverge.
 Net: the desktop just **renders the control plane the CLI already drives** — one model, two
 front-ends.
 
+### I. Remote fleet members — agents on other machines
+
+The slices above manage **local** agents: the supervisor `run_exec`s a subprocess on *this*
+host, tracks it by pid, and the proxy forwards to `127.0.0.1:<port>`. But the model already
+generalizes to **remote** protoAgents on other machines — the only thing that's intrinsically
+local is *process spawning*. Everything else is address-based:
+
+- **Each agent is already an independent A2A endpoint** (the `a2a` field is a URL). Nothing
+  makes it loopback-only — point it at `https://host:port` and agent↔agent `delegate_to`
+  works cross-machine today.
+- **The reverse proxy is address-based** — `/active/*` forwards to "the active agent's
+  address." Localhost now; a remote `host:port` needs no console change.
+- **The host already self-registers** as a first-class agent (`host: true`) — a *remote*
+  member is the same idea with `remote: true` and a non-local address.
+
+**A remote member is *registered*, not spawned.** Add it by URL + token (not create+launch):
+
+- **Agent kind** — `supervisor.status()` gains a `remote: true` member kind: `{name, kind:
+  "remote", url, running, a2a: <url>/a2a}`. No local pid.
+- **Status** — health is a poll of the remote's `GET /api/runtime/status` (+ the hub token),
+  not the local `_alive(pid)` probe. Unreachable ⇒ `running: false` (same UX as a crash).
+- **Lifecycle** — you can't `kill` a remote process. Two tiers: (a) **register-only** — the
+  remote runs itself; the hub bookmarks + proxies + monitors it, no start/stop; (b) **remote
+  hub** — if the other machine runs its *own* fleet hub, start/stop proxies to *its*
+  control-plane API (turtles all the way down).
+- **Transport/auth** — real network now: TLS + a per-remote token (reuse the existing A2A /
+  console bearer-gate). The proxy attaches the token on forward.
+
+**Relationship to the delegate registry (ADR 0025).** protoAgent *already* connects to remote
+agents — `delegate_to` over a2a/openai/acp (Settings → Integrations). That's the **delegation**
+axis (hand a remote a task). The fleet is the **management** axis (switch your console *into* an
+agent, see its status, control its lifecycle). Remote fleet members are the **convergence**: a
+registered remote could surface in *both* — delegate to it as a peer **and** focus the console
+on it. A future cleanup is one registry feeding both views.
+
+**Frontend is mostly free** — the panels render `/api/fleet`; a remote agent is just an agent
+with a remote address + `remote: true`. Show a "remote" tag (like the `host` tag), gate
+start/stop on the lifecycle tier, and the switcher's address swap already routes through the
+proxy. The only real new UI is the **"add remote agent"** form (URL + token) alongside "+ New."
+
+Honest scope: this is **not built** — it's the designed-for next axis. The proxy +
+independent-endpoint + self-registration design were chosen so it's an extension, not a
+rewrite.
+
 ## Options considered
 
 - **Separate consoles per agent** (ADR 0041 slice-4 simple) — navigate to each agent's own
@@ -166,6 +210,10 @@ front-ends.
 3. **Switcher UI** — the agent-name dropdown (list, status, switch, start/stop) over the API.
 4. **Archetypes** — `GET /api/archetypes` + the "+ New agent" picker → create-from-archetype.
 5. **Keep-alive policy** — keep-N-warm + resume, lifecycle polish.
+6. **Remote fleet members** (§I, *not yet built*) — a `remote: true` agent kind registered by
+   URL+token: status via the remote's `/api/runtime/status`, proxy-to-remote with the bearer,
+   register-only lifecycle first (remote-hub start/stop later), an "add remote agent" form, and
+   convergence with the delegate registry (ADR 0025).
 
 Slices 1–3 deliver the core (switch between running agents in one console); 4 adds the
-starter-type creation flow; 5 makes it scale.
+starter-type creation flow; 5 makes it scale; 6 extends the fleet across machines.

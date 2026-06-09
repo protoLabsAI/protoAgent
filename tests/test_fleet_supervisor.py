@@ -42,7 +42,8 @@ def test_start_status_stop(fleet):
 
     supervisor.stop("alpha")
     assert not supervisor.is_running("alpha")
-    assert not any(s["running"] for s in supervisor.status())
+    # The host self-registers as an always-running entry (ADR 0042); only peers stop.
+    assert not any(s["running"] for s in supervisor.status() if not s.get("host"))
 
 
 def test_start_unknown_workspace_errors(fleet):

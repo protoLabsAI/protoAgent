@@ -1,25 +1,31 @@
-import { BarChart3, Gauge, Puzzle, Settings2 } from "lucide-react";
+import { BarChart3, Gauge, Palette, Puzzle, Server, Settings2 } from "lucide-react";
 
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { DelegatesSection } from "./DelegatesSection";
+import { FleetSurface } from "./FleetSurface";
 import { OverviewPanel } from "./OverviewPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
+import { ThemeSurface } from "./ThemeSurface";
 
 // Central Settings — only cross-cutting stuff now (the settings decentralization):
 // Overview (status), Telemetry, Plugins (delegates + the settings for any view-less
 // plugin), and System (runtime/middleware). Agent + Memory settings moved to their
 // home views (Agent → Settings, Knowledge → Settings).
 
-export type SettingsTab = "overview" | "telemetry" | "plugins" | "system";
+export type SettingsTab = "overview" | "agents" | "theme" | "telemetry" | "plugins" | "system";
 
 export const SETTINGS_TABS = [
   { id: "overview", label: "Overview", icon: Gauge },
+  { id: "agents", label: "Agents", icon: Server },
+  { id: "theme", label: "Theme", icon: Palette },
   { id: "telemetry", label: "Telemetry", icon: BarChart3 },
   { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "system", label: "System", icon: Settings2 },
 ] as const;
 
 export function SettingsSurface({ tab = "overview" }: { tab?: SettingsTab }) {
+  if (tab === "agents") return <FleetSurface />;              // the fleet (ADR 0042)
+  if (tab === "theme") return <ThemeSurface />;               // per-agent look (ADR 0042)
   if (tab === "telemetry") return <TelemetrySurface />;       // self-contained (own section + boundary)
   if (tab === "plugins") {
     return (

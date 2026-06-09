@@ -11,6 +11,9 @@ import "./app/tailwind.css";
 import "@protolabsai/ui/styles.css";
 import "./app/theme.css";
 import { queryClient } from "./lib/queryClient";
+import { watchThemeChanges } from "./lib/agentTheme";
+
+watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

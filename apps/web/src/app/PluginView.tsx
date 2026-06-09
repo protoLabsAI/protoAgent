@@ -103,6 +103,24 @@ export function PluginView({ view }: { view: PluginViewType }) {
     };
   }, [src, pluginId]);
 
+  // Live theme updates — re-post the current tokens to the iframe whenever the console theme
+  // changes (a live edit, a save, or an agent switch). The page handles `protoagent:theme`
+  // the same way it handles the initial `protoagent:init.theme`.
+  useEffect(() => {
+    const repost = () => {
+      const win = frameRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        const origin = new URL(apiUrl(src), window.location.href).origin;
+        win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);
+      } catch {
+        /* cross-origin / detached — best effort */
+      }
+    };
+    window.addEventListener("protoagent:theme", repost);
+    return () => window.removeEventListener("protoagent:theme", repost);
+  }, [src]);
+
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
     setLoaded(true);
     const win = e.currentTarget.contentWindow;

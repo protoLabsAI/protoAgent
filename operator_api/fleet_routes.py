@@ -46,6 +46,11 @@ def register_fleet_routes(app) -> None:
         beyond the warm cap (their sessions persist + resume on a later switch).
         """
         try:
+            # Focusing the host (this instance) drops the proxy pointer — the console
+            # talks to /api directly again, no peer in focus.
+            host = next((a for a in supervisor.status() if a.get("host")), None)
+            if host and name == host["name"]:
+                return {"ok": True, **proxy.clear_active(), "evicted": []}
             if not supervisor.is_running(name):
                 supervisor.start(name)  # resume a cold agent on switch (from checkpoint)
             result = proxy.set_active(name)

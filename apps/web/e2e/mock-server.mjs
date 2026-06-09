@@ -15,9 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   ACTIVITY_HISTORY,
+  ARCHETYPES,
   buildFrames,
   DELEGATES,
   DELEGATE_TYPES,
+  FLEET,
   GOALS,
   INBOX_ITEMS,
   NOTES_WORKSPACE,
@@ -127,6 +129,14 @@ function handleApiGet(pathname) {
       return { plugins: INSTALLED_PLUGINS };
     case "/api/plugins/workflows/list":
       return { workflows: WORKFLOWS };
+    case "/api/theme":
+      return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
+    case "/api/fleet":
+      return { agents: FLEET.agents, active: FLEET.active };
+    case "/api/fleet/active":
+      return { active: FLEET.active };
+    case "/api/archetypes":
+      return { archetypes: ARCHETYPES };
     case "/api/activity":
       return ACTIVITY_HISTORY;
     case "/api/inbox":
@@ -207,7 +217,9 @@ async function serveStatic(pathname, res) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
-  const { pathname } = url;
+  // Fleet proxy (ADR 0042): /active/<path> is the hub re-proxying the console to the active
+  // agent. The mock just strips the prefix and serves the same handlers (one agent here).
+  const pathname = url.pathname.startsWith("/active/") ? url.pathname.slice("/active".length) : url.pathname;
 
   if (pathname === "/a2a" && req.method === "POST") {
     const body = await readBody(req);
@@ -277,6 +289,35 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "DELETE" && /^\/api\/plugins\/workflows\/[^/]+$/.test(pathname)) {
       return sendJson(res, { deleted: true });
+    }
+    // Fleet (ADR 0042) — mutate the in-memory FLEET so create/start/stop/activate/remove round-trip.
+    if (pathname === "/api/fleet" && req.method === "POST") {
+      const name = String(body.name || "").trim();
+      if (!/^[A-Za-z0-9-_]+$/.test(name)) return sendJson(res, { detail: "invalid name" }, 400);
+      const agent = { name, id: name, port: 7899, pid: 5000, running: true, bundle: body.bundle || "" };
+      FLEET.agents.push(agent);
+      return sendJson(res, { ok: true, agent, installed: [] });
+    }
+    if (pathname === "/api/fleet/down" && req.method === "POST") {
+      FLEET.agents.forEach((a) => { a.running = false; a.pid = null; });
+      return sendJson(res, { ok: true, stopped: FLEET.agents.map((a) => a.name) });
+    }
+    {
+      const m = pathname.match(/^\/api\/fleet\/([^/]+)\/(start|stop|activate)$/);
+      if (m && req.method === "POST") {
+        const a = FLEET.agents.find((x) => x.name === m[1]);
+        if (!a) return sendJson(res, { detail: "no such agent" }, 400);
+        if (m[2] === "start") { a.running = true; a.pid = 5001; return sendJson(res, { ok: true, agent: a }); }
+        if (m[2] === "stop") { a.running = false; a.pid = null; return sendJson(res, { ok: true, name: a.name, stopped: true }); }
+        // activate: host → clear (focus host); peer → set active.
+        if (a.host) { FLEET.active = null; return sendJson(res, { ok: true, active: null, evicted: [] }); }
+        FLEET.active = a.name; a.running = true; return sendJson(res, { ok: true, active: a.name, evicted: [] });
+      }
+    }
+    if (req.method === "DELETE" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
+      const name = decodeURIComponent(pathname.split("/").pop());
+      FLEET.agents = FLEET.agents.filter((a) => a.name !== name);
+      return sendJson(res, { ok: true, name, removed: [name] });
     }
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
       return sendJson(res, { enabled: true, deleted: true });

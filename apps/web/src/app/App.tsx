@@ -72,6 +72,7 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { SettingsSurface, SETTINGS_TABS, type SettingsTab } from "../settings/SettingsSurface";
+import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
   type ActivityTab,
@@ -87,6 +88,7 @@ import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
+import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
 import { Tabs } from "@protolabsai/ui/navigation";
@@ -238,6 +240,7 @@ export function App() {
   const railOrder = useUI((s) => s.railOrder);
   const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
   const isMobile = useIsMobile();
+  useActiveTheme(); // apply the focused agent's saved theme on boot + repaint on switch (ADR 0042)
   const mobileActive = useUI((s) => s.mobileActive);
   const setMobileActive = useUI((s) => s.setMobileActive);
   const quickBar = useUI((s) => s.quickBar);
@@ -631,7 +634,15 @@ export function App() {
       <Header
         dragRegion
         logo={<Logo src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" size={22} />}
-        name={brandName(runtime?.identity?.name)}
+        name={
+          <FleetSwitcher
+            fallbackName={brandName(runtime?.identity?.name)}
+            onNewAgent={() => {
+              setSurface("settings");
+              setSettingsTab("agents");
+            }}
+          />
+        }
         org={runtime?.identity?.org || "protoLabs.studio"}
         status={
           <button

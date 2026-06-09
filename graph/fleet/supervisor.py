@@ -124,11 +124,35 @@ def stop(name: str, *, timeout: float = 8.0) -> dict:
     return {"name": name, "stopped": True}
 
 
+def _host_entry() -> dict:
+    """The instance serving this console — the agent you're *in* (ADR 0042). Always
+    present + running, marked ``host: True`` so it can't be stopped/removed from within
+    itself. This is the "single agent, like before" you manage until you add peers, so the
+    fleet is never empty (you're always at least one — yourself)."""
+    import os
+
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    name = getattr(cfg, "identity_name", "") or "main"
+    port = getattr(STATE, "active_port", None)
+    return {
+        "name": name,
+        "id": getattr(cfg, "instance_id", "") or name,
+        "port": port,
+        "pid": os.getpid(),
+        "running": True,
+        "bundle": "",
+        "host": True,
+        "a2a": f"http://127.0.0.1:{port}/a2a" if port else None,
+    }
+
+
 def status() -> list[dict]:
-    """Every workspace + its live status (running/stopped, pid, port)."""
+    """The host (this instance) + every workspace, with live status (running/stopped)."""
     state = _load_state()
     dirty = False
-    out: list[dict] = []
+    out: list[dict] = [_host_entry()]
     for ws in manager.list_workspaces():
         rec = state.get(ws["name"]) or {}
         running = _alive(rec.get("pid"))
