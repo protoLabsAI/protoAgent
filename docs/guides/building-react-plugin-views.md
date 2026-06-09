@@ -94,5 +94,7 @@ sandboxed.
 
 ## References
 
+- [Security & trust model](../explanation/security-and-trust.md) — why plugin UIs are sandboxed
+  iframes, and the "installing a plugin runs its code" trust posture.
 - ADR 0026 (plugin console surfaces + the bridge), ADR 0027 (git-URL install), ADR 0038
   (the two-mode model + why federation was retired).
