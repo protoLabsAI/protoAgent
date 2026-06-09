@@ -88,6 +88,11 @@ skills:
   db_path: /sandbox/skills.db
   top_k: 5
   max_tokens: 2000
+  # Tier (ADR 0041 slice 3): scope = scoped (private) | shared (one commons for all)
+  # | layered (read commons ∪ private, write private, promote to commons). Blank →
+  # derived from `shared` below. `python -m server skills promote <name>` lifts a
+  # private skill into the commons.
+  # scope: scoped
   # Tiered stores (ADR 0041). `shared: true` lifts the skills library into the
   # COMMONS — one DB read/written by every agent on this host (a fleet's compounding
   # skill library) — instead of per-instance scope. Default false = private per
