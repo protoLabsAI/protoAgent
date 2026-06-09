@@ -134,9 +134,15 @@ def status() -> list[dict]:
         if rec and not running:  # stale entry — agent died; clean it
             state.pop(ws["name"], None)
             dirty = True
+        port = ws.get("port")
         out.append({"name": ws["name"], "id": ws.get("id", ws["name"]),
-                    "port": ws.get("port"), "pid": rec.get("pid") if running else None,
-                    "running": running, "bundle": ws.get("bundle", "")})
+                    "port": port, "pid": rec.get("pid") if running else None,
+                    "running": running, "bundle": ws.get("bundle", ""),
+                    # Direct A2A endpoint — every agent is an independent endpoint on its
+                    # own port (ADR 0042), reachable regardless of console focus, so a
+                    # focused agent can `delegate_to` an unfocused sibling here. Live only
+                    # while running, but the address is stable.
+                    "a2a": f"http://127.0.0.1:{port}/a2a" if port else None})
     if dirty:
         _save_state(state)
     return out
