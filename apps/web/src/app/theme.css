@@ -681,39 +681,8 @@ h2 {
   color: var(--fg-secondary);
 }
 
-.status-pill {
-  min-height: 22px;
-  max-width: 240px;
-  display: inline-block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 4px 8px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.status-pill.success {
-  border-color: rgba(65, 196, 141, 0.28);
-  background: rgba(65, 196, 141, 0.16);
-  color: #a9e8c9;
-}
-
-.status-pill.warning {
-  border-color: rgba(212, 189, 79, 0.3);
-  background: rgba(212, 189, 79, 0.16);
-  color: #eadf9a;
-}
-
-.status-pill.error {
-  border-color: rgba(240, 116, 88, 0.3);
-  background: rgba(240, 116, 88, 0.16);
-  color: #f4b09f;
-}
+/* StatusPill now renders the @protolabsai/ui Badge (.pl-badge) — the local
+   .status-pill ruleset is retired. */
 
 .icon-button,
 .primary-button {
