@@ -8,7 +8,7 @@ import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
-import { PanelHeader } from "../app/PanelHeader";
+import { PanelHeader } from "@protolabsai/ui";
 import { api } from "../lib/api";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import {
