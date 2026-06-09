@@ -9,6 +9,10 @@ export type ExtSurface = {
   label: string;
   icon: ReactNode;
   placement?: "left" | "right"; // which rail (default: left)
+  // Gate the surface on a plugin being enabled (its id in runtime.plugins). The rail item
+  // is hidden + the surface unreachable unless that plugin is on. Used by first-party
+  // optional surfaces extracted to plugins (e.g. workflows → plugins/workflows).
+  requiresPlugin?: string;
   render: () => ReactNode;
 };
 
