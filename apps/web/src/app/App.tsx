@@ -60,7 +60,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { ComponentType, CSSProperties, LazyExoticComponent, ReactNode } from "react";
+import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
@@ -373,41 +373,8 @@ export function App() {
     if (viewingInbox()) setInboxUnread(0);
   }, [surface, activityTab]);
 
-  // Drag the right panel's left edge to resize (clamped 280–720px, persisted).
-  function startRightResize(e: React.MouseEvent) {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = rightWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.min(720, Math.max(280, startW + (startX - ev.clientX)));
-      setRightWidth(next);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-    };
-    document.body.style.userSelect = "none";
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }
-
-  // Keyboard-resizable (ADR 0035 S3): arrows nudge, Home/End jump to max/min, double-click
-  // resets. The handle sits on the right panel's LEFT edge, so ← widens / → narrows.
-  const RIGHT_DEFAULT_WIDTH = 360;
-  function onResizeKey(e: React.KeyboardEvent) {
-    const step = e.shiftKey ? 48 : 16;
-    if (e.key === "ArrowLeft") { setRightWidth(rightWidth + step); e.preventDefault(); }
-    else if (e.key === "ArrowRight") { setRightWidth(rightWidth - step); e.preventDefault(); }
-    else if (e.key === "Home") { setRightWidth(720); e.preventDefault(); }
-    else if (e.key === "End") { setRightWidth(280); e.preventDefault(); }
-  }
-
-  // Drive only the right column's WIDTH via a CSS var — the grid template
-  // itself lives in CSS (.workspace), so the responsive media query can
-  // collapse to two columns below the breakpoint. Setting the full template
-  // inline here would beat the media query and leave a blank reserved column.
-  const rightCol = rightCollapsed ? "0px" : `${rightWidth}px`;
+  // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
+  // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.
 
   // One glanceable health light for the topbar (detail on hover; full status in
   // System → Runtime). Worst-state wins. Derived from the runtime query — while
@@ -641,7 +608,7 @@ export function App() {
                 (Settings → Identity), defaulting to protoAgent for the template.
                 A fork sets its name once and the whole UI follows. */}
             <div className="brand-name">{brandName(runtime?.identity?.name)}</div>
-            <div className="brand-subline">protoLabs.studio</div>
+            <div className="brand-subline">{runtime?.identity?.org || "protoLabs.studio"}</div>
           </div>
         </div>
         <div className="topbar-status">

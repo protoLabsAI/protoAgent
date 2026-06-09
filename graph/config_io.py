@@ -274,6 +274,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
         "identity": {
             "name": config.identity_name,
             "operator": config.identity_operator,
+            "org": getattr(config, "identity_org", ""),
         },
         "auth": {
             "token": "",

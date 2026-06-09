@@ -75,6 +75,7 @@ def build_runtime_status(
         "identity": {
             "name": getattr(config, "identity_name", ""),
             "operator": getattr(config, "identity_operator", ""),
+            "org": getattr(config, "identity_org", ""),
         },
         "middleware": {
             "knowledge": bool(getattr(config, "knowledge_middleware", False)),
