@@ -27,6 +27,16 @@ function goalTone(status: string) {
   return "muted" as const;
 }
 
+function ago(epochSeconds: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+const trunc = (t: string, n = 80) => (t.length > n ? `${t.slice(0, n)}…` : t);
+
 function GoalsList() {
   const { data } = useSuspenseQuery(goalsQuery());
   const goals = data.goals;
@@ -53,14 +63,17 @@ function GoalsList() {
         <div className="goal-row" key={goal.session_id}>
           <div className="goal-row-head">
             <strong>{goal.condition || goal.session_id}</strong>
+            {goal.mode === "monitor" ? <StatusPill label="monitor" tone="muted" /> : null}
             <StatusPill label={goal.status} tone={goalTone(goal.status)} />
           </div>
           <span className="goal-row-meta">
-            {goal.session_id} · {goal.verifier?.type || "llm"} · iter {goal.iteration ?? 0}/
-            {goal.max_iterations ?? 0}
-            {goal.last_reason
-              ? ` · ${goal.last_reason.length > 80 ? `${goal.last_reason.slice(0, 80)}…` : goal.last_reason}`
-              : ""}
+            {goal.session_id} · {goal.verifier?.type || "llm"}
+            {goal.mode === "monitor" ? (
+              <> · watched{goal.last_checked ? ` · checked ${ago(goal.last_checked)}` : ""}</>
+            ) : (
+              <> · iter {goal.iteration ?? 0}/{goal.max_iterations ?? 0}</>
+            )}
+            {goal.last_reason ? ` · ${trunc(goal.last_reason)}` : ""}
           </span>
           <button
             className="icon-button goal-row-clear"

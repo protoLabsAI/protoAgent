@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Goals come alive in the console** — the Goals panel now shows a **monitor** badge + last-checked
+  (vs drive iteration count), and a goal finishing raises a **toast** (`goal.achieved`/`goal.failed`,
+  ADR 0039). Authoring stays in chat (`/goal`); the panel is observe + clear. Goal-mode guide updated.
 - **Goals broadcast on the event bus** — a terminal goal now emits `goal.achieved` / `goal.failed`
   (ADR 0039) with `{session_id, condition, status, reason, evidence, mode}`, alongside the existing
   plugin `goal_hooks`. **Any plugin (or the console) can react to a goal completing without writing a

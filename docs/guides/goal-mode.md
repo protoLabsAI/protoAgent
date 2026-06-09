@@ -1,6 +1,13 @@
 # Goal mode
 
-Goal mode gives the agent a **testable outcome** and lets it self-drive toward it: after every turn the agent stops on, a **verifier** checks whether the goal is met; if not, the agent is re-invoked with a continuation prompt until it passes, runs out of budget, or is flagged unachievable.
+A **goal** is a testable outcome you attach to the agent — a *condition* plus a **verifier** that ground-truths whether it's met (a shell command's exit code, a test run, a CI status, a data assertion, a plugin check, or an LLM judgment as the fallback). Goals turn "please do X" into "keep going / watch until X is provably true."
+
+There are **two kinds**, and the difference is *who moves the needle*:
+
+- **Drive** (default) — *the agent's own turns* do the work. After each turn the verifier runs; if not met, the agent is re-invoked with a continuation prompt until it passes, the iteration budget is spent, or it's flagged unachievable. Use for "make the tests pass," "finish the README."
+- **Monitor** (ADR 0030) — *an external process* moves the needle (a background engine, a training run, a deployment, a market). The agent only starts/supervises; the goal is checked **out-of-band on a cadence** and never re-invokes the agent. Use for "treasury ≥ 1,000,000," "rollout reaches 100%."
+
+When a goal reaches a terminal state it **broadcasts on the event bus** (`goal.achieved` / `goal.failed`, ADR 0039) — so the console, or any plugin, can react without writing code (see [Reacting to a goal](#reacting-to-a-goal)).
 
 It's modelled on protocli's goal system but deliberately more rigorous for a long-running server agent:
 
@@ -55,12 +62,29 @@ Programmatic status/clear is also available: `GET /api/goal/{session_id}` and `D
 
 ## Manage from the console
 
-The React console's **Goals** surface lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), iteration count, verifier type, and the latest verifier reason — and lets you **clear** any of them. Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers, so it stays an explicit in-chat action); the panel is a read-and-clear view. Backed by:
+The React console's **Goals** surface (right sidebar) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), a **`monitor` badge** for monitor goals, the verifier type, and either the drive **iteration count** or (for monitor) **when it was last checked** — plus the latest verifier reason. You can **clear** any of them. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
+
+Goals are still *set* in chat with `/goal` (setting can run shell/test verifiers, so it stays an explicit operator action); the panel is a read-and-clear view. Backed by:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/goals` | List all goals across sessions (`{goals, enabled}`) |
+| `POST` | `/api/goals` | Set a goal **programmatically** — `plugin` verifier only (safe set; command/test/ci/data/llm stay operator-only via `/goal`) |
 | `DELETE` | `/api/goals/{session_id}` | Clear one (`{cleared}`) |
+
+## Reacting to a goal
+
+A terminal goal is a **trigger**, not just a checkbox. Every finish publishes one of two events on the [event bus](/guides/plugins#events-the-plugin-bus) (ADR 0039):
+
+| Topic | When | Payload |
+|---|---|---|
+| `goal.achieved` | verifier passed | `{session_id, condition, status, reason, evidence, mode}` |
+| `goal.failed` | `exhausted` / `unachievable` | same shape |
+
+Two ways to react:
+
+- **No code (any plugin / the console).** Subscribe to the topic — `registry.on("goal.achieved", …)` in a plugin, or `protoagent:subscribe` from a sandboxed view. The built-in console toast is exactly this. Because it's the bus, **nobody imports the goal system** to listen.
+- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), kick a follow-up agent turn via `host.invoke`, stop a background engine, alert. This is how a fork drives an autonomous loop: *set a monitor goal → external engine runs → the cadence tick verifies → the hook advances.*
 
 ## Verifier types
 
