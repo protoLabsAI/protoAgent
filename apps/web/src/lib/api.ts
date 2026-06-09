@@ -561,26 +561,27 @@ export const api = {
     });
   },
 
+  // Workflows are an opt-in plugin (plugins/workflows) — it serves /api/plugins/workflows.
   workflows() {
-    return request<{ workflows: WorkflowSummary[] }>("/api/workflows");
+    return request<{ workflows: WorkflowSummary[] }>("/api/plugins/workflows/list");
   },
 
   runWorkflow(name: string, inputs: Record<string, unknown>) {
-    return request<WorkflowRunResult>(`/api/workflows/${encodeURIComponent(name)}/run`, {
+    return request<WorkflowRunResult>(`/api/plugins/workflows/${encodeURIComponent(name)}/run`, {
       method: "POST",
       body: { inputs },
     });
   },
 
   saveWorkflow(recipe: Record<string, unknown>) {
-    return request<{ saved: boolean; name: string; path?: string }>("/api/workflows", {
+    return request<{ saved: boolean; name: string; path?: string }>("/api/plugins/workflows/save", {
       method: "POST",
       body: recipe,
     });
   },
 
   deleteWorkflow(name: string) {
-    return request<{ deleted: boolean }>(`/api/workflows/${encodeURIComponent(name)}`, {
+    return request<{ deleted: boolean }>(`/api/plugins/workflows/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
   },

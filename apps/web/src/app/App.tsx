@@ -82,7 +82,6 @@ import {
   type Surface,
 } from "../state/uiStore";
 import { SettingsCategoryPanel } from "../settings/SettingsCategory";
-import { WorkflowsSurface } from "../workflows/WorkflowsSurface";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
@@ -274,6 +273,8 @@ export function App() {
   const allPluginViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
+  // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
+  const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
   const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right");
   const pluginRightPanels = allPluginViews.filter((v) => v.placement === "right");
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
@@ -412,7 +413,8 @@ export function App() {
   const CORE_SURFACES: { id: string; label: string; icon: ReactNode }[] = [
     { id: "chat", label: "Chat", icon: <MessageSquare size={18} /> },
     { id: "activity", label: "Activity", icon: <Activity size={18} /> },
-    { id: "studio", label: "Studio", icon: <Boxes size={18} /> },
+    // "studio" (Workflows) is contributed via src/ext/workflows.tsx, gated on the
+    // workflows plugin (lean core) — no longer a hardcoded core surface.
     { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
     { id: "agent", label: "Agent", icon: <Bot size={18} /> },
     { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
@@ -439,8 +441,10 @@ export function App() {
       .filter((v) => !placed.has(v.key))
       .map((v): RailItem => ({ id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }));
     // Fork-contributed surfaces (ADR 0038 D3 — the src/ext seam), appended for their rail side.
+    // A surface that requiresPlugin is hidden unless that plugin is enabled (lean core).
     const ext = registeredSurfaces()
       .filter((s) => (s.placement ?? "left") === side)
+      .filter((s) => !s.requiresPlugin || enabledPluginIds.has(s.requiresPlugin))
       .map((s): RailItem => ({ id: s.id, label: s.label, icon: s.icon }));
     return [...ordered, ...extra, ...ext];
   }
@@ -457,8 +461,6 @@ export function App() {
             {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
           </>
         );
-      case "studio":
-        return <WorkflowsSurface />;
       case "agent":
         return (
           <>
@@ -518,8 +520,9 @@ export function App() {
         return <SchedulePanel />;
       default: {
         // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
+        // Skip a requiresPlugin surface when its plugin is off (e.g. a stale saved order).
         const ext = registeredSurfaces().find((s) => s.id === id);
-        if (ext) return ext.render();
+        if (ext && (!ext.requiresPlugin || enabledPluginIds.has(ext.requiresPlugin))) return ext.render();
         const v = allPluginViews.find((x) => x.key === id);
         return v ? <PluginView key={v.key} view={v} /> : null;
       }

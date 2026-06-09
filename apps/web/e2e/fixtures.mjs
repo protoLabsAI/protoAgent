@@ -36,6 +36,8 @@ export const RUNTIME_STATUS = {
   plugins: [
     { id: "demo", name: "Demo Plugin", version: "1.0.0", enabled: true, loaded: true, tools: ["demo_tool"], skills: 1 },
     { id: "zzz-off", name: "Zzz Disabled", version: "0.1.0", enabled: false, loaded: false, tools: [], skills: 0 },
+    // Workflows is an opt-in plugin (lean core); enabled here so the gated Studio surface shows.
+    { id: "workflows", name: "Workflows", version: "0.1.0", enabled: true, loaded: true, tools: ["run_workflow", "save_workflow"], skills: 0 },
     // A plugin that contributes a console view (ADR 0026) → a dynamic rail icon + iframe.
     {
       id: "boardy", name: "Boardy", version: "0.1.0", enabled: true, loaded: true, tools: [], skills: 0,
