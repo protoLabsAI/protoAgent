@@ -340,7 +340,11 @@ def _build_skills_index(config, extra_skill_dirs=None):
         from graph.skills.index import SkillsIndex
         from graph.skills.loader import seed_skills_index
 
-        db_path = _resolve_skills_db(config.skills_db_path)
+        db_path = _resolve_skills_db(
+            config.skills_db_path,
+            shared=getattr(config, "skills_shared", False),
+            commons=_commons_dir(config),
+        )
         index = SkillsIndex(db_path=db_path)
 
         live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (
@@ -756,12 +760,30 @@ def _build_workflow_registry(config):
         return None
 
 
-def _resolve_skills_db(configured: str) -> str:
-    """Pick a writable skills DB path; fall back to ~/.protoagent when the
-    configured dir (default /sandbox) isn't creatable — same idea as the
-    knowledge store's ``_resolve_path``."""
+def _commons_dir(config):
+    """The shared commons base (ADR 0041) — read by every agent on the host, never
+    per-instance scoped. Configurable via ``commons.path``; defaults to
+    ``~/.protoagent/commons``."""
+    from pathlib import Path
+
+    raw = (getattr(config, "commons_path", "") or "").strip()
+    return Path(raw).expanduser() if raw else (Path.home() / ".protoagent" / "commons")
+
+
+def _resolve_skills_db(configured: str, *, shared: bool = False, commons=None) -> str:
+    """Pick a writable skills DB path.
+
+    When ``shared`` (ADR 0041, tiered stores), the skills library is the COMMONS:
+    resolved un-scoped so every agent on the host shares one DB. Otherwise it's
+    per-instance scoped (``scope_leaf``), falling back to ~/.protoagent when the
+    configured dir (default /sandbox) isn't creatable."""
     import os
     from pathlib import Path
+
+    if shared:
+        path = Path(commons or (Path.home() / ".protoagent" / "commons")) / "skills.db"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
 
     candidate = Path(configured)
     try:
