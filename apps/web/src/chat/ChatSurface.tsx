@@ -82,8 +82,9 @@ export function ChatSurface({
   return (
     <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active}>
       {/* One row: a tab per session (status dot · title · close), then "+".
-          Double-click a title to rename. Replaces the old header + tab strip +
-          per-session title row. */}
+          Double-click a title to rename. Below ~26rem of container width it collapses
+          to a session dropdown + add (the per-session strip can't fit) — container query. */}
+      <div className="chat-tabbar-wrap">
       <div className="chat-tabbar" role="tablist" aria-label="Chat sessions">
         {chat.sessions.map((session) => {
           const active = session.id === chat.currentSessionId;
@@ -138,6 +139,41 @@ export function ChatSurface({
         >
           <Plus size={15} />
         </button>
+      </div>
+
+      {/* Narrow (container query) — the per-session strip collapses to a dropdown
+          (switch) + close-current + add. Distinct classes so e2e's .chat-tab-* keep
+          matching only the strip. */}
+      <div className="chat-tabbar-compact">
+        <select
+          className="chat-session-select"
+          value={chat.currentSessionId ?? ""}
+          aria-label="Chat session"
+          onChange={(e) => chatStore.switchSession(e.target.value)}
+        >
+          {chat.sessions.map((s) => (
+            <option key={s.id} value={s.id}>{s.title}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="chat-compact-btn"
+          title="Close session"
+          aria-label="Close current session"
+          onClick={() => chat.currentSessionId && setPendingClose(chat.currentSessionId)}
+        >
+          <X size={12} />
+        </button>
+        <button
+          type="button"
+          className="chat-compact-btn"
+          title="New chat"
+          aria-label="New chat"
+          onClick={() => chatStore.createSession()}
+        >
+          <Plus size={15} />
+        </button>
+      </div>
       </div>
 
       <div className="chat-session-pool">

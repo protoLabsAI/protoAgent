@@ -572,6 +572,10 @@ h2 {
 /* One consolidated tab bar: a tab per session (dot · title · close) + "new".
    Double-click a title to rename. Replaces the old header + tab strip + the
    per-session title row. */
+.chat-tabbar-wrap {
+  container-type: inline-size;
+}
+
 .chat-tabbar {
   display: flex;
   align-items: center;
@@ -579,6 +583,44 @@ h2 {
   overflow-x: auto;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Narrow: the per-session strip collapses to a session dropdown + add (container query). */
+.chat-tabbar-compact {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-session-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-compact-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.chat-compact-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+@container (max-width: 26rem) {
+  .chat-tabbar-wrap > .chat-tabbar {
+    display: none;
+  }
+  .chat-tabbar-wrap > .chat-tabbar-compact {
+    display: flex;
+  }
 }
 
 .chat-tab {
