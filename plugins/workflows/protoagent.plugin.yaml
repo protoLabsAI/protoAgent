@@ -1,0 +1,15 @@
+id: workflows
+name: Workflows
+version: 0.1.0
+description: >-
+  Declarative, multi-step subagent workflows (ADR 0002) — chain subagent steps
+  (some in parallel) into repeatable recipes. Extracted from core to an opt-in
+  plugin (lean core); the engine taps core via the plugin SDK (graph.sdk.run_subagent),
+  never core internals.
+enabled: false            # lean core — opt in via plugins.enabled or enabled:true
+capabilities:
+  network: []
+  filesystem: scoped      # recipe dir in the instance data dir
+# The Studio console surface is a first-party native-React view registered through the
+# src/ext build-time seam (ADR 0038 D3), gated on this plugin being enabled — not an
+# iframe view declared here.
