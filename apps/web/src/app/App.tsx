@@ -450,7 +450,7 @@ export function App() {
       case "activity":
         return (
           <>
-            <Tabs active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
+            <Tabs responsive active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
               { id: "thread", label: "Thread", icon: Activity },
               { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
             ].map(toTab)} />
@@ -462,7 +462,7 @@ export function App() {
       case "agent":
         return (
           <>
-            <Tabs active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} items={[
+            <Tabs responsive active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} items={[
               { id: "identity", label: "Identity", icon: Sparkles },
               { id: "settings", label: "Settings", icon: Settings2 },
               { id: "tools", label: "Tools", icon: Wrench },
@@ -483,7 +483,7 @@ export function App() {
       case "plugins":
         return (
           <>
-            <Tabs active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
+            <Tabs responsive active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
               { id: "local", label: "Local", icon: Boxes },
               { id: "market", label: "Market", icon: Store },
               { id: "download", label: "Download", icon: Download },
@@ -494,7 +494,7 @@ export function App() {
       case "knowledge":
         return (
           <>
-            <Tabs active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} items={[
+            <Tabs responsive active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} items={[
               { id: "store", label: "Store", icon: Database },
               { id: "settings", label: "Settings", icon: Settings2 },
             ].map(toTab)} />
@@ -504,7 +504,7 @@ export function App() {
       case "settings":
         return (
           <>
-            <Tabs active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
+            <Tabs responsive active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
             <SettingsSurface tab={settingsTab} />
           </>
         );

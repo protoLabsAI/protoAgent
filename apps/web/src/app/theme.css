@@ -495,11 +495,13 @@ h2 {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-/* A tabbed surface renders the DS <Tabs> strip + the .panel card as siblings in the
-   AppShell column. Style the strip as the card's TOP edge and drop the panel's top
+/* A tabbed surface renders the DS Tabs + the .panel card as siblings in the AppShell
+   column. Style the tab strip as the card's TOP edge and drop the panel's top
    border/radius, so the two read as ONE full-height card — its top aligns with the
-   non-tabbed panels (which have no strip). */
-.pl-appshell__col > .pl-tabs {
+   non-tabbed panels. (Responsive Tabs wrap the strip in .pl-tabs-wrap and collapse to
+   a dropdown on narrow containers — match both as the column's direct child.) */
+.pl-appshell__col > .pl-tabs,
+.pl-appshell__col > .pl-tabs-wrap {
   flex: 0 0 auto;
   padding: 8px 12px 0;
   border: 1px solid var(--border);
@@ -507,7 +509,8 @@ h2 {
   border-radius: var(--radius) var(--radius) 0 0;
   background: var(--bg-panel);
 }
-.pl-appshell__col > .pl-tabs + .panel {
+.pl-appshell__col > .pl-tabs + .panel,
+.pl-appshell__col > .pl-tabs-wrap + .panel {
   border-top: none;
   border-top-left-radius: 0;
   border-top-right-radius: 0;

@@ -125,7 +125,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
   return (
     <>
       {/* Sub-tab strip above the panel card — shared DS Tabs (single source of truth). */}
-      <Tabs active={activeTab} onSelect={setActiveTab}
+      <Tabs responsive active={activeTab} onSelect={setActiveTab}
             items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
       <section className="panel stage-panel plugin-view">
       <div className="plugin-view-body">
