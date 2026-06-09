@@ -299,6 +299,13 @@ def _main():
 
         raise SystemExit(run_skills_cli(sys.argv[2:]))
 
+    # Fleet subcommand (ADR 0042 slice 1): `python -m server fleet up|down|ls` —
+    # run workspace agents as persistent background processes (start/stop/status).
+    if len(sys.argv) > 1 and sys.argv[1] == "fleet":
+        from graph.fleet.cli import run_fleet_cli
+
+        raise SystemExit(run_fleet_cli(sys.argv[2:]))
+
     # Frozen-binary entrypoint for a plugin's managed MCP server (ADR 0019): the
     # bundled desktop app has no `python` on PATH, so a plugin's managed-server
     # factory re-invokes this binary with `--mcp-plugin <id>` instead of `-m
