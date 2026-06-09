@@ -39,10 +39,20 @@ def register_fleet_routes(app) -> None:
 
     @app.post("/api/fleet/{name}/activate")
     async def _activate(name: str):
-        """Point the console proxy at a running agent — the in-place switch."""
+        """Switch the console to an agent — the in-place switch.
+
+        Resumes the target if it was stopped (keep-N-warm), points the proxy at it,
+        marks it most-recently-active, then evicts the least-recently-used agents
+        beyond the warm cap (their sessions persist + resume on a later switch).
+        """
         try:
-            return {"ok": True, **proxy.set_active(name)}
-        except supervisor.FleetError as exc:
+            if not supervisor.is_running(name):
+                supervisor.start(name)  # resume a cold agent on switch (from checkpoint)
+            result = proxy.set_active(name)
+            supervisor.touch(name)
+            evicted = supervisor.enforce_warm_cap(protect=name)
+            return {"ok": True, **result, "evicted": evicted}
+        except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
     @app.api_route("/active/{path:path}",
@@ -94,6 +104,12 @@ def register_fleet_routes(app) -> None:
             return {"ok": True, **supervisor.stop(name)}
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
+
+    @app.post("/api/fleet/down")
+    async def _stop_fleet():
+        """Shut down the **entire** fleet (every running agent). Mirrors the CLI's
+        ``fleet down`` with no args."""
+        return {"ok": True, "stopped": [r["name"] for r in supervisor.down()]}
 
     @app.delete("/api/fleet/{name}")
     async def _remove_agent(name: str, purge: bool = False):
