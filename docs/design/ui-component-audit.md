@@ -134,14 +134,14 @@ Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu
 
 Sharing standard: **`docs/design/component-sharing-standard.md`** (the contract). Each row is a held commit; all green (68/68 e2e, tsc+build).
 
-**Adopted (local retired + CSS removed):**
+**Adopted (local retired + CSS removed) — 18 held commits, all 68/68 e2e green:**
 - `PanelHeader` → DS (19 surfaces) · `StageSubnav` → DS `Tabs` · context menu → DS `Menu` (local `dropdown-menu` deleted) · `ScrollArea` + `ConfirmDialog` → DS · `StatusPill` → DS `Badge` (adapter) · `PanelSkeleton` spinner → DS `Spinner`.
+- **`Button` — DONE.** All ~90 buttons (14 clean files batch + 5 mixed files per-button) → DS `Button` (`variant`/`icon`); bespoke buttons (chat-tab, slash, modes) kept. **All bespoke button CSS removed (−120 lines of `theme.css`).**
 - Bumped `@protolabsai/ui` `^0.4.0` → **`^0.8.0`**; all imports on domain **subpaths** (root barrel gone).
 - Fixed: always-mounted DS `Menu` must render **outside** the `.app-shell` grid (stray anchor row → footer overlap).
 
-**Remaining — mechanical long-tail, do as deliberate held slices (each locally reviewed):**
-- **Button** (~66 static + dynamic): `primary-button`→`variant="primary"`, `secondary-button`→default, `ghost-button`→`variant="ghost"`, `icon-button`→`icon variant="ghost"`, `…danger`→`variant="danger"`. Per-file (open+close tag) refactor; retires the biggest bespoke-button CSS block.
-- **Forms**: settings/setup `input`/`select`/`textarea`/`checkbox`/toggle → DS `Field`/`Input`/`Select`/`Textarea`/`Switch`/`Checkbox`.
+**Remaining — deliberate held slices, each locally reviewed at `:7901`:**
+- **Forms** (56 `input` / 12 `select` / 12 `textarea` / 6 `checkbox`): → DS `Field`/`Input`/`Select`/`Textarea`/`Switch`/`Checkbox`. **NOT a safe bulk swap** — DS `Input` (`.pl-input`) forces `width:100%`, which breaks the app's many *inline* inputs (issue-title, tab-rename, search boxes); needs per-board judgment (full-width settings fields are a clean fit; inline inputs need care). `Switch`/`Checkbox` also flip `onChange`→`onCheckedChange`.
 - **`Callout`/`Table`/`Tooltip`** where apt (panel-error/settings-banner → `Callout`; telemetry table → `Table`; native `title=` → `Tooltip`).
 - **`SurfaceRail`/`MobileNav`/`AppShell`**: **deferred by design** — the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137), not a rushed swap.
 
