@@ -1,3 +1,4 @@
+import { Input } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Brain, Database, RefreshCw } from "lucide-react";
 
@@ -67,7 +68,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       />
 
       <div className="stage-body">
-        <input
+        <Input
           className="playbook-search"
           type="search"
           placeholder="Search the knowledge base (findings, notes, daily log)…"

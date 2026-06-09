@@ -1,3 +1,4 @@
+import { Input } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 
@@ -92,7 +93,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
       />
 
       <div className="stage-body">
-        <input
+        <Input
           className="playbook-search"
           type="search"
           placeholder="Search skills (name, description, tools)…"

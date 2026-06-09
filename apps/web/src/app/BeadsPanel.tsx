@@ -1,3 +1,4 @@
+import { Input, Select } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
@@ -104,7 +105,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           if (draft.title.trim()) create.mutate(draft);
         }}
       >
-        <input
+        <Input
           value={draft.title}
           onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
           placeholder="New issue title"
@@ -114,7 +115,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           Add
         </Button>
         <div className="issue-create-meta">
-          <select
+          <Select
             value={draft.type}
             onChange={(event) => setDraft((d) => ({ ...d, type: event.target.value }))}
             aria-label="Issue type"
@@ -123,8 +124,8 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
             <option value="bug">bug</option>
             <option value="feature">feature</option>
             <option value="chore">chore</option>
-          </select>
-          <select
+          </Select>
+          <Select
             value={draft.priority}
             onChange={(event) => setDraft((d) => ({ ...d, priority: Number(event.target.value) }))}
             aria-label="Issue priority"
@@ -134,8 +135,8 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
             <option value={2}>P2</option>
             <option value={3}>P3</option>
             <option value={4}>P4</option>
-          </select>
-          <input
+          </Select>
+          <Input
             value={draft.description}
             onChange={(event) => setDraft((d) => ({ ...d, description: event.target.value }))}
             placeholder="Description"

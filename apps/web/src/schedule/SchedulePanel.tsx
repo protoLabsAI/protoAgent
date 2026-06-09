@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
@@ -98,7 +99,7 @@ function ScheduleModal({
         {mode === "once" && (
           <label className="field">
             <span>Date &amp; time</span>
-            <input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)}
+            <Input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)}
                    data-testid="schedule-once" />
           </label>
         )}
@@ -107,24 +108,24 @@ function ScheduleModal({
           <div className="schedule-repeat">
             <label className="field">
               <span>Frequency</span>
-              <select value={freq} onChange={(e) => setFreq(e.target.value as RepeatFreq)} data-testid="schedule-freq">
+              <Select value={freq} onChange={(e) => setFreq(e.target.value as RepeatFreq)} data-testid="schedule-freq">
                 <option value="hourly">Every hour</option>
                 <option value="daily">Every day</option>
                 <option value="weekdays">Every weekday (Mon–Fri)</option>
                 <option value="weekly">Every week</option>
-              </select>
+              </Select>
             </label>
             {freq === "weekly" && (
               <label className="field">
                 <span>Day</span>
-                <select value={dow} onChange={(e) => setDow(Number(e.target.value))}>
+                <Select value={dow} onChange={(e) => setDow(Number(e.target.value))}>
                   {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                </select>
+                </Select>
               </label>
             )}
             <label className="field">
               <span>{freq === "hourly" ? "Minute" : "Time"}</span>
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
+              <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} data-testid="schedule-time" />
             </label>
           </div>
         )}
@@ -132,7 +133,7 @@ function ScheduleModal({
         {mode === "cron" && (
           <label className="field">
             <span>Cron expression (5 fields)</span>
-            <input value={cronRaw} onChange={(e) => setCronRaw(e.target.value)}
+            <Input value={cronRaw} onChange={(e) => setCronRaw(e.target.value)}
                    placeholder='e.g. "0 9 * * 1-5"' data-testid="schedule-cron" />
           </label>
         )}
@@ -140,10 +141,10 @@ function ScheduleModal({
         {mode !== "once" && (
           <label className="field">
             <span>Timezone</span>
-            <select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
+            <Select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
               <option value="">UTC (default)</option>
               {tzOptions.map((z) => <option key={z} value={z}>{z}</option>)}
-            </select>
+            </Select>
           </label>
         )}
 
@@ -153,12 +154,12 @@ function ScheduleModal({
 
         <label className="field">
           <span>Prompt (delivered to the agent when it fires)</span>
-          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4}
+          <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4}
                     placeholder="What the agent should do when this fires" data-testid="schedule-prompt" />
         </label>
         <label className="field">
           <span>Job id (optional)</span>
-          <input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
+          <Input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
         </label>
 
         <div className="confirm-actions">

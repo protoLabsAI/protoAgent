@@ -1,3 +1,4 @@
+import { Input } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   Loader2,
@@ -91,7 +92,7 @@ export function ChatSurface({
             <div className={`chat-tab ${active ? "active" : ""}`} role="tab" aria-selected={active} key={session.id}>
               <span className={`session-dot ${status}`} title={status} />
               {editingId === session.id ? (
-                <input
+                <Input
                   className="chat-tab-edit"
                   autoFocus
                   defaultValue={session.title}

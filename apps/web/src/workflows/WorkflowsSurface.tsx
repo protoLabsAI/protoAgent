@@ -1,3 +1,4 @@
+import { Input, Select } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
 
@@ -119,13 +120,13 @@ function WorkflowsBody() {
             ) : (
               <label className="field">
                 <span>Recipe</span>
-                <select value={selectedName} onChange={(event) => selectRecipe(event.target.value)}>
+                <Select value={selectedName} onChange={(event) => selectRecipe(event.target.value)}>
                   {workflows.map((w) => (
                     <option key={w.name} value={w.name}>
                       {w.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             )}
 
@@ -154,7 +155,7 @@ function WorkflowsBody() {
                           {inp.name}
                           {inp.required ? " *" : ""}
                         </span>
-                        <input
+                        <Input
                           value={inputs[inp.name] ?? ""}
                           onChange={(event) => setInputs((prev) => ({ ...prev, [inp.name]: event.target.value }))}
                           placeholder={inp.default != null ? `default: ${String(inp.default)}` : inp.required ? "required" : "optional"}

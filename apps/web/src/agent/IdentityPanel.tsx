@@ -1,3 +1,4 @@
+import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -68,11 +69,11 @@ export function IdentityPanel() {
           <>
             <label className="field">
               <span>Agent name</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-agent" data-testid="identity-name" />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-agent" data-testid="identity-name" />
             </label>
             <label className="field">
               <span>SOUL.md — the agent's persona &amp; system identity</span>
-              <textarea
+              <Textarea
                 value={soul}
                 onChange={(e) => setSoul(e.target.value)}
                 rows={22}

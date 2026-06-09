@@ -1,3 +1,4 @@
+import { Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
 
@@ -154,7 +155,7 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
             void send();
           }}
         >
-          <textarea
+          <Textarea
             value={draft}
             onChange={(ev) => setDraft(ev.target.value)}
             placeholder="Reply in the activity thread…"

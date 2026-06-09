@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useState } from "react";
@@ -72,7 +73,7 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
       </div>
 
       {mode === "json" ? (
-        <textarea
+        <Textarea
           className="playbook-search mcp-json"
           rows={8}
           placeholder={'Paste a server config, e.g.\n{\n  "mcpServers": {\n    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"] }\n  }\n}'}
@@ -82,20 +83,20 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
       ) : (
         <>
           <div className="mcp-add-row">
-            <input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
-            <select className="playbook-search" value={transport} onChange={(e) => setTransport(e.target.value as Transport)}>
+            <Input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
+            <Select className="playbook-search" value={transport} onChange={(e) => setTransport(e.target.value as Transport)}>
               <option value="stdio">stdio</option>
               <option value="http">http</option>
               <option value="sse">sse</option>
-            </select>
+            </Select>
           </div>
           {transport === "stdio" ? (
             <div className="mcp-add-row">
-              <input className="playbook-search" placeholder="command (e.g. python)" value={command} onChange={(e) => setCommand(e.target.value)} />
-              <input className="playbook-search" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
+              <Input className="playbook-search" placeholder="command (e.g. python)" value={command} onChange={(e) => setCommand(e.target.value)} />
+              <Input className="playbook-search" placeholder="args (space-separated)" value={args} onChange={(e) => setArgs(e.target.value)} />
             </div>
           ) : (
-            <input className="playbook-search" placeholder="url (https://…)" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <Input className="playbook-search" placeholder="url (https://…)" value={url} onChange={(e) => setUrl(e.target.value)} />
           )}
         </>
       )}

@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
 
@@ -392,11 +393,11 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>Agent name</span>
-                  <input value={state.agentName} onChange={(event) => update({ agentName: event.target.value })} />
+                  <Input value={state.agentName} onChange={(event) => update({ agentName: event.target.value })} />
                 </label>
                 <label className="field">
                   <span>Operator</span>
-                  <input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
+                  <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
                 </label>
               </div>
             </StepBody>
@@ -407,11 +408,11 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>API base</span>
-                  <input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
+                  <Input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
                 </label>
                 <label className="field">
                   <span>API key</span>
-                  <input
+                  <Input
                     type="password"
                     value={state.apiKey}
                     onChange={(event) => update({ apiKey: event.target.value })}
@@ -423,7 +424,7 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Model</span>
-                  <input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                  <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
                   <datalist id="model-options">
                     {models.map((model) => (
                       <option key={model} value={model} />
@@ -457,15 +458,15 @@ export function SetupWizard({
               <div className="setup-grid three">
                 <label className="field">
                   <span>Temperature</span>
-                  <input type="number" min="0" max="2" step="0.1" value={state.temperature} onChange={(event) => update({ temperature: Number(event.target.value) })} />
+                  <Input type="number" min="0" max="2" step="0.1" value={state.temperature} onChange={(event) => update({ temperature: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Max tokens</span>
-                  <input type="number" min="1" value={state.maxTokens} onChange={(event) => update({ maxTokens: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.maxTokens} onChange={(event) => update({ maxTokens: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Max turns</span>
-                  <input type="number" min="1" value={state.maxIterations} onChange={(event) => update({ maxIterations: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.maxIterations} onChange={(event) => update({ maxIterations: Number(event.target.value) })} />
                 </label>
               </div>
             </StepBody>
@@ -476,13 +477,13 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Preset</span>
-                  <select value={state.preset} onChange={(event) => update({ preset: event.target.value })}>
+                  <Select value={state.preset} onChange={(event) => update({ preset: event.target.value })}>
                     {(setupStatus?.presets || []).map((preset) => (
                       <option key={preset} value={preset}>
                         {preset}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
                 <Button type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
                   {busy ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
@@ -491,7 +492,7 @@ export function SetupWizard({
               </div>
               <label className="field">
                 <span>SOUL.md</span>
-                <textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
+                <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
               </label>
             </StepBody>
           ) : null}
@@ -512,7 +513,7 @@ export function SetupWizard({
               </div>
               <label className="field">
                 <span>Researcher turns</span>
-                <input type="number" min="1" value={state.researcherTurns} onChange={(event) => update({ researcherTurns: Number(event.target.value) })} />
+                <Input type="number" min="1" value={state.researcherTurns} onChange={(event) => update({ researcherTurns: Number(event.target.value) })} />
               </label>
             </StepBody>
           ) : null}
@@ -521,21 +522,21 @@ export function SetupWizard({
             <StepBody icon={<Database size={20} />} title="Workspace" kicker="Storage">
               <label className="field">
                 <span>Knowledge DB</span>
-                <input value={state.knowledgePath} onChange={(event) => update({ knowledgePath: event.target.value })} />
+                <Input value={state.knowledgePath} onChange={(event) => update({ knowledgePath: event.target.value })} />
               </label>
               <div className="setup-grid two">
                 <label className="field">
                   <span>Knowledge top K</span>
-                  <input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
+                  <Input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
                 </label>
                 <label className="field">
                   <span>Project path</span>
-                  <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
+                  <Input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
                 </label>
               </div>
               <label className="field">
                 <span>Allowed project directories</span>
-                <textarea
+                <Textarea
                   rows={3}
                   value={state.allowedDirs}
                   onChange={(event) => update({ allowedDirs: event.target.value })}
@@ -564,7 +565,7 @@ export function SetupWizard({
               </p>
               <label className="field">
                 <span>Bot token</span>
-                <input
+                <Input
                   type="password"
                   value={state.discordToken}
                   onChange={(event) => update({ discordToken: event.target.value })}
@@ -575,7 +576,7 @@ export function SetupWizard({
               <div className="setup-grid model-row">
                 <label className="field">
                   <span>Your Discord user ID(s)</span>
-                  <input
+                  <Input
                     value={state.discordAdminId}
                     onChange={(event) => update({ discordAdminId: event.target.value })}
                     placeholder="e.g. 249386616806834177 — comma-separated; empty = anyone"
@@ -618,7 +619,7 @@ export function SetupWizard({
               <div className="setup-grid two">
                 <label className="field">
                   <span>OAuth client ID</span>
-                  <input
+                  <Input
                     value={state.googleClientId}
                     onChange={(event) => update({ googleClientId: event.target.value })}
                     placeholder="…apps.googleusercontent.com"
@@ -626,7 +627,7 @@ export function SetupWizard({
                 </label>
                 <label className="field">
                   <span>OAuth client secret</span>
-                  <input
+                  <Input
                     type="password"
                     value={state.googleClientSecret}
                     onChange={(event) => update({ googleClientSecret: event.target.value })}
@@ -637,7 +638,7 @@ export function SetupWizard({
               </div>
               <label className="field">
                 <span>Timezone (IANA, optional)</span>
-                <input
+                <Input
                   value={state.googleTz}
                   onChange={(event) => update({ googleTz: event.target.value })}
                   placeholder="e.g. America/Los_Angeles — sets the day bounds for “today”"

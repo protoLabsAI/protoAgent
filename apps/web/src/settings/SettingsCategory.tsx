@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
@@ -287,7 +288,7 @@ function SettingInput({ field, value, onChange }: { field: SettingsField; value:
   }
   if (field.type === "number") {
     return (
-      <input
+      <Input
         id={id}
         className="setting-input"
         type="number"
@@ -300,15 +301,15 @@ function SettingInput({ field, value, onChange }: { field: SettingsField; value:
   }
   if (field.type === "select" && field.options.length) {
     return (
-      <select id={id} className="setting-input" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+      <Select id={id} className="setting-input" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
         {field.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-      </select>
+      </Select>
     );
   }
   if (field.type === "string_list") {
     const text = Array.isArray(value) ? value.join("\n") : "";
     return (
-      <textarea
+      <Textarea
         id={id}
         className="setting-input setting-textarea"
         rows={3}
@@ -320,7 +321,7 @@ function SettingInput({ field, value, onChange }: { field: SettingsField; value:
   }
   if (field.type === "secret") {
     return (
-      <input
+      <Input
         id={id}
         className="setting-input"
         type="password"
@@ -332,7 +333,7 @@ function SettingInput({ field, value, onChange }: { field: SettingsField; value:
     );
   }
   return (
-    <input
+    <Input
       id={id}
       className="setting-input"
       type="text"

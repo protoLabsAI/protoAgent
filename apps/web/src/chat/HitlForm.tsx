@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useState } from "react";
 
@@ -55,7 +56,7 @@ function Field({
   let control;
   if (Array.isArray(schema.enum)) {
     control = (
-      <select value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+      <Select value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
         <option value="" disabled>
           Select…
         </option>
@@ -64,20 +65,20 @@ function Field({
             {String(opt)}
           </option>
         ))}
-      </select>
+      </Select>
     );
   } else if (schema.type === "number" || schema.type === "integer") {
     control = (
-      <input
+      <Input
         type="number"
         value={value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
       />
     );
   } else if (schema.format === "textarea") {
-    control = <textarea value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} rows={3} />;
+    control = <Textarea value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} rows={3} />;
   } else {
-    control = <input type="text" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />;
+    control = <Input type="text" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />;
   }
 
   return (
@@ -131,7 +132,7 @@ export function HitlForm({
       <div className="hitl-card" role="dialog" aria-label="Input requested">
         <div className="hitl-title">{payload.title || "Input requested"}</div>
         <div className="hitl-prompt">{prompt}</div>
-        <textarea
+        <Textarea
           className="hitl-freetext"
           value={text}
           autoFocus

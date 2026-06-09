@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 
@@ -96,11 +97,11 @@ export function WorkflowBuilder({
 
       <label className="field">
         <span>Name *</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
       </label>
       <label className="field">
         <span>Description</span>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
       </label>
 
       <div className="builder-section">
@@ -112,7 +113,7 @@ export function WorkflowBuilder({
         </div>
         {inputs.map((inp, i) => (
           <div className="builder-row" key={i}>
-            <input
+            <Input
               value={inp.name}
               placeholder="input name"
               onChange={(e) => setInputs((x) => x.map((v, j) => (j === i ? { ...v, name: e.target.value } : v)))}
@@ -142,25 +143,25 @@ export function WorkflowBuilder({
         {steps.map((step, i) => (
           <div className="builder-step" key={i}>
             <div className="builder-row">
-              <input
+              <Input
                 value={step.id}
                 placeholder="step id"
                 onChange={(e) => setStep(i, { id: e.target.value })}
               />
-              <select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
+              <Select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
                 {(subagents.length ? subagents : [fallback]).map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
               {steps.length > 1 && (
                 <Button icon variant="ghost" type="button" onClick={() => removeStep(i)} title="Remove step">
                   <Trash2 size={14} />
                 </Button>
               )}
             </div>
-            <textarea
+            <Textarea
               className="builder-prompt"
               value={step.prompt}
               rows={2}
@@ -190,7 +191,7 @@ export function WorkflowBuilder({
 
       <label className="field">
         <span>Output</span>
-        <input
+        <Input
           value={output}
           onChange={(e) => setOutput(e.target.value)}
           placeholder={`default: {{steps.${steps[steps.length - 1].id.trim() || "lastStep"}.output}}`}

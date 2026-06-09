@@ -1,3 +1,4 @@
+import { Input } from "@protolabsai/ui/forms";
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense, useState } from "react";
 
@@ -43,7 +44,7 @@ function ToolsBody() {
     <>
       <PanelHeader title="Tools" kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"} · ${groups.size} group${groups.size === 1 ? "" : "s"}`} />
       <div className="stage-body">
-        <input
+        <Input
           className="playbook-search"
           type="search"
           placeholder="Search tools…"

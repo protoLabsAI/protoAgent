@@ -1,3 +1,4 @@
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-react";
@@ -238,11 +239,11 @@ function DelegateForm({
 
       <label className="field">
         <span>Name</span>
-        <input value={name} disabled={editing} onChange={(e) => setName(e.target.value)} placeholder="e.g. opus" />
+        <Input value={name} disabled={editing} onChange={(e) => setName(e.target.value)} placeholder="e.g. opus" />
       </label>
       <label className="field">
         <span>Description</span>
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What it's for (the model reads this to pick it)." />
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What it's for (the model reads this to pick it)." />
       </label>
 
       {(current?.fields ?? []).map((f) => (
@@ -286,15 +287,15 @@ function DelegateField({
   let control: React.ReactNode;
   if (field.kind === "select" && field.options.length) {
     control = (
-      <select {...common}>
+      <Select {...common}>
         {field.options.map((o) => <option key={o} value={o}>{o || "(none)"}</option>)}
-      </select>
+      </Select>
     );
   } else if (field.kind === "textarea") {
-    control = <textarea rows={3} placeholder={field.placeholder} {...common} />;
+    control = <Textarea rows={3} placeholder={field.placeholder} {...common} />;
   } else if (field.kind === "secret") {
     control = (
-      <input
+      <Input
         type="password"
         autoComplete="new-password"
         placeholder={hasStoredSecret ? "•••••••• (set — leave blank to keep)" : field.placeholder || "unset"}
@@ -302,9 +303,9 @@ function DelegateField({
       />
     );
   } else if (field.kind === "number") {
-    control = <input type="number" placeholder={field.placeholder} {...common} />;
+    control = <Input type="number" placeholder={field.placeholder} {...common} />;
   } else {
-    control = <input type="text" placeholder={field.placeholder} {...common} />;
+    control = <Input type="text" placeholder={field.placeholder} {...common} />;
   }
   return (
     <label className="field">
