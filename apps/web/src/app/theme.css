@@ -528,9 +528,9 @@ h2 {
   min-height: 0;
   overflow-y: auto;
   /* Horizontal inset matches the DS PanelHeader (--pl-space-4) so body content lines
-     up with the header instead of sitting flush against the panel edge; bottom gives
-     breathing room above the utility bar. */
-  padding: 0 var(--pl-space-4) 12px;
+     up with the header; a top gap clears the header divider; bottom gives breathing
+     room above the utility bar. */
+  padding: var(--pl-space-3) var(--pl-space-4) 12px;
 }
 
 /* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
