@@ -57,3 +57,4 @@ croniter>=2.0
 # fleet.json process registry, ADR 0042). The full tier got this transitively
 # via Gradio → huggingface_hub; the lean tiers must declare it (the #426 class).
 filelock>=3.12
+zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)

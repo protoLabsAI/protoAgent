@@ -3409,6 +3409,14 @@ textarea {
 }
 
 /* Topbar fleet switcher (ADR 0042) — the agent name as a dropdown */
+/* The DS Header name slot (.pl-header__name) sets `overflow: hidden` for text ellipsis — but
+   it now hosts the FleetSwitcher, whose dropdown menu is positioned BELOW the trigger and so
+   gets clipped invisible. Let the slot (and the lockup above it) overflow when the switcher
+   lives there, so the menu actually shows. */
+.pl-header__lockup:has(.fleet-switcher),
+.pl-header__name:has(.fleet-switcher) {
+  overflow: visible;
+}
 .fleet-switcher {
   position: relative;
   display: inline-flex;
