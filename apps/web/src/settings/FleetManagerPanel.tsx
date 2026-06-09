@@ -42,7 +42,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     <section className="panel stage-panel">
       <PanelHeader
         title="Agents"
-        kicker={`${agents.length} agent${agents.length === 1 ? "" : "s"} on this host · the fleet (ADR 0042)`}
+        kicker={`${agents.length} agent${agents.length === 1 ? "" : "s"} on this host · the fleet`}
         actions={
           <Button variant="primary" onClick={onNew}>
             <Plus size={15} /> New agent

@@ -81,17 +81,29 @@ def register_fleet_routes(app) -> None:
         """Create an agent (optionally from a bundle archetype) and start it.
 
         Body: ``{name, bundle?: <git-url>, port?: int, start?: bool=true,
-        shared_skills?: bool}``. A blank ``bundle`` is the built-in **Basic** archetype.
+        shared_skills?: bool, inherit_config?: bool=true}``. A blank ``bundle`` is the built-in
+        **Basic** archetype. By default a new agent **inherits the host's model config + secrets**
+        (re-stamped to its own identity) so it boots ready-to-chat on the same gateway — set
+        ``inherit_config: false`` for a blank agent you'll configure yourself.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
+        # Inherit the host's config so peers work immediately — only if the host is actually
+        # configured (a fresh, un-set-up host falls back to the blank template).
+        from_config = None
+        if bool(body.get("inherit_config", True)):
+            from graph.config_io import _live_config_dir
+            cfg_dir = _live_config_dir()
+            if (cfg_dir / "langgraph-config.yaml").exists():
+                from_config = str(cfg_dir)
         try:
-            # create() may clone+install a bundle (subprocess) — keep it off the loop.
+            # create() may clone the host config + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(
-                manager.create, name, bundle=bundle, port=port, shared_skills=shared)
+                manager.create, name, bundle=bundle, port=port, shared_skills=shared,
+                from_config=from_config)
             agent = (await asyncio.to_thread(supervisor.start, name)) if start else {
                 "name": name, "id": ws["id"], "port": ws["port"], "running": False}
             return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}

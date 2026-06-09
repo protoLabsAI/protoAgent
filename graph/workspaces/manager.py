@@ -75,6 +75,14 @@ def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
     used = {w["port"] for w in list_workspaces() if w.get("port")}
+    # Don't collide with the HUB itself — the host instance (this process) self-registers as a
+    # fleet agent on its own port but isn't a workspace, so it's invisible to list_workspaces().
+    try:
+        from runtime.state import STATE
+        if getattr(STATE, "active_port", None):
+            used.add(int(STATE.active_port))
+    except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
+        pass
     p = PORT_BASE + 1
     while p in used:
         p += 1

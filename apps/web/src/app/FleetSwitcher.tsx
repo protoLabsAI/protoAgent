@@ -13,8 +13,10 @@ import { setLayoutAgent, useUI } from "../state/uiStore";
 // hub → /api/fleet errors) it falls back to the plain name with no dropdown.
 export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: ReactNode; onNewAgent?: () => void }) {
   const qc = useQueryClient();
-  // Own observer: no poll (the Agents panel polls); retry off so single-agent fails fast to the fallback.
-  const fleet = useQuery({ queryKey: queryKeys.fleet, queryFn: () => api.fleet(), retry: false, staleTime: 5_000 });
+  // Poll the fleet so the topbar reflects it live — a newly-added agent makes the switcher
+  // appear without needing the Agents panel open (it was relying on that panel's poll before,
+  // so adding an agent from elsewhere left the switcher stale at 1 → no dropdown).
+  const fleet = useQuery({ queryKey: queryKeys.fleet, queryFn: () => api.fleet(), retry: false, refetchInterval: 3_000 });
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
