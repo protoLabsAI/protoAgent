@@ -75,6 +75,18 @@ themeable, on-brand, and safe to share across the console + every plugin remote.
 - **App-decoupled** — no protoAgent-specific types, routes, stores, or `data-testid`s.
 - **Reused or reusable** — used across surfaces, or a primitive any app/plugin would want.
 
+**Acceptable native patterns (don't force a DS component):**
+- **Simple tooltips** — a native `title=` attribute is fine for plain hover hints; reserve DS `Tooltip`
+  for rich/interactive tooltip content. (We did not convert ~89 native `title=` hints.)
+- **Structured alert composites** — an alert with an icon + an action button (a retry card, a restart
+  banner) is *not* a `Callout` (which is a plain note block, no icon/action slot). Swapping it is a
+  redesign, not an adoption — keep it app-side (or redesign in a reviewed slice). Bare-text notices
+  *do* map to `Callout`.
+- **`ref`-needing form controls** — the DS form primitives aren't `forwardRef`; an `<input>`/`<textarea>`
+  that needs a `ref` (autosize, focus) stays raw until the DS forwards refs.
+- **External-label form controls** — DS `Checkbox`/`Switch` take no `id`/`...rest`, so a control
+  associated via `<label htmlFor>` stays raw (tracked: protoContent #155).
+
 **App-domain concerns stay in the console**, even for a shared component:
 - **Persistence & registries.** `AppShell` is controlled; the console owns rail order, panel widths,
   the surface registry, and their `localStorage` persistence (Zustand). The DS owns layout + the
