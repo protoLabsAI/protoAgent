@@ -615,10 +615,9 @@ export function App() {
   }, [leftActive, rightActive, mobileActive, rightCollapsed, setPluginDot]);
 
   return (
+    <>
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
-      {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry. */}
-      <ContextMenuRenderer />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}
@@ -812,6 +811,11 @@ export function App() {
         {confirmState?.message}
       </ConfirmDialog>
     </div>
+    {/* App-wide right-click menu (ADR 0036) — one renderer; menus come from the registry.
+        Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
+        its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
+    <ContextMenuRenderer />
+    </>
   );
 }
 
