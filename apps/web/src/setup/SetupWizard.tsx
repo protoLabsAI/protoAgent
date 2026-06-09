@@ -1,5 +1,5 @@
 import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Callout } from "@protolabsai/ui/primitives";
 import {
 
   AlertTriangle,
@@ -657,11 +657,11 @@ export function SetupWizard({
                 <StatusLine icon={<Database size={15} />} label={state.knowledgePath || "knowledge"} />
                 <StatusLine icon={<Network size={15} />} label={`${state.researcherTurns} researcher turns`} />
               </div>
-              {message ? <div className="setup-message">{message}</div> : null}
+              {message ? <Callout>{message}</Callout> : null}
             </StepBody>
           ) : null}
 
-          {error ? <div className="setup-error">{error}</div> : null}
+          {error ? <Callout tone="error">{error}</Callout> : null}
 
           <div className="setup-actions">
             <Button type="button" onClick={() => setStep(steps[Math.max(0, index - 1)])} disabled={index === 0 || busy}>
