@@ -254,6 +254,9 @@ def _install_bundle(bundle: dict, bundle_url: str, bundle_sha: str, ref: str | N
     lock["bundles"].append({
         "id": bid, "source_url": bundle_url, "requested_ref": ref or "",
         "resolved_sha": bundle_sha, "plugins": [s["id"] for s in installed],
+        # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
+        # this bundle as a starter type without re-reading its manifest.
+        "archetype": bundle.get("archetype") or {},
         "installed_at": datetime.now(timezone.utc).isoformat(), "by": by,
     })
     _write_lock(lock)
