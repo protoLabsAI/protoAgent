@@ -90,8 +90,9 @@ def start(name: str) -> dict:
     logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
     # start_new_session detaches it from this CLI's process group so it survives exit.
     proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
+    now = datetime.now(timezone.utc).isoformat()
     rec = {"pid": proc.pid, "port": ws.get("port"), "id": ws.get("id", name),
-           "started_at": datetime.now(timezone.utc).isoformat(), "log": str(log_path)}
+           "started_at": now, "last_active": now, "log": str(log_path)}
     state[name] = rec
     _save_state(state)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
@@ -165,3 +166,51 @@ def down(names: list[str] | None = None) -> list[dict]:
         except FleetError:
             pass
     return out
+
+
+# ── Keep-N-warm policy (ADR 0042 §G) ──────────────────────────────────────────
+# Bound how many agents stay hot (a laptop won't run a big fleet). On a switch the
+# target is resumed and the least-recently-active agents beyond the cap are stopped —
+# their sessions persist (instance.id-scoped checkpoints) and resume on the next switch.
+
+def max_warm() -> int:
+    """Warm-agent cap from ``PROTOAGENT_FLEET_MAX_WARM`` (0/unset = unlimited)."""
+    try:
+        return max(0, int(os.environ.get("PROTOAGENT_FLEET_MAX_WARM", "0")))
+    except ValueError:
+        return 0
+
+
+def touch(name: str) -> None:
+    """Mark an agent as most-recently-active (drives LRU eviction)."""
+    name = manager._safe(name)
+    state = _load_state()
+    rec = state.get(name)
+    if rec:
+        rec["last_active"] = datetime.now(timezone.utc).isoformat()
+        _save_state(state)
+
+
+def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> list[str]:
+    """Stop the least-recently-active running agents beyond ``keep`` (default
+    ``max_warm()``). ``protect`` is never stopped. No-op when keep is 0/unlimited."""
+    keep = max_warm() if keep is None else keep
+    if keep <= 0:
+        return []
+    running = [(n, r) for n, r in _load_state().items() if _alive(r.get("pid"))]
+    if len(running) <= keep:
+        return []
+    # Oldest last_active first; the protected agent is never a candidate.
+    running.sort(key=lambda kv: kv[1].get("last_active", ""))
+    candidates = [n for n, _ in running if n != protect]
+    evicted: list[str] = []
+    for n in candidates[: len(running) - keep]:
+        try:
+            stop(n)
+            evicted.append(n)
+        except FleetError:
+            pass
+    if evicted:
+        log.info("[fleet] keep-%d-warm: evicted %s (sessions resume on next switch)",
+                 keep, ", ".join(evicted))
+    return evicted

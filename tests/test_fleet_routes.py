@@ -54,11 +54,15 @@ def test_create_bad_name_is_400(client):
     assert client.post("/api/fleet", json={"name": "bad name"}).status_code == 400
 
 
-def test_activate_requires_running_and_proxy_409s(client):
-    r = client.post("/api/fleet", json={"name": "beta", "start": False})
-    assert r.status_code == 200 and not r.json()["agent"]["running"]
-    assert client.post("/api/fleet/beta/activate").status_code == 400  # not running
-    assert client.get("/active/whatever").status_code == 409           # nothing active
+def test_activate_unknown_400_and_proxy_409(client):
+    assert client.post("/api/fleet/ghost/activate").status_code == 400  # no such workspace
+    assert client.get("/active/whatever").status_code == 409            # nothing active
+
+
+def test_activate_autostarts_a_stopped_agent(client):
+    client.post("/api/fleet", json={"name": "delta", "start": False})  # created, not running
+    r = client.post("/api/fleet/delta/activate")                       # switch → resume + activate
+    assert r.status_code == 200 and r.json()["active"] == "delta"
 
 
 def test_activate_running_sets_active(client):
@@ -66,3 +70,10 @@ def test_activate_running_sets_active(client):
     assert client.post("/api/fleet/gamma/activate").json()["active"] == "gamma"
     assert client.get("/api/fleet/active").json()["active"] == "gamma"
     assert client.get("/api/fleet").json()["active"] == "gamma"
+
+
+def test_stop_entire_fleet(client):
+    client.post("/api/fleet", json={"name": "x", "port": 7895})
+    client.post("/api/fleet", json={"name": "y", "port": 7896})
+    assert client.post("/api/fleet/down").json()["ok"]
+    assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"])
