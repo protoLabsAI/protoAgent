@@ -462,11 +462,6 @@ h2 {
   outline: none;
 }
 
-/* Dim a collapse toggle when its panel is hidden. */
-.icon-button.is-off {
-  color: var(--fg-tertiary, #666);
-}
-
 .panel {
   min-width: 0;
   min-height: 0;
@@ -681,56 +676,6 @@ h2 {
   color: var(--fg-secondary);
 }
 
-/* StatusPill now renders the @protolabsai/ui Badge (.pl-badge) — the local
-   .status-pill ruleset is retired. */
-
-.icon-button,
-.primary-button {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
-}
-
-.icon-button {
-  width: 32px;
-  padding: 0;
-}
-
-.primary-button {
-  padding: 0 12px;
-  background: transparent;
-  border-color: var(--fg);
-  color: var(--fg);
-  font-weight: 500;
-}
-
-.icon-button:hover,
-.primary-button:hover {
-  border-color: var(--fg);
-  background: var(--bg-hover);
-}
-
-.primary-button:hover {
-  background: var(--fg);
-  border-color: var(--fg);
-  color: var(--bg);
-}
-
-.icon-button.danger:hover {
-  border-color: var(--error);
-  color: #f4b09f;
-}
-
-.icon-button:disabled,
-.primary-button:disabled,
 input:disabled,
 textarea:disabled,
 select:disabled {
@@ -795,26 +740,6 @@ select:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.ghost-button {
-  font: inherit;
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--pl-color-border);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.ghost-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
-}
-.ghost-button:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 .plugin-hint {
   margin: 0 0 8px;
@@ -2074,7 +1999,6 @@ textarea {
   padding: 12px;
 }
 
-
 .notes-tabbar {
   display: flex;
   gap: 6px;
@@ -2379,11 +2303,6 @@ textarea {
   gap: 6px;
 }
 
-.issue-actions .icon-button {
-  width: 28px;
-  height: 28px;
-}
-
 .empty-state {
   min-height: 96px;
   display: flex;
@@ -2458,12 +2377,6 @@ textarea {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
-}
-
-.primary-button.danger {
-  background: var(--danger, #ff6b6b);
-  border-color: var(--danger, #ff6b6b);
-  color: #fff;
 }
 
 /* New-schedule modal (friendly builder) */
@@ -2702,31 +2615,6 @@ textarea {
   gap: 12px;
   padding: 18px;
   border-top: 1px solid var(--border);
-}
-
-.secondary-button {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--fg);
-  padding: 0 12px;
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease;
-}
-
-.secondary-button:hover {
-  border-color: var(--fg);
-  background: var(--bg-hover);
-}
-
-.secondary-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .spin {
@@ -3113,13 +3001,6 @@ textarea {
   font-size: 11.5px; color: var(--fg-muted); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.icon-button {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 4px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: transparent; color: var(--fg-muted); cursor: pointer; margin-top: 2px;
-}
-.icon-button:hover { background: var(--bg-hover); color: var(--fg); }
-.icon-button.danger:hover { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
 .playbook-foot { margin-top: 16px; font-size: 11.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }
 
 /* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
@@ -3214,7 +3095,6 @@ textarea {
   color: var(--fg-muted);
   word-break: break-word;
 }
-
 
 /* Mobile shell (ADR 0035 S4) — single surface + bottom quick-bar + hamburger drawer. The
    --pl-color-overlay / --pl-color-bg-hover tokens land in @protolabsai/design 0.4.0; fallbacks
