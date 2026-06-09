@@ -289,14 +289,14 @@ h2 {
   font-size: 1.05rem;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: var(--text, #e8e8ec);
+  color: var(--fg);
 }
 
 .boot-gate-detail {
   margin: 0;
   font-size: 0.85rem;
   line-height: 1.45;
-  color: var(--text-muted, #9a9aa6);
+  color: var(--fg-muted);
 }
 
 .boot-gate-retry {
