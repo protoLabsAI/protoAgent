@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import {
   Loader2,
   Plus,
@@ -635,15 +636,15 @@ function ChatSessionSlot({
           rows={3}
         />
         {status === "streaming" ? (
-          <button className="secondary-button" type="button" onClick={() => void stop()}>
+          <Button type="button" onClick={() => void stop()}>
             <Square size={15} />
             Stop
-          </button>
+          </Button>
         ) : (
-          <button className="primary-button" type="submit" disabled={!canSend}>
+          <Button variant="primary" type="submit" disabled={!canSend}>
             <Send size={16} />
             Send
-          </button>
+          </Button>
         )}
         </form>
       </div>
