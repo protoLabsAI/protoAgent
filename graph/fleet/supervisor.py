@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from filelock import FileLock, Timeout
+from filelock import FileLock
 
 from graph.workspaces import manager
 
