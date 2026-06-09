@@ -5,14 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && npm run build:remotes && vite build",
+    "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "npm run build && playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "build:remotes": "vite build -c remotes/hello-react/vite.config.ts && vite build -c remotes/notes/vite.config.ts"
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "@protoagent/plugin-ui": "*",
     "@protolabsai/design": "^0.4.0",
     "@protolabsai/ui": "^0.4.0",
     "@radix-ui/react-dropdown-menu": "^2.1.17",
@@ -30,7 +28,6 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
-    "@originjs/vite-plugin-federation": "^1.4.1",
     "@playwright/test": "^1.60.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

@@ -5,7 +5,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
-import { resolveMenu, useContextMenuStore } from "@protoagent/plugin-ui";
+import { resolveMenu } from "./registry";
+import { useContextMenuStore } from "./store";
 
 // One renderer at the app root (ADR 0036 D1). A shadcn Radix DropdownMenu opened at the cursor via
 // an invisible fixed-positioned trigger — so any element can summon it without wrapping targets.

@@ -1,12 +1,8 @@
-// Host-side context-menu barrel. The registry/store/types now live in @protoagent/plugin-ui (the
-// shared SDK singleton, ADR 0034) — re-exported here so host code keeps importing from
-// "../contextMenu". The renderer + the host's own menu registrations stay local.
-export {
-  registerContextMenu,
-  resolveMenu,
-  openContextMenu,
-  useContextMenuStore,
-} from "@protoagent/plugin-ui";
+// Host-side context-menu system (ADR 0036). The registry/store/types are host-internal again —
+// they only lived in @protoagent/plugin-ui to be a Module Federation singleton; federation is
+// retired (ADR 0038), so there's no cross-bundle boundary to share across.
+export { registerContextMenu, resolveMenu } from "./registry";
+export { openContextMenu, useContextMenuStore } from "./store";
 export type {
   ContextType,
   MenuItem,
@@ -14,6 +10,6 @@ export type {
   MenuEntry,
   MenuHelpers,
   ContextMenuRegistration,
-} from "@protoagent/plugin-ui";
+} from "./types";
 export { ContextMenuRenderer } from "./ContextMenuRenderer";
 import "./registrations";

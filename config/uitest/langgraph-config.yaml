@@ -137,7 +137,7 @@ google:
   tz: ''
 hello:
   greeting: Hello
-agent_runtime: acp:copilot
+agent_runtime: native
 operator_mcp:
   tools:
     - '*'

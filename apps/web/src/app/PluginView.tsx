@@ -2,7 +2,6 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
-import { FederatedView } from "../plugins/FederatedView";
 import { StageSubnav } from "./StageSubnav";
 import type { PluginView as PluginViewType } from "../lib/types";
 
@@ -56,20 +55,8 @@ export function PluginView({ view }: { view: PluginViewType }) {
     }
   }
 
-  // ADR 0034 — a `ui: react` view mounts a federated React remote into the host tree (one React,
-  // shared query cache) instead of an iframe. The trust gate (D5) is enforced here: only a
-  // host-trusted plugin gets the in-process mount; an untrusted `ui: react` view falls through to
-  // the sandboxed iframe of its `path` below. Trust is host-decided (never the plugin's word).
-  if (view.ui === "react" && view.remote && view.trusted) {
-    return (
-      <section className="panel stage-panel plugin-view">
-        <div className="plugin-view-body">
-          <FederatedView label={view.label} remote={view.remote} />
-        </div>
-      </section>
-    );
-  }
-
+  // ADR 0038 — plugin views are sandboxed iframes (the plugin serves its own page). Module
+  // Federation + the in-process `ui: react` path were retired; rich plugins serve their own UI.
   return (
     <>
       {/* Sub-tab strip above the panel card — shared StageSubnav (single source of truth). */}

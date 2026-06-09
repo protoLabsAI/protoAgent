@@ -50,21 +50,6 @@ export const RUNTIME_STATUS = {
         { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
         // A right-rail panel (ADR 0026 placement:"right") — sits with Notes/Beads/Goals.
         { id: "scratch", label: "Scratch", icon: "FileText", path: "/plugins/boardy/scratch", placement: "right" },
-        // A first-class React view (ADR 0034 `ui:"react"`) — a federated remote mounted into
-        // the host tree, not an iframe. Points at the built hello-react remote the host serves.
-        {
-          id: "react-panel", label: "React Panel", icon: "Atom", placement: "right",
-          // trusted:true — the host's allowlist promoted this plugin to the in-process React mount
-          // (ADR 0034 D5). An untrusted ui:react view would fall back to the iframe of `path`.
-          ui: "react", path: "/plugins/boardy/scratch", trusted: true,
-          remote: { url: "/app/remotes/hello-react/assets/remoteEntry.js", module: "./Panel" },
-        },
-        // The same React view but UNTRUSTED — the trust gate (D5) must degrade it to an iframe.
-        {
-          id: "react-untrusted", label: "React Untrusted", icon: "Atom", placement: "right",
-          ui: "react", path: "/plugins/boardy/scratch", trusted: false,
-          remote: { url: "/app/remotes/hello-react/assets/remoteEntry.js", module: "./Panel" },
-        },
       ],
     },
   ],
