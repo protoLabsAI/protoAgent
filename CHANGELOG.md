@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Telemetry opt-out in Settings** — `telemetry.enabled` (+ retention) are now a console toggle
+  (System → Telemetry), not YAML-only. Off = no store is opened and the per-turn record path no-ops;
+  telemetry is local and never sent anywhere. (Memory/knowledge middleware were already toggles.)
 - **Plugin event bus (ADR 0039)** — promotes the ADR 0003 bus into a decoupled topic pub/sub:
   dot-namespaced topics with `*`/`#` wildcards, in-process handler subscriptions (`registry.on`),
   namespace-guarded publish (`registry.emit` auto-prefixes `<plugin>.`), a ring buffer for SSE

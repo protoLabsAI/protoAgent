@@ -132,6 +132,15 @@ FIELDS: list[Field] = [
     Field("middleware.scheduler", "scheduler_enabled", "Scheduler", "bool", "Middleware"),
     Field("middleware.enforcement", "enforcement_enabled", "Tool enforcement", "bool", "Middleware"),
 
+    # ── Telemetry (local cost/latency store, ADR 0006) ───────────────────────
+    Field("telemetry.enabled", "telemetry_enabled", "Store telemetry locally", "bool", "Telemetry",
+          "Persist a per-turn cost/latency row to a local SQLite DB (queryable in Settings → "
+          "Telemetry). Off = nothing is recorded — no store is opened. Stays on your machine; "
+          "it is never sent anywhere.", restart=True),
+    Field("telemetry.retention_days", "telemetry_retention_days", "Telemetry retention (days)",
+          "number", "Telemetry", "Auto-prune rows older than this (0 = keep forever).",
+          minimum=0, restart=True),
+
     # ── Identity / operator ──────────────────────────────────────────────────
     Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
@@ -200,6 +209,7 @@ _SECTION_CATEGORY = {
     "Caching": "System",
     "Middleware": "System",
     "Runtime": "System",
+    "Telemetry": "System",
     # Discord / Google / other plugin sections → "Plugins" (the default).
 }
 
