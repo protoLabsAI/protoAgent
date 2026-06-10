@@ -39,6 +39,29 @@ Install pins the **resolved commit SHA** and records it in a committed
 `plugins.lock`, so `plugin sync` reproduces the exact set. The code itself is
 gitignored (re-cloned from the lock).
 
+## Keep one up to date
+
+Because the lock pins a commit SHA, an installed plugin doesn't move until you
+update it. The console surfaces this for you: the **Plugins** rail (Local tab)
+and **Settings → Integrations** show a freshness badge next to each plugin's
+version —
+
+- **up to date** — the locked SHA matches the latest commit on its ref
+- **update available** — the remote ref has moved ahead → an **Update** button appears
+- **pinned** — the plugin was installed at a specific commit SHA (`--ref <sha>`),
+  so it intentionally never auto-updates (update it by reinstalling at a new ref)
+- **check failed** — the remote couldn't be reached (the row still works)
+
+Clicking **Update** pulls the latest code at the plugin's recorded ref, rewrites
+the lock with the new SHA, and — if the plugin is enabled — hot-reloads it in
+place. A plugin that contributes a **console view or background surface** can't
+swap its already-mounted router live, so updating it recommends a restart to
+finish loading the new view (the UI tells you when).
+
+The freshness check runs `git ls-remote` against the recorded `source_url` and is
+timeout-bounded + briefly cached, so it never hangs the panel. Pinned plugins skip
+the network entirely.
+
 ## Publish one
 
 > **Start from the devkit.** Enable the bundled **`plugin-devkit`** plugin
