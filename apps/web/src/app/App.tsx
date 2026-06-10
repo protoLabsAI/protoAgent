@@ -694,9 +694,15 @@ export function App() {
         activeLeft={leftCollapsed ? "" : leftActive}
         activeRight={rightCollapsed ? "" : rightActive}
         onSelect={(side, id) => {
-          // Mirror the right: selecting a rail view re-opens its panel if collapsed.
-          if (side === "left") { setSurface(id); setLeftCollapsed(false); }
-          else { setRightPanel(id); setRightCollapsed(false); }
+          // Click the already-open view's icon → toggle the panel closed; otherwise open the
+          // panel on the clicked view (re-opening it if it was collapsed).
+          if (side === "left") {
+            if (!leftCollapsed && leftActive === id) setLeftCollapsed(true);
+            else { setSurface(id); setLeftCollapsed(false); }
+          } else {
+            if (!rightCollapsed && rightActive === id) setRightCollapsed(true);
+            else { setRightPanel(id); setRightCollapsed(false); }
+          }
         }}
         onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
         onRailReorder={setRailOrder}
