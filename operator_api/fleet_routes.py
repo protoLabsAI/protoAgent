@@ -29,13 +29,9 @@ def register_fleet_routes(app) -> None:
 
     @app.get("/api/fleet")
     async def _list_fleet():
-        """Every workspace agent + live status (running/stopped, port, pid, bundle)."""
-        return {"agents": supervisor.status(), "active": proxy.get_active()}
-
-    @app.get("/api/fleet/active")
-    async def _get_active():
-        """The agent the console proxy currently points at (None if unset/stopped)."""
-        return {"active": proxy.get_active()}
+        """Every workspace agent + live status (running/stopped, port, pid, bundle). The focused
+        agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active' pointer."""
+        return {"agents": supervisor.status()}
 
     @app.get("/api/fleet/discover")
     async def _discover():
@@ -54,42 +50,23 @@ def register_fleet_routes(app) -> None:
 
     @app.post("/api/fleet/{name}/activate")
     async def _activate(name: str):
-        """Switch the console to an agent — the in-place switch.
-
-        Resumes the target if it was stopped (keep-N-warm), points the proxy at it,
-        marks it most-recently-active, then evicts the least-recently-used agents
-        beyond the warm cap (their sessions persist + resume on a later switch).
+        """Ensure an agent is running + mark it most-recently-active (keep-N-warm). Call this when
+        a console window navigates to an agent (ADR 0042 slug routing): it resumes a cold agent
+        from its checkpoint, then evicts the least-recently-used agents beyond the warm cap (their
+        sessions persist + resume on a later visit). The host is this instance (always up) → no-op.
         """
         try:
-            # Focusing the host (this instance) drops the proxy pointer — the console
-            # talks to /api directly again, no peer in focus.
             host = next((a for a in supervisor.status() if a.get("host")), None)
             if host and name == host["name"]:
-                return {"ok": True, **proxy.clear_active(), "evicted": []}
+                return {"ok": True, "evicted": []}
             if not supervisor.is_running(name):
                 await asyncio.to_thread(supervisor.start, name)  # resume from checkpoint
-            result = proxy.set_active(name)
             supervisor.touch(name)
-            # Eviction can busy-wait on a SIGTERM (#6) — off the loop so a switch never
-            # freezes the hub / its proxied SSE streams.
+            # Eviction can busy-wait on a SIGTERM (#6) — off the loop.
             evicted = await asyncio.to_thread(supervisor.enforce_warm_cap, protect=name)
-            return {"ok": True, **result, "evicted": evicted}
+            return {"ok": True, "evicted": evicted}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
-
-    @app.api_route("/active/{path:path}",
-                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-    async def _proxy(path: str, request: Request):
-        """Reverse-proxy the *console* to the active agent (chat → /active/api/chat,
-        SSE → /active/api/events). This is the human's lens only — switching re-points
-        it with no change to the caller's URL.
-
-        It does NOT gate agent↔agent A2A: every agent stays an independent endpoint on
-        its own port (``127.0.0.1:<port>/a2a``), reachable regardless of focus, so a
-        focused agent's ``delegate_to`` hits an unfocused sibling directly — the proxy
-        never sees that traffic.
-        """
-        return await proxy.forward(request, path)
 
     @app.api_route("/agents/{slug}/{path:path}",
                    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])

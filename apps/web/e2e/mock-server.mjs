@@ -132,9 +132,7 @@ function handleApiGet(pathname) {
     case "/api/theme":
       return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
     case "/api/fleet":
-      return { agents: FLEET.agents, active: FLEET.active };
-    case "/api/fleet/active":
-      return { active: FLEET.active };
+      return { agents: FLEET.agents };
     case "/api/archetypes":
       return { archetypes: ARCHETYPES };
     case "/api/activity":
@@ -309,9 +307,9 @@ const server = createServer(async (req, res) => {
         if (!a) return sendJson(res, { detail: "no such agent" }, 400);
         if (m[2] === "start") { a.running = true; a.pid = 5001; return sendJson(res, { ok: true, agent: a }); }
         if (m[2] === "stop") { a.running = false; a.pid = null; return sendJson(res, { ok: true, name: a.name, stopped: true }); }
-        // activate: host → clear (focus host); peer → set active.
-        if (a.host) { FLEET.active = null; return sendJson(res, { ok: true, active: null, evicted: [] }); }
-        FLEET.active = a.name; a.running = true; return sendJson(res, { ok: true, active: a.name, evicted: [] });
+        // activate: ensure-running + keep-warm (no server-side active pointer — slug routing).
+        if (!a.host) a.running = true;
+        return sendJson(res, { ok: true, evicted: [] });
       }
     }
     if (req.method === "DELETE" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {

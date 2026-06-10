@@ -492,8 +492,8 @@ export type FleetAgent = {
   host?: boolean; // the instance serving this console — can't be stopped/removed from itself
 };
 
-// `active` is the focused peer, or null when the host itself is focused (talk /api direct).
-export type FleetStatus = { agents: FleetAgent[]; active: string | null };
+// The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
+export type FleetStatus = { agents: FleetAgent[] };
 
 // Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
