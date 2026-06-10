@@ -11,6 +11,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tailnet discovery** — fleet discovery gains a third channel: online **Tailscale**
+  peers (via the local `tailscale` CLI) are probed for agent-cards over the fleet port
+  range, since mDNS multicast never crosses a WireGuard overlay. All three channels
+  (local scan, mDNS, tailnet) now scan concurrently. (#816)
+- **Co-located-instance warning** — every server drops a heartbeat in its data root;
+  when a LIVE sibling shares the same root (two unscoped instances, or two with the
+  same `PROTOAGENT_INSTANCE`), both consoles banner it and the boot log warns — they
+  can clobber each other's chat history, knowledge and stores. (#818)
+- **Cross-agent "turn finished" toasts** — leave a turn running on one agent, switch
+  windows, and get a toast (+ a native notification when the window is hidden) the
+  moment it completes. The shell watches the other agents' in-flight turns and polls
+  their durable tasks through the hub proxy. (#827)
+- **Opaque agent ids + rename** — fleet agents get a stable, opaque id at create
+  (`ava-4e8e`) that keys the workspace, the window URL and the data scope; the *name*
+  is now an editable display label (pencil-rename in the fleet manager,
+  `PATCH /api/fleet/{agent}`). Renames never move storage or break open windows. (#823)
+- **Enable delegates without a restart** — plugin routes now hot-mount on a config
+  reload, so enabling a route-bearing plugin (e.g. `delegates` on the host) takes
+  effect immediately; the fleet manager turns the old "needs a restart" dead-end into
+  a one-click **Enable delegates on this agent** that retries the add. (#822)
+- **Cold agents resume on navigation** — opening a stopped agent's window now
+  activates it (resume from checkpoint + keep-N-warm touch) instead of hitting a dead
+  proxy. (#819)
+
+### Fixed
+- **mDNS advertise actually works** — `Zeroconf.register_service` was called on the
+  event loop and deadlocked it: a ~10s stall at every boot, then a swallowed failure,
+  so **no agent had ever advertised** since the feature shipped. Now runs off-loop,
+  with a guard that refuses (loudly) instead of stalling. (#815)
+- **A2A task reconcile had rotted against a2a-sdk 1.1** — the chat self-heal and
+  cancel used the 0.3 method names (`tasks/get`/`tasks/cancel` → Method not found),
+  which made an interrupted turn finalize instantly even while still running on the
+  server. Fixed to the 1.0 wire (`GetTask`/`CancelTask` + `A2A-Version` header); the
+  e2e mock now mirrors the real wire and rejects the legacy names so this class of
+  rot can't pass CI again. (#827)
+- **Each fleet hub owns its own registry** — `~/.protoagent/workspaces` (and
+  `fleet.json`) is now instance-scoped like every other store, so two co-located
+  instances no longer manage/evict each other's agents, and a peer can no longer see
+  or stop its parent hub's fleet. (#813)
+
+### Changed
+- **Shell + settings banners are the design system's `Alert`** — both hand-rolled
+  banner implementations replaced by `@protolabsai/ui` `Alert`; the genuinely missing
+  inline-rename control is filed upstream instead (protoContent#195), per the
+  contribute-back loop now recorded in `docs/design/ui-component-audit.md`. (#825, #827)
+
 ### Removed
 - **Retired the deprecated `peer_consult` / `peer_list` tools** from the core
   toolset. `delegate_to` over the unified delegate registry (ADR 0025,
