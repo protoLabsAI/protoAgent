@@ -166,8 +166,19 @@ function isHubPath(path: string) {
 }
 function isAgentPath(path: string) {
   // Everything that drives the focused AGENT: its console API, its A2A brain (streaming chat),
-  // and its OpenAI-compat endpoint. /api/fleet stays on the hub.
-  return (path.startsWith("/api/") && !isHubPath(path)) || path.startsWith("/a2a") || path.startsWith("/v1");
+  // its OpenAI-compat endpoint, and its plugin VIEW content. /api/fleet stays on the hub.
+  //
+  // `/plugins/` is the registry's DEFAULT router prefix — plugin views served there (e.g.
+  // agent_browser → /plugins/agent_browser/panel) are the focused agent's, so a fleet member's
+  // view must proxy to it. Custom-prefix plugins serve their view at /api/plugins/<id>/… (already
+  // covered by the /api/ clause). Without /plugins/ here, a member's default-prefix view iframe
+  // hits the hub origin instead of the member → 404 (the agent_browser/project_board panels).
+  return (
+    (path.startsWith("/api/") && !isHubPath(path)) ||
+    path.startsWith("/plugins/") ||
+    path.startsWith("/a2a") ||
+    path.startsWith("/v1")
+  );
 }
 
 export function apiUrl(path: string) {

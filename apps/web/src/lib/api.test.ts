@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { drainSseBuffer, textFromParts, hitlFromParts } from "./api";
+import { apiUrl, drainSseBuffer, textFromParts, hitlFromParts } from "./api";
 
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
@@ -89,5 +89,38 @@ describe("hitlFromParts", () => {
 
   it("returns null for undefined parts", () => {
     expect(hitlFromParts(undefined)).toBeNull();
+  });
+});
+
+describe("apiUrl — fleet slug routing (ADR 0042)", () => {
+  // currentSlug() reads /app/agent/<slug>/ from the URL; drive it via history.
+  const focus = (slug: string | null) =>
+    window.history.replaceState({}, "", slug ? `/app/agent/${slug}/` : "/app/");
+
+  it("does not slug-prefix on the host window", () => {
+    focus(null);
+    expect(apiUrl("/plugins/agent_browser/panel")).not.toContain("/agents/");
+    expect(apiUrl("/api/runtime/status")).not.toContain("/agents/");
+  });
+
+  it("routes a DEFAULT-prefix plugin view (/plugins/<id>/…) to the focused member", () => {
+    // The 404 regression: agent_browser/project_board views use the registry's default
+    // /plugins/ prefix; without that in isAgentPath, a member's view iframe hit the hub.
+    focus("protoPlugins-abf8");
+    expect(apiUrl("/plugins/agent_browser/panel")).toContain(
+      "/agents/protoPlugins-abf8/plugins/agent_browser/panel",
+    );
+  });
+
+  it("routes custom-prefix plugin views (/api/plugins/<id>/…) and the agent API", () => {
+    focus("m");
+    expect(apiUrl("/api/plugins/notes/view")).toContain("/agents/m/api/plugins/notes/view");
+    expect(apiUrl("/api/runtime/status")).toContain("/agents/m/api/runtime/status");
+  });
+
+  it("keeps hub control-plane paths on the hub even in a member window", () => {
+    focus("m");
+    expect(apiUrl("/api/fleet")).not.toContain("/agents/");
+    expect(apiUrl("/api/archetypes")).not.toContain("/agents/");
   });
 });
