@@ -25,3 +25,10 @@ def pytest_configure(config):  # noqa: ARG001
     # dummy so middleware-wiring tests don't each need to set it.
     # `setdefault` never overrides a real key, and no test asserts key-absence.
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+    # Isolate the ADR-0047 Host layer: default PROTOAGENT_HOST_CONFIG to an absent
+    # path so from_yaml sees no host-config.yaml unless a test opts in (the cascade
+    # then collapses to App defaults + the agent leaf — today's behavior).
+    # Deterministic regardless of any host-config.yaml on the dev/CI machine.
+    # `setdefault` lets cascade tests override via monkeypatch.setenv.
+    os.environ.setdefault("PROTOAGENT_HOST_CONFIG", "/nonexistent/protoagent-host-config.test.yaml")
