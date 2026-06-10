@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The desktop app reported its version as `0.0.0` (version-coherence Cross-cutting
+  B).** A frozen PyInstaller binary has no installed-package metadata, and
+  `pyproject.toml` wasn't bundled — so `paths.package_version()` fell through to its
+  `0.0.0` last resort, which blinds the A2A card, the fleet version handshake, runtime
+  status, and the plugin `min_protoagent_version` compat gate (every plugin that sets
+  one was wrongly refused on desktop). `pyproject.toml` is now bundled into the
+  sidecar (`build_sidecar.py`), so the existing `_MEIPASS` read resolves the real
+  version. (Docker already worked via `COPY .`.)
+
 ## [0.34.0] - 2026-06-10
 
 ### Fixed
