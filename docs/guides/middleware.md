@@ -169,5 +169,5 @@ For the full path (plugin load → chain membership), see
 ## Related
 
 - [Plugins](/guides/plugins) — the full contribution surface (`register_*` inventory)
-- [Plugin console views](/guides/plugin-views) — surface your middleware's output in the console
+- [Building a plugin view](/guides/building-react-plugin-views) — surface your middleware's output in the console
 - ADR 0032 (plugin middleware) · ADR 0039 (event bus)

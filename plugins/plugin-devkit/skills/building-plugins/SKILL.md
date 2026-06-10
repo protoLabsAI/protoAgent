@@ -16,9 +16,11 @@ description: >-
 
 A plugin is a self-contained directory (optionally its own git repo) that extends
 a running agent **without forking** core. Authoritative refs: ADR 0018 (surfaces),
-0019 (config/secrets/settings), 0026 (console views), 0027 (distribution); guides
-`plugins`, `plugin-views`, `plugin-registry`. The shipped `plugins/hello/` is the
-worked example — read it first.
+0019 (config/secrets/settings), 0026 (console views), 0027 (distribution), 0045
+(chat slot); guides `plugins`, `building-react-plugin-views`, `plugin-registry`.
+The shipped `plugins/hello/` is the worked backend example — read it first. For a
+**console view**, copy `examples/plugins/chat_example` — the gold-standard view
+(the four rules + the init/theme handshake + slug-aware routing + the DS kit).
 
 ## Scale to the ask
 A one-tool plugin is ~15 lines (manifest + `register()`). A "full bundle"
@@ -31,8 +33,9 @@ Map the ask to the contribution surface:
 - **tool / subagent / route / MCP server** → code, via `register(registry)`.
 - **SKILL.md skills** / **`*.yaml` workflows** → data, auto-discovered from
   conventional `skills/` and `workflows/` subdirs (no code).
-- **console view** (rail icon + page) → declared in the manifest `views:`; a **sandboxed
-  iframe** of a page your plugin serves (ADR 0038).
+- **console view** (rail icon + page, or a `slot: "chat"` panel) → declared in the manifest
+  `views:`; a **sandboxed iframe** of a page your plugin serves (ADR 0026/0038/0045). Copy
+  `examples/plugins/chat_example`; full guide: `building-react-plugin-views`.
 - **events** (broadcast / react) → `registry.emit("x", data)` / `registry.on("topic.*", fn)`;
   declare `emits:` / `subscribes:` in the manifest (ADR 0039). Plugins coordinate via the bus,
   never by importing each other.
@@ -66,7 +69,9 @@ settings:                   # render in Settings → its group
   - { key: api_base, label: "API base", type: string }
   - { key: api_key, label: "API key", type: secret }
 views:                      # console rail view (ADR 0026/0038) — a sandboxed iframe of a page you serve
-  - { id: board, label: "Board", icon: LayoutDashboard, path: /api/plugins/my-plugin/board }
+  # `path` MUST be a path a registered router serves, same-origin RELATIVE (no scheme/host).
+  # The PAGE is public (an iframe load can't carry a bearer); its DATA calls are gated /api/.
+  - { id: board, label: "Board", icon: LayoutDashboard, path: /plugins/my-plugin/board }
 emits: ["my-plugin.updated"]     # event-bus topics you broadcast (ADR 0039; optional, for discovery)
 subscribes: ["other-plugin.*"]   # topics you listen for
 requires_pip: ["httpx>=0.27"]   # deps — declared, NOT auto-installed (ADR 0027)
@@ -86,10 +91,14 @@ def register(registry):
     registry.on("other-plugin.*", on_event)     # react to another plugin without importing it
     # skills/ and workflows/ subdirs auto-load — no call needed.
 ```
-A `views:` page is served by your router (e.g. `@router.get("/board")` returning HTML). Mount the
-router under **`/api/plugins/<id>`** so it inherits the operator bearer gate; the console iframes the
-page (sandboxed) and `postMessage`s it the bearer + theme — see the `plugin-views` guide. An event
-under `<id>.*` lights your plugin's rail icon (a notification dot) until the user opens it.
+A `views:` page is served by your router (e.g. `@router.get("/board")` returning HTML). Mount **data**
+routes under **`/api/plugins/<id>`** so they inherit the operator bearer gate; serve the **page itself**
+under the public **`/plugins/<id>`** prefix (an iframe page-load can't carry a bearer, so the page is
+public chrome — its data calls are the gated part). The console iframes the page (sandboxed) and
+`postMessage`s it the bearer + theme; the page derives a slug-aware base and uses the DS kit's
+`apiFetch` for authed same-origin calls — copy `examples/plugins/chat_example`, full guide
+`building-react-plugin-views`. An event under `<id>.*` lights your plugin's rail icon (a notification
+dot) until the user opens it.
 
 ## 5. Test it
 - Enable it: `plugins: { enabled: [my-plugin] }`, restart, then

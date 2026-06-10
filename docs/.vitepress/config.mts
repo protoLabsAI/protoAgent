@@ -98,7 +98,7 @@ export default defineConfig({
           items: [
             { text: "Plugins", link: "/guides/plugins" },
             { text: "Middleware", link: "/guides/middleware" },
-            { text: "Plugin console views", link: "/guides/plugin-views" },
+            { text: "Building a plugin view", link: "/guides/building-react-plugin-views" },
             { text: "Build a communication plugin", link: "/guides/communication-plugins" },
             { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
             { text: "Discord surface", link: "/guides/discord" },
@@ -123,6 +123,15 @@ export default defineConfig({
             { text: "Build an operator fork (Roxy)", link: "/guides/operator-fork" },
             { text: "Sync a fork from upstream", link: "/guides/upstream-sync" },
             { text: "Eval your fork", link: "/guides/evals" },
+          ],
+        },
+      ],
+
+      "/how-to/": [
+        {
+          text: "How-To",
+          items: [
+            { text: "Build a plugin view", link: "/how-to/build-a-plugin-view" },
           ],
         },
       ],

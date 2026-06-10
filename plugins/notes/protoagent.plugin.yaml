@@ -3,9 +3,9 @@ name: Notes
 version: 0.1.0
 description: >-
   A single shared markdown note the agent and the operator both read and write.
-  The first-class React reference plugin (ADR 0034 S4) — it owns its storage,
-  its agent tools, and a `ui: react` console panel. Replaces the legacy native
-  Notes surface.
+  The flagship reference plugin (ADR 0034 S4) — it owns its storage, its agent
+  tools, and a sandboxed-iframe editor it serves itself (ADR 0038). Replaces the
+  legacy native Notes surface.
 enabled: true            # first-party — shipped on
 capabilities:
   network: []
@@ -13,4 +13,4 @@ capabilities:
 # The plugin self-serves its editor page (ADR 0038) — a sandboxed iframe, no host build, so it's
 # git-installable like any plugin. (Was a federated `ui: react` remote; federation retired.)
 views:
-  - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/api/plugins/notes/view" }
+  - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/plugins/notes/view" }

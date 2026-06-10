@@ -958,6 +958,16 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
     for r in routers:
         key = (r.get("plugin_id"), r.get("prefix"))
         if key in STATE.plugin_router_keys:
+            # A plugin registered a SECOND router at the SAME prefix — the first
+            # already won the slot, so this one is silently dropped and its routes
+            # never serve (projectBoard's /board 404'd for exactly this reason).
+            # Mount distinct prefixes for distinct route groups (e.g. a public
+            # /plugins/<id> view router + a gated /api/plugins/<id> data router).
+            log.warning(
+                "[plugins] %s registered a second router at prefix %s — dropped "
+                "(its routes won't be served; mount each router at a distinct prefix)",
+                r.get("plugin_id"), r.get("prefix") or "/",
+            )
             continue
         try:
             app.include_router(r["router"], prefix=r.get("prefix") or "")

@@ -195,6 +195,47 @@ def _min_version_gate(manifest: PluginManifest) -> str | None:
     return None
 
 
+def _served_paths(routers: list[dict]) -> set[str]:
+    """The set of URL paths served by *routers* (``[{"router", "prefix"}, …]``).
+
+    Each path is the router's ``prefix`` + a contained route's ``path``. A route
+    at the prefix root (``route.path`` of ``""`` or ``"/"``) is normalised to the
+    bare prefix so a view declared as the prefix itself counts as served.
+    """
+    served: set[str] = set()
+    for r in routers:
+        prefix = str(r.get("prefix", "")).rstrip("/")
+        router = r.get("router")
+        for route in getattr(router, "routes", []) or []:
+            rp = getattr(route, "path", None)
+            if rp is None:
+                continue
+            full = (prefix + str(rp)).rstrip("/") or "/"
+            served.add(full)
+    return served
+
+
+def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
+    """Warn for each enabled view whose ``path`` no router serves (ADR 0026/0018).
+
+    A declared view is an iframe of a page the plugin must serve at ``path``. If no
+    registered router serves that path the iframe renders blank/404 — usually a
+    missing ``register_router`` or a path typo, which fails silently today.
+    """
+    if not manifest.views:
+        return
+    served = _served_paths(routers)
+    for view in manifest.views:
+        path = str(view.get("path", "")).rstrip("/") or "/"
+        if path not in served:
+            log.warning(
+                "[plugins] %s: view %r declares path %r but no registered router serves it "
+                "— it will render a blank/404 iframe (did you forget register_router, "
+                "or is the path a typo?)",
+                manifest.id, view.get("id"), view.get("path"),
+            )
+
+
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
     """Load enabled plugins and collect their contributions.
 
@@ -302,6 +343,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # the server can namespace + report them.
         for r in registry.routers:
             result.routers.append({"plugin_id": manifest.id, **r})
+        # Cross-check: every declared view must be served by one of this plugin's
+        # routers, else the iframe renders blank/404. Catches "declared a view but
+        # forgot register_router" / a path typo that fails silently today.
+        _warn_unserved_views(manifest, registry.routers)
         for s in registry.surfaces:
             result.surfaces.append({"plugin_id": manifest.id, **s})
         result.subagents.extend(registry.subagents)

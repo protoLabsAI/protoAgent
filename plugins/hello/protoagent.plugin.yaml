@@ -31,11 +31,3 @@ settings:
 # name; `path` is served by this plugin's router (see __init__.py `/view`).
 views:
   - { id: hello, label: "Hello", icon: "Sparkles", path: "/plugins/hello/view" }
-  # A first-class React plugin view (ADR 0034) — `ui: react` mounts a Module Federation
-  # remote into the console's own React tree (not an iframe), in the right panel. `path` is
-  # kept as an iframe fallback. The remote is built to apps/web/public/remotes/hello-react/.
-  - {
-      id: hello-react, label: "Hello (React)", icon: "Atom", placement: right,
-      ui: react, path: "/plugins/hello/view",
-      remote: { url: "/app/remotes/hello-react/assets/remoteEntry.js", module: "./Panel" },
-    }

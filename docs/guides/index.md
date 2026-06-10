@@ -44,7 +44,7 @@ Drop-in packages that add capability without forking — and reach the agent ove
 | Guide | When to read |
 |---|---|
 | [Plugins](/guides/plugins) | You want drop-in packages that add tools, skills, routes, background surfaces, subagents and managed MCP servers without forking (Discord + Google ship this way) |
-| [Plugin console views](/guides/plugin-views) | You want a plugin to add its own left-rail icon + view (dashboard) to the console |
+| [Building a plugin view](/guides/building-react-plugin-views) | You want a plugin to add its own console surface — a left-rail view (dashboard/chart/editor) or a panel that replaces the built-in chat |
 | [Build a communication plugin](/guides/communication-plugins) | You want a new inbound/outbound channel (like Discord) as a plugin surface |
 | [Install & publish plugins (git URLs)](/guides/plugin-registry) | You want to install a plugin from a git URL, or publish one as a shareable repo (tools + skills + subagents + workflows + views) |
 | [Discord surface](/guides/discord) | You want the agent reachable from Discord (the first-party `discord` plugin) |

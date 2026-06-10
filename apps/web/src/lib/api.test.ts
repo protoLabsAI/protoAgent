@@ -114,7 +114,7 @@ describe("apiUrl — fleet slug routing (ADR 0042)", () => {
 
   it("routes custom-prefix plugin views (/api/plugins/<id>/…) and the agent API", () => {
     focus("m");
-    expect(apiUrl("/api/plugins/notes/view")).toContain("/agents/m/api/plugins/notes/view");
+    expect(apiUrl("/api/plugins/notes/note")).toContain("/agents/m/api/plugins/notes/note");
     expect(apiUrl("/api/runtime/status")).toContain("/agents/m/api/runtime/status");
   });
 

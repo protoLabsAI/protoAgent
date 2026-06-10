@@ -75,7 +75,7 @@ def register(registry):
 
 `skills/` and `workflows/` are **data**, so they're auto-discovered from those
 conventional subdirs — no boilerplate. **Console views** (a rail icon + page) are
-declared in the manifest — see [Plugin console views](/guides/plugin-views).
+declared in the manifest — see [Building a plugin view](/guides/building-react-plugin-views).
 
 Declare pip dependencies (they are **not** auto-installed — see Safety):
 

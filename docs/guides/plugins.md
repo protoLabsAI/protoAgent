@@ -63,7 +63,7 @@ def register(registry):
 ```
 
 `register` is called once at load. The registry accepts these contribution types
-(plus console **views**, declared in the manifest — see [Plugin console views](/guides/plugin-views)) —
+(plus console **views**, declared in the manifest — see [Building a plugin view](/guides/building-react-plugin-views)) —
 a fork adds any of them as a plugin, never editing the core `server/` package:
 
 | Method | Contributes | Lifecycle |
@@ -193,7 +193,7 @@ def register(registry):
 - **Declare your contract** in the manifest (`emits:` / `subscribes:`) — your events are your public
   API, discoverable in `/api/runtime/status`.
 - A console **view** (sandboxed iframe) talks to the bus over the bridge — see
-  [Plugin console views](/guides/plugin-views). Any event under `<plugin_id>.*` lights your plugin's
+  [Building a plugin view](/guides/building-react-plugin-views). Any event under `<plugin_id>.*` lights your plugin's
   rail icon (a **notification dot**) until the user opens that surface.
 - Fire-and-forget + topic-filtered + exception-isolated: a slow or broken subscriber can't affect the
   publisher or other subscribers. Ephemeral (a ring buffer covers SSE reconnects; no durable log).
@@ -307,8 +307,8 @@ Restart, then check `GET /api/runtime/status` — the `hello` plugin shows
 
 ## Related
 
-- **[Plugin console views](/guides/plugin-views)** — give a plugin its own
-  left-rail icon + view (a dashboard) in the console (ADR 0026).
+- **[Building a plugin view](/guides/building-react-plugin-views)** — give a plugin its own
+  console surface — a left-rail view or a chat-slot panel (ADR 0026 / 0045).
 - **[Install & publish plugins (git URLs)](/guides/plugin-registry)** — install a
   plugin from a git URL (`python -m server plugin install <url>`) or publish one as
   a shareable repo. A repo is a full bundle: besides what `register()` adds, a

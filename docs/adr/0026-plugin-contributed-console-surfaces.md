@@ -125,7 +125,7 @@ for the plugin page; core views are unaffected.
 - **PR3 (shipped): view-tabs + auth/theming bridge + sandbox + docs.** Declared
   `tabs` → `stage-subnav`; the post-load `postMessage` token + theme handshake
   (`protoagent:init`); sandbox attrs; the `hello` view is the reference receiver;
-  `docs/guides/plugin-views.md`.
+  `docs/guides/building-react-plugin-views.md` (canonical guide; `chat_example` is the copy-me reference).
 - **Later (optional): schema-driven views** (D1) for forks that want a native-look
   dashboard without serving their own page — a separate ADR if pursued.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,7 +49,13 @@ class PluginManifest:
     # Console surfaces (ADR 0026) — each entry adds a left-rail icon opening a
     # full view (an iframe of a page the plugin serves at `path`). Declared as
     # data so it's known without importing the plugin, and surfaced to the
-    # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?}.
+    # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?, slot?}.
+    # `path` must (1) be a path a registered router actually serves — the console
+    # iframes it verbatim, so a path no router answers is a blank surface — and
+    # (2) be a same-origin RELATIVE path (no scheme/host/port): an absolute URL
+    # escapes the ADR 0042 fleet proxy origin and breaks the same-origin
+    # postMessage token handshake. See `_parse_views` (warns on non-same-origin)
+    # and docs/guides/building-react-plugin-views.md.
     views: list[dict] = field(default_factory=list)
     # Event contract (ADR 0039) — the topics this plugin broadcasts / listens for.
     # Declarative for discoverability (surfaced in /api/runtime/status): a plugin
@@ -68,6 +75,41 @@ class PluginManifest:
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
+
+
+# A view path that carries a scheme/host instead of being a same-origin relative
+# path. Console views are sandboxed iframes served back through the ADR 0042 fleet
+# proxy and rely on a same-origin postMessage token handshake — an absolute URL
+# (http(s)://…, protocol-relative //host, localhost, or an explicit :PORT) escapes
+# the proxy origin and breaks both. We warn (not reject) so a typo is loud but the
+# plugin still loads.
+_NON_SAME_ORIGIN_PATH = re.compile(r"https?://|^//|localhost|:\d", re.IGNORECASE)
+
+
+def _parse_views(views, plugin_id: str) -> list[dict]:
+    """Keep view entries with an ``id`` + ``path``; warn on non-same-origin paths.
+
+    Views must point at a same-origin **relative** path. A path that carries a
+    scheme or host (``http(s)://``, protocol-relative ``//host``, ``localhost``, or
+    a ``:PORT``) breaks the ADR 0042 fleet proxy and the same-origin postMessage
+    token handshake — we log a warning but still keep the view so the author sees
+    the mistake rather than a silently-missing rail icon.
+    """
+    if not isinstance(views, (list, tuple)):
+        return []
+    kept: list[dict] = []
+    for v in views:
+        if not (isinstance(v, dict) and v.get("id") and v.get("path")):
+            continue
+        path = str(v.get("path"))
+        if _NON_SAME_ORIGIN_PATH.search(path):
+            log.warning(
+                "[plugins] %s: view %r path %r is not same-origin relative — a scheme/host "
+                "breaks the fleet proxy + the postMessage token handshake; use a relative path",
+                plugin_id, v.get("id"), path,
+            )
+        kept.append(v)
+    return kept
 
 
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
@@ -102,7 +144,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     cfg = data.get("config")
     secrets = data.get("secrets")
     settings = data.get("settings")
-    views = data.get("views")
+    views = _parse_views(data.get("views"), pid)
     emits = data.get("emits")
     subscribes = data.get("subscribes")
     requires_pip = data.get("requires_pip")
@@ -121,8 +163,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
         settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
         test=bool(data.get("test", False)),
-        views=[v for v in views if isinstance(v, dict) and v.get("id") and v.get("path")]
-        if isinstance(views, (list, tuple)) else [],
+        views=views,
         emits=[str(x) for x in emits] if isinstance(emits, (list, tuple)) else [],
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
         requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],

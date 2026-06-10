@@ -1,82 +1,109 @@
 <!doctype html>
+<!--
+  ════════════════════════════════════════════════════════════════════════════
+  chat_example/panel.html — the GOLD-STANDARD copy-me plugin view.
+
+  Copy this when you build your own console view. It models the FOUR RULES every
+  plugin view should follow:
+
+    1. SERVE WHAT YOU DECLARE — the manifest's `views[].path`
+       (/plugins/chat_example/panel) is the ONE route the plugin's router serves
+       (see __init__.py). The console iframes exactly that path; serve it and
+       nothing the manifest doesn't declare.
+
+    2. GATE BY DEFAULT — every DATA call goes to a bearer-gated /api/ route
+       (here the core non-streaming POST /api/chat), authed with the bearer the
+       console hands us via the protoagent:init handshake — never a public route,
+       never a token in the URL. (The PAGE itself is served outside /api/ as
+       public chrome on purpose: a browser iframe page-load can't carry an
+       Authorization header — so only the page is public; all its data is gated.)
+
+    3. SAME-ORIGIN, SLUG-AWARE, NEVER HARDCODE — derive `base` from the iframe's
+       OWN path and prefix EVERY fetch/asset with it. On the host window base=""
+       (so /api/chat); through the fleet proxy base="/agents/<slug>" (so
+       /agents/<slug>/api/chat) — the panel always talks to ITS agent, never the
+       host's (ADR 0042). Hardcoding "/api/chat" is the fleet-UNSAFE antipattern.
+
+    4. LINK THE KIT — pull the design system from the console's own, same-origin
+       <base>/_ds/plugin-kit.{css,js} instead of hand-rolling a hex/theme map or
+       pinning a CDN. plugin-kit.css gives the --pl-* tokens + .pl-* components;
+       plugin-kit.js wires the protoagent:init handshake so the kit's tokens
+       re-skin to the operator's live theme for free (protoContent #176).
+  ════════════════════════════════════════════════════════════════════════════
+-->
 <html>
 <head>
 <meta charset="utf-8" />
 <title>Chat (example plugin)</title>
+<script>
+  "use strict";
+  // ── RULE 3: slug-aware base, computed FIRST (everything below prefixes it). ──
+  // iframe lives at /plugins/... (host) or /agents/<slug>/plugins/... (proxied).
+  window.__base = location.pathname.split("/plugins/")[0]; // "" or "/agents/<slug>"
+  // ── RULE 4: link the kit from the console's own same-origin DS, slug-aware. ──
+  // Injected here (not a static <link>) so the href carries the slug-aware base.
+  document.write(
+    '<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">',
+  );
+</script>
 <style>
-  /* Defaults match the console's dark ground; protoagent:init overrides them with
-     the live theme tokens so the panel re-skins with the agent's theme. */
-  :root {
-    --bg: #0a0f14; --bg-panel: #11161d; --fg: #e6e6e6; --fg-muted: #9aa0aa;
-    --brand: #9b87f2; --border: #232a33;
-  }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  /* Layout only — colors/typography come from plugin-kit.css's --pl-* tokens,
+     which plugin-kit.js re-skins to the operator's live theme on the handshake. */
+  html, body { margin: 0; height: 100%; }
   .wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
   header { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-    border-bottom: 1px solid var(--border); font-size: 13px; color: var(--fg-muted); }
-  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
-  header button { margin-left: auto; background: none; border: 1px solid var(--border);
-    color: var(--fg-muted); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
-  header button:hover { color: var(--fg); border-color: var(--brand); }
+    border-bottom: var(--pl-border-width) solid var(--pl-color-border);
+    font-size: 13px; color: var(--pl-color-fg-muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pl-color-accent); }
+  header button { margin-left: auto; }
   #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 72ch; padding: 9px 13px; border-radius: 12px; font-size: 14px;
+  .msg { max-width: 72ch; padding: 9px 13px; border-radius: var(--pl-radius); font-size: 14px;
     line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-  .msg.user { align-self: flex-end; background: var(--brand); color: #0a0f14; border-bottom-right-radius: 4px; }
-  .msg.assistant { align-self: flex-start; background: var(--bg-panel);
-    border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-  .msg.pending { color: var(--fg-muted); font-style: italic; }
-  .msg.error { align-self: stretch; background: none; border: 1px solid #b3404a; color: #e08089; }
-  .empty { margin: auto; text-align: center; color: var(--fg-muted); font-size: 13px; max-width: 44ch; line-height: 1.7; }
-  .empty b { color: var(--brand); }
-  form { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
-  textarea { flex: 1; resize: none; background: var(--bg-panel); color: var(--fg);
-    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font: inherit;
-    font-size: 14px; min-height: 20px; max-height: 140px; }
-  textarea:focus { outline: none; border-color: var(--brand); }
-  form button { background: var(--brand); color: #0a0f14; border: 0; border-radius: 10px;
-    padding: 0 18px; font-weight: 600; font-size: 14px; cursor: pointer; }
-  form button:disabled { opacity: 0.5; cursor: default; }
+  .msg.user { align-self: flex-end; background: var(--pl-color-accent); color: var(--pl-color-fg-on-accent); }
+  .msg.assistant { align-self: flex-start; background: var(--pl-color-bg-raised);
+    border: var(--pl-border-width) solid var(--pl-color-border); }
+  .msg.pending { color: var(--pl-color-fg-muted); font-style: italic; }
+  .msg.error { align-self: stretch; background: none;
+    border: var(--pl-border-width) solid var(--pl-color-status-error); color: var(--pl-color-status-error); }
+  .empty { margin: auto; text-align: center; color: var(--pl-color-fg-muted);
+    font-size: 13px; max-width: 44ch; line-height: 1.7; }
+  .empty b { color: var(--pl-color-fg); }
+  form { display: flex; gap: 8px; padding: 12px 14px; border-top: var(--pl-border-width) solid var(--pl-color-border); }
+  #input { flex: 1; min-height: 20px; max-height: 140px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header><span class="dot"></span> chat_example — a slot-claiming chat panel
-    <button id="reset" type="button" title="Start a fresh session">New session</button>
+    <button id="reset" class="pl-btn pl-btn--sm" type="button" title="Start a fresh session">New session</button>
   </header>
   <div id="log">
     <div class="empty">This is the <b>example chat plugin</b> rendering in the chat slot.
-      Send a message — it drives the agent over <b>POST /api/chat</b> with the bearer from
-      the <b>protoagent:init</b> handshake. Disable the plugin to restore the built-in chat.</div>
+      Send a message — it drives the agent over the gated <b>POST /api/chat</b> with the
+      bearer from the <b>protoagent:init</b> handshake. Disable the plugin to restore the
+      built-in chat.</div>
   </div>
   <form id="composer">
-    <textarea id="input" rows="1" placeholder="Message the agent…"></textarea>
-    <button id="send" type="submit">Send</button>
+    <textarea id="input" class="pl-input" rows="1" placeholder="Message the agent…"></textarea>
+    <button id="send" class="pl-btn pl-btn--primary" type="submit">Send</button>
   </form>
 </div>
+<!-- RULE 4: the kit's JS, same-origin + slug-aware. Gives window.protoPluginView
+     ({ initPluginView, apiFetch, getToken }) — the no-build handshake + authed fetch. -->
+<script src="" id="kit"></script>
+<script>
+  document.getElementById("kit").src = window.__base + "/_ds/plugin-kit.js";
+</script>
 <script>
   "use strict";
-  // ── Console handshake (ADR 0038): bearer + theme arrive via postMessage. ─────
-  let token = null;
-  function applyTheme(theme) {
-    if (!theme) return;
-    const map = { bg: "--bg", bgPanel: "--bg-panel", fg: "--fg", fgMuted: "--fg-muted",
-                  brand: "--brand", border: "--border" };
-    for (const [k, v] of Object.entries(map)) {
-      if (theme[k]) document.documentElement.style.setProperty(v, theme[k]);
-    }
-  }
-  window.addEventListener("message", (e) => {
-    const m = e.data || {};
-    if (m.type === "protoagent:init") { token = m.token || null; applyTheme(m.theme); }
-    else if (m.type === "protoagent:theme") applyTheme(m.theme); // live re-theme
-  });
+  const base = window.__base;
 
-  // ── Slug-aware base (ADR 0042): the iframe lives at /plugins/... (host window)
-  // or /agents/<slug>/plugins/... (peer window) — keep API calls on OUR agent. ──
-  const base = location.pathname.split("/plugins/")[0];
+  // ── RULE 4: the kit handles the protoagent:init handshake (bearer + theme) and
+  // re-skins its --pl-* tokens to the operator's live theme. We just listen. ──
+  const kit = window.protoPluginView;
+  kit.initPluginView();
 
-  // ── One session per agent, persisted; New session rotates it. ────────────────
+  // ── RULE 3: one session per agent, keyed by slug-aware base; New session rotates it. ──
   const SKEY = "chat-example.session:" + (base || "host");
   let sessionId = localStorage.getItem(SKEY) ||
     "chx-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -103,10 +130,10 @@
   async function sendTurn(message) {
     const pending = bubble("assistant pending", "thinking…");
     try {
-      const res = await fetch(base + "/api/chat", {
+      // RULE 2 + 3: kit.apiFetch attaches the bearer; base keeps it on OUR agent.
+      const res = await kit.apiFetch(base + "/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json",
-                   ...(token ? { Authorization: "Bearer " + token } : {}) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, session_id: sessionId }),
       });
       if (!res.ok) {
