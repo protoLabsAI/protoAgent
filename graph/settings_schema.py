@@ -31,6 +31,12 @@ class Field:
     options_source: str = ""      # "models" → filled dynamically by the endpoint
     minimum: float | None = None
     maximum: float | None = None
+    # Cascade layer this field's shared default lives at (ADR 0047). "agent" (the
+    # leaf) by default; "host" = box-shared default in host-config.yaml. Git-style
+    # advisory — a field is always overridable at a lower layer, so this only sets
+    # the home/default layer + where the settings UI writes it. No "app" value: the
+    # App layer is the dataclass defaults (no writable file).
+    scope: str = "agent"
 
 
 # Ordered registry. Section order here is the order the UI renders groups in.
@@ -46,9 +52,9 @@ FIELDS: list[Field] = [
 
     # ── Model ────────────────────────────────────────────────────────────────
     Field("model.name", "model_name", "Primary model", "select", "Model",
-          "The main reasoning model (gateway alias).", options_source="models"),
-    Field("model.provider", "model_provider", "Provider", "string", "Model"),
-    Field("model.api_base", "api_base", "API base URL", "string", "Model"),
+          "The main reasoning model (gateway alias).", options_source="models", scope="host"),
+    Field("model.provider", "model_provider", "Provider", "string", "Model", scope="host"),
+    Field("model.api_base", "api_base", "API base URL", "string", "Model", scope="host"),
     Field("model.api_key", "api_key", "API key", "secret", "Model",
           "Stored in secrets.yaml, never echoed back."),
     Field("model.temperature", "temperature", "Temperature", "number", "Model",
@@ -60,9 +66,9 @@ FIELDS: list[Field] = [
     # ── Routing ──────────────────────────────────────────────────────────────
     Field("routing.aux_model", "aux_model", "Auxiliary (fast) model", "string", "Routing",
           "Cheap/fast alias for summarization, goal-verification, and subagents. "
-          "Blank = use the main model."),
+          "Blank = use the main model.", scope="host"),
     Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
-          "Routing", "Retried in order when the primary model errors."),
+          "Routing", "Retried in order when the primary model errors.", scope="host"),
 
     # ── Context compaction ───────────────────────────────────────────────────
     Field("compaction.enabled", "compaction_enabled", "Enable compaction", "bool", "Compaction",
@@ -91,13 +97,13 @@ FIELDS: list[Field] = [
 
     # ── Prompt caching ───────────────────────────────────────────────────────
     Field("prompt_cache.enabled", "prompt_cache_enabled", "Enable prefix caching", "bool", "Caching",
-          "Anthropic prefix caching on the stable prompt; no-op on non-Anthropic models."),
+          "Anthropic prefix caching on the stable prompt; no-op on non-Anthropic models.", scope="host"),
     Field("prompt_cache.ttl", "prompt_cache_ttl", "Cache TTL", "select", "Caching",
-          options=["5m", "1h"]),
+          options=["5m", "1h"], scope="host"),
     Field("prompt_cache.warm.enabled", "cache_warming_enabled", "Cache warming", "bool", "Caching",
-          "Reproduce the cached prefix on an interval (only for sporadic, latency-sensitive traffic)."),
+          "Reproduce the cached prefix on an interval (only for sporadic, latency-sensitive traffic).", scope="host"),
     Field("prompt_cache.warm.interval_seconds", "cache_warming_interval_seconds",
-          "Warm interval (s)", "number", "Caching", minimum=1),
+          "Warm interval (s)", "number", "Caching", minimum=1, scope="host"),
 
     # ── Knowledge / memory ───────────────────────────────────────────────────
     Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge",
@@ -136,15 +142,15 @@ FIELDS: list[Field] = [
     Field("telemetry.enabled", "telemetry_enabled", "Store telemetry locally", "bool", "Telemetry",
           "Persist a per-turn cost/latency row to a local SQLite DB (queryable in Settings → "
           "Telemetry). Off = nothing is recorded — no store is opened. Stays on your machine; "
-          "it is never sent anywhere.", restart=True),
+          "it is never sent anywhere.", restart=True, scope="host"),
     Field("telemetry.retention_days", "telemetry_retention_days", "Telemetry retention (days)",
           "number", "Telemetry", "Auto-prune rows older than this (0 = keep forever).",
-          minimum=0, restart=True),
+          minimum=0, restart=True, scope="host"),
 
     # ── Identity / operator ──────────────────────────────────────────────────
     Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
-    Field("identity.org", "identity_org", "Organization", "string", "Identity"),
+    Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
     Field("operator.allowed_dirs", "operator_allowed_dirs", "Allowed project dirs", "string_list",
           "Identity", "Directories the beads/notes APIs may touch."),
     Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",

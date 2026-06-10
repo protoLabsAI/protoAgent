@@ -226,3 +226,34 @@ def test_fields_types_match_dataclass(field):
             f"{field.key!r} is type 'string_list' but {field.attr} defaults to "
             f"{type(val).__name__} ({val!r})."
         )
+
+
+# --------------------------------------------------------------------------- #
+# 4) Field.scope assignment (ADR 0047 §2.1 Decision 2) — the box-shared set.
+# --------------------------------------------------------------------------- #
+
+# The fields whose shared default lives at the HOST layer (gateway/model/routing/
+# cache/telemetry infra + org branding). Everything else is "agent". Locked here so
+# a new Field can't silently land in the wrong cascade layer.
+HOST_SCOPED_KEYS = {
+    "model.api_base", "model.provider", "model.name",
+    "routing.aux_model", "routing.fallback_models",
+    "prompt_cache.enabled", "prompt_cache.ttl",
+    "prompt_cache.warm.enabled", "prompt_cache.warm.interval_seconds",
+    "telemetry.enabled", "telemetry.retention_days",
+    "identity.org",
+}
+
+
+def test_field_scope_assignment_matches_adr_0047():
+    """The host/agent split is exactly as decided (ADR 0047 §2.1). A new Field
+    defaulting to 'agent' is fine; promoting one to 'host' (or vice-versa) must be
+    a deliberate edit here, not silent drift."""
+    live_host = {f.key for f in FIELDS if f.scope == "host"}
+    assert live_host == HOST_SCOPED_KEYS, (
+        f"host-scoped FIELDS changed: {live_host ^ HOST_SCOPED_KEYS} differ. "
+        "Update HOST_SCOPED_KEYS + ADR 0047 §2.1 if intentional."
+    )
+    # Only "agent" / "host" are valid today (App layer = dataclass defaults, no field scope).
+    bad = {f.scope for f in FIELDS} - {"agent", "host"}
+    assert not bad, f"unexpected Field.scope value(s): {bad}"
