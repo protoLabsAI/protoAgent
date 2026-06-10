@@ -224,6 +224,15 @@ async def discover(*, known: set | None = None,
         asyncio.to_thread(_browse_mdns, timeout),
         _scan_tailnet(port_range, known),
     )
+    # An mDNS advert carrying THIS machine's own IP is a co-located agent — the same
+    # agent the local scan finds at 127.0.0.1:<port>. Normalize it to loopback so the
+    # (host, port) dedupe collapses the pair (it surfaced twice otherwise, once per
+    # channel). Genuinely-remote LAN/tailnet siblings keep their own addresses.
+    own_ip = _local_ip()
+    for a in network:
+        if a["host"] == own_ip:
+            a["host"] = "127.0.0.1"
+            a["url"] = f"http://127.0.0.1:{a['port']}"
     out: dict[tuple, dict] = {}
     for a in network + tailnet + local:  # local wins on a url clash (it's the more specific probe)
         if (a["host"], a["port"]) in known:
