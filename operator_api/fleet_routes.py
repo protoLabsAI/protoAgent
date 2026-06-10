@@ -164,10 +164,19 @@ def register_fleet_routes(app) -> None:
 
 def _archetypes() -> list[dict]:
     """Built-in Basic + installed-bundle archetypes (cached in plugins.lock)."""
-    out = [{
-        "id": "basic", "label": "Basic", "icon": "Sparkles", "bundle": None,
-        "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
-    }]
+    out = [
+        {
+            "id": "basic", "label": "Basic", "icon": "Sparkles", "bundle": None,
+            "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
+        },
+        {
+            # Built-in PM archetype — installed FRESH from the git URL on each create (no pin),
+            # so a new PM agent always gets the latest pm-stack.
+            "id": "pm-stack", "label": "Project Manager", "icon": "LayoutGrid",
+            "bundle": "https://github.com/protoLabsAI/pm-stack",
+            "blurb": "Project-management tools + board — clones the latest pm-stack on create.",
+        },
+    ]
     try:
         from graph.plugins.installer import _read_lock
         for b in (_read_lock().get("bundles") or []):

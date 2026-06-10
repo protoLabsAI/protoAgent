@@ -364,6 +364,9 @@ export type AgentConfig = {
   operator?: {
     allowed_dirs: string[];
   };
+  plugins?: {
+    enabled?: string[];
+  };
 };
 
 export type ConfigPayload = {

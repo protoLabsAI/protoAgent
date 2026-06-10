@@ -115,7 +115,10 @@ model:
   api_key: ""         # or set OPENAI_API_KEY in this workspace's secrets.yaml
 
 plugins:
-  enabled: []
+  # `delegates` is on by default for fleet agents (ADR 0042 + 0025) so they can delegate to
+  # each other out of the box — enabled at startup, so the /api/delegates routes are registered
+  # with no restart-to-enable (a hot-reload alone doesn't bind new plugin routes).
+  enabled: [delegates]
   sources:
     allow: [github.com/protoLabsAI/*]
 
