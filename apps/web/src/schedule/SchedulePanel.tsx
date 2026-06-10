@@ -1,3 +1,5 @@
+import "./schedule.css";
+
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
