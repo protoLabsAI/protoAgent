@@ -250,9 +250,9 @@
   gap: 6px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: rgba(240, 116, 88, 0.12);
-  border: 1px solid rgba(240, 116, 88, 0.28);
-  color: #f4b09f;
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 28%, transparent);
+  color: var(--error);
   font-size: 0.8rem;
   line-height: 1.45;
 }
@@ -313,9 +313,9 @@
   flex: none;
   padding: 1px 6px;
   border-radius: 5px;
-  background: rgba(65, 196, 141, 0.16);
-  border: 1px solid rgba(65, 196, 141, 0.28);
-  color: #a9e8c9;
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  color: var(--success);
   font-family: var(--font-mono);
   font-size: 0.72rem;
 }

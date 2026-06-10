@@ -396,10 +396,10 @@ select:disabled {
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
-  border: 1px solid rgba(240, 116, 88, 0.3);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
   border-radius: var(--radius);
-  background: rgba(240, 116, 88, 0.14);
-  color: #f4b09f;
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--error);
   padding: 8px 10px;
 }
 
@@ -705,7 +705,7 @@ textarea {
   margin: 0 12px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #08080a;
+  background: var(--pl-color-bg-inset);
   padding: 10px;
   color: var(--fg-secondary);
   font-family: var(--font-mono);
@@ -739,7 +739,7 @@ textarea {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #46c46a;
+  background: var(--success);
   animation: rail-dot-pulse 1.4s ease-in-out infinite;
 }
 @keyframes rail-dot-pulse {
@@ -989,11 +989,11 @@ textarea {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: rgba(220, 60, 60, 0.06);
+  background: color-mix(in srgb, var(--error) 6%, transparent);
 }
 
 .panel-error svg:first-child {
-  color: #e0564f;
+  color: var(--error);
 }
 
 .panel-error > div {
@@ -1040,7 +1040,7 @@ textarea {
   justify-content: space-between;
   gap: 8px;
   border-bottom: 1px solid var(--border);
-  background: #0c0c0f;
+  background: var(--pl-color-bg-inset);
   padding: 6px 10px;
   color: var(--fg-muted);
   font-family: var(--font-mono);
@@ -1182,7 +1182,7 @@ textarea {
   display: grid;
   place-items: center;
   overflow: auto;
-  background: rgba(10, 10, 12, 0.98);
+  background: color-mix(in srgb, var(--pl-color-bg) 98%, transparent);
   padding: 24px;
 }
 
@@ -1193,7 +1193,7 @@ textarea {
   z-index: 200;
   display: grid;
   place-items: center;
-  background: rgba(10, 10, 12, 0.6);
+  background: var(--pl-color-overlay);
   padding: 24px;
 }
 
@@ -1203,7 +1203,7 @@ textarea {
   border-radius: 12px;
   background: var(--bg-elevated, #16161a);
   padding: 18px 18px 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--pl-shadow-popover);
 }
 
 .confirm-head {
@@ -1294,7 +1294,7 @@ textarea {
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(124, 58, 237, 0.36);
+  border: 1px solid color-mix(in srgb, var(--brand-violet) 36%, transparent);
   border-radius: var(--radius);
   color: var(--brand-violet-light);
 }
@@ -1377,15 +1377,15 @@ textarea {
 }
 
 .setup-error {
-  border: 1px solid rgba(240, 116, 88, 0.3);
-  background: rgba(240, 116, 88, 0.14);
-  color: #f4b09f;
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--error);
 }
 
 .setup-message {
-  border: 1px solid rgba(65, 196, 141, 0.28);
-  background: rgba(65, 196, 141, 0.16);
-  color: #a9e8c9;
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
 
 /* "Test connection" result line in the model step. */
@@ -1401,15 +1401,15 @@ textarea {
 }
 
 .setup-test.ok {
-  border: 1px solid rgba(65, 196, 141, 0.28);
-  background: rgba(65, 196, 141, 0.12);
-  color: #a9e8c9;
+  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
 }
 
 .setup-test.err {
-  border: 1px solid rgba(240, 116, 88, 0.3);
-  background: rgba(240, 116, 88, 0.12);
-  color: #f4b09f;
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
 }
 
 .setup-test svg {
@@ -1559,7 +1559,7 @@ textarea {
   align-items: center;
   gap: 4px;
   font-size: 0.8rem;
-  color: #818cf8;
+  color: var(--brand-indigo-bright);
   text-decoration: none;
 }
 .settings-help-link:hover,
@@ -1644,7 +1644,7 @@ textarea {
   color: var(--fg-muted);
 }
 .federated-loading { align-items: center; }
-.federated-error { color: #eadf9a; }
+.federated-error { color: var(--warning); }
 .federated-error strong { color: var(--fg); }
 .federated-error-detail {
   margin: 4px 0 8px;
@@ -1769,8 +1769,8 @@ textarea {
   background: var(--fg-muted);
 }
 .fleet-dot.running {
-  background: #34d399;
-  box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 50%, transparent);
 }
 .fleet-dot.stopped {
   opacity: 0.45;
@@ -1860,7 +1860,7 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--pl-shadow-popover);
   display: flex;
   flex-direction: column;
   gap: 1px;

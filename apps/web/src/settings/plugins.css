@@ -43,12 +43,12 @@
 .plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .plugin-ver { font-size: 11px; color: var(--fg-muted); }
 .plugin-state { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; }
-.plugin-state.on { background: rgba(70,196,106,.15); color: #46c46a; }
+.plugin-state.on { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
 .plugin-state.off { background: var(--bg-hover); color: var(--fg-muted); }
-.plugin-state.warn { background: rgba(245,180,80,.15); color: #f5b450; display: inline-flex; align-items: center; gap: 3px; }
+.plugin-state.warn { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); display: inline-flex; align-items: center; gap: 3px; }
 .plugin-desc { font-size: 12px; color: var(--fg-secondary); margin: 4px 0; }
 .plugin-meta { font-size: 11px; color: var(--fg-muted); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
 .plugin-review { font-size: 11px; color: var(--fg-muted); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.plugin-review .warn { color: #f5b450; display: inline-flex; align-items: center; gap: 3px; }
+.plugin-review .warn { color: var(--warning); display: inline-flex; align-items: center; gap: 3px; }
 .plugin-enable-hint { font-size: 11px; color: var(--fg-secondary); margin: 6px 0 0; }
-.btn-icon.danger:hover { color: #ef6b6b; }
+.btn-icon.danger:hover { color: var(--danger); }

@@ -30,7 +30,7 @@
 }
 .schedule-modes button.active {
   background: var(--accent, #9b87f2);
-  color: #0a0a0c;
+  color: var(--pl-color-fg-on-accent);
 }
 .schedule-repeat {
   display: grid;

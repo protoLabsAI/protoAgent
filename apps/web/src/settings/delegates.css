@@ -10,7 +10,7 @@
   border: 1px solid var(--border);
   color: var(--brand-violet-light);
 }
-.delegate-badge-warn { font-size: 10px; color: #e0a23a; }
+.delegate-badge-warn { font-size: 10px; color: var(--warning); }
 .delegate-badge-ok { font-size: 10px; color: var(--fg-muted); }
 .delegate-form {
   margin-top: 14px;
@@ -40,6 +40,6 @@
 .delegate-type-tile-blurb { font-size: 11px; color: var(--fg-muted); }
 .delegate-field-help { font-size: 11px; color: var(--fg-muted); }
 .delegate-health { font-size: 10px; line-height: 1; }
-.delegate-health.ok { color: #46c46a; }
-.delegate-health.down { color: #e0533a; }
+.delegate-health.ok { color: var(--success); }
+.delegate-health.down { color: var(--error); }
 .delegate-health.unknown { color: var(--fg-muted); }
