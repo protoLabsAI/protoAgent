@@ -6,9 +6,9 @@ requires-python = ">=3.11"
 
 # Single source of truth for runtime deps. The `requirements-*.txt` files are
 # kept as readable, tier-scoped references (ADR 0010) but no longer the source
-# of truth: `requirements.txt` is a thin `-e .[ui,google]` that routes pip
-# through this table, and `uv sync` reads it directly. Keep these three lists in
-# step with requirements-core/ui/google.txt — CI installs via pyproject.
+# of truth: `requirements.txt` is a thin `-e .[google]` that routes pip
+# through this table, and `uv sync` reads it directly. Keep these lists in
+# step with requirements-core/google.txt — CI installs via pyproject.
 #
 # core (the `none`/`console` tiers) — mirrors requirements-core.txt:
 dependencies = [
