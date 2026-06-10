@@ -584,14 +584,14 @@ def _main():
         try:
             import paths as _paths
             _paths.unregister_instance()
-        except Exception:
+        except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             pass
         # Withdraw the mDNS advertisement (ADR 0042 §I). Off the loop — same deadlock as
         # advertise (zc.close() posts to and waits on the loop it's called from).
         try:
             from graph.fleet import discovery
             await asyncio.to_thread(discovery.stop_advertise)
-        except Exception:
+        except Exception:  # noqa: BLE001 — mDNS withdraw is best-effort on shutdown
             pass
         # Stop plugin surfaces first (ADR 0018) — best-effort.
         for h in STATE.plugin_surface_handles:

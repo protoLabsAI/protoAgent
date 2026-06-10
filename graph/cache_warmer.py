@@ -146,5 +146,7 @@ class CacheWarmer:
         task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            pass  # expected — we just cancelled the warm-cache task
+        except Exception:  # noqa: BLE001 — a failing teardown must not break stop()
             pass

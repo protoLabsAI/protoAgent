@@ -179,7 +179,9 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             service.cancel()
             try:
                 await service
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                pass  # expected — we just cancelled the service task
+            except Exception:  # noqa: BLE001 — teardown failure must not mask the result
                 pass
 
         out = (stdout or b"").decode(errors="replace").strip()

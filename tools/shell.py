@@ -78,7 +78,7 @@ async def run_command(
         proc.kill()
         try:
             await proc.communicate()
-        except Exception:
+        except Exception:  # noqa: BLE001 — process already killed; draining is best-effort
             pass
         return ShellResult(1, "", "", timed_out=True, error=f"timed out after {timeout:g}s")
 

@@ -239,7 +239,7 @@ def _record_a2a_telemetry(outcome) -> None:
     try:
         import metrics
         metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
-    except Exception:
+    except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
         pass
 
     store = STATE.telemetry_store
