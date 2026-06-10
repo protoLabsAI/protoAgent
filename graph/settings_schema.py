@@ -225,7 +225,36 @@ def _category_for(section: str) -> str:
     return _SECTION_CATEGORY.get(section, "Plugins")
 
 
-def build_schema(config, *, model_options: list[str] | None = None) -> list[dict[str, Any]]:
+def _resolve_dotted(doc: dict | None, dotted: str) -> bool:
+    """True iff ``dotted`` (e.g. ``"prompt_cache.warm.enabled"``) resolves in ``doc``."""
+    cur: Any = doc
+    if not isinstance(cur, dict):
+        return False
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False
+        cur = cur[part]
+    return True
+
+
+def _source_for(key: str, agent_doc: dict | None, host_doc: dict | None) -> str:
+    """Which cascade layer the live value came from (ADR 0047): the agent leaf if it
+    sets the key, else the Host layer, else the App default. Drives the UI's
+    inherited-vs-overridden badge."""
+    if _resolve_dotted(agent_doc, key):
+        return "agent"
+    if _resolve_dotted(host_doc, key):
+        return "host"
+    return "default"
+
+
+def build_schema(
+    config,
+    *,
+    model_options: list[str] | None = None,
+    agent_doc: dict | None = None,
+    host_doc: dict | None = None,
+) -> list[dict[str, Any]]:
     """Return the settings schema grouped by section, with current values.
 
     Each group carries a ``category`` (ADR 0020) so the console can present a
@@ -247,6 +276,8 @@ def build_schema(config, *, model_options: list[str] | None = None) -> list[dict
             "restart": f.restart,
             "options": (model_options or []) if f.options_source == "models" else list(f.options),
             "default": _jsonable(getattr(defaults, f.attr, None)),
+            "scope": f.scope,  # ADR 0047: "agent" | "host"
+            "source": _source_for(f.key, agent_doc, host_doc),  # which layer set the live value
         }
         if f.type == "secret":
             entry["value"] = ""
@@ -277,6 +308,8 @@ def build_schema(config, *, model_options: list[str] | None = None) -> list[dict
             "restart": bool(spec.get("restart", False)),
             "options": list(spec.get("options", []) or []),
             "default": _jsonable(sch.defaults.get(key)),
+            "scope": "agent",  # plugin config is agent-local (ADR 0047 D6)
+            "source": "agent" if current is not None else "default",
         }
         if ftype == "secret":
             entry["value"] = ""

@@ -144,13 +144,25 @@ def register_config_routes(app) -> None:
         """All editable settings, grouped, with current values + metadata
         (type, default, restart-vs-hot-reload, description). Drives the
         operator console's Settings surface."""
-        from graph.config_io import list_gateway_models
+        from graph.config import _load_host_layer
+        from graph.config_io import CONFIG_YAML_PATH, list_gateway_models, load_yaml_doc
         from graph.settings_schema import build_schema
 
         models: list[str] = []
         if STATE.graph_config is not None:
             models, _ = list_gateway_models(STATE.graph_config.api_base, STATE.graph_config.api_key)
-        return {"groups": build_schema(STATE.graph_config, model_options=models)}
+        # Per-layer provenance (ADR 0047): the raw agent leaf doc + the filtered Host
+        # layer let build_schema report each field's `source` (agent/host/default) so
+        # the UI can badge inherited-vs-overridden.
+        agent_doc = load_yaml_doc(CONFIG_YAML_PATH) if CONFIG_YAML_PATH.exists() else {}
+        host_doc = _load_host_layer()
+        return {
+            "groups": build_schema(
+                STATE.graph_config, model_options=models,
+                agent_doc=agent_doc if isinstance(agent_doc, dict) else {},
+                host_doc=host_doc,
+            )
+        }
 
     @app.post("/api/settings")
     async def _api_save_settings(req: SettingsUpdateRequest):

@@ -117,3 +117,41 @@ def test_no_host_file_matches_from_dict(tmp_path):
         if f.name == "plugin_config":
             continue  # resolution is config_dir-relative; equal here but skip to be safe
         assert getattr(via_yaml, f.name) == getattr(via_dict, f.name), f.name
+
+
+def test_build_schema_reports_scope_and_source():
+    """build_schema (slice 3a) tags each field with its cascade scope + the layer
+    its live value came from — the data the UI's inherited-vs-overridden badge needs."""
+    from graph.settings_schema import build_schema
+
+    cfg = LangGraphConfig()  # App defaults
+    groups = build_schema(
+        cfg,
+        agent_doc={"goal": {"enabled": False}},      # agent leaf sets an agent-scoped key
+        host_doc={"model": {"name": "host-m"}},       # host layer sets a host-scoped key
+    )
+    by_key = {e["key"]: e for g in groups for e in g["fields"]}
+
+    # scope reflects ADR 0047 §2.1
+    assert by_key["model.name"]["scope"] == "host"
+    assert by_key["goal.enabled"]["scope"] == "agent"
+
+    # source = the layer the live value came from
+    assert by_key["model.name"]["source"] == "host"          # inherited from Host
+    assert by_key["goal.enabled"]["source"] == "agent"       # set in the agent leaf
+    assert by_key["compaction.enabled"]["source"] == "default"  # neither layer → App default
+
+
+def test_build_schema_agent_override_of_host_field_shows_as_agent_source():
+    """A host-scoped field overridden in the agent leaf reports source='agent'
+    (the UI badges it 'overridden here', not 'inherited from Host')."""
+    from graph.settings_schema import build_schema
+
+    groups = build_schema(
+        LangGraphConfig(),
+        agent_doc={"model": {"name": "agent-m"}},
+        host_doc={"model": {"name": "host-m"}},
+    )
+    by_key = {e["key"]: e for g in groups for e in g["fields"]}
+    assert by_key["model.name"]["scope"] == "host"     # home layer is still host
+    assert by_key["model.name"]["source"] == "agent"   # but the live value is the agent override
