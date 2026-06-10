@@ -62,6 +62,7 @@ import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
+import { FleetTurnWatch } from "./FleetTurnWatch";
 import { IntroSplash } from "./IntroSplash";
 import { BootGate } from "./BootGate";
 
@@ -624,6 +625,10 @@ export function App() {
     <>
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       <IntroSplash />
+      {/* Cross-agent awareness: toast + native-notify when ANOTHER agent's turn
+          finishes (per-window SSE can't see it — this watches the other slugs'
+          persisted in-flight turns and polls their durable tasks via the hub). */}
+      <FleetTurnWatch />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}
