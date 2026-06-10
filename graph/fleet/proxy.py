@@ -1,10 +1,13 @@
-"""Reverse proxy for the in-place switch (ADR 0042 slice 2b).
+"""Reverse proxy for the fleet console (ADR 0042 slug routing).
 
-The hub forwards console traffic to the **active** agent under the ``/active/<path>``
-prefix — so switching agents is a single ``activate`` call that re-points where
-``/active/*`` lands (chat → ``/active/api/chat``, SSE → ``/active/api/events``, A2A →
-``/active/a2a``). The active pointer lives in ``<workspaces_root>/fleet-active`` so it
-survives restarts; it only resolves while that agent is actually running.
+The hub forwards console traffic to a specific agent named by the **URL slug** —
+``/agents/<slug>/<path>`` (the slug lives in the console URL ``/app/agent/<slug>/``), so each
+console window targets its own agent independently (chat → ``/agents/<slug>/api/chat``, SSE →
+``/agents/<slug>/api/events``, A2A → ``/agents/<slug>/a2a``). ``slug == "host"`` is this
+instance; any other slug resolves to its workspace port via the supervisor. There is no
+server-side "active" pointer — switching agents is just navigating the console URL, so two
+windows can't desync (the URL is the source of truth). The slug only resolves while that
+agent is actually running.
 
 Streaming-safe: responses (incl. SSE) are piped through unbuffered, and the upstream
 client is closed when the stream ends.

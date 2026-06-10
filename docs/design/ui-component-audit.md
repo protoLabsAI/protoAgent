@@ -145,7 +145,7 @@ Sharing standard: **`docs/design/component-sharing-standard.md`** (the contract)
 **Componentization complete to the extent the DS supports it.** Every component with a clean DS mapping is adopted. The remainder is documented exceptions, not unfinished work:
 - **Acceptable native patterns** (per the sharing standard): ~89 simple `title=` tooltips stay native (DS `Tooltip` is for rich content); structured alert composites (panel-error retry card, settings-banner icon+restart) stay app-side (DS `Callout` has no icon/action slot — swapping is a redesign); the chat composer `<textarea>` stays raw (needs a `ref`; DS forms aren't `forwardRef`).
 - **Blocked on a DS gap** (filed): 2 external-label `<label htmlFor>` toggles stay raw — DS `Checkbox`/`Switch` take no `id`/`...rest` → [protoContent #155](https://github.com/protoLabsAI/protoContent/issues/155).
-- **`SurfaceRail`/`MobileNav`/`AppShell` — deferred by design:** the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137) — and the new pluggable utility-bar (ADR 0040) lands there too.
+- **`SurfaceRail`/`MobileNav`/`AppShell` — deferred by design:** the local rail/nav are already DS-API-identical (we authored the upstream from them) + zero-coupling; swapping is low-value/high-risk (shell-grid + ~30 `.rail` e2e refs). Part of the controlled AppShell convergence (#137) — and the new pluggable utility-bar (ADR 0046) lands there too.
 
 ## Full-sweep classification (all 323 `theme.css` class groups triaged)
 

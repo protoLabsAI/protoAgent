@@ -1,6 +1,6 @@
 # ADR 0034 — Plugin UI as first-class React (Module Federation)
 
-**Status:** Proposed
+**Status:** Superseded by [ADR 0038](./0038-generative-ui-artifacts-two-mode.md) — Module Federation retired; first-class React plugins shipped via the iframe + `src/ext` two-mode model
 
 ## Context
 

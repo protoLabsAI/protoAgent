@@ -1,4 +1,4 @@
-# ADR 0040 — Pluggable utility bar: declarative widgets + data tickers
+# ADR 0046 — Pluggable utility bar: declarative widgets + data tickers
 
 **Status:** Proposed
 
@@ -31,7 +31,7 @@ A plugin declares widgets as **data** in a manifest `utility` block; the **conso
 natively** from that spec (icon + text + tone), not via an iframe. This keeps the bar fast,
 on-brand (DS tokens), and overflow-managed, and avoids N iframes for N tickers.
 
-> Contrast: ADR 0026 rail **views** = iframe (rich, sandboxed, full surface). ADR 0040 utility
+> Contrast: ADR 0026 rail **views** = iframe (rich, sandboxed, full surface). ADR 0046 utility
 > **widgets** = declarative (tiny, data-driven, native render). Rich interaction = open the view.
 
 ### D3 — Three widget kinds

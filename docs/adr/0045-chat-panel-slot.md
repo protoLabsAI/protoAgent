@@ -1,6 +1,6 @@
 # 0045 — The chat panel is a slot (swappable chat plugins)
 
-- Status: Proposed
+- Status: Accepted (#799)
 - Date: 2026-06-10
 - Builds on: ADR 0026 (plugin console views), 0038 (two-mode plugin UI), 0039 (event bus), 0032 (plugin middleware).
 

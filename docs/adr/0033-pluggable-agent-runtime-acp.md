@@ -1,6 +1,6 @@
 # ADR 0033 — Pluggable agent runtime (ACP executor)
 
-**Status:** Proposed
+**Status:** Accepted (shipped)
 
 ## Context
 

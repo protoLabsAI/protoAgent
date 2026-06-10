@@ -1,6 +1,6 @@
 # 0042 — Fleet supervisor & unified console (background agents, in-place switching)
 
-- Status: Proposed
+- Status: Accepted (v0.31.0)
 - Date: 2026-06-09
 - Builds on: ADR 0004 (per-instance scoping), 0027 (plugins), 0040 (bundles), 0041
   (workspaces & tiered stores).

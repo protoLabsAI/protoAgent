@@ -1,6 +1,6 @@
 # 0043 — Plugin consumption SDK + workflows as the first opt-in core extraction
 
-- Status: Proposed
+- Status: Accepted (#791)
 - Date: 2026-06-09
 - Builds on: ADR 0001 (extensibility), 0002 (workflows), 0026/0027 (plugins),
   0038 (two-mode plugin UI + `src/ext` seam), 0009 (control stack)

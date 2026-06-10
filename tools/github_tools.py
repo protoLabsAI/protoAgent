@@ -9,7 +9,8 @@ at the wrong repository (a real misrouting bug observed across the fleet).
 Tools degrade gracefully: if ``gh`` isn't installed or auth is missing,
 they return a readable ``Error: ...`` string the model can act on.
 
-Wire-in: ``get_github_tools()`` is appended by ``tools/lg_tools.get_all_tools``.
+Wire-in: ``get_github_tools()`` is registered by the GitHub plugin
+(``plugins/github/__init__.py``), not appended in ``tools/lg_tools.get_all_tools``.
 """
 
 from __future__ import annotations

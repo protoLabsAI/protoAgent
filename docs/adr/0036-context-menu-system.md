@@ -1,6 +1,6 @@
 # ADR 0036 — A unified context-menu system (+ plugin-contributed items)
 
-**Status:** Proposed
+**Status:** Accepted (shipped)
 
 ## Context
 
