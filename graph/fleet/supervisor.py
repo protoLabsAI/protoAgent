@@ -66,14 +66,18 @@ def _load_state() -> dict:
     try:
         d = json.loads(f.read_text())
         return d if isinstance(d, dict) else {}
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as e:
+        # Tolerant load keeps the fleet usable, but say so LOUDLY: a corrupt
+        # registry means every running agent is forgotten (orphaned processes
+        # still holding their ports) until they're re-created.
+        log.warning("[fleet] %s unreadable (%s) — treating as empty; running agents may be orphaned", f, e)
         return {}
 
 
 def _save_state(state: dict) -> None:
-    f = _state_path()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(state, indent=2) + "\n")
+    from paths import atomic_write
+
+    atomic_write(_state_path(), json.dumps(state, indent=2) + "\n")
 
 
 def _alive(pid: int | None) -> bool:
@@ -199,8 +203,8 @@ def _host_entry() -> dict:
 # joins this fleet as a SWITCHABLE agent: it gets a slug window like a local peer, with the
 # hub reverse-proxying its console + A2A. We can't start/stop it — `running` is a cached
 # reachability probe. Registry: `<workspaces_root>/remotes.json` (hub-scoped, #813);
-# an optional bearer token is stored alongside (plaintext, same posture as secrets.yaml)
-# and attached by the proxy — `status()` never returns it.
+# an optional bearer token is stored alongside (0600 + atomic write, same posture as
+# secrets.yaml) and attached by the proxy — `status()` never returns it.
 
 
 def _remotes_path() -> Path:
@@ -208,16 +212,24 @@ def _remotes_path() -> Path:
 
 
 def _load_remotes() -> dict:
+    p = _remotes_path()
+    if not p.exists():
+        return {}
     try:
-        return json.loads(_remotes_path().read_text())
-    except (OSError, json.JSONDecodeError):
+        return json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        # Loud: a corrupt registry silently dropping every remote member —
+        # including their stored bearer tokens — is undebuggable otherwise.
+        log.warning("[fleet] %s unreadable (%s) — treating as empty; remote members dropped", p, e)
         return {}
 
 
 def _save_remotes(remotes: dict) -> None:
-    p = _remotes_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(remotes, indent=2))
+    from paths import atomic_write
+
+    # 0600: this file carries the remotes' bearer tokens (matching the
+    # secrets.yaml posture — written atomically, never group/world readable).
+    atomic_write(_remotes_path(), json.dumps(remotes, indent=2), mode=0o600)
 
 
 def list_remotes() -> list[dict]:

@@ -15,12 +15,41 @@ so the segment survives a ``/sandbox`` → ``~/.protoagent`` fallback.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
+import tempfile
 from pathlib import Path
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+
+def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> None:
+    """Crash-safe text write: temp file in the same directory + ``os.replace``.
+
+    A bare ``open(path, "w")`` leaves a truncated file if the process dies
+    mid-write — for the JSON/YAML registries that tolerantly load ``{}`` on a
+    parse error, that silently forgets every record. The same-dir temp file
+    keeps the swap on one filesystem so ``os.replace`` stays atomic.
+
+    ``mode`` (e.g. ``0o600`` for files carrying credentials) is applied to the
+    temp file *before* the swap, so the final path never exists with looser
+    permissions.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _auto_scope_enabled() -> bool:
