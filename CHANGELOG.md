@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remotes.json` mutations now serialize on their own sibling FileLock
   (`remotes.json.lock`) instead of sharing `fleet.json`'s, so remote add/remove
   and probe-version persists can't contend with — or be lost under — fleet-state
-  writes. (#862)
+  writes. (#868)
 
 ### Fixed
 - **`config_to_dict` now emits the complete plugins section** — the serialized
