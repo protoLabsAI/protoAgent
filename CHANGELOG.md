@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Layered settings cascade — host-shared defaults agents inherit and override**
+  (ADR 0047). Settings now resolve **App → Host → Agent** per field. A new **Host
+  defaults** tab sets box-shared defaults — model/gateway, routing, prompt-cache,
+  telemetry, org branding — that every agent on the machine inherits; each agent
+  overrides any of them in its own settings (git-style: nearest layer wins), with
+  **"inherited from Host" / "overridden here"** badges and one-click **Reset to
+  inherited**. The shared layer lives in `host-config.yaml` (per-hub, `scope_leaf`'d);
+  secrets stay agent-local (never written to the host file). No migration: with no
+  host file the cascade is byte-identical to the old single-config behavior.
+  (#833/#836/#838/#846/#847/#848/#849)
 - **Remote fleet members — the agent there, the UI here** (ADR 0042 §I). Register any
   reachable protoAgent by URL (Discover → *Add to this fleet*, or
   `POST /api/fleet/remotes`) and it becomes a switchable member: a slug window like a
@@ -66,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or stop its parent hub's fleet. (#813)
 
 ### Changed
+- **`pyproject.toml` is the dependency source of truth** — runtime deps moved into
+  `[project.dependencies]` / `[project.optional-dependencies]`, so `uv sync` and
+  `pip install -e .[ui,google]` both just work; `requirements-*.txt` are kept as
+  readable, tier-scoped references that mirror it. (#811)
+- **Config is a single source of truth** — `config_to_dict` is now driven by the
+  settings-schema `FIELDS` registry (it had silently drifted, dropping 27 fields),
+  with a `from_dict` parse seam and a drift guard; adding a setting is now one
+  `Field` declaration that flows to parse, serialize, and the UI. (#833/#836/#838)
 - **Shell + settings banners are the design system's `Alert`** — both hand-rolled
   banner implementations replaced by `@protolabsai/ui` `Alert`; the genuinely missing
   inline-rename control is filed upstream instead (protoContent#195), per the
