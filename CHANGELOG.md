@@ -23,8 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [protoLabsAI/artifact-plugin](https://github.com/protoLabsAI/artifact-plugin) (git-installable,
   `protoagent-plugin` topic). It's the reference distributable plugin; core ships leaner. Install via
   Plugins → Download.
+- **Design system → @protolabsai/ui 0.18, with console polish** — the Identity panel renders SOUL.md
+  as Markdown by default (an **Edit** toggle flips to a raw editor) and fills the panel; a
+  **left-panel collapse toggle** joins the right one (both drag-aware; click an open panel's rail
+  icon to close it); chat-composer height + delegate-badge layout fixes.
 
 ### Removed
+- **The `/active` global-pointer proxy machinery** — superseded by slug routing (`/agents/<slug>/*`);
+  the `activate` endpoint is now ensure-running + keep-N-warm.
 - **Retired Module Federation (ADR 0038)** — plugin UI is now **sandboxed iframes** only
   (the right model for untrusted third-party + generative code, and trivially git-installable).
   Removed the in-process `ui: react`/federation path, the `@protoagent/plugin-ui` federation SDK,
@@ -33,6 +39,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own editor page). The context-menu registry moved back host-internal. Guide rewritten.
 
 ### Added
+- **Fleet console — run a fleet of agents from one console (ADR 0042).** A slug-routed UI
+  (`/app/agent/<slug>/`) where each window targets its own agent, so two agents can be open in two
+  windows at once with no shared-state cross-talk. Includes a **fleet manager** (create / start /
+  stop / remove agents) + an **archetype picker** (Basic + a built-in **Project Manager** that clones
+  the latest pm-stack on create), a **topbar switcher**, and **per-agent layout / theme / chat**.
+  New agents inherit the host's model config (model-only) so they boot ready-to-chat on the same
+  gateway. Agents are addable as each other's **`delegate_to` targets** for agent-to-agent flows,
+  and **mDNS + local-scan discovery** finds other protoAgents on the box / LAN to add as remote
+  delegates.
+- **Chat panel is a slot (ADR 0045)** — a plugin can contribute a `slot:"chat"` view that replaces
+  the built-in chat panel (A2A stays the canonical contract).
+- **Plugin-driven console navigation (ADR 0044)** — plugins drive surface navigation via
+  `registry.navigate`.
 - **Goals come alive in the console** — the Goals panel now shows a **monitor** badge + last-checked
   (vs drive iteration count), and a goal finishing raises a **toast** (`goal.achieved`/`goal.failed`,
   ADR 0039). Authoring stays in chat (`/goal`); the panel is observe + clear. Goal-mode guide updated.
@@ -70,6 +89,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WebUI model, so generated code is isolated from the console. Rides the existing iframe surface
   path (no federation). First slice of the two-mode plugin-UI model (ADR 0038); the `src/ext` fork
   seam + Module Federation retirement follow.
+
+### Security
+- **Secret-scan CI gate** — gitleaks runs on every PR (plus an opt-in pre-push hook), blocking
+  secrets from reaching the repo; example/lockfile/doc paths and the redaction-test fixtures are
+  allowlisted to avoid false positives.
 
 ## [0.30.0] - 2026-06-09
 
