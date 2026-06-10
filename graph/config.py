@@ -10,11 +10,15 @@ The defaults here point at the protoLabs LiteLLM gateway via the
 YAML (or swap the gateway alias) per agent without code changes.
 """
 
+import copy
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger("protoagent.config")
 
 # The built-in researcher's runtime defaults are the single source of truth; the
 # config-side SubagentDef mirrors them so the YAML override layer can't drift
@@ -72,6 +76,82 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
             resolved[k] = v if v is not None else resolved.get(k, "")
         out[sch.section] = resolved
     return out
+
+
+# ── App→Host→Agent settings cascade (ADR 0047) ───────────────────────────────
+
+def _deep_merge_dicts(base: dict, overlay: dict) -> dict:
+    """Deep-merge ``overlay`` onto ``base`` in place — overlay wins on leaf
+    conflicts; nested dicts merge recursively; lists REPLACE (no union)."""
+    for k, v in overlay.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge_dicts(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+def _get_dotted(d: dict, dotted: str):
+    """Walk ``dotted`` (``"prompt_cache.warm.enabled"``) through ``d`` →
+    ``(found, value)``; ``found`` is False at the first missing/non-dict segment."""
+    cur = d
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False, None
+        cur = cur[part]
+    return True, cur
+
+
+def _set_dotted(out: dict, dotted: str, value) -> None:
+    cur = out
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        cur = cur.setdefault(part, {})
+    cur[parts[-1]] = value
+
+
+def _filter_to_host_keys(raw: dict) -> dict:
+    """Keep only the host-scoped FIELDS keys present in a raw host-config doc.
+
+    The Host file can set box-shared defaults but **cannot inject agent-only
+    settings** (ADR 0047 D1/D4) — anything outside the ``scope=="host"`` set is
+    dropped here before the merge."""
+    from graph.settings_schema import FIELDS
+
+    out: dict = {}
+    for f in FIELDS:
+        if getattr(f, "scope", "agent") != "host":
+            continue
+        found, val = _get_dotted(raw, f.key)
+        if found:
+            _set_dotted(out, f.key, val)
+    return out
+
+
+def _load_host_layer() -> dict:
+    """The Host layer (ADR 0047): ``host-config.yaml`` filtered to host-scoped keys.
+
+    Returns ``{}`` when the file is absent, unreadable, or malformed — the cascade
+    then collapses to App defaults + the agent leaf. Best-effort: a corrupt host
+    file must never crash boot."""
+    try:
+        from paths import host_config_path
+
+        hp = host_config_path()
+    except Exception:  # noqa: BLE001 — never let host-path resolution break config load
+        return {}
+    if not hp.exists():
+        return {}
+    try:
+        with open(hp) as f:
+            raw = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        log.warning("host-config.yaml at %s is unreadable (%s); ignoring the Host layer", hp, exc)
+        return {}
+    if not isinstance(raw, dict):
+        log.warning("host-config.yaml at %s is not a mapping; ignoring the Host layer", hp)
+        return {}
+    return _filter_to_host_keys(raw)
 
 
 @dataclass
@@ -489,21 +569,31 @@ class LangGraphConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
-        """Load config from YAML file. Falls back to defaults if absent.
+        """Load config via the App→Host→Agent cascade (ADR 0047).
 
-        Thin wrapper: read the file (+ sibling secrets.yaml), then parse via
-        :meth:`from_dict` — the dict-level seam tests and the layered-settings
-        loader build on.
+        Reads the **agent** (leaf) YAML at ``path`` and overlays it on the box-shared
+        **Host** layer (``host-config.yaml``, filtered to host-scoped FIELDS keys).
+        Agent values win (git-style per-field override); the **App** layer is the
+        dataclass defaults filled in by :meth:`from_dict`. With NO host file the merge
+        collapses to the agent doc alone — byte-identical to the pre-cascade parse
+        (zero-migration). Secrets stay leaf-only (sibling ``secrets.yaml``).
         """
         p = Path(path)
-        if not p.exists():
+        host_layer = _load_host_layer()  # {} when absent/unreadable — never crashes boot
+        if not p.exists() and not host_layer:
             return cls()
 
-        with open(p) as f:
-            data = yaml.safe_load(f) or {}
+        agent_data: dict = {}
+        if p.exists():
+            with open(p) as f:
+                agent_data = yaml.safe_load(f) or {}
+
+        # Host is the base; the agent leaf overlays it (agent wins). No host layer ⇒
+        # merged is exactly the agent doc — the pre-cascade input, unchanged.
+        merged = _deep_merge_dicts(copy.deepcopy(host_layer), agent_data) if host_layer else agent_data
 
         secrets = _load_secrets_doc(p.parent)
-        return cls.from_dict(data, secrets=secrets, config_dir=p.parent)
+        return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
 
     @classmethod
     def from_dict(

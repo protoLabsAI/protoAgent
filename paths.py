@@ -99,6 +99,21 @@ def scope_leaf(path: str | Path) -> Path:
     return p.parent / _safe_segment(iid) / p.name
 
 
+def host_config_path() -> Path:
+    """The Host-layer config file (ADR 0047) — box-shared settings (gateway/model/
+    routing/telemetry defaults that all agents this machine owns inherit).
+
+    ``scope_leaf``'d per instance like every other store, so co-located hubs stay
+    isolated (#813); one-hub-per-box ≡ per-box. ``PROTOAGENT_HOST_CONFIG`` overrides
+    with an explicit file path (e.g. a read-only desktop sidecar). The file is
+    optional — absent ⇒ the cascade collapses to App defaults + the agent leaf.
+    """
+    raw = os.environ.get("PROTOAGENT_HOST_CONFIG")
+    if raw:
+        return Path(raw).expanduser()
+    return scope_leaf(data_home() / "host-config.yaml")
+
+
 def workspace_dir(*, create: bool = False) -> Path:
     """The agent's default fenced workspace — where the on-by-default filesystem
     toolset can read/write/edit (the fence the agent lives inside).
