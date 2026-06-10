@@ -128,11 +128,39 @@ def workspace_dir(*, create: bool = False) -> Path:
 # at shutdown, and anyone can ask who else is alive in the same root.
 
 
-def _instances_dir() -> Path:
-    """`.instances/` under THIS instance's data root (scoped or shared)."""
+def instance_root() -> Path:
+    """THIS instance's data root: ``data_home()/<iid>`` when scoped, else the shared home."""
     home = data_home()
     iid = instance_id()
-    return (home / _safe_segment(iid) if iid else home) / ".instances"
+    return home / _safe_segment(iid) if iid else home
+
+
+def _instances_dir() -> Path:
+    """`.instances/` under THIS instance's data root (scoped or shared)."""
+    return instance_root() / ".instances"
+
+
+def instance_uid() -> str:
+    """A stable, opaque uid for THIS data root (``<root>/.instance-uid``, created on
+    first read). The console keys its per-origin client state against it: when a
+    DIFFERENT backend reuses the same address (port handed from one agent to another),
+    the uid mismatch tells the new tenant's window to drop the previous tenant's
+    persisted chat view instead of rendering another agent's transcripts. Same root →
+    same uid (same data, by design). Best-effort: "" when the root isn't writable."""
+    import uuid
+
+    try:
+        f = instance_root() / ".instance-uid"
+        if f.exists():
+            got = f.read_text().strip()
+            if got:
+                return got
+        f.parent.mkdir(parents=True, exist_ok=True)
+        fresh = uuid.uuid4().hex[:16]
+        f.write_text(fresh)
+        return fresh
+    except Exception:  # noqa: BLE001 — a status field, never worth failing for
+        return ""
 
 
 def _pid_alive(pid: int) -> bool:

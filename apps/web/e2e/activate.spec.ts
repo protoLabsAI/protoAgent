@@ -5,16 +5,19 @@ import { expect, test } from "@playwright/test";
 // fixture's "roxy" is STOPPED, so this is the exact navigate-to-a-cold-agent path.
 
 test("opening a slug page activates (resumes) the agent", async ({ page }) => {
-  const activated = page.waitForRequest(
-    (r) => r.method() === "POST" && r.url().includes("/api/fleet/roxy/activate"),
+  const activated = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().includes("/api/fleet/roxy/activate"),
   );
   await page.goto("/app/agent/roxy/", { waitUntil: "load" });
-  await activated; // boot fired the resume call
+  await activated; // boot fired the resume call AND the mock processed it
 
   // And the mock fleet now reports it running.
-  const fleet = await page.evaluate(() => fetch("/api/fleet").then((r) => r.json()));
-  const roxy = fleet.agents.find((a: { id: string }) => a.id === "roxy");
-  expect(roxy.running).toBe(true);
+  await expect
+    .poll(async () => {
+      const fleet = await page.evaluate(() => fetch("/api/fleet").then((r) => r.json()));
+      return fleet.agents.find((a: { id: string }) => a.id === "roxy")?.running;
+    })
+    .toBe(true);
 });
 
 test("the host window never calls activate", async ({ page }) => {

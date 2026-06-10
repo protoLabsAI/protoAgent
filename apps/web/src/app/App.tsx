@@ -64,6 +64,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { IntroSplash } from "./IntroSplash";
+import { TenantGuard } from "./TenantGuard";
 import { BootGate } from "./BootGate";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
@@ -629,6 +630,9 @@ export function App() {
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
       <FleetTurnWatch />
+      {/* Tenant guard: if a DIFFERENT backend now owns this origin (port handed
+          between agents), drop the previous tenant's persisted chat view. */}
+      <TenantGuard uid={runtime?.instance_uid} />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. */}

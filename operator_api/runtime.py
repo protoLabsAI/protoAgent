@@ -22,6 +22,7 @@ def build_runtime_status(
     telemetry_store: Any = None,
     checkpoint_path: str = "",
     warnings: list[str] | None = None,
+    instance_uid: str = "",
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -63,6 +64,7 @@ def build_runtime_status(
             "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
             "warnings": warnings_block,
+            "instance_uid": instance_uid,
         }
 
     return {
@@ -132,6 +134,9 @@ def build_runtime_status(
             "telemetry_retention_days": getattr(config, "telemetry_retention_days", None),
         },
         "warnings": warnings_block,
+        # Stable per-data-root uid — the console keys per-origin client state on it
+        # (a different backend on the same address must not render this one's chats).
+        "instance_uid": instance_uid,
     }
 
 

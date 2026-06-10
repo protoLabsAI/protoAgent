@@ -124,3 +124,22 @@ def test_runtime_status_carries_warnings():
     assert s["warnings"] == ["sibling alert"]            # empties filtered
     s2 = build_runtime_status(config=None, setup_complete=False, graph_loaded=False)
     assert s2["warnings"] == []
+
+
+def test_instance_uid_stable_and_scoped(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    uid = paths.instance_uid()
+    assert uid and paths.instance_uid() == uid          # created once, then stable
+    assert (tmp_path / ".instance-uid").read_text().strip() == uid
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    scoped = paths.instance_uid()
+    assert scoped and scoped != uid                     # different data root → different uid
+    assert (tmp_path / "roxy" / ".instance-uid").exists()
+
+
+def test_runtime_status_carries_instance_uid():
+    from operator_api.runtime import build_runtime_status
+    s = build_runtime_status(config=None, setup_complete=False, graph_loaded=False,
+                             instance_uid="abc123")
+    assert s["instance_uid"] == "abc123"

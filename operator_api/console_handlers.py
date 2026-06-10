@@ -48,7 +48,7 @@ def _operator_runtime_status():
     # Live co-location check (#706) — re-evaluated per poll so the shell banner
     # appears/clears as siblings come and go. Quiet (empty `.instances/`) costs one
     # is_dir(); the `ps` guard only runs when sibling heartbeats actually exist.
-    from paths import colocation_warning
+    from paths import colocation_warning, instance_uid
     try:
         warnings = [w for w in (colocation_warning(),) if w]
     except Exception:  # noqa: BLE001 — status must never raise
@@ -73,6 +73,7 @@ def _operator_runtime_status():
         telemetry_store=STATE.telemetry_store,
         checkpoint_path=STATE.checkpoint_path,
         warnings=warnings,
+        instance_uid=instance_uid(),
     )
 
 

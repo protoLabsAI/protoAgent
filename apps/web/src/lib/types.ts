@@ -50,6 +50,9 @@ export type RuntimeStatus = {
   /** User-facing operational alerts (e.g. a live co-located instance sharing
    *  this data root, #706) — the shell banners them under the topbar. */
   warnings?: string[];
+  /** Stable per-data-root uid — the TenantGuard keys per-origin client state on it
+   *  (a different backend reusing this address must not render this one's chats). */
+  instance_uid?: string;
   skills?: {
     enabled: boolean;
     count: number;

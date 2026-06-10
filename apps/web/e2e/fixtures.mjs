@@ -9,6 +9,7 @@ export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
+  instance_uid: "mock-uid-1", // TenantGuard keys per-origin client state on this
   graph_loaded: true,
   project: { path: "/tmp/e2e-project", allowed_dirs: ["/tmp/e2e-project"] },
   model: {
