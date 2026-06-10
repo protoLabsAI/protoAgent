@@ -4,7 +4,7 @@
 
 /* Per-session status dot — passed into the DS TabBar `icon` slot (#832), so it
    renders inside .pl-tabbar__icon before the title (the TabBar frame itself is
-   now DS-owned; the bespoke .chat-tab*/.chat-tabbar*/.chat-session-select CSS the
+   now DS-owned; the bespoke .chat-tab* / .chat-tabbar* / .chat-session-select CSS the
    .pl-tabbar replaces was deleted). Plain global class keyed on .session-dot. */
 .session-dot {
   width: 7px;

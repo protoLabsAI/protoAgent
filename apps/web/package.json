@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "prebuild": "node scripts/copy-plugin-kit.mjs",
+    "prebuild": "node scripts/check-css-comments.mjs && node scripts/copy-plugin-kit.mjs",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "npm run build && playwright test",
