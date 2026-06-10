@@ -82,6 +82,11 @@ export type PluginView = {
   // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
   // alongside Notes/Beads/Goals/Schedule (ADR 0026).
   placement?: "rail" | "right";
+  // Claim a core surface slot instead of adding a rail icon (ADR 0045). A view with
+  // slot:"chat" REPLACES the built-in chat panel — it renders under the core "chat"
+  // rail id, stays mounted for the app's lifetime (streaming continuity, #613), and
+  // does not get its own rail entry. First enabled claimant wins.
+  slot?: "chat";
 };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its
