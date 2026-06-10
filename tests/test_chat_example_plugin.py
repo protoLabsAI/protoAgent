@@ -6,7 +6,9 @@ from pathlib import Path
 
 from graph.plugins.manifest import load_manifest
 
-_PLUGIN_DIR = Path("plugins/chat_example")
+# Lives in examples/ (NOT plugins/) on purpose: it's a copy-me reference, not a
+# shipped plugin — the loader never discovers it unless a user copies it in.
+_PLUGIN_DIR = Path("examples/plugins/chat_example")
 
 
 def _load_module():

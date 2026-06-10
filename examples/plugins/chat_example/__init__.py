@@ -17,8 +17,13 @@ It deliberately stops there: a production panel should drive the streaming A2A
 contract (``SendStreamingMessage`` + ``tasks/get`` reconciliation) and honor the
 ADR 0045 conformance checklist. This is the scaffold you grow that from.
 
-Enable with ``plugins: { enabled: [chat_example] }`` and reload — Chat becomes this
-panel. Disable it and the built-in chat is back.
+This is a copy-me example, not a bundled plugin — the loader only discovers
+directories under ``plugins/``. To try it::
+
+    cp -r examples/plugins/chat_example plugins/
+
+then ``plugins: { enabled: [chat_example] }`` and reload — Chat becomes this
+panel. Disable (or delete) the copy and the built-in chat is back.
 """
 
 from __future__ import annotations
