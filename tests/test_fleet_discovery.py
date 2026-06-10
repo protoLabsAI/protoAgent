@@ -84,3 +84,74 @@ def test_stop_advertise_refuses_on_event_loop(caplog):
 def test_advertise_without_port_is_noop(fake_zeroconf):
     discovery.advertise("alpha", 0)
     assert discovery._zc is None
+
+
+# ── tailnet channel ───────────────────────────────────────────────────────────
+_TS_STATUS = {
+    "Peer": {
+        "k1": {"HostName": "ava", "Online": True,
+               "TailscaleIPs": ["100.101.189.45", "fd7a::1"]},
+        "k2": {"HostName": "beefcake", "Online": False,
+               "TailscaleIPs": ["100.77.164.70"]},
+        "k3": {"HostName": "no-ips", "Online": True, "TailscaleIPs": []},
+    }
+}
+
+
+class _FakeRun:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_tailnet_peer_ips_online_ipv4_only(monkeypatch):
+    import json as _json
+    monkeypatch.setattr(discovery, "_tailscale_cli", lambda: "/fake/tailscale")
+    monkeypatch.setattr(discovery.subprocess, "run",
+                        lambda *a, **kw: _FakeRun(0, _json.dumps(_TS_STATUS)))
+    assert discovery._tailnet_peer_ips() == ["100.101.189.45"]  # online + IPv4 only
+
+
+def test_tailnet_peer_ips_quiet_without_tailscale(monkeypatch):
+    monkeypatch.setattr(discovery, "_tailscale_cli", lambda: None)
+    assert discovery._tailnet_peer_ips() == []
+
+    monkeypatch.setattr(discovery, "_tailscale_cli", lambda: "/fake/tailscale")
+    monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **kw: _FakeRun(1, ""))
+    assert discovery._tailnet_peer_ips() == []  # CLI errors → empty, never raises
+
+
+def test_scan_tailnet_probes_peers_and_skips_known(monkeypatch):
+    monkeypatch.setattr(discovery, "_tailnet_peer_ips", lambda: ["100.101.189.45"])
+    probed: list[tuple] = []
+
+    async def fake_probe(client, host, port):
+        probed.append((host, port))
+        if port == 7871:
+            return {"name": "ava-agent", "url": f"http://{host}:{port}",
+                    "host": host, "port": port}
+        return None
+
+    monkeypatch.setattr(discovery, "_probe", fake_probe)
+    found = asyncio.run(discovery._scan_tailnet((7870, 7872), known={("100.101.189.45", 7870)}))
+    assert found == [{"name": "ava-agent", "url": "http://100.101.189.45:7871",
+                      "host": "100.101.189.45", "port": 7871}]
+    assert ("100.101.189.45", 7870) not in probed  # known member skipped
+
+
+def test_discover_merges_three_channels(monkeypatch):
+    async def fake_local(port_range, skip):
+        return [{"name": "loc", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871}]
+
+    async def fake_tailnet(port_range, known):
+        return [{"name": "ava-agent", "url": "http://100.101.189.45:7874",
+                 "host": "100.101.189.45", "port": 7874}]
+
+    monkeypatch.setattr(discovery, "_scan_local", fake_local)
+    monkeypatch.setattr(discovery, "_scan_tailnet", fake_tailnet)
+    monkeypatch.setattr(discovery, "_browse_mdns", lambda timeout: [
+        {"name": "lan", "url": "http://192.168.5.40:7871", "host": "192.168.5.40", "port": 7871},
+        {"name": "known", "url": "http://192.168.5.41:7871", "host": "192.168.5.41", "port": 7871},
+    ])
+    found = asyncio.run(discovery.discover(known={("192.168.5.41", 7871)}))
+    assert sorted(f["name"] for f in found) == ["ava-agent", "lan", "loc"]
