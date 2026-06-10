@@ -8,7 +8,7 @@ test("feed shows entries with provenance + live append", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
   // Pushed activity messages arrive while we're on Chat → the rail badge shows.
-  await expect(page.locator(".pl-rail__badge")).toBeVisible();
+  await expect(page.locator(".pl-count--rail")).toBeVisible();
 
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();

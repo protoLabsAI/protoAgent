@@ -3,6 +3,7 @@ import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@protolabsai/ui/primitives";
+import { EditableText } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
@@ -23,7 +24,6 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
 
   // Display rename (the id — and so the URL slug + data scope — never changes).
   const [renaming, setRenaming] = useState<string | null>(null); // the id being renamed
-  const [renameValue, setRenameValue] = useState("");
   const rename = useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) => api.renameAgent(id, name),
     onMutate: () => setError(null),
@@ -181,21 +181,16 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                   <div className="fleet-row-main">
                     <span className="fleet-name">
                       {renaming === a.id ? (
-                        <form
-                          className="fleet-rename"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            rename.mutate({ id: a.id, name: renameValue.trim() });
-                          }}>
-                          <input
-                            className="fleet-rename-input"
-                            value={renameValue}
-                            autoFocus
-                            aria-label="New agent name"
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
-                          />
-                        </form>
+                        <EditableText
+                          inputClassName="fleet-rename-input"
+                          value={a.name}
+                          editing
+                          commitOnBlur={false}
+                          aria-label="New agent name"
+                          validate={(v) => v.length > 0}
+                          onEditingChange={(e) => setRenaming(e ? a.id : null)}
+                          onCommit={(next) => rename.mutate({ id: a.id, name: next })}
+                        />
                       ) : (
                         a.name
                       )}
@@ -238,10 +233,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       <>
                         <Button icon variant="ghost" title="Rename (display name only — the id/URL stays)"
                           disabled={rename.isPending}
-                          onClick={() => {
-                            setRenaming(a.id);
-                            setRenameValue(a.name);
-                          }}>
+                          onClick={() => setRenaming(a.id)}>
                           <Pencil size={14} />
                         </Button>
                         {a.running ? (

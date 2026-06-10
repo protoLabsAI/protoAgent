@@ -1,4 +1,4 @@
-import { Input } from "@protolabsai/ui/forms";
+import { EditableText } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   Loader2,
@@ -93,19 +93,14 @@ export function ChatSurface({
             <div className={`chat-tab ${active ? "active" : ""}`} role="tab" aria-selected={active} key={session.id}>
               <span className={`session-dot ${status}`} title={status} />
               {editingId === session.id ? (
-                <Input
-                  className="chat-tab-edit"
-                  autoFocus
-                  defaultValue={session.title}
+                <EditableText
+                  className="chat-tab-label"
+                  inputClassName="chat-tab-edit"
+                  value={session.title}
                   aria-label="Rename session"
-                  onBlur={(e) => {
-                    chatStore.renameSession(session.id, e.target.value.trim() || session.title);
-                    setEditingId(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    else if (e.key === "Escape") setEditingId(null);
-                  }}
+                  editing
+                  onEditingChange={(e) => setEditingId(e ? session.id : null)}
+                  onCommit={(next) => chatStore.renameSession(session.id, next)}
                 />
               ) : (
                 <button

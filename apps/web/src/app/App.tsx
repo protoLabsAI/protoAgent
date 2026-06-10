@@ -63,9 +63,10 @@ import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
-import { IntroSplash } from "./IntroSplash";
+import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { TenantGuard } from "./TenantGuard";
-import { BootGate } from "./BootGate";
+import { Splash, BootGate } from "@protolabsai/ui/splash";
+import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
@@ -347,6 +348,19 @@ export function App() {
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);
   const bootReady = bootOverride || setupPending || engineReady;
+  // The boot gate state the DS BootGate (a slot-only shell) doesn't own: whether
+  // the runtime probe has given up (`bootFailed`), and the post-grace "stuck"
+  // copy/escape-hatch swap. STUCK_AFTER_MS=45s — past it, offer "Continue anyway"
+  // so a graph that never compiles can't trap the operator on the loading screen.
+  const bootFailed = !runtime && runtimeQ.isError;
+  // White-labelled gate copy: identity.name → display name (forks read their own).
+  const bootName = brandName(runtime?.identity?.name);
+  const [bootStuck, setBootStuck] = useState(false);
+  useEffect(() => {
+    if (bootReady) return; // resolved before the grace period — no timer needed
+    const t = window.setTimeout(() => setBootStuck(true), 45_000);
+    return () => window.clearTimeout(t);
+  }, [bootReady]);
   const [error, setError] = useState("");
 
   // Clear the stale "Load failed" strip once the engine reports ready. The
@@ -635,7 +649,19 @@ export function App() {
   return (
     <>
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
-      <IntroSplash />
+      {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
+          2.5s then hands off via the View Transitions API cross-fade (the
+          protoAgent path); shows once per tab session (sessionStorage
+          "protoagent.introSeen") and skips under automation. The slotted icon is
+          gradient-filled to match the wordmark via stroke="url(#pl-brand-gradient)"
+          (the def Splash auto-renders with `gradient`). */}
+      <Splash
+        logo={<ProtoLabsIcon variant="outline" size={88} decorative gradientStroke />}
+        word="protoLabs.studio"
+        holdMs={2500}
+        once="protoagent.introSeen"
+        viewTransition
+      />
       {/* Cross-agent awareness: toast + native-notify when ANOTHER agent's turn
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
@@ -645,14 +671,44 @@ export function App() {
       <TenantGuard uid={runtime?.instance_uid} />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
-          "Starting <agent>…" rather than a "Load failed" flash. */}
-      <BootGate
-        ready={bootReady}
-        failed={!runtime && runtimeQ.isError}
-        name={brandName(runtime?.identity?.name)}
-        onRetry={() => void runtimeQ.refetch()}
-        onContinue={() => setBootOverride(true)}
-      />
+          "Starting <agent>…" rather than a "Load failed" flash. The DS BootGate
+          is a slot-only shell with no `ready` — the host owns the gate by
+          conditionally rendering it, and computes the failed/loading copy +
+          escape-hatch action. Name flows from identity so forks white-label. */}
+      {!bootReady && (
+        // role=status live region restores the screen-reader announcement the old
+        // gate carried ("Starting…" / "isn't responding") during the ~30s cold start
+        // — the DS BootGate shell doesn't own one. Host wrapper, no CSS (interim
+        // for protoContent#203: DS BootGate should own role=status aria-live).
+        <div role="status" aria-live="polite">
+          <BootGate
+            logo={<ProtoLabsIcon variant="outline" size={56} decorative />}
+            title={
+              bootFailed
+                ? `${bootName} isn’t responding`
+                : `Starting ${bootName}…`
+            }
+            detail={
+              bootFailed
+                ? "The engine didn’t come up in time. It may still be warming up — give it another moment, then retry."
+                : bootStuck
+                  ? "This is taking longer than usual. The engine may still be compiling, or it may need attention in Settings."
+                  : "Warming up the engine — first launch (and finishing setup) can take up to a minute. Later launches are quick."
+            }
+            action={
+              bootFailed ? (
+                <Button variant="primary" size="sm" onClick={() => void runtimeQ.refetch()}>
+                  Retry
+                </Button>
+              ) : bootStuck ? (
+                <Button variant="primary" size="sm" onClick={() => setBootOverride(true)}>
+                  Continue anyway
+                </Button>
+              ) : null
+            }
+          />
+        </div>
+      )}
       {/* macOS desktop: the topbar IS the window's drag region (its brand insets
           right of the native traffic lights — see `.is-tauri-mac .topbar`).
           Interactive children (the status dot) stay clickable; harmless on web. */}

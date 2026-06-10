@@ -20,6 +20,7 @@ export function ProtoLabsIcon({
   variant = "flat",
   className,
   decorative = false,
+  gradientStroke = false,
 }: {
   size?: number;
   variant?: "flat" | "outline" | "white";
@@ -27,8 +28,17 @@ export function ProtoLabsIcon({
   /** When true the SVG is hidden from a11y (the labelled container carries the
    *  name) — avoids a redundant nested "protoLabs.studio" announcement. */
   decorative?: boolean;
+  /** Stroke the (outline) mark with the brand gradient instead of solid lavender,
+   *  matching the gradient wordmark. References `#pl-brand-gradient` — the def the
+   *  DS Splash renders (or mount <BrandGradientDef/>). CSS can't gradient a slotted
+   *  SVG from outside, so the fill must live on the SVG itself. */
+  gradientStroke?: boolean;
 }) {
-  const robotStroke = variant === "outline" ? "#9b87f2" : "#ffffff";
+  const robotStroke = gradientStroke
+    ? "url(#pl-brand-gradient)"
+    : variant === "outline"
+      ? "#9b87f2"
+      : "#ffffff";
   const a11y = decorative
     ? { "aria-hidden": true as const }
     : { role: "img", "aria-label": "protoLabs.studio" };

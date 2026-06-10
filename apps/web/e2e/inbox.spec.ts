@@ -7,7 +7,7 @@ test("inbox badge appears, panel lists items, and dismiss removes one", async ({
   await page.goto("/app/", { waitUntil: "load" });
 
   // Inbound events bump the Activity rail's combined unread badge.
-  await expect(page.locator(".pl-rail__badge")).toBeVisible();
+  await expect(page.locator(".pl-count--rail")).toBeVisible();
 
   // Open Activity → its Inbox sub-tab.
   await page.getByRole("button", { name: "Activity", exact: true }).click();

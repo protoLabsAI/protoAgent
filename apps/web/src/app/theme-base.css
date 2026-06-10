@@ -10,7 +10,6 @@
   --brand-violet-light: #a78bfa;
   --brand-indigo: #6366f1;
   --brand-indigo-bright: #818cf8;
-  --brand-gradient: linear-gradient(135deg, #a78bfa 0%, #818cf8 50%, #6366f1 100%);
 
   /* Light-mode ready: the legacy app vars are now ALIASES of the @protolabsai/design
      `--pl-*` tokens (imported in main.tsx), so the whole console — DS components AND
@@ -20,9 +19,15 @@
   --bg-raised: var(--pl-color-bg-raised, #131316);
   --bg-panel: var(--pl-color-bg-raised, #101013);
   --bg-hover: var(--pl-color-bg-hover, #19191d);
+  /* --bg-elevated/--fg-tertiary/--danger were USED across the chrome but never
+     DEFINED here, so `var(--x, <dark>)` always resolved to the dark literal and
+     never flipped in light mode (#842). Aliased to the same --pl-* tokens as their
+     siblings so they flip too. */
+  --bg-elevated: var(--pl-color-bg-raised, #16161a);
   --fg: var(--pl-color-fg, #ededed);
   --fg-secondary: var(--pl-color-fg-muted, #a3a3ad);
   --fg-muted: var(--pl-color-fg-subtle, #8b8b94);
+  --fg-tertiary: var(--pl-color-fg-subtle, #6b6b73);
   --border: var(--pl-color-border, rgba(255, 255, 255, 0.08));
   --border-strong: var(--pl-color-border-strong, rgba(255, 255, 255, 0.18));
   --accent: var(--pl-color-accent, #7c8cff);
@@ -30,6 +35,7 @@
   --success: var(--pl-color-status-success, #41c48d);
   --warning: var(--pl-color-status-warning, #d4bd4f);
   --error: var(--pl-color-status-error, #f07458);
+  --danger: var(--pl-color-status-error, #f07458);
   --info: var(--pl-color-status-info, #7aa2ff);
 
   --font-sans: var(--pl-font-sans, "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
