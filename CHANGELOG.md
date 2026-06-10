@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PYTHONPATH` (the `entrypoint.sh` recipe); re-enabling autostart overwrites a
   stale plist in place. The CI stale-path guard — which only scanned
   `*.sh`/`*.yml`/`Dockerfile*` and so missed this — now also covers `*.py`. (#855)
+- **Knowledge embedding no longer blocks the event loop** — with a hybrid store,
+  the query embed (a sync HTTP call) ran *on* the loop before **every** LLM call
+  (`abefore_model` just called the sync hook), and inside the async
+  `memory_recall`/`memory_ingest` tools and `/api/knowledge/search` — one slow
+  embedding endpoint stalled every stream, health check and A2A peer on the
+  server. All four paths now dispatch via `asyncio.to_thread`, same as the
+  checkpointer. (#857)
+- **Chat no longer rewrites localStorage on every streamed token** — the console
+  chat store serialized *all* sessions to localStorage per SSE frame (~24 chars),
+  each write firing a cross-window `storage` event the other fleet windows
+  re-parse. Streamed updates now persist on a trailing 300ms timer; session
+  add/remove/rename/switch, stream done and page unload still flush immediately,
+  and the UI still streams live (only the write is deferred). (#857)
 
 ## [0.32.0] - 2026-06-10
 
