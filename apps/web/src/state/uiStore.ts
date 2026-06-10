@@ -92,6 +92,16 @@ type UIState = {
   setPluginDot: (key: string, on: boolean) => void;
 };
 
+/** persist v1→v2 migration: drop the obsolete `railOf` (side map); `railOrder`
+ * falls back to the default via the store's merge. Exported for unit testing. */
+export function migrateUiState(persisted: unknown): unknown {
+  if (persisted && typeof persisted === "object") {
+    const { railOf: _drop, ...rest } = persisted as Record<string, unknown>;
+    return rest;
+  }
+  return persisted;
+}
+
 export const useUI = create<UIState>()(
   persist(
     (set) => ({
@@ -173,14 +183,7 @@ export const useUI = create<UIState>()(
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
       version: 2, // v2: railOf (side map) → railOrder (ordered lists per rail)
-      migrate: (persisted: unknown) => {
-        // Drop the obsolete railOf; railOrder falls back to the default via merge.
-        if (persisted && typeof persisted === "object") {
-          const { railOf: _drop, ...rest } = persisted as Record<string, unknown>;
-          return rest as never;
-        }
-        return persisted as never;
-      },
+      migrate: (persisted: unknown) => migrateUiState(persisted) as never,
     },
   ),
 );

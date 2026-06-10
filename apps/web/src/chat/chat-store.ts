@@ -94,7 +94,7 @@ function persist(state: ChatState) {
   }
 }
 
-function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
+export function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
   if (!sessionId) return state.activeSessions;
   if (state.activeSessions.includes(sessionId)) return state.activeSessions;
 

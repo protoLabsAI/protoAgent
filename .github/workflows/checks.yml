@@ -126,6 +126,11 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Run unit tests (vitest)
+        # Pure-logic unit tests (chat-store reducers, the A2A SSE frame parser,
+        # the uiStore persist migration). Fast — runs before the heavier
+        # Playwright path so a reducer regression fails the job early.
+        run: npm run test:unit --workspace @protoagent/web
       - name: Install Playwright chromium
         run: npm --workspace @protoagent/web exec -- playwright install --with-deps chromium
       - name: Run E2E smoke (built SPA vs mock backend)

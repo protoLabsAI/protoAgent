@@ -9,7 +9,10 @@
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "npm run build && playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@protolabsai/design": "^0.5.0",
@@ -34,9 +37,11 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.5.0",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "typescript": "^5.6.3",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vitest": "^4.1.8"
   }
 }

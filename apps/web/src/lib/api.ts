@@ -245,7 +245,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
-function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
+export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
   return (parts || [])
     .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
     .map((part) => part.text)
@@ -301,7 +301,7 @@ function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
 }
 
 /** Pull the HITL form/question payload off an input-required frame's parts. */
-function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
+export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
   return (dataByMime(parts, HITL_MIME) as HitlPayload) || null;
 }
 
@@ -324,7 +324,7 @@ function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
 // (the agent had replied). Match any blank-line boundary, and split data lines
 // on any line ending. The regex matches on the raw buffer (not a normalized
 // copy), so a boundary split across two fetch chunks still reassembles correctly.
-function drainSseBuffer(buffer: string, onFrame: (frame: A2AFrame) => void): string {
+export function drainSseBuffer(buffer: string, onFrame: (frame: A2AFrame) => void): string {
   const BOUNDARY = /\r\n\r\n|\n\n|\r\r/;
   let match = BOUNDARY.exec(buffer);
   while (match) {
