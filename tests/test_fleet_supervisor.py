@@ -110,6 +110,8 @@ def test_remote_member_lifecycle(tmp_path, monkeypatch):
     entry = next(a for a in supervisor.status() if a.get("remote"))
     assert entry["name"] == "ava" and entry["running"] is False
     assert entry["a2a"] == "http://100.101.189.45:7871/a2a" and entry["pid"] is None
+    assert entry["version"] == ""      # no probe yet — version unknown
+    assert "token" not in entry        # the bearer NEVER leaves the registry via status()
 
     supervisor._probe_cache[rec["id"]] = (True, supervisor.time.monotonic())
     assert next(a for a in supervisor.status() if a.get("remote"))["running"] is True
@@ -134,6 +136,9 @@ def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
     class FakeResp:
         status_code = 200
 
+        def json(self):
+            return {"name": "ava", "version": "0.9.9"}
+
     def fake_get(url, timeout):
         calls["n"] += 1
         return FakeResp()
@@ -144,3 +149,86 @@ def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
     supervisor.refresh_remote_probes()  # within TTL — no second call
     assert calls["n"] == 1
     assert supervisor._probe_cache[rec["id"]][0] is True
+
+
+def test_probe_captures_remote_version(tmp_path, monkeypatch):
+    """Hub↔remote version handshake: the probe lifts ``version`` off the remote's A2A
+    card, persists it on the registry record (survives a hub restart), and status()
+    surfaces it — while the stored bearer token still never leaves via status()."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"name": "ava", "version": "0.30.0"}
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    supervisor.refresh_remote_probes()
+
+    entry = next(a for a in supervisor.status() if a.get("remote"))
+    assert entry["version"] == "0.30.0" and entry["running"] is True
+    assert "token" not in entry
+    # persisted on the record (token intact for the proxy)
+    stored = supervisor.remote_for_slug(rec["id"])
+    assert stored["version"] == "0.30.0" and stored["token"] == "sek"
+    # …and the hub's own version rides on the host entry, so the console can compare.
+    host = next(a for a in supervisor.status() if a.get("host"))
+    assert host["version"]
+
+
+def test_probe_card_without_version_keeps_last_known(tmp_path, monkeypatch):
+    """A card with no/blank version (or unparseable JSON) must not clobber the
+    last-known value — last-good wins until the remote reports something new."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+    rec = supervisor.add_remote("ava", "http://h:9")
+    supervisor._record_remote_version(rec["id"], "0.28.0")
+
+    class NoVersionResp:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: NoVersionResp())
+    supervisor.refresh_remote_probes()
+    assert supervisor.remote_for_slug(rec["id"])["version"] == "0.28.0"
+    assert next(a for a in supervisor.status() if a.get("remote"))["version"] == "0.28.0"
+
+
+def test_remotes_lock_serializes_concurrent_adds(tmp_path, monkeypatch):
+    """remotes.json RMW is FileLock-guarded (sibling of the fleet.json lock): two
+    concurrent add_remote calls — e.g. two route handlers — must both land. The
+    widened load→save window (sleep) loses one of them if the lock is ever dropped."""
+    import threading
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    orig_load = supervisor._load_remotes
+
+    def slow_load():
+        d = orig_load()
+        supervisor.time.sleep(0.05)  # widen the read→write window
+        return d
+
+    monkeypatch.setattr(supervisor, "_load_remotes", slow_load)
+    errs: list[Exception] = []
+
+    def add(name, port):
+        try:
+            supervisor.add_remote(name, f"http://h:{port}")
+        except Exception as e:  # noqa: BLE001 — surfaced below
+            errs.append(e)
+
+    threads = [threading.Thread(target=add, args=(n, p))
+               for n, p in (("r-one", 1), ("r-two", 2))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errs
+    assert {r["name"] for r in supervisor.list_remotes()} == {"r-one", "r-two"}

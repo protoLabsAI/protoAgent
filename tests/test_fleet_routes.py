@@ -90,6 +90,31 @@ def test_reserved_host_name_is_400(client):
     assert client.post("/api/fleet", json={"name": "host"}).status_code == 400
 
 
+def test_fleet_list_carries_versions(client, monkeypatch):
+    """Hub↔remote version handshake over /api/fleet: the host entry carries the hub's
+    own version, a remote member carries its last-probed one (never its token) —
+    that's what the console compares to flag skew."""
+    import httpx
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+    supervisor.add_remote("ava", "http://1.2.3.4:7871", token="sek")
+
+    class FakeCard:
+        status_code = 200
+
+        def json(self):
+            return {"name": "ava", "version": "0.30.0"}
+
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    agents = client.get("/api/fleet").json()["agents"]
+    host = next(a for a in agents if a.get("host"))
+    assert host["version"]  # the hub always knows its own version
+    remote = next(a for a in agents if a.get("remote"))
+    assert remote["version"] == "0.30.0"
+    assert "token" not in remote and "sek" not in str(agents)
+
+
 def test_discover_endpoint(client, monkeypatch):
     # /api/fleet/discover returns OTHER protoAgents (mock the scan); the route's host self-exclusion
     # + supervisor scan run, discover() internals are unit-tested elsewhere.

@@ -515,6 +515,10 @@ export type FleetAgent = {
   host?: boolean; // the instance serving this console — can't be stopped/removed from itself
   remote?: boolean; // a REMOTE member (ADR 0042 §I) — proxied by URL, no start/stop from here
   url?: string; // the remote member's base URL
+  // App version (pyproject [project].version). Always set on the host (hub) entry;
+  // for a remote member it's the last-probed value ("" until the first probe lands).
+  // The console flags hub↔remote skew — the proxied /api/* surface has no other versioning.
+  version?: string;
 };
 
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.

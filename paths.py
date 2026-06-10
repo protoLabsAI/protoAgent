@@ -52,6 +52,43 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
         raise
 
 
+def package_version() -> str:
+    """This instance's app version — ``pyproject.toml`` ``[project].version`` is the
+    one source of truth (the release pipeline bumps it).
+
+    Prefer installed-package metadata; fall back to reading pyproject.toml next to
+    this module (source checkout / ``COPY .`` image) or the PyInstaller bundle root;
+    final fallback keeps callers valid if neither is available. Lives here (a leaf
+    module) so the A2A card (``server/a2a.py``), the runtime status, and the fleet
+    supervisor all report it without import cycles — the hub↔remote version
+    handshake compares it.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("protoagent")
+        except PackageNotFoundError:
+            pass
+    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
+        pass
+
+    import sys
+
+    root = Path(__file__).resolve().parent
+    if getattr(sys, "frozen", False):  # PyInstaller onefile — assets land at _MEIPASS
+        root = Path(getattr(sys, "_MEIPASS", root))
+    try:
+        m = re.search(
+            r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(), re.MULTILINE
+        )
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
 def _auto_scope_enabled() -> bool:
     """``PROTOAGENT_AUTO_SCOPE`` — derive a per-instance scope from the working dir when
     no explicit ``PROTOAGENT_INSTANCE`` is set, so co-located instances never silently

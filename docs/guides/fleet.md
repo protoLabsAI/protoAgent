@@ -159,6 +159,12 @@ their lifecycle; **Remove** only unregisters (the remote agent is untouched). Re
 as a member and adding as a [`delegate_to` target](delegates.md) compose: the same agent
 can be both a window you operate and a delegate your agents call.
 
+**Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
+remote on a *different protoAgent release* is a real compat surface. The reachability probe
+also reads the remote's app version off its A2A agent card; when it differs from the hub's,
+the fleet manager shows a warning badge on that member ("remote runs vX.Y.Z, the hub
+vA.B.C — features may misbehave"). Upgrade the lagging side to clear it.
+
 ## See also
 
 - ADRs: [0040 bundles](../adr/0040-plugin-bundles.md) ·

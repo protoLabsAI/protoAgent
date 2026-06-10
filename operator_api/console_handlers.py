@@ -48,7 +48,7 @@ def _operator_runtime_status():
     # Live co-location check (#706) — re-evaluated per poll so the shell banner
     # appears/clears as siblings come and go. Quiet (empty `.instances/`) costs one
     # is_dir(); the `ps` guard only runs when sibling heartbeats actually exist.
-    from paths import colocation_warning, instance_uid
+    from paths import colocation_warning, instance_uid, package_version
     try:
         warnings = [w for w in (colocation_warning(),) if w]
     except Exception:  # noqa: BLE001 — status must never raise
@@ -74,6 +74,9 @@ def _operator_runtime_status():
         checkpoint_path=STATE.checkpoint_path,
         warnings=warnings,
         instance_uid=instance_uid(),
+        # App version (pyproject [project].version) — the hub↔remote version
+        # handshake (ADR 0042 §I) needs skew between consoles + agents visible.
+        version=package_version(),
     )
 
 

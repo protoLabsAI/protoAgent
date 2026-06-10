@@ -23,6 +23,7 @@ def build_runtime_status(
     checkpoint_path: str = "",
     warnings: list[str] | None = None,
     instance_uid: str = "",
+    version: str = "",
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -34,6 +35,11 @@ def build_runtime_status(
 
     ``warnings`` are user-facing operational alerts (e.g. a live co-located
     instance sharing this data root, #706) — the shell banners them.
+
+    ``version`` is this instance's app version (pyproject ``[project].version``) —
+    the console↔server ``/api/*`` surface has no other versioning, and with remote
+    fleet members (ADR 0042 §I) a hub console can drive a DIFFERENT release by
+    proxy, so skew must at least be visible.
     """
     warnings_block = [w for w in (warnings or []) if w]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
@@ -65,6 +71,7 @@ def build_runtime_status(
             "cache_warmer": {"enabled": False, "loaded": False},
             "warnings": warnings_block,
             "instance_uid": instance_uid,
+            "version": version,
         }
 
     return {
@@ -137,6 +144,7 @@ def build_runtime_status(
         # Stable per-data-root uid — the console keys per-origin client state on it
         # (a different backend on the same address must not render this one's chats).
         "instance_uid": instance_uid,
+        "version": version,
     }
 
 

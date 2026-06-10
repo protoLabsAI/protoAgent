@@ -9,20 +9,18 @@ wiring itself still lives in ``server.__init__._main`` (it calls these); only th
 logic moved here.
 
 ``server/__init__.py`` re-exports every public name below so ``server.<symbol>``
-keeps resolving for ``_main`` and the test suite. The three symbols this module
-imports from ``server`` (``agent_name``, ``_bundle_root``, ``_event_bus``) are
-all defined in ``__init__`` before its re-export line, so the import is not a
-cycle.
+keeps resolving for ``_main`` and the test suite. The symbols this module
+imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
+``__init__`` before its re-export line, so the import is not a cycle.
 """
 
 import logging
 import os
-import re
 
 from events import ACTIVITY_CONTEXT
 from graph.output_format import extract_output
 from runtime.state import STATE
-from server import _bundle_root, _event_bus, agent_name
+from server import _event_bus, agent_name
 
 log = logging.getLogger("protoagent.server")
 
@@ -110,31 +108,14 @@ def structured_skill_schema(skill_id: str) -> dict | None:
 def _package_version() -> str:
     """Single-source the agent-card version from the package metadata.
 
-    ``pyproject.toml`` ``[project].version`` is the one source of truth (the
-    release pipeline bumps it). Prefer installed-package metadata; fall back
-    to reading pyproject.toml (it's shipped in the image via ``COPY .``);
-    final fallback keeps the card valid if neither is available.
+    Delegates to ``paths.package_version()`` (one source of truth — the
+    pyproject ``[project].version`` the release pipeline bumps) so the card,
+    the runtime status, and the fleet version handshake can never disagree.
+    Kept as a name here for its existing importers (``server.__init__`` re-exports it).
     """
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    from paths import package_version
 
-        try:
-            return version("protoagent")
-        except PackageNotFoundError:
-            pass
-    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
-        pass
-
-    pyproject = _bundle_root() / "pyproject.toml"
-    try:
-        m = re.search(
-            r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE
-        )
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
-    return "0.0.0"
+    return package_version()
 
 
 def _a2a_card_url() -> str:

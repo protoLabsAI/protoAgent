@@ -183,6 +183,8 @@ def _host_entry() -> dict:
 
     from runtime.state import STATE
 
+    from paths import package_version
+
     cfg = getattr(STATE, "graph_config", None)
     name = getattr(cfg, "identity_name", "") or "main"
     port = getattr(STATE, "active_port", None)
@@ -195,6 +197,10 @@ def _host_entry() -> dict:
         "bundle": "",
         "host": True,
         "a2a": f"http://127.0.0.1:{port}/a2a" if port else None,
+        # The hub's own version — the console compares remote members against it
+        # (hub↔remote version handshake, ADR 0042 §I): a remote on a different
+        # release is a real, otherwise-invisible /api/* compat surface.
+        "version": package_version(),
     }
 
 
@@ -209,6 +215,14 @@ def _host_entry() -> dict:
 
 def _remotes_path() -> Path:
     return manager.workspaces_root() / "remotes.json"
+
+
+def _remotes_lock() -> FileLock:
+    """Cross-process lock around remotes.json read-modify-write — same pattern as
+    ``_state_lock`` but a SIBLING lock file, so remote-registry mutations (two route
+    handlers adding members concurrently, a probe persisting a version) serialize
+    against each other without contending on fleet.json's lock."""
+    return FileLock(str(_remotes_path()) + ".lock", timeout=5)
 
 
 def _load_remotes() -> dict:
@@ -251,7 +265,7 @@ def add_remote(name: str, url: str, token: str = "") -> dict:
     url = (url or "").strip().rstrip("/")
     if not url.startswith(("http://", "https://")):
         raise FleetError(f"remote url must be http(s), got {url!r}")
-    with _state_lock():
+    with _remotes_lock():
         remotes = _load_remotes()
         taken = ({r["name"] for r in remotes.values()}
                  | {w["name"] for w in manager.list_workspaces()})
@@ -270,7 +284,7 @@ def add_remote(name: str, url: str, token: str = "") -> dict:
 
 def remove_remote(ident: str) -> dict:
     """Unregister a remote member (by id or name) — the remote agent itself is untouched."""
-    with _state_lock():
+    with _remotes_lock():
         remotes = _load_remotes()
         rid = ident if ident in remotes else next(
             (k for k, r in remotes.items() if r["name"] == ident), None)
@@ -297,12 +311,36 @@ def refresh_remote_probes(timeout: float = 1.0) -> None:
         hit = _probe_cache.get(rec["id"])
         if hit and now - hit[1] < _PROBE_TTL:
             continue
+        version = ""
         try:
             r = httpx.get(f"{rec['url']}/.well-known/agent-card.json", timeout=timeout)
             alive = r.status_code == 200
+            if alive:
+                try:
+                    # The A2A card carries the remote's app version (pyproject
+                    # [project].version) — same unauthenticated endpoint the
+                    # reachability probe already hits, no extra round-trip.
+                    version = str(r.json().get("version", "") or "")
+                except ValueError:
+                    version = ""
         except httpx.HTTPError:
             alive = False
         _probe_cache[rec["id"]] = (alive, now)
+        if version and version != rec.get("version"):
+            _record_remote_version(rec["id"], version)
+
+
+def _record_remote_version(rid: str, version: str) -> None:
+    """Persist a probed remote's version on its registry record (hub↔remote version
+    handshake) so ``status()`` can surface skew — last-known survives a hub restart.
+    Write-on-change only; under the remotes lock so it can't lose a concurrent
+    add/remove."""
+    with _remotes_lock():
+        remotes = _load_remotes()
+        rec = remotes.get(rid)
+        if rec is not None and rec.get("version") != version:
+            rec["version"] = version
+            _save_remotes(remotes)
 
 
 def status() -> list[dict]:
@@ -334,6 +372,8 @@ def status() -> list[dict]:
         alive = _probe_cache.get(rec["id"], (False, 0.0))[0]
         out.append({"name": rec["name"], "id": rec["id"], "port": None, "pid": None,
                     "running": alive, "bundle": "", "remote": True, "url": rec["url"],
+                    # Last-probed remote version (from its A2A card) — NEVER the token.
+                    "version": rec.get("version", ""),
                     "a2a": f"{rec['url']}/a2a"})
     return out
 

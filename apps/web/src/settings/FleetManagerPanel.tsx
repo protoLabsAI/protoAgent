@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { EditableText } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -38,6 +38,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
 
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent this window is focused on (the URL slug)
+  // Hub↔remote version handshake (ADR 0042 §I): the proxied /api/* surface has no
+  // other versioning, so a remote member on a different release gets a warning badge.
+  const hubVersion = agents.find((a) => a.host)?.version ?? "";
 
   const run = useMutation({
     mutationFn: async (fn: () => Promise<unknown>) => fn(),
@@ -198,6 +201,16 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       )}
                       {a.host ? <span className="fleet-host-tag">this instance</span> : null}
                       {a.remote ? <span className="fleet-host-tag" title="A remote fleet member — proxied by URL">remote</span> : null}
+                      {/* Version skew (hub↔remote handshake): the hub console drives this
+                          remote's /api/* by proxy, so a different release can misbehave. */}
+                      {a.remote && a.version && hubVersion && a.version !== hubVersion ? (
+                        <span
+                          data-testid="fleet-version-skew"
+                          title={`This remote runs v${a.version}, the hub runs v${hubVersion} — features may misbehave across the version gap.`}
+                        >
+                          <Badge status="warning">v{a.version}</Badge>
+                        </span>
+                      ) : null}
                       {isActive ? <span className="fleet-active-tag">active</span> : null}
                     </span>
                     <span className="fleet-meta">
