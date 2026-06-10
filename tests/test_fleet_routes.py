@@ -80,3 +80,8 @@ def test_stop_entire_fleet(client):
     assert client.post("/api/fleet/down").json()["ok"]
     # The host can't stop itself; every peer is down.
     assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"] if not a.get("host"))
+
+
+def test_reserved_host_name_is_400(client):
+    # `host` is the reserved slug for this instance — a peer named `host` would shadow it.
+    assert client.post("/api/fleet", json={"name": "host"}).status_code == 400

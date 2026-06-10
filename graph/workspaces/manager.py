@@ -26,6 +26,13 @@ class WorkspaceError(Exception):
     """A workspace op was rejected (bad name, collision, missing workspace)."""
 
 
+# Names that collide with the fleet's routing vocabulary (ADR 0042 slug routing). `host` is the
+# reserved slug that addresses THIS instance (`/app/agent/host/` / `/agents/host/*`); a workspace
+# named `host` would shadow it → the peer is permanently unreachable + two switcher entries both
+# claim to be current. Reject at creation.
+_RESERVED_NAMES = {"host"}
+
+
 def workspaces_root() -> Path:
     """Where workspaces live. ``PROTOAGENT_WORKSPACES_DIR`` overrides; default
     ``~/.protoagent/workspaces``."""
@@ -131,6 +138,8 @@ def create(name: str, *, from_config: str | None = None, inherit_model: str | No
       * neither — the plain blank template.
     """
     name = _safe(name)
+    if name.lower() in _RESERVED_NAMES:
+        raise WorkspaceError(f"{name!r} is reserved — it's how the fleet addresses this instance")
     ws = _ws_dir(name)
     if ws.exists():
         raise WorkspaceError(f"workspace {name!r} already exists at {ws}")
