@@ -7,7 +7,7 @@ into a ``Delegate``, and how to ``dispatch`` a query to it. A reachability
 
 Ported/unified from ORBIS's ``agent/delegate_adapters.py`` — the canonical
 protoLabs delegate registry — adapted to protoAgent (the acp adapter reuses the
-ADR 0024 ``AcpClient``; the a2a adapter reuses the ``peer_tools`` JSON-RPC path).
+ADR 0024 ``AcpClient``; the a2a adapter reuses the ``peer_tools`` A2A parse helpers).
 """
 
 from __future__ import annotations

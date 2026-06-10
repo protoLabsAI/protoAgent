@@ -458,8 +458,8 @@ class LangGraphConfig:
     egress_allowed_hosts: list[str] = field(default_factory=list)
 
     # Opt-in CIDR allowlist for outbound A2A destinations — push callbacks +
-    # peer_consult (#572). Empty/unset = today's behavior (callbacks keep their
-    # default private-IP denylist; peer_consult unrestricted). When set, an
+    # delegate_to a2a delegates (#572). Empty/unset = today's behavior (callbacks keep their
+    # default private-IP denylist; delegate_to unrestricted). When set, an
     # outbound destination is allowed iff every resolved IP is inside a listed
     # CIDR. Enforced via ``security.set_callback_allowlist``.
     security_callback_allowlist: list[str] = field(default_factory=list)

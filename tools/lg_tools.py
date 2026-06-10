@@ -745,11 +745,10 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):
     # read_note / write_note / append_note over one shared markdown doc. Enabled
     # by default (the plugin manifest), so the agent gets them without a core list here.
-    # A2A peer-consult tools — only when at least one PEER_<HANDLE>_URL is set,
-    # so agents with no federation peers aren't cluttered.
-    from tools.peer_tools import get_peer_tools, list_env_peers
-    if list_env_peers():
-        tools.extend(get_peer_tools())
+    # A2A federation is the `delegate_to` tool over the delegate registry (ADR
+    # 0025, plugins/delegates) — it replaced the env-var `peer_consult`/`peer_list`
+    # tools, which were retired (delegate_to does a2a + openai + acp behind one tool
+    # with a console panel). Nothing to wire here.
     # Outbound Discord tools now come from the discord plugin (ADR 0018/0019) —
     # it registers them when a token is set, so disabling the plugin
     # (`plugins.disabled: [discord]`) removes the surface AND the tools.
