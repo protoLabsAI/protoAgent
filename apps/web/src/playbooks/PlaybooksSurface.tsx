@@ -1,5 +1,5 @@
 import { Input } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
@@ -102,13 +102,16 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
         />
 
         {!enabled ? (
-          <p className="empty-note">The skills index is disabled (set <code>skills.enabled: true</code>).</p>
+          <Empty>The skills index is disabled (set <code>skills.enabled: true</code>).</Empty>
         ) : filtered.length === 0 ? (
-          <p className="empty-note">
-            {playbooks.length === 0
-              ? "No playbooks yet — author a SKILL.md, or let the agent emit one from a run."
-              : "No playbooks match your search."}
-          </p>
+          playbooks.length === 0 ? (
+            <Empty
+              title="No playbooks yet"
+              description="author a SKILL.md, or let the agent emit one from a run."
+            />
+          ) : (
+            <Empty>No playbooks match your search.</Empty>
+          )
         ) : (
           <ul className="playbook-list">
             {filtered.map((p) => (
@@ -116,12 +119,16 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                 <div className="playbook-main">
                   <div className="playbook-title">
                     {p.source === "disk" ? (
-                      <span className="playbook-badge pinned" title="Pinned SKILL.md (re-seeded on boot)">
-                        <Pin size={12} /> pinned
+                      <span title="Pinned SKILL.md (re-seeded on boot)">
+                        <Badge status="info">
+                          <Pin size={12} /> pinned
+                        </Badge>
                       </span>
                     ) : (
-                      <span className="playbook-badge learned" title="Agent-emitted (curated/decaying)">
-                        <Sparkles size={12} /> learned
+                      <span title="Agent-emitted (curated/decaying)">
+                        <Badge status="success">
+                          <Sparkles size={12} /> learned
+                        </Badge>
                       </span>
                     )}
                     <strong>{p.name}</strong>

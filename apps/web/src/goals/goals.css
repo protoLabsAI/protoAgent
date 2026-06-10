@@ -18,10 +18,6 @@
   border-bottom: 0;
 }
 
-.goal-row.empty {
-  gap: 2px;
-}
-
 .goal-row-head {
   display: flex;
   align-items: center;

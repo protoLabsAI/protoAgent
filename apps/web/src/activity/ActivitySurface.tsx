@@ -1,7 +1,7 @@
 import "./activity.css";
 
 import { Textarea } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
 
 import { useEffect, useRef, useState } from "react";
@@ -136,9 +136,11 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       <div className="stage-body activity-body">
         <div className="activity-feed" ref={scrollRef}>
           {chronological.length === 0 && !loading ? (
-            <div className="activity-empty">
-              Nothing yet. Scheduled fires, inbox items, and sister-agent pushes land here — each tagged with what triggered it.
-            </div>
+            <Empty
+              className="activity-empty"
+              title="Nothing yet"
+              description="Scheduled fires, inbox items, and sister-agent pushes land here — each tagged with what triggered it."
+            />
           ) : null}
           {chronological.map((e) => (
             <div className="activity-entry" key={e.id} data-origin={e.origin}>

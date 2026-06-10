@@ -1,6 +1,6 @@
-/* Activity surface (ADR 0003) — moved from app/theme.css (#832). The rail badge
-   (.rail-badge) + the background-stream rail dot (.rail-dot) stay in theme.css:
-   they style the always-mounted shell rail buttons, not the Activity surface. */
+/* Activity surface (ADR 0003) — moved from app/theme.css (#832). The
+   background-stream rail dot (.rail-dot) stays in theme.css: it styles the
+   always-mounted shell rail buttons, not the Activity surface. */
 .activity-body {
   display: flex;
   flex-direction: column;
@@ -16,12 +16,10 @@
   gap: 12px;
 }
 
+/* Layout-only: the chrome is the DS Empty (.pl-empty--slotted, which centers its
+   own contents + caps width); this just centers the block within the scroll feed. */
 .activity-empty {
-  color: var(--fg-secondary);
-  font-size: 13px;
   margin: auto;
-  text-align: center;
-  max-width: 36ch;
 }
 
 .activity-msg {

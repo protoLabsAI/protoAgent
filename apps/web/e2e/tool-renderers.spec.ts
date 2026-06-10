@@ -51,7 +51,7 @@ test("current_time renders the timestamp and human line", async ({ page }) => {
 test("fetch_url renders a status badge, link, and body", async ({ page }) => {
   const body = await run(page, "FETCH the page");
   const fetch = body.locator(".tool-fetch");
-  await expect(fetch.locator(".tool-badge")).toHaveText("200");
+  await expect(fetch.getByText("200", { exact: true })).toBeVisible(); // DS Badge (#832)
   await expect(fetch.locator("a.tool-link")).toHaveAttribute("href", "https://example.com");
   await expect(fetch.locator(".tool-fetch-body")).toContainText("Example Domain");
 });

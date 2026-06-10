@@ -1,6 +1,6 @@
 import "./chat.css";
 import { EditableText } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
   Loader2,
   Plus,
@@ -543,10 +543,7 @@ function ChatSessionSlot({
     <div className="chat-session-slot" hidden={!visible}>
       <div className="message-list" ref={listRef}>
         {messages.length === 0 ? (
-          <div className="empty-state">
-            <TerminalSquare size={18} />
-            <span>No messages in this session.</span>
-          </div>
+          <Empty icon={<TerminalSquare />} description="No messages in this session." />
         ) : (
           messages.map((message) => (
             <article className={`message message-${message.role}`} key={message.id || `${message.role}-${message.createdAt}`}>

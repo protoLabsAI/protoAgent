@@ -17,7 +17,7 @@ test("Agents tab lists the host (this instance) + peers, host active by default"
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
   // The host self-registers — it's always present + marked "this instance", and focused
   // (active) when no peer is — so the panel is never "0 agents".
-  await expect(page.locator(".fleet-host-tag").first()).toBeVisible();
+  await expect(page.getByText("this instance").first()).toBeVisible(); // DS Badge (#832)
   await expect(page.locator(".fleet-row.active .fleet-name")).toContainText("main");
   await expect(page.locator(".fleet-row", { hasText: "ava" })).toBeVisible();
   await expect(page.locator(".fleet-row", { hasText: "roxy" })).toBeVisible();

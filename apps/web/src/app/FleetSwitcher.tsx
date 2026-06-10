@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ExternalLink, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { Badge } from "@protolabsai/ui/primitives";
+
 import { agentHref, api, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 
@@ -65,7 +67,7 @@ export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: Reac
                 <span className={`fleet-dot ${a.running ? "running" : "stopped"}`} aria-hidden />
                 <span className="fleet-switcher-name">
                   {a.name}
-                  {a.host ? <span className="fleet-host-tag">this instance</span> : null}
+                  {a.host ? <Badge status="neutral">this instance</Badge> : null}
                 </span>
                 {isCurrent ? (
                   <Check size={14} />

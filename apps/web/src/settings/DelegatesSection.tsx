@@ -2,7 +2,9 @@ import "./settings.css";
 import "./delegates.css";
 
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
+
+import { StatusPill } from "../app/StatusPill";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -121,9 +123,9 @@ export function DelegatesSection() {
                       ●
                     </span>
                   ) : null}
-                  {d.name} <span className="delegate-type-badge">{d.type}</span>
-                  {!d.configured ? <span className="delegate-badge-warn">⚠ unconfigured</span> : null}
-                  {d.has_secret ? <span className="delegate-badge-ok">secret set</span> : null}
+                  {d.name} <Badge status="neutral">{d.type}</Badge>
+                  {!d.configured ? <StatusPill label="⚠ unconfigured" tone="warning" /> : null}
+                  {d.has_secret ? <StatusPill label="secret set" tone="muted" /> : null}
                 </strong>
                 <span>{p ? probeLine(p) : d.description || d.error || ""}</span>
               </div>

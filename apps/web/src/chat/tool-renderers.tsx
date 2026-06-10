@@ -1,6 +1,8 @@
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { Badge } from "@protolabsai/ui/primitives";
+
 // Renders a tool's input/output as real components instead of a raw JSON blob.
 //
 // Two layers:
@@ -179,7 +181,7 @@ function renderFetchUrl(raw: string): ReactNode | null {
   return (
     <div className="tool-fetch">
       <div className="tool-fetch-head">
-        <span className="tool-badge">{status}</span>
+        <Badge status="success">{status}</Badge>
         <Link href={url} />
       </div>
       <div className="tool-text tool-fetch-body">{body}</div>

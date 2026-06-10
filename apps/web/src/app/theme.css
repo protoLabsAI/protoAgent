@@ -713,22 +713,9 @@ textarea {
   white-space: pre-wrap;
 }
 
-/* Activity surface + rail badge (ADR 0003) ---------------------------------- */
-.rail-badge {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent, #7c8cff);
-  color: #fff;
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-  font-weight: 600;
-}
+/* Activity surface + rail dot (ADR 0003) ------------------------------------ */
+/* .rail-badge retired (#832) — dead class; the rail unread count is the DS
+   SurfaceRail .pl-count--rail (app-shell.tsx), fed by App.tsx's count. */
 
 /* Background chat-streaming indicator on the Chat rail button — a small pulsing
    dot (no count), shown while a turn streams on another tab. */
@@ -1018,7 +1005,7 @@ textarea {
 }
 
 /* Goals side-panel — .goals-list + .goal-row* moved to src/goals/goals.css (#832).
-   The .issue-* / .empty-state / .setup-overlay rules below belong to other surfaces
+   The .issue-* / .setup-overlay rules below belong to other surfaces
    (BeadsPanel, ChatSurface, SetupWizard) and stay shared here. */
 
 .issue-group {
@@ -1160,20 +1147,8 @@ textarea {
   gap: 6px;
 }
 
-.empty-state {
-  min-height: 96px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--fg-muted);
-}
-
-.empty-state.stacked {
-  flex-direction: column;
-  gap: 10px;
-  text-align: center;
-}
+/* .empty-state / .empty-state.stacked retired (#832) — BeadsPanel + ChatSurface
+   now render the DS <Empty> (.pl-empty--slotted). */
 
 .setup-overlay {
   position: fixed;
@@ -1543,7 +1518,7 @@ textarea {
 }
 
 /* ── Settings surface ─────────────────────────────────────────────────────── */
-/* The settings-form chrome (.settings-banner/.settings-group*/.setting-*, ADR 0047
+/* The settings-form chrome (.settings-banner / .settings-group / .setting-..., ADR 0047
    .setting-inheritance) moved to src/settings/settings.css (#832). Left here, shared:
    .settings-status (SchedulePanel renders it too) + the .settings-help-link / .setup-link
    rule (it pairs the setup wizard's link styling). */
@@ -1568,13 +1543,8 @@ textarea {
 }
 
 /* Telemetry dashboard + insights (ADR 0006 Slices 3–4) — the .telemetry-* / .turn-state* /
-   .insight-* / .flag-* rules moved to src/settings/telemetry.css (#832). .empty-note stays:
-   it's shared (PlaybooksSurface + KnowledgeStore render it too). */
-.empty-note {
-  color: var(--fg-muted);
-  font-size: 13px;
-  padding: 16px 2px;
-}
+   .insight-* / .flag-* rules moved to src/settings/telemetry.css (#832). .empty-note retired
+   (#832): Knowledge/Playbooks/Telemetry now render the DS <Empty> (.pl-empty). */
 
 /* Playbooks surface (ADR 0009) */
 .playbook-search {
@@ -1602,13 +1572,8 @@ textarea {
 .playbook-main { min-width: 0; }
 .playbook-title { display: flex; align-items: center; gap: 8px; }
 .playbook-title strong { font-size: 13.5px; }
-.playbook-badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--border); color: var(--fg-muted); white-space: nowrap;
-}
-.playbook-badge.pinned { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
-.playbook-badge.learned { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+/* .playbook-badge / .pinned / .learned retired (#832) — pinned/learned/domain/
+   finding-type tags are now DS <Badge> (info / success / neutral). */
 .playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--fg-secondary); }
 .playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
 .playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--bg-hover); color: var(--fg-muted); }
@@ -1752,11 +1717,12 @@ textarea {
 }
 
 /* Fleet manager (Settings → Agents, ADR 0042) — the .fleet-list / .fleet-row* /
-   .fleet-rename-input / .fleet-active-tag / .fleet-meta / .fleet-error / .fleet-purge /
-   .fleet-delegate-tag / .fleet-discover rules moved to src/fleet/fleet.css (#832).
+   .fleet-rename-input / .fleet-meta / .fleet-error / .fleet-purge / .fleet-discover
+   rules moved to src/fleet/fleet.css (#832). The .fleet-active-tag / .fleet-delegate-tag /
+   .fleet-host-tag text tags are now DS <Badge> (#832).
    Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), .field-hint
-   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), and .fleet-host-tag
-   + .fleet-dot* — both rendered by the always-mounted topbar FleetSwitcher AND the FleetManager
+   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), and .fleet-dot*
+   — both rendered by the always-mounted topbar FleetSwitcher AND the FleetManager
    panel, so they stay in this always-loaded layer (not a Settings-only module that loads lazily),
    plus the global ::view-transition root crossfade. */
 
@@ -1776,10 +1742,9 @@ textarea {
   opacity: 0.45;
 }
 
+/* The grid track + gap are now the DS <Grid min="160px" gap="sm"> (#832); this
+   keeps only the spacing below the picker, merged onto Grid via className. */
 .archetype-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
   margin-bottom: 18px;
 }
 .archetype-card {
@@ -1895,17 +1860,8 @@ textarea {
   background: var(--border);
 }
 
-/* The host (this instance) tag in the fleet manager + switcher (ADR 0042) */
-.fleet-host-tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0 5px;
-  margin-left: 8px;
-}
+/* .fleet-host-tag retired (#832) — the "this instance" / "remote" tags in the
+   fleet manager + switcher are now DS <Badge status="neutral">. */
 
 /* Theme crossfade (ADR 0042) — applyAgentTheme() applies the focused agent's look inside a
    View Transition (when supported), so switching agents snapshots before/after and crossfades

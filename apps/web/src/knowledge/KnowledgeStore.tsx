@@ -1,5 +1,5 @@
 import { Input } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Brain, Database, RefreshCw } from "lucide-react";
 
 import { useEffect, useState } from "react";
@@ -77,26 +77,33 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
         />
 
         {!enabled ? (
-          <p className="empty-note">
+          <Empty>
             The knowledge store is off (enable <code>middleware.knowledge</code>).
-          </p>
+          </Empty>
         ) : results.length === 0 ? (
-          <p className="empty-note">
-            {query.trim()
-              ? "No entries match your search."
-              : "The knowledge base is empty — findings, daily-log entries, and harvested sessions will appear here as the agent works."}
-          </p>
+          query.trim() ? (
+            <Empty>No entries match your search.</Empty>
+          ) : (
+            <Empty
+              title="The knowledge base is empty"
+              description="findings, daily-log entries, and harvested sessions will appear here as the agent works."
+            />
+          )
         ) : (
           <ul className="playbook-list">
             {results.map((c) => (
               <li key={c.id} className="playbook-card">
                 <div className="playbook-main">
                   <div className="playbook-title">
-                    <span className="playbook-badge learned" title={`domain: ${c.domain}`}>
-                      <Database size={12} /> {c.domain}
+                    <span title={`domain: ${c.domain}`}>
+                      <Badge status="success">
+                        <Database size={12} /> {c.domain}
+                      </Badge>
                     </span>
                     {c.finding_type ? (
-                      <span className="playbook-badge" title="finding type">{c.finding_type}</span>
+                      <span title="finding type">
+                        <Badge status="neutral">{c.finding_type}</Badge>
+                      </span>
                     ) : null}
                     {c.heading ? <strong>{c.heading}</strong> : null}
                   </div>

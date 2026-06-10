@@ -1,6 +1,6 @@
 import "../goals/goals.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
 
   QueryErrorResetBoundary,
@@ -52,12 +52,14 @@ function GoalsList() {
 
   if (!goals.length) {
     return (
-      <div className="goal-row empty">
-        <strong>No goals</strong>
-        <span className="goal-row-meta">
-          set one in chat with <code>/goal …</code>
-        </span>
-      </div>
+      <Empty
+        title="No goals"
+        description={
+          <>
+            set one in chat with <code>/goal …</code>
+          </>
+        }
+      />
     );
   }
 

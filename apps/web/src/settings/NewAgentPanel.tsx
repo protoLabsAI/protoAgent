@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@protolabsai/ui/primitives";
+import { Grid } from "@protolabsai/ui/layout";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { api } from "../lib/api";
@@ -57,7 +58,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         ) : null}
 
         <p className="fleet-section-label">Archetype</p>
-        <div className="archetype-grid">
+        <Grid className="archetype-grid" min="160px" gap="sm">
           {list.map((a: Archetype) => (
             <button
               key={a.id}
@@ -71,7 +72,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
               <span className="archetype-blurb">{a.blurb}</span>
             </button>
           ))}
-        </div>
+        </Grid>
 
         <label className="field archetype-name-field">
           <span>Name</span>

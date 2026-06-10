@@ -1,5 +1,5 @@
 import { Input, Select } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -149,10 +149,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
 
       <ScrollArea className="issue-list" role="region" aria-label="Beads tasks" tabIndex={0}>
         {issues.length === 0 ? (
-          <div className="empty-state stacked">
-            <Boxes size={18} />
-            <span>No issues yet — add one above, or the agent will.</span>
-          </div>
+          <Empty icon={<Boxes />} description="No issues yet — add one above, or the agent will." />
         ) : (
           groupIssues(issues).map((group) => {
             const isGroupCollapsed = collapsed.has(group.status);

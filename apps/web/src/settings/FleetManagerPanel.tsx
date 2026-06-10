@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { EditableText } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -169,9 +169,17 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           </p>
         ) : null}
         {fleet.isLoading ? (
-          <p className="fleet-empty">Loading the fleet…</p>
+          <Empty>Loading the fleet…</Empty>
         ) : agents.length === 0 ? (
-          <p className="fleet-empty">No agents yet — create one to get started.</p>
+          <Empty
+            title="No agents yet"
+            description="create one to get started"
+            action={
+              <Button variant="primary" onClick={onNew}>
+                <Plus size={15} /> New agent
+              </Button>
+            }
+          />
         ) : (
           <ul className="fleet-list">
             {agents.map((a) => {
@@ -199,8 +207,12 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       ) : (
                         a.name
                       )}
-                      {a.host ? <span className="fleet-host-tag">this instance</span> : null}
-                      {a.remote ? <span className="fleet-host-tag" title="A remote fleet member — proxied by URL">remote</span> : null}
+                      {a.host ? <Badge status="neutral">this instance</Badge> : null}
+                      {a.remote ? (
+                        <span title="A remote fleet member — proxied by URL">
+                          <Badge status="neutral">remote</Badge>
+                        </span>
+                      ) : null}
                       {/* Version skew (hub↔remote handshake): the hub console drives this
                           remote's /api/* by proxy, so a different release can misbehave. */}
                       {a.remote && a.version && hubVersion && a.version !== hubVersion ? (
@@ -211,7 +223,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           <Badge status="warning">v{a.version}</Badge>
                         </span>
                       ) : null}
-                      {isActive ? <span className="fleet-active-tag">active</span> : null}
+                      {isActive ? <Badge status="info">active</Badge> : null}
                     </span>
                     <span className="fleet-meta">
                       {a.remote ? a.url : `:${a.port}`}
@@ -224,7 +236,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         agent but the one you're on (it can't delegate to itself). */}
                     {!isActive ? (
                       delegateNames.has(a.name) ? (
-                        <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
+                        <span title="A delegate of this agent">
+                          <Badge status="info">delegate</Badge>
+                        </span>
                       ) : (
                         <Button icon variant="ghost" title="Add as a delegate of this agent (delegate_to)"
                           disabled={addDelegate.isPending || !a.a2a}
@@ -283,7 +297,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           </Button>
           {discovered ? (
             discovered.length === 0 ? (
-              <p className="fleet-empty">No other protoAgents found on the network.</p>
+              <Empty>No other protoAgents found on the network.</Empty>
             ) : (
               <ul className="fleet-list">
                 {discovered.map((d) => (
@@ -302,7 +316,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         <Plus size={14} />
                       </Button>
                       {delegateNames.has(d.name) ? (
-                        <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
+                        <span title="A delegate of this agent">
+                          <Badge status="info">delegate</Badge>
+                        </span>
                       ) : (
                         <Button icon variant="ghost" title="Add as a remote delegate (delegate_to)"
                           disabled={addDelegate.isPending}

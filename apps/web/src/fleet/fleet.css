@@ -36,15 +36,7 @@
   font-weight: 600;
   width: 12ch;
 }
-.fleet-active-tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  padding: 0 5px;
-}
+/* .fleet-active-tag retired (#832) — now DS <Badge status="info">. */
 .fleet-meta {
   font-size: 12px;
   color: var(--fg-muted);
@@ -55,7 +47,8 @@
   display: flex;
   gap: 4px;
 }
-.fleet-empty,
+/* .fleet-empty retired (#832) — the manager + discover empty states now render
+   the DS <Empty> (.pl-empty). .fleet-section-label keeps its muted color. */
 .fleet-section-label {
   color: var(--fg-muted);
 }
@@ -80,22 +73,8 @@
   width: auto;
 }
 
-/* "delegate" marker on a fleet row — this agent is a delegate_to target of the focused agent. */
-.fleet-delegate-tag {
-  /* It lives in .fleet-row-actions (a flex row), so center it + don't stretch to the action
-     buttons' height (that left a tall box with the text top-aligned). */
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  line-height: 1.6;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--brand-violet, #9b87f2);
-  border: 1px solid color-mix(in srgb, var(--brand-violet, #9b87f2) 40%, transparent);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
+/* .fleet-delegate-tag retired (#832) — now DS <Badge status="info"> (wrapped in a
+   titled span to keep the "A delegate of this agent" tooltip). */
 
 /* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
 .fleet-discover {

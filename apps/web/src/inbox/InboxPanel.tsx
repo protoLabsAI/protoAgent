@@ -1,6 +1,6 @@
 import "./inbox.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
 
   QueryErrorResetBoundary,
@@ -68,10 +68,14 @@ function InboxBody({
 
       <div className="inbox-list">
         {items.length === 0 ? (
-          <div className="inbox-empty">
-            Nothing pending. Inbound stimuli (webhooks, scripts, sister agents) posted to
-            <code>/api/inbox</code> show up here.
-          </div>
+          <Empty
+            title="Nothing pending"
+            description={
+              <>
+                Inbound stimuli (webhooks, scripts, sister agents) posted to <code>/api/inbox</code> show up here.
+              </>
+            }
+          />
         ) : null}
         {items.map((item) => (
           <div className="inbox-item" key={item.id}>

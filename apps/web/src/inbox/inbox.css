@@ -8,20 +8,6 @@
   padding: 10px;
 }
 
-.inbox-empty {
-  color: var(--fg-secondary);
-  font-size: 12px;
-  padding: 8px;
-  line-height: 1.5;
-}
-
-.inbox-empty code {
-  font-size: 11px;
-  background: var(--bg-elevated, #111114);
-  padding: 1px 4px;
-  border-radius: 4px;
-}
-
 .inbox-item {
   border: 1px solid var(--border);
   border-radius: var(--radius);

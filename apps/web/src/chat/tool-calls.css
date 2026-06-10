@@ -309,16 +309,8 @@
   gap: 7px;
   min-width: 0;
 }
-.tool-badge {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
-  color: var(--success);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-}
+/* .tool-badge retired (#832) — the fetch status code is now the DS <Badge
+   status="success"> (success-toned outline pill). */
 
 /* web_search: result cards */
 .tool-results {

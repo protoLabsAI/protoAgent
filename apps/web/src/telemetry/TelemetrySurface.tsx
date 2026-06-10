@@ -1,7 +1,7 @@
 import "../settings/telemetry.css";
 
 import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
 
 import {
@@ -84,9 +84,9 @@ function TelemetryBody() {
 
       <div className="stage-body">
         {!enabled ? (
-          <p className="empty-note">Telemetry store is disabled (set <code>telemetry.enabled: true</code>).</p>
+          <Empty>Telemetry store is disabled (set <code>telemetry.enabled: true</code>).</Empty>
         ) : !summary || summary.turns === 0 ? (
-          <p className="empty-note">No turns recorded yet — run a turn and refresh.</p>
+          <Empty>No turns recorded yet — run a turn and refresh.</Empty>
         ) : (
           <>
             {insights ? (

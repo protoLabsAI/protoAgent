@@ -1,17 +1,7 @@
 /* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
 .delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.delegate-type-badge {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  color: var(--brand-violet-light);
-}
-.delegate-badge-warn { font-size: 10px; color: var(--warning); }
-.delegate-badge-ok { font-size: 10px; color: var(--fg-muted); }
+/* .delegate-type-badge / .delegate-badge-warn / .delegate-badge-ok retired (#832) —
+   now DS Badge (type) + StatusPill (unconfigured/secret-set). */
 .delegate-form {
   margin-top: 14px;
   padding: 14px;
