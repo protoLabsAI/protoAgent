@@ -18,8 +18,9 @@ Roxy is a filled-in fork — an autonomous ProtoMaker portfolio manager with its
 own persona, A2A skills, and project registry — a good example of what a fork
 looks like end-to-end.
 
-**Try it in 5 minutes:** clone, `pip install -r requirements.txt`,
-`python -m server`, open <http://localhost:7870>, and walk the
+**Try it in 5 minutes:** clone, `uv sync && uv run python -m server`
+(or `pip install -r requirements.txt && python -m server`), open
+<http://localhost:7870>, and walk the
 setup wizard — no forking, no `sed`, no Docker required to get
 your first agent talking. See the [first-agent tutorial](./docs/tutorials/first-agent.md).
 
@@ -55,14 +56,19 @@ rename / release-pipeline wiring.
 git clone https://github.com/protoLabsAI/protoAgent.git my-agent
 cd my-agent
 
-# 2. Install deps into a venv
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+# 2. Install deps + run — uv (recommended): creates the venv, installs the
+#    core deps from pyproject.toml, and runs the server. No env vars required.
+uv sync && uv run python -m server          # core (--ui console/none)
+# Want the Gradio UI and/or the Google surface? Add the extras:
+#   uv sync --extra ui --extra google && uv run python -m server
+# Already synced? `uv run --no-sync python -m server` skips the re-resolve.
 
-# 3. Run the server — no env vars required
-python -m server
+# 2b. Or with pip — `requirements.txt` installs everything (core + Gradio UI):
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt        # == pip install -e .[ui,google]
+#   python -m server
 
-# 4. Open the wizard — pick your endpoint, pick a model, name the
+# 3. Open the wizard — pick your endpoint, pick a model, name the
 #    agent, pick a persona preset, hit Launch. The chat UI appears
 #    on the same page.
 open http://localhost:7870

@@ -1,3 +1,6 @@
+# READABLE REFERENCE ONLY — the live list lives in pyproject.toml
+# ([project.optional-dependencies].google). Keep the two in step.
+#
 # Google MCP server deps (Slice 2) — install only when enabling the Google
 # surface: `pip install -r requirements-google.txt`. The server runs as a
 # subprocess; the core agent doesn't import these.

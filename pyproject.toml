@@ -4,6 +4,111 @@ version = "0.31.0"
 description = "protoAgent — LangGraph + A2A template for spawning protoLabs agents"
 requires-python = ">=3.11"
 
+# Single source of truth for runtime deps. The `requirements-*.txt` files are
+# kept as readable, tier-scoped references (ADR 0010) but no longer the source
+# of truth: `requirements.txt` is a thin `-e .[ui,google]` that routes pip
+# through this table, and `uv sync` reads it directly. Keep these three lists in
+# step with requirements-core/ui/google.txt — CI installs via pyproject.
+#
+# core (the `none`/`console` tiers) — mirrors requirements-core.txt:
+dependencies = [
+  "httpx>=0.27",
+  "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
+  "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0",
+  "fastapi>=0.115",
+  "python-multipart>=0.0.9",
+  "uvicorn>=0.30",
+  "langfuse>=3.0",
+  "prometheus-client>=0.20",
+  "pyyaml>=6.0",
+  "ruamel.yaml>=0.18",
+  "websockets>=12.0",
+  "langchain>=1.2.3",
+  "langchain-core>=1.0",
+  "langgraph>=1.1.0",
+  "langchain-openai>=1.0",
+  "langgraph-checkpoint-sqlite>=2.0",
+  "langchain-mcp-adapters>=0.2,<0.3",
+  "mcp>=1.2",
+  "ddgs>=9.0",
+  "beautifulsoup4>=4.12",
+  "croniter>=2.0",
+  "filelock>=3.12",
+  "zeroconf>=0.131",
+]
+
+[project.optional-dependencies]
+# ui (the `full` Gradio tier) — mirrors requirements-ui.txt:
+ui = [
+  "gradio>=5.0",
+]
+# google MCP surface (Slice 2) — mirrors requirements-google.txt:
+google = [
+  "mcp>=1.2",
+  "google-api-python-client>=2.120",
+  "google-auth-oauthlib>=1.2",
+]
+# convenience: everything (core + ui + google), what `requirements.txt` installs:
+all = ["protoagent[ui,google]"]
+
+[build-system]
+# Needed so `pip install -e .` / `uv pip install -e .` can build the project and
+# route through the dependency table above. This is a flat-layout application
+# (modules at the repo root + top-level packages), not a distributable library,
+# so the wheel target below lists the importable surface explicitly.
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# protolabs-a2a is a direct git reference (PEP 508 `pkg @ git+https://…`).
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+# Top-level packages (dirs with __init__.py) plus the root-level runtime modules.
+# Excludes apps/, sites/, static/, docs/, deploy/, scripts/, examples/, config/,
+# mcp_servers/ and tests/ — those aren't part of the import surface a wheel needs.
+packages = [
+  "activity",
+  "beads",
+  "enforcement",
+  "evals",
+  "events",
+  "graph",
+  "inbox",
+  "knowledge",
+  "operator_api",
+  "runtime",
+  "scheduler",
+  "server",
+  "surfaces",
+  "tools",
+]
+include = [
+  "a2a_auth.py",
+  "a2a_executor.py",
+  "a2a_stores.py",
+  "audit.py",
+  "autostart.py",
+  "cache.py",
+  "chat_ui.py",
+  "egress.py",
+  "metrics.py",
+  "paths.py",
+  "pricing.py",
+  "security.py",
+  "telemetry_store.py",
+  "tracing.py",
+]
+
+[tool.uv]
+# The app runs from the repo root (pythonpath = ["."] below); an editable build
+# isn't required for `uv run`/`uv sync` to put deps on the path. Building the
+# wheel target on every sync is unnecessary overhead, so don't treat the project
+# itself as a package for uv's workspace install — `uv sync` installs only the
+# declared dependencies. `pip install -e .` / `uv pip install -e .` still build
+# via the [build-system] above.
+package = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

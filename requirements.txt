@@ -1,6 +1,13 @@
-# All-in-one install (the `full` UI tier) = core + the Gradio UI (ADR 0010).
-# `pip install -r requirements.txt` is unchanged — it still gets everything.
-# For a lean headless deploy (--ui none/console) install requirements-core.txt
-# instead, which skips Gradio.
--r requirements-core.txt
--r requirements-ui.txt
+# SOURCE OF TRUTH: pyproject.toml ([project.dependencies] + optional-dependencies).
+# This file is a thin shim so `pip install -r requirements.txt` keeps working —
+# it installs the project in editable mode with the `ui` + `google` extras, i.e.
+# the all-in-one (`full` UI tier) install, exactly as before (ADR 0010). pip
+# routes through pyproject, so there is no second list to drift.
+#
+# Modern path: `uv sync` (core only) or `uv sync --extra ui --extra google`,
+# or `pip install -e .[ui,google]` directly. For a lean headless deploy
+# (--ui none/console) use `uv sync` / `pip install -e .` (core, skips Gradio).
+#
+# The requirements-core/ui/google.txt files are kept as readable, tier-scoped
+# references; the live dependency lists live in pyproject.toml.
+-e .[ui,google]

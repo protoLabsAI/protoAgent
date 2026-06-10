@@ -89,6 +89,3 @@ sites/marketing/.astro/
 config/*/secrets.yaml
 config/*/langgraph-config.yaml
 config/*/.setup-complete
-
-# uv lockfile — deps live in requirements-*.txt; not uv-managed (see prod-readiness A7)
-uv.lock

@@ -11,17 +11,27 @@ git clone https://github.com/protoLabsAI/protoAgent.git my-agent
 cd my-agent
 ```
 
-## 2. Install dependencies
+## 2. Install dependencies & run
+
+Dependencies live in `pyproject.toml` (the single source of truth), so both
+modern `uv` and classic `pip` just work.
+
+**uv (recommended)** — creates the venv, installs the core deps, runs the server:
+
+```bash
+uv sync && uv run python -m server          # core (--ui console/none)
+# Add the Gradio UI and/or Google surface with extras:
+#   uv sync --extra ui --extra google && uv run python -m server
+# Re-running and already synced? `uv run --no-sync python -m server`.
+```
+
+**pip** — `requirements.txt` is a thin `-e .[ui,google]`, so it installs the
+all-in-one (core + Gradio UI) set just like before:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## 3. Run the server
-
-```bash
+pip install -r requirements.txt            # == pip install -e .[ui,google]
 python -m server
 ```
 
@@ -32,7 +42,7 @@ LangGraph agent initialized (setup wizard not complete — graph not compiled. O
 Starting protoagent on http://0.0.0.0:7870
 ```
 
-## 4. Open the setup wizard
+## 3. Open the setup wizard
 
 Visit <http://localhost:7870> in a browser. Because `config/.setup-complete` doesn't exist yet, you'll land in the wizard instead of the chat UI.
 
@@ -45,7 +55,7 @@ Walk through the four steps:
 
 Hit **Launch agent**. The wizard closes, the chat UI appears, and the Configuration drawer on the right is now populated with your choices.
 
-## 5. Try it
+## 4. Try it
 
 In the chat box:
 

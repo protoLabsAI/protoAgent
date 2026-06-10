@@ -1,3 +1,6 @@
+# READABLE REFERENCE ONLY — the live list lives in pyproject.toml
+# ([project.dependencies]). Keep the two in step; pip + uv install via pyproject.
+#
 # Core runtime — API / A2A / LangGraph / stores. Everything the agent needs to
 # run in the `console` and `none` UI tiers (ADR 0010). The Gradio UI lives in
 # requirements-ui.txt; `requirements.txt` = core + ui (the all-in-one install).
