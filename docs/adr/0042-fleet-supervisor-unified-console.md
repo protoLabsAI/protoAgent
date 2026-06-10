@@ -210,10 +210,13 @@ rewrite.
 3. **Switcher UI** — the agent-name dropdown (list, status, switch, start/stop) over the API.
 4. **Archetypes** — `GET /api/archetypes` + the "+ New agent" picker → create-from-archetype.
 5. **Keep-alive policy** — keep-N-warm + resume, lifecycle polish.
-6. **Remote fleet members** (§I, *not yet built*) — a `remote: true` agent kind registered by
-   URL+token: status via the remote's `/api/runtime/status`, proxy-to-remote with the bearer,
-   register-only lifecycle first (remote-hub start/stop later), an "add remote agent" form, and
-   convergence with the delegate registry (ADR 0025).
+6. **Remote fleet members** (§I, **shipped — #839, register-only tier**) — a `remote: true`
+   member registered by URL (+ optional bearer, stored hub-side and attached by the proxy):
+   `remotes.json` beside `fleet.json`, status via a TTL-cached agent-card probe (refreshed off
+   the event loop), `_target_for_slug` resolves remote slugs to URLs, Discover's "Add to this
+   fleet" + `POST/DELETE /api/fleet/remotes`. Composes with the delegate registry (ADR 0025) —
+   the same remote can be a member *and* a `delegate_to` target. Remote-hub start/stop (tier b)
+   remains future work.
 
 Slices 1–3 deliver the core (switch between running agents in one console); 4 adds the
 starter-type creation flow; 5 makes it scale; 6 extends the fleet across machines.

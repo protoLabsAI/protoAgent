@@ -121,12 +121,43 @@ a `fleet.json` registry. Because each agent's chat history is scoped to its own
 checkpoints, a **stopped agent's session resumes** when you restart it — and a **running**
 one keeps its background work (schedules, an in-flight loop) going while you're elsewhere.
 
-## What's next — the unified console
+## The unified console — every agent in one UI
 
-*(In progress, ADR 0042 slices 2–4.)* A **hub** serves one console and reverse-proxies the
-active console's chat / A2A / SSE to the **selected** agent backend — so you switch between
-running agents **in place**: Ava keeps running while you look at Roxy, and you drop back
-into Ava's live session right where you left it. "+ New agent" runs the archetype picker.
+*(Shipped — ADR 0042 slices 2–5.)* The **hub** (any running agent) serves one console and
+reverse-proxies each agent window's chat / A2A / SSE to that agent's backend, keyed by the
+**URL slug** (`/app/agent/<id>/`) — so every window targets its own agent: switch in place
+from the topbar, or open two agents in two windows at once. Per-agent chat, theme and
+layout follow the slug; a stopped agent **resumes from its checkpoint** when you navigate
+to it; "+ New agent" runs the archetype picker. Settings → Agents is the fleet manager
+(create / start / stop / rename / remove), and **Discover** finds other protoAgents on the
+box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI).
+
+## Remote fleet members — the agent there, the UI here
+
+*(ADR 0042 §I.)* A fleet member doesn't have to be local: register any reachable protoAgent
+by URL and it becomes a **switchable member** — a slug window like any peer, with the hub
+reverse-proxying its console + A2A. The remote runs fully headless; this console is its UI.
+
+On the other machine:
+
+```bash
+A2A_AUTH_TOKEN=<secret> python -m server --port 7871 --host 0.0.0.0 --ui none
+```
+
+On this one — Settings → Agents → **Discover** → **➕ Add to this fleet**, or register
+manually (the stored token is attached by the proxy; the browser never sees it):
+
+```bash
+curl -X POST http://127.0.0.1:7871/api/fleet/remotes \
+  -H 'content-type: application/json' \
+  -d '{"name": "ava", "url": "http://100.101.189.45:7871", "token": "<secret>"}'
+```
+
+Remote members show a `remote` tag + their URL in the fleet manager; `running` is a cached
+reachability probe. You can't start/stop/rename them from here — their deployment owns
+their lifecycle; **Remove** only unregisters (the remote agent is untouched). Registering
+as a member and adding as a [`delegate_to` target](delegates.md) compose: the same agent
+can be both a window you operate and a delegate your agents call.
 
 ## See also
 
