@@ -195,21 +195,28 @@ def load_yaml_doc(path: Path = CONFIG_YAML_PATH) -> Any:
 
 
 def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
-    """Persist the document. Creates parent dirs if needed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if _HAS_RUAMEL:
-        with open(path, "w") as f:
-            _ruamel.dump(doc, f)
-        return
+    """Persist the document atomically (temp + rename). Creates parent dirs.
 
-    log.warning(
-        "ruamel.yaml not installed — YAML comments in %s will not be "
-        "preserved on save. Add `ruamel.yaml>=0.18` to requirements.txt "
-        "to fix.", path,
-    )
-    import yaml
-    with open(path, "w") as f:
-        yaml.safe_dump(doc, f, sort_keys=False, default_flow_style=False)
+    This file is the single most important one the agent owns — a crash
+    mid-dump must never leave a truncated YAML behind, so the dump goes to a
+    buffer and lands via ``paths.atomic_write``.
+    """
+    import io
+
+    from paths import atomic_write
+
+    buf = io.StringIO()
+    if _HAS_RUAMEL:
+        _ruamel.dump(doc, buf)
+    else:
+        log.warning(
+            "ruamel.yaml not installed — YAML comments in %s will not be "
+            "preserved on save. Add `ruamel.yaml>=0.18` to requirements.txt "
+            "to fix.", path,
+        )
+        import yaml
+        yaml.safe_dump(doc, buf, sort_keys=False, default_flow_style=False)
+    atomic_write(path, buf.getvalue())
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from paths import atomic_write
+
 PORT_BASE = 7870  # workspaces get PORT_BASE+1, +2, … unless an explicit port is given
 
 
@@ -213,7 +215,7 @@ def create(name: str, *, from_config: str | None = None, inherit_model: str | No
     # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
     # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
     # workspace that's invisible in the list (no workspace.yaml).
-    (ws / "workspace.yaml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
     installed: list[str] = []
     try:
         if bundle:
@@ -335,7 +337,7 @@ def rename(ident: str, new_name: str) -> dict:
     ws = Path(found["path"])
     rec = _read_record(ws) or {}
     rec["name"] = new_name
-    (ws / "workspace.yaml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
     cfg = ws / "langgraph-config.yaml"
     if cfg.exists():  # keep the agent's self-identity in step with the display name
         _stamp_identity(cfg, new_name, False, instance_id=rec.get("id", found["id"]))

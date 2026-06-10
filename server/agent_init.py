@@ -16,9 +16,11 @@ keeps resolving for ``_main``'s wiring and for the test suite.
 """
 
 import asyncio
+import functools
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +33,28 @@ if TYPE_CHECKING:
     from scheduler.interface import SchedulerBackend
 
 log = logging.getLogger("protoagent.server")
+
+# Serializes every config read-modify-write + graph reload. The callers all
+# run on worker threads (asyncio.to_thread from the routes), and a fleet hub
+# makes concurrent saves routine (two console windows, a settings save racing
+# a plugin toggle). Without this: classic lost-update on the YAML, and two
+# interleaved reloads can commit graph A with STATE.graph_config B — the exact
+# de-sync the reload path's build-then-commit choreography assumes can't
+# happen. RLock because _apply_settings_changes/_reset_settings_keys call
+# _reload_langgraph_agent, which is also lockable on its own (plugin routes
+# call it directly).
+_CONFIG_WRITE_LOCK = threading.RLock()
+
+
+def _serialized_config_write(fn):
+    """Run ``fn`` under ``_CONFIG_WRITE_LOCK`` (config RMW + reload guard)."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _CONFIG_WRITE_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _init_langgraph_agent(headless_setup: bool = False):
@@ -930,6 +954,7 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             log.exception("[plugins] failed to mount router from %s", r.get("plugin_id"))
 
 
+@_serialized_config_write
 def _reload_langgraph_agent() -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
 
@@ -1220,6 +1245,7 @@ def _filter_nested_to_host_keys(config: dict) -> tuple[dict, list[str]]:
     return host_only, dropped
 
 
+@_serialized_config_write
 def _apply_settings_changes(
     config: dict | None = None,
     soul: str | None = None,
@@ -1310,6 +1336,7 @@ def _apply_settings_changes(
     return ok, messages
 
 
+@_serialized_config_write
 def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
     """Reset-to-inherited (ADR 0047 slice 3): pop ``keys`` from the AGENT leaf
     YAML, then reload so each field falls back to the Host/App layer.

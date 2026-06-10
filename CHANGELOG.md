@@ -46,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is its boundary). **Upgrade note:** an existing deployment binding
   `0.0.0.0` without a token must set `A2A_AUTH_TOKEN` (recommended) or
   `PROTOAGENT_ALLOW_OPEN=1` to boot.
+- **Persistence hardening — atomic writes, a config write lock, and 0600 on the
+  remote-token registry** (prod-readiness audit). `langgraph-config.yaml`,
+  `fleet.json`, `remotes.json`, and `workspace.yaml` were written with a bare
+  `open(path, "w")` — a crash mid-dump left a truncated file, and the fleet
+  registries silently loaded `{}` afterwards (every running agent forgotten,
+  every remote member + stored bearer dropped, zero log lines). All four now
+  land via a shared `paths.atomic_write` (same-dir temp + `os.replace`);
+  corrupt registries still load tolerantly but WARN loudly. `remotes.json`
+  is now written 0600 (it carries remote bearer tokens — the "same posture as
+  secrets.yaml" its comment claimed but didn't have). Concurrent settings
+  saves (two console windows, a save racing a plugin toggle) were a classic
+  lost-update on the YAML plus interleaved graph reloads — `_apply_settings_changes`,
+  `_reset_settings_keys`, and `_reload_langgraph_agent` now serialize on one
+  RLock.
 
 ## [0.32.0] - 2026-06-10
 
