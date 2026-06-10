@@ -79,9 +79,12 @@ Suggested order (dependency-aware):
 ## F. Design-system migration
 
 > **`@protolabsai/ui@0.21.0` shipped 3 of the 4 filed gaps:** #184 `Grid`, #186 `TabBar`, #188 `Empty` — **closed**. #187 `ToolCard` **held for design** (crew answering: do activity/inbox rows share the chat-tool shape; generic vs chat-specific of the 52 classes; status set-once vs live-streaming).
+>
+> **Contribute-back loop is a standing rule** (recorded in `docs/design/ui-component-audit.md` § Filed upstream): check the DS first, file genuine gaps on protoContent, mark app-local interims with the issue #. 2026-06-09: DS `Alert` adopted for the shell + settings banners (PR #825 — both were bespoke re-implementations); **protoContent #195 filed** (`EditableText` inline-rename — consumers: fleet rename #823, chat-tab rename pre-F6).
 
 | ID | Task | Evidence | Effort | Disp. |
 |----|------|----------|:------:|:-----:|
+| F8 | Adopt DS `EditableText` when protoContent #195 ships → retire `.fleet-rename-input` (+ chat-tab rename with F6) | `FleetManagerPanel`, `ChatSurface` | S | ⚪ Backlog (blocked on #195) |
 | F5 | **Adopt DS `Grid` (#184)** → delete `.archetype-grid`/`.subagent-grid`/`.metric-grid` (bump →0.21) | 3 sites | S | 🟡 Next (reference) |
 | F1 | DS Phase 1 — token sweep (`muted`/`empty`/`spin`/status → DS) | `theme.css` | M | 🟡 Next |
 | F6 | Adopt DS `TabBar` (#186) → retire `.chat-tab*` | `chat/ChatSurface` | M | ⚪ Backlog |

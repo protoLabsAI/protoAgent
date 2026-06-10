@@ -861,26 +861,36 @@ export const api = {
   },
 
   cancelTask(taskId: string) {
+    // A2A 1.0 (a2a-sdk 1.1): proto method name + the version header — `tasks/cancel`
+    // is -32601 Method not found on the live server (same rot class as the eval
+    // harness's; the mock now mirrors the 1.0 wire so this can't rot silently again).
     return request<{ result?: unknown; error?: unknown }>("/a2a", {
       method: "POST",
+      headers: { "A2A-Version": "1.0" },
       body: {
         jsonrpc: "2.0",
         id: `cancel-${Date.now()}`,
-        method: "tasks/cancel",
+        method: "CancelTask",
         params: { id: taskId },
       },
     });
   },
 
-  // Reconcile a turn against the server's durable task (A2A tasks/get). Used to
+  // Reconcile a turn against the server's durable task (A2A GetTask). Used to
   // self-heal a chat message stuck in `streaming` after the stream was
   // interrupted (reload, network blip, a stale tab) — the server task is the
   // source of truth. Returns the normalized state + the final answer text (empty
   // until terminal).
+  //
+  // A2A 1.0: the method is `GetTask` (+ A2A-Version header) and the unary result
+  // is the task FLAT on `result` with TASK_STATE_* states. The old `tasks/get`
+  // was Method-not-found against a2a-sdk 1.1 — which made this self-heal finalize
+  // a still-running turn instantly with empty state (caught live 2026-06-09).
   async getTask(taskId: string): Promise<{ state: string; text: string }> {
     const res = await request<A2AFrame>("/a2a", {
       method: "POST",
-      body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "tasks/get", params: { id: taskId } },
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
     });
     const result = res.result;
     const task = (result?.task ?? (result?.kind === "task" ? result : result)) as

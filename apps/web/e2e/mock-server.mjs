@@ -221,18 +221,31 @@ const server = createServer(async (req, res) => {
 
   if (pathname === "/a2a" && req.method === "POST") {
     const body = await readBody(req);
-    // tasks/get — the reconcile path (self-heal a stuck streaming turn): return a
-    // terminal task carrying the final answer as an artifact.
-    if (body?.method === "tasks/get") {
+    // GetTask — the reconcile path (self-heal a stuck streaming turn + the cross-agent
+    // turn watcher): return a terminal task carrying the final answer as an artifact.
+    // Mirrors the REAL a2a-sdk 1.1 wire: proto method name, TASK_STATE_* state, the task
+    // FLAT on `result`, member-style `{text}` parts. The legacy `tasks/get` is -32601 on
+    // the live server — answering it here is how the self-heal rotted unnoticed.
+    if (body?.method === "GetTask") {
       return sendJson(res, {
         jsonrpc: "2.0",
         id: body.id,
         result: {
-          id: body.params?.id, contextId: "reconcile", kind: "task",
-          status: { state: "completed" },
-          artifacts: [{ parts: [{ kind: "text", text: "RECONCILED ANSWER" }] }],
+          id: body.params?.id, contextId: "reconcile",
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: "RECONCILED ANSWER" }] }],
         },
       });
+    }
+    if (body?.method === "CancelTask") {
+      return sendJson(res, {
+        jsonrpc: "2.0", id: body.id,
+        result: { id: body.params?.id, status: { state: "TASK_STATE_CANCELLED" } },
+      });
+    }
+    if (body?.method === "tasks/get" || body?.method === "tasks/cancel") {
+      // The 0.3 names are GONE on the live server — keep the mock honest.
+      return sendJson(res, { jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "Method not found" } });
     }
     return handleA2AStream(req, res, body);
   }
