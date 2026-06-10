@@ -141,16 +141,43 @@ FROM_YAML_EXAMPLE_FIELDS = {
 # Fields handled by their own dedicated assertions, not the golden map.
 _GOLDEN_EXEMPT = {"api_key", "auth_token", "plugin_config"}
 
-# config_to_dict(from_yaml(example)) exact output — freezes the partial
-# (today's) emitted surface so a later expansion shows up as a reviewable diff.
+# config_to_dict(from_yaml(example)) exact output — freezes the now-FIELDS-
+# complete emitted surface (B1 PR-3) so a later change shows up as a reviewable
+# diff. The diff vs the old (partial, 11-section) golden is purely ADDITIVE:
+# the new sections agent_runtime / checkpoint / compaction / execute_code / goal
+# / knowledge.embeddings+facts / middleware.enforcement / operator_mcp /
+# prompt_cache / routing / telemetry appeared; no pre-existing value changed.
 CONFIG_TO_DICT_GOLDEN = {
+    "agent_runtime": "native",
     "auth": {
         "token": "",
+    },
+    "checkpoint": {
+        "db_path": "/sandbox/checkpoints.db",
+        "harvest_enabled": True,
+        "keep_per_thread": 5,
+        "max_age_days": 30,
+        "prune_interval_hours": 6,
+    },
+    "compaction": {
+        "enabled": True,
+        "keep_messages": 20,
+        "model": "",
+        "trigger": "fraction:0.8",
     },
     "discord": {
         "admin_ids": [],
         "bot_token": "",
         "enabled": False,
+    },
+    "execute_code": {
+        "enabled": False,
+        "timeout": 30,
+    },
+    "goal": {
+        "enabled": True,
+        "eval_model": "",
+        "max_iterations": 8,
     },
     "google": {
         "client_id": "",
@@ -166,6 +193,8 @@ CONFIG_TO_DICT_GOLDEN = {
     "knowledge": {
         "db_path": "/sandbox/knowledge/agent.db",
         "embed_model": "qwen3-embedding",
+        "embeddings": True,
+        "facts": True,
         "top_k": 5,
     },
     "mcp": {
@@ -176,6 +205,7 @@ CONFIG_TO_DICT_GOLDEN = {
     },
     "middleware": {
         "audit": True,
+        "enforcement": False,
         "knowledge": True,
         "memory": True,
         "scheduler": True,
@@ -192,9 +222,24 @@ CONFIG_TO_DICT_GOLDEN = {
     "operator": {
         "allowed_dirs": [],
     },
+    "operator_mcp": {
+        "tools": [],
+    },
     "plugins": {
         "dir": "",
         "enabled": [],
+    },
+    "prompt_cache": {
+        "enabled": True,
+        "ttl": "5m",
+        "warm": {
+            "enabled": False,
+            "interval_seconds": 3300,
+        },
+    },
+    "routing": {
+        "aux_model": "",
+        "fallback_models": [],
     },
     "runtime": {
         "autostart_on_boot": False,
@@ -218,6 +263,10 @@ CONFIG_TO_DICT_GOLDEN = {
                 "memory_list",
             ],
         },
+    },
+    "telemetry": {
+        "enabled": True,
+        "retention_days": 90,
     },
 }
 
@@ -270,6 +319,46 @@ EMITTED_ATTRS = {
     "autostart_on_boot",
     # operator.*
     "operator_allowed_dirs",
+    # --- B1 PR-3: config_to_dict is now FIELDS-complete, so these 27
+    # newly-emitted keys (derived key->attr from FIELDS) must also round-trip. ---
+    # agent_runtime
+    "agent_runtime",
+    # operator_mcp.tools
+    "operator_mcp_tools",
+    # routing.*
+    "aux_model",
+    "routing_fallback_models",
+    # compaction.*
+    "compaction_enabled",
+    "compaction_trigger",
+    "compaction_keep_messages",
+    "compaction_model",
+    # goal.*
+    "goal_enabled",
+    "goal_max_iterations",
+    "goal_eval_model",
+    # execute_code.*
+    "execute_code_enabled",
+    "execute_code_timeout",
+    # prompt_cache.* (incl. prompt_cache.warm.*)
+    "prompt_cache_enabled",
+    "prompt_cache_ttl",
+    "cache_warming_enabled",
+    "cache_warming_interval_seconds",
+    # knowledge.embeddings / knowledge.facts
+    "knowledge_embeddings",
+    "knowledge_facts",
+    # checkpoint.*
+    "checkpoint_db_path",
+    "checkpoint_keep_per_thread",
+    "checkpoint_max_age_days",
+    "checkpoint_prune_interval_hours",
+    "checkpoint_harvest_enabled",
+    # middleware.enforcement
+    "enforcement_enabled",
+    # telemetry.*
+    "telemetry_enabled",
+    "telemetry_retention_days",
 }
 
 
@@ -592,10 +681,15 @@ def test_case9_empty_a2a_section_handled_via_or(tmp_path):
 def test_real_merge_path_preserves_omitted_and_overwrites_emitted(tmp_path):
     """The REAL save path merges config_to_dict INTO the existing doc (not an
     empty one). config_to_dict-EMITTED keys are overwritten; sections it OMITS
-    (e.g. goal) and unknown keys are preserved. (Behavior captured live.)"""
+    and unknown keys are preserved. (Behavior captured live.)
+
+    B1 PR-3: config_to_dict is now FIELDS-complete, so the formerly-omitted
+    ``goal`` section is now emitted. ``a2a`` is a real still-omitted section
+    (no FIELDS keys, parsed by from_yaml) — it now stands in as the
+    omitted-but-preserved case."""
     cfg = LangGraphConfig.from_yaml(EXAMPLE_PATH)
     doc = {
-        "goal": {"max_iterations": 99},  # omitted by config_to_dict
+        "a2a": {"description": "kept_desc"},  # omitted by config_to_dict
         "model": {"name": "OLD_NAME", "extra_key": "keep_me"},  # emitted section + unknown key
     }
     apply_updates_to_yaml(doc, config_to_dict(cfg))
@@ -603,7 +697,7 @@ def test_real_merge_path_preserves_omitted_and_overwrites_emitted(tmp_path):
     save_yaml_doc(doc, out)
     reloaded = LangGraphConfig.from_yaml(str(out))
 
-    assert reloaded.goal_max_iterations == 99  # omitted section preserved
+    assert reloaded.a2a_description == "kept_desc"  # omitted section preserved
     assert reloaded.model_name == "protolabs/reasoning"  # emitted key overwritten
     assert doc["model"]["extra_key"] == "keep_me"  # unknown key untouched by the merge
 

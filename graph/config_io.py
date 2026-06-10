@@ -216,79 +216,75 @@ def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
 # Config dict <-> dataclass
 # ---------------------------------------------------------------------------
 
-def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
-    """Serialize a LangGraphConfig into the nested dict shape the UI
-    works with. Mirrors the YAML schema so round-tripping is trivial.
+def _deep_merge(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``src`` into ``dst`` (src wins on leaf conflicts)."""
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
 
-    Secret fields (model API key, A2A bearer) are redacted to ``""`` — the
-    UI never needs the value back, only whether one is set (runtime status
-    carries that as a boolean). Combined with the blank-means-unchanged save
-    semantics in ``split_secret_updates``, a save that echoes the blank back
-    leaves the stored secret intact.
+
+def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
+    """Serialize a LangGraphConfig into the nested dict shape the UI works with.
+
+    SINGLE SOURCE (B1): every settings-schema field (``graph.settings_schema.FIELDS``)
+    is emitted from its declared ``key -> attr`` mapping, so adding a ``Field``
+    auto-serializes it — this function no longer hand-mirrors the schema (it used
+    to, and silently drifted: 27 fields were unserialized). Secret-typed fields are
+    redacted to ``""`` — the UI only needs to know one is set, and the blank-means-
+    unchanged save semantics (``split_secret_updates``) keep the stored secret
+    intact when the blank is echoed back. The non-FIELDS legacy keys
+    (mcp / knowledge.db_path / skills / plugins / researcher) and the ADR-0019
+    plugin sections are layered on explicitly below.
     """
-    d: dict[str, Any] = {
-        "model": {
-            "provider": config.model_provider,
-            "name": config.model_name,
-            "api_base": config.api_base,
-            "api_key": "",
-            "temperature": config.temperature,
-            "max_tokens": config.max_tokens,
-            "max_iterations": config.max_iterations,
-        },
-        "subagents": {
-            "researcher": {
-                "enabled": config.researcher.enabled,
-                "tools": list(config.researcher.tools),
-                "max_turns": config.researcher.max_turns,
-                "model": config.researcher.model,
-            },
-        },
-        "middleware": {
-            "knowledge": config.knowledge_middleware,
-            "audit": config.audit_middleware,
-            "memory": config.memory_middleware,
-            "scheduler": config.scheduler_enabled,
-        },
-        "knowledge": {
-            "db_path": config.knowledge_db_path,
-            "embed_model": config.embed_model,
-            "top_k": config.knowledge_top_k,
-        },
-        "skills": {
-            "enabled": config.skills_enabled,
-            "db_path": config.skills_db_path,
-            "top_k": config.skills_top_k,
-            "dir": config.skills_dir,
-        },
+    from graph.settings_schema import FIELDS
+
+    # (A) Schema-driven: every settings-exposed key, from its declared key->attr.
+    d: dict[str, Any] = {}
+    for f in FIELDS:
+        val = "" if f.type == "secret" else getattr(config, f.attr)
+        if isinstance(val, (list, tuple)):
+            val = list(val)
+        cursor = d
+        parts = f.key.split(".")
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[parts[-1]] = val
+
+    # (B) Non-FIELDS legacy keys the UI/round-trip needs but the settings schema
+    # doesn't expose. Their attrs still round-trip via from_yaml; they're just not
+    # in FIELDS, so they stay explicit.
+    r = config.researcher
+    _deep_merge(d, {
+        "knowledge": {"db_path": config.knowledge_db_path},
         "mcp": {
             "enabled": config.mcp_enabled,
             "servers": list(config.mcp_servers),
             "timeout_seconds": config.mcp_timeout_seconds,
             "denylist": list(config.mcp_denylist),
         },
+        "skills": {
+            "enabled": config.skills_enabled,
+            "db_path": config.skills_db_path,
+            "dir": config.skills_dir,
+        },
         "plugins": {
             "enabled": list(config.plugins_enabled),
             "dir": config.plugins_dir,
         },
-        "identity": {
-            "name": config.identity_name,
-            "operator": config.identity_operator,
-            "org": getattr(config, "identity_org", ""),
+        "subagents": {
+            "researcher": {
+                "enabled": r.enabled,
+                "tools": list(r.tools),
+                "max_turns": r.max_turns,
+                "model": r.model,
+            },
         },
-        "auth": {
-            "token": "",
-        },
-        # `discord` and `google` are now plugin sections (ADR 0019) — surfaced
-        # via the plugin_config loop below, not hardcoded blocks.
-        "runtime": {
-            "autostart_on_boot": config.autostart_on_boot,
-        },
-        "operator": {
-            "allowed_dirs": list(config.operator_allowed_dirs),
-        },
-    }
-    # Plugin-declared sections (ADR 0019) — reflect the PASSED config's resolved
+    })
+
+    # (C) Plugin-declared sections (ADR 0019) — reflect the PASSED config's resolved
     # plugin_config (not a re-discovery), with declared secrets redacted
     # (blank-means-unchanged, like api_key). A default config has none.
     plugin_cfg = getattr(config, "plugin_config", {}) or {}

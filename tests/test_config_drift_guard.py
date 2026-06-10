@@ -24,14 +24,13 @@ failure the moment the refactor closes them):
   + the ``from_yaml`` parse line were added, so the white-label org label persists
   now. ``ATTR_MISSING_KEYS`` is empty and test #1's ``identity.org`` param passes
   normally (the strict xfail is gone).
-* ``config_to_dict`` is PARTIAL — it serializes only a legacy subset of sections
-  (model/subagents/middleware-core/knowledge/skills/mcp/plugins/identity/auth/
-  runtime/operator). 27 otherwise-valid FIELDS keys (routing, compaction, goal,
-  execute_code, prompt_cache, several checkpoint/knowledge/telemetry keys,
-  agent_runtime, operator_mcp.tools, middleware.enforcement) are NOT emitted,
-  despite its docstring claiming it "mirrors the YAML schema". Each missing key
-  is a ``strict=True`` xfail in test #2; making ``config_to_dict`` FIELDS-complete
-  flips them to passing.
+* ``config_to_dict`` was PARTIAL — RESOLVED in PR-3: it is now FIELDS-driven and
+  serializes ALL FIELDS keys (the 27 previously-missing keys — routing, compaction,
+  goal, execute_code, prompt_cache, several checkpoint/knowledge/telemetry keys,
+  agent_runtime, operator_mcp.tools, middleware.enforcement — are now emitted).
+  ``CONFIG_TO_DICT_MISSING_KEYS`` is therefore empty, the per-key strict xfails in
+  test #2 are gone (every key passes normally), and
+  ``test_config_to_dict_missing_set_is_exactly_as_expected`` asserts it stays empty.
 """
 
 from __future__ import annotations
@@ -55,39 +54,12 @@ from graph.settings_schema import FIELDS
 # test_no_unexpected_attr_drift asserts this stays empty.
 ATTR_MISSING_KEYS: set[str] = set()
 
-# B1: non-secret FIELDS keys that config_to_dict does NOT serialize (partial
-# serializer — 27 keys). identity.org is intentionally NOT here: config_to_dict
-# DOES emit it (via a defensive getattr default of ""), so its resolution passes
-# even though its dataclass attr is missing (that drift is covered by test #1).
-CONFIG_TO_DICT_MISSING_KEYS = {
-    "agent_runtime",
-    "operator_mcp.tools",
-    "routing.aux_model",
-    "routing.fallback_models",
-    "compaction.enabled",
-    "compaction.trigger",
-    "compaction.keep_messages",
-    "compaction.model",
-    "goal.enabled",
-    "goal.max_iterations",
-    "goal.eval_model",
-    "execute_code.enabled",
-    "execute_code.timeout",
-    "prompt_cache.enabled",
-    "prompt_cache.ttl",
-    "prompt_cache.warm.enabled",
-    "prompt_cache.warm.interval_seconds",
-    "knowledge.embeddings",
-    "checkpoint.db_path",
-    "checkpoint.keep_per_thread",
-    "checkpoint.max_age_days",
-    "checkpoint.prune_interval_hours",
-    "checkpoint.harvest_enabled",
-    "knowledge.facts",
-    "middleware.enforcement",
-    "telemetry.enabled",
-    "telemetry.retention_days",
-}
+# B1: non-secret FIELDS keys that config_to_dict does NOT serialize. RESOLVED in
+# PR-3 — config_to_dict is now FIELDS-driven and emits every FIELDS key, so this
+# is EMPTY. The per-field strict xfail in test #2 is therefore gone (all keys pass
+# normally), and test_config_to_dict_missing_set_is_exactly_as_expected asserts
+# this set stays empty so any future serializer regression fails loudly.
+CONFIG_TO_DICT_MISSING_KEYS: set[str] = set()
 
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
 

@@ -128,9 +128,17 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # Top-level schema surface — all the sections the YAML exposes.
     # Adding a new section here without updating config_to_dict would
     # strand fork-added fields outside the drawer's round-trip.
+    # B1 PR-3: config_to_dict is now FIELDS-complete, so this is the FULL
+    # top-level key set (agent_runtime / checkpoint / compaction / execute_code
+    # / goal / operator_mcp / prompt_cache / routing / telemetry are now emitted
+    # too). discord/google are NOT here — they're plugin sections, present only
+    # when their plugin is enabled (surfaced via plugin_config), and a default
+    # LangGraphConfig() carries no plugin_config.
     assert set(d.keys()) == {
         "model", "subagents", "middleware", "knowledge", "skills", "mcp", "plugins",
-        "identity", "auth", "runtime", "operator",
+        "identity", "auth", "runtime", "operator", "agent_runtime", "checkpoint",
+        "compaction", "execute_code", "goal", "operator_mcp", "prompt_cache",
+        "routing", "telemetry",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
