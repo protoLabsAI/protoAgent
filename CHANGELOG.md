@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (streaming/A2A sessions, keyed `a2a:`, are unaffected).
 
 ### Fixed
+- **The desktop app reported its version as `0.0.0` (version-coherence Cross-cutting
+  B).** A frozen PyInstaller binary has no installed-package metadata, and
+  `pyproject.toml` wasn't bundled — so `paths.package_version()` fell through to its
+  `0.0.0` last resort, which blinds the A2A card, the fleet version handshake, runtime
+  status, and the plugin `min_protoagent_version` compat gate (every plugin that sets
+  one was wrongly refused on desktop). `pyproject.toml` is now bundled into the
+  sidecar (`build_sidecar.py`), so the existing `_MEIPASS` read resolves the real
+  version. (Docker already worked via `COPY .`.)
 - **Fleet members render plugin views with no design system (version-coherence
   Axis 3).** The DS plugin-kit (`/_ds/plugin-kit.{css,js}`) was served only by the
   console tier (`mount_react_app`), so a `--ui none` fleet member served its plugins'

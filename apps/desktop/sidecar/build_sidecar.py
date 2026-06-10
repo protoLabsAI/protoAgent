@@ -31,6 +31,13 @@ NAME = "protoagent-server"
 # .yaml, secrets.yaml, .setup-complete) is NOT bundled — it's written at
 # runtime to PROTOAGENT_CONFIG_DIR. Never bundle secrets.yaml or the live YAML.
 BUNDLED_DATA: list[tuple[str, str]] = [
+    # Version truth (version-coherence Cross-cutting B, docs/dev/version-coherence.md):
+    # `paths.package_version()` has no installed-package metadata in a frozen binary,
+    # so it falls back to reading `pyproject.toml` at _MEIPASS. Bundle it (top level)
+    # so the desktop app reports its REAL version instead of "0.0.0" — which otherwise
+    # blinds the A2A card, the fleet version handshake, runtime status, and the plugin
+    # `min_protoagent_version` compat gate (every plugin with one is wrongly refused).
+    ("pyproject.toml", "."),
     ("config/langgraph-config.example.yaml", "config"),
     ("config/SOUL.md", "config"),
     ("config/soul-presets", "config/soul-presets"),
