@@ -38,8 +38,10 @@ test("goals tab in the right sidebar lists active goals", async ({ page }) => {
 });
 
 test("beads tab in the right sidebar lists issues (query-backed)", async ({ page }) => {
-  // Beads panel reads via TanStack Query / Suspense (ADR 0013).
-  await page.getByRole("button", { name: "Beads", exact: true }).click();
+  // Beads (TanStack Query / Suspense, ADR 0013) is the default-active right panel, and clicking an
+  // already-open panel now toggles it closed — so switch to Goals first, then back to Beads.
+  await page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true }).click();
+  await page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Beads" })).toBeVisible();
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
@@ -78,14 +80,15 @@ test("plugins section: Local / Market / Download tabs", async ({ page }) => {
 test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Move off the defaults: a left surface (Agent) + a right-panel tab (Beads).
+  // Move off the defaults: a left surface (Agent) + a non-default right-panel tab (Goals — Beads
+  // is the default, and clicking the default-active one would toggle it closed).
   await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true }).click();
+  await page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true }).click();
 
   // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
   await page.reload({ waitUntil: "load" });
   await expect(page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true })).toHaveClass(/active/);
 });
 
 
