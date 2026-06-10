@@ -109,6 +109,16 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 
 **Coordination thread:** [protoContent #137](https://github.com/protoLabsAI/protoContent/issues/137) — the umbrella discussion where both teams work through priorities, API shapes, and AppShell convergence. The rows below are its actionable children.
 
+> **The contribute-back loop (standing rule).** Before hand-rolling any console UI:
+> **(1)** check `@protolabsai/ui` for an existing component — adopt it (the Alert
+> banners were re-implemented twice before anyone looked); **(2)** if it's genuinely
+> missing and the pattern has (or will have) a second consumer, **file a gap issue on
+> protoContent** in the #131/#186/#188 format (Gap / Evidence / Proposed API /
+> Priority / Context) and link it here; **(3)** an app-local interim implementation is
+> fine — mark it with the issue # so the adoption sweep can retire it when the DS
+> ships. Every bespoke component is either a filed gap or a deliberate
+> "not-for-the-DS" entry — never silent.
+
 **`@protolabsai/ui@0.5.0` (published 2026-06-08) delivered 3 of 6** — the P0 + both P1 composites. Adoption now unblocked.
 
 | # | Request | Priority | Status |
