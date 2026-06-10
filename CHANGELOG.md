@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Architectural import contracts in CI** — `lint-imports` (import-linter,
+  pinned) now gates three layering contracts declared in `pyproject.toml
+  [tool.importlinter]`: `graph/` and the infra packages
+  (`events`/`knowledge`/`runtime`/`scheduler`/`tools`) must not import
+  `server/` or `operator_api/`, and `operator_api/` must not import `server/`.
+  The 8 existing violations (e.g. `graph.skills.cli -> server.agent_init`, the
+  `operator_api` route modules reaching into `server.agent_init`/`server.chat`)
+  are grandfathered as an explicit burndown list in `ignore_imports` — new
+  violations fail CI, including function-level (lazy) imports. (#866)
+
 ### Fixed
 - **`config_to_dict` now emits the complete plugins section** — the serialized
   config dict (the `/api/config` payload and anything else treating it as the
@@ -72,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lost-update on the YAML plus interleaved graph reloads — `_apply_settings_changes`,
   `_reset_settings_keys`, and `_reload_langgraph_agent` now serialize on one
   RLock.
+- **Pinned the release-tools clone in the PR gate** — `checks.yml` cloned
+  `protoLabsAI/release-tools` at HEAD and executed its script on every PR, so
+  a push to that repo's `main` could change what runs in this repo's CI. The
+  clone is now pinned to a commit SHA (v2.3.0), matching the action pin
+  `release.yml` already uses. (#866)
 
 ## [0.32.0] - 2026-06-10
 
