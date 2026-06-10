@@ -57,7 +57,7 @@ def register_fleet_routes(app) -> None:
         """
         try:
             host = next((a for a in supervisor.status() if a.get("host")), None)
-            if host and name == host["name"]:
+            if host and name in (host["name"], host["id"]):
                 return {"ok": True, "evicted": []}
             if not supervisor.is_running(name):
                 await asyncio.to_thread(supervisor.start, name)  # resume from checkpoint
@@ -134,6 +134,19 @@ def register_fleet_routes(app) -> None:
         ``fleet down`` with no args."""
         stopped = await asyncio.to_thread(supervisor.down)  # busy-waits per agent (#6)
         return {"ok": True, "stopped": [r["name"] for r in stopped]}
+
+    @app.patch("/api/fleet/{name}")
+    async def _rename_agent(name: str, req: dict):
+        """Rename an agent's DISPLAY name (by id or current name). The id — and so the
+        URL slug, the workspace dir and the data scope — never changes; open windows
+        and checkpoints survive. A running agent re-reads its identity on restart."""
+        new_name = str((req or {}).get("name", "")).strip()
+        if not new_name:
+            raise HTTPException(400, "name is required")
+        try:
+            return {"ok": True, **manager.rename(name, new_name)}
+        except manager.WorkspaceError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.delete("/api/fleet/{name}")
     async def _remove_agent(name: str, purge: bool = False):

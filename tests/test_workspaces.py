@@ -16,24 +16,43 @@ def root(tmp_path, monkeypatch):
 
 def test_new_ls_run_rm(root):
     s = manager.create("alpha")
-    assert s["id"] == "alpha" and s["port"] == 7871
-    ws = root / "alpha"
+    # The id is opaque + immutable (`alpha-<4hex>`) and keys the dir; the name is display.
+    assert s["name"] == "alpha" and s["id"].startswith("alpha-") and s["id"] != "alpha"
+    assert s["port"] == 7871
+    ws = root / s["id"]
     assert (ws / "langgraph-config.yaml").exists() and (ws / "workspace.yaml").exists()
     cfg = yaml.safe_load((ws / "langgraph-config.yaml").read_text())
-    assert cfg["instance"]["id"] == "alpha" and cfg["identity"]["name"] == "alpha"
+    assert cfg["instance"]["id"] == s["id"] and cfg["identity"]["name"] == "alpha"
 
     assert [w["name"] for w in manager.list_workspaces()] == ["alpha"]
 
-    env, argv = manager.run_exec("alpha", [])
+    env, argv = manager.run_exec("alpha", [])  # resolves by display name too
     assert env["PROTOAGENT_CONFIG_DIR"] == str(ws)
-    assert env["PROTOAGENT_INSTANCE"] == "alpha"
+    assert env["PROTOAGENT_INSTANCE"] == s["id"]
     assert "--port" in argv and "7871" in argv
 
     assert manager.create("beta")["port"] == 7872  # next free port
     with pytest.raises(manager.WorkspaceError):
-        manager.create("alpha")  # collision
+        manager.create("alpha")  # display-name collision
 
     assert "workspace" in manager.remove("alpha")["removed"] and not ws.exists()
+
+
+def test_rename_changes_display_not_id(root):
+    s = manager.create("ava")
+    out = manager.rename("ava", "nova")
+    assert out == {"id": s["id"], "name": "nova"}  # id (slug/data scope) untouched
+    ws = manager._find("nova")
+    assert ws and ws["id"] == s["id"] and (root / s["id"]).exists()
+    cfg = yaml.safe_load((root / s["id"] / "langgraph-config.yaml").read_text())
+    assert cfg["identity"]["name"] == "nova" and cfg["instance"]["id"] == s["id"]
+    assert manager._find("nova-x") is None and manager._find(s["id"])["name"] == "nova"
+
+    manager.create("taken")
+    with pytest.raises(manager.WorkspaceError):
+        manager.rename("nova", "taken")          # display names stay unique
+    with pytest.raises(manager.WorkspaceError):
+        manager.rename("nova", "host")           # reserved slug
 
 
 def test_from_config_clones_and_restamps(root, tmp_path):
@@ -41,12 +60,12 @@ def test_from_config_clones_and_restamps(root, tmp_path):
     (src / "langgraph-config.yaml").write_text(
         "identity: { name: orig }\ninstance: { id: orig }\nmodel: { name: keep-me }\n")
     (src / "secrets.yaml").write_text("model: { api_key: k }\n")
-    manager.create("clone", from_config=str(src), shared_skills=True)
-    cfg = yaml.safe_load((root / "clone" / "langgraph-config.yaml").read_text())
-    assert cfg["identity"]["name"] == "clone" and cfg["instance"]["id"] == "clone"
+    s = manager.create("clone", from_config=str(src), shared_skills=True)
+    cfg = yaml.safe_load((root / s["id"] / "langgraph-config.yaml").read_text())
+    assert cfg["identity"]["name"] == "clone" and cfg["instance"]["id"] == s["id"]
     assert cfg["model"]["name"] == "keep-me"          # other config preserved
     assert cfg["skills"]["shared"] is True
-    assert (root / "clone" / "secrets.yaml").exists()  # secrets cloned too
+    assert (root / s["id"] / "secrets.yaml").exists()  # secrets cloned too
 
 
 def test_bad_name_rejected(root):

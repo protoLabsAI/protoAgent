@@ -101,3 +101,20 @@ test("host without delegates: add → 404 → Enable delegates → retried add s
   await expect.poll(() => delegatePosts).toBe(2); // the 404'd attempt + the post-enable retry
   await expect(error).toHaveCount(0); // retry succeeded -> error cleared
 });
+
+test("rename edits the display name; the id/slug stays", async ({ page }) => {
+  await openAgents(page);
+  const row = page.locator(".fleet-row", { hasText: "ava" });
+  await row.getByRole("button", { name: /Rename/ }).click();
+  const input = page.getByLabel("New agent name");
+  await input.fill("nova");
+  await input.press("Enter");
+
+  const renamed = page.locator(".fleet-row", { hasText: "nova" });
+  await expect(renamed).toBeVisible();
+  // The slug (stable id) is untouched: switching to the renamed agent still
+  // navigates to its original id URL.
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: /nova/ }).click();
+  await expect(page).toHaveURL(/\/app\/agent\/ava\//);
+});
