@@ -85,3 +85,16 @@ def test_stop_entire_fleet(client):
 def test_reserved_host_name_is_400(client):
     # `host` is the reserved slug for this instance — a peer named `host` would shadow it.
     assert client.post("/api/fleet", json={"name": "host"}).status_code == 400
+
+
+def test_discover_endpoint(client, monkeypatch):
+    # /api/fleet/discover returns OTHER protoAgents (mock the scan); the route's host self-exclusion
+    # + supervisor scan run, discover() internals are unit-tested elsewhere.
+    from graph.fleet import discovery
+
+    async def fake_discover(**_kw):
+        return [{"name": "remote", "url": "http://1.2.3.4:7899", "host": "1.2.3.4", "port": 7899}]
+
+    monkeypatch.setattr(discovery, "discover", fake_discover)
+    body = client.get("/api/fleet/discover").json()
+    assert body["discovered"][0]["name"] == "remote"

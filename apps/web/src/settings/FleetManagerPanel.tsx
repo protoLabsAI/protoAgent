@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Play, Plus, Square, Trash2 } from "lucide-react";
+import { Link2, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@protolabsai/ui/primitives";
@@ -8,7 +8,7 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
-import type { FleetAgent } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent } from "../lib/types";
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
@@ -55,6 +55,31 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           ? "This agent can't hold delegates yet — enable the delegates plugin on it (new fleet agents get it automatically; the host needs it enabled + a restart)."
           : e.message,
       ),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["delegates"] });
+      void delegatesQ.refetch();
+    },
+  });
+
+  // Network discovery (ADR 0042 §I) — scan the box + LAN for OTHER protoAgents (not in this
+  // fleet), then add a found one as a delegate of the focused agent (its A2A = url + /a2a).
+  const [scanning, setScanning] = useState(false);
+  const [discovered, setDiscovered] = useState<DiscoveredAgent[] | null>(null);
+  const scan = async () => {
+    setScanning(true);
+    setError(null);
+    try {
+      setDiscovered((await api.discoverAgents()).discovered);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  };
+  const addRemote = useMutation({
+    mutationFn: (d: DiscoveredAgent) => api.createDelegate({ name: d.name, type: "a2a", url: `${d.url}/a2a` }),
+    onMutate: () => setError(null),
+    onError: (e: Error) => setError(e.message),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["delegates"] });
       void delegatesQ.refetch();
@@ -145,6 +170,42 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             })}
           </ul>
         )}
+
+        {/* Network discovery — scan the box + LAN for OTHER protoAgents and add one as a remote
+            delegate of the focused agent (ADR 0042 §I). */}
+        <div className="fleet-discover">
+          <Button variant="ghost" onClick={scan} disabled={scanning}>
+            <Radar size={14} /> {scanning ? "Scanning…" : "Discover agents on the network"}
+          </Button>
+          {discovered ? (
+            discovered.length === 0 ? (
+              <p className="fleet-empty">No other protoAgents found on the network.</p>
+            ) : (
+              <ul className="fleet-list">
+                {discovered.map((d) => (
+                  <li key={d.url} className="fleet-row">
+                    <span className="fleet-dot running" aria-hidden />
+                    <div className="fleet-row-main">
+                      <span className="fleet-name">{d.name}</span>
+                      <span className="fleet-meta">{d.url}</span>
+                    </div>
+                    <div className="fleet-row-actions">
+                      {delegateNames.has(d.name) ? (
+                        <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
+                      ) : (
+                        <Button icon variant="ghost" title="Add as a remote delegate (delegate_to)"
+                          disabled={addRemote.isPending}
+                          onClick={() => addRemote.mutate(d)}>
+                          <Link2 size={14} />
+                        </Button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </div>
       </div>
 
       <ConfirmDialog

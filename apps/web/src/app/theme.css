@@ -3506,6 +3506,13 @@ textarea {
   padding: 0 5px;
 }
 
+/* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
+.fleet-discover {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
 /* Theme crossfade (ADR 0042) — applyAgentTheme() applies the focused agent's look inside a
    View Transition (when supported), so switching agents snapshots before/after and crossfades
    instead of hard-cutting. Ease the root transition so it glides. (Live picker drags bypass

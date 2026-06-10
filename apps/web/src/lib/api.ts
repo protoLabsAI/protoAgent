@@ -8,6 +8,7 @@ import type {
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
+  DiscoveredAgent,
   FleetAgent,
   FleetStatus,
   GoalState,
@@ -636,6 +637,9 @@ export const api = {
   // --- Fleet (ADR 0042) — many workspace agents on one host ------------------
   fleet() {
     return request<FleetStatus>("/api/fleet");
+  },
+  discoverAgents() {
+    return request<{ discovered: DiscoveredAgent[] }>("/api/fleet/discover");
   },
   archetypes() {
     return request<{ archetypes: Archetype[] }>("/api/archetypes");

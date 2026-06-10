@@ -555,8 +555,22 @@ def _main():
             except Exception:
                 log.exception("[plugins] surface %s failed to start", s.get("name"))
 
+        # Fleet discovery (ADR 0042 §I) — advertise this agent on mDNS so siblings on the LAN can
+        # find it. Best-effort; never breaks boot.
+        try:
+            from graph.fleet import discovery
+            discovery.advertise(agent_name(), int(getattr(STATE, "active_port", 0) or 0))
+        except Exception:
+            log.exception("[discovery] mDNS advertise failed")
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
+        # Withdraw the mDNS advertisement (ADR 0042 §I).
+        try:
+            from graph.fleet import discovery
+            discovery.stop_advertise()
+        except Exception:
+            pass
         # Stop plugin surfaces first (ADR 0018) — best-effort.
         for h in STATE.plugin_surface_handles:
             stop = h.get("stop")
