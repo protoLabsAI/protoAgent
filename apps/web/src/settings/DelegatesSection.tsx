@@ -1,3 +1,4 @@
+import "./settings.css";
 import "./delegates.css";
 
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";

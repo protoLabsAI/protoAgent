@@ -411,38 +411,10 @@ select:disabled {
   overflow: auto;
 }
 
-/* Plugins → Marketplace: discovery links (directory + GitHub topic). */
-.plugin-market {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.plugin-market-link {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg-raised);
-  color: inherit;
-  text-decoration: none;
-  transition: border-color 0.15s;
-}
-.plugin-market-link:hover {
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
-}
-.plugin-market-link > span {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  gap: 1px;
-}
-.plugin-market-link .muted {
-  font-size: 12px;
-}
+/* Plugins → Marketplace (.plugin-market*) — moved to src/settings/plugins.css (#832). */
 
-/* Plugins → Installed: per-row enable/disable + the result hint. */
+/* Plugins → Installed: per-row enable/disable + the result hint. Shared with the
+   MCP panel (McpPanel renders .plugin-row-actions + .plugin-hint), so they stay here. */
 .plugin-row-actions {
   display: flex;
   align-items: center;
@@ -779,105 +751,7 @@ textarea {
   position: relative;
 }
 
-.activity-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.activity-log {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.activity-empty {
-  color: var(--fg-secondary);
-  font-size: 13px;
-  margin: auto;
-  text-align: center;
-  max-width: 36ch;
-}
-
-.activity-msg {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.activity-role {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-tertiary, var(--fg-secondary));
-}
-
-.activity-content {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 12px;
-  background: var(--bg-elevated, #111114);
-  font-size: 14px;
-}
-
-.activity-user .activity-content {
-  background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
-}
-
-.activity-composer {
-  display: flex;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.activity-composer textarea {
-  flex: 1;
-  resize: none;
-}
-
-/* Activity provenance feed (ADR 0022) ------------------------------------- */
-.activity-feed {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.activity-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.activity-prov {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 11px;
-}
-.activity-origin {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-weight: 600;
-  border: 1px solid var(--border);
-  color: var(--fg-secondary);
-}
-.activity-origin svg { flex: 0 0 auto; }
-.activity-origin-scheduler { color: #818cf8; border-color: color-mix(in srgb, #818cf8 45%, var(--border)); }
-.activity-origin-inbox     { color: #34d399; border-color: color-mix(in srgb, #34d399 45%, var(--border)); }
-.activity-origin-webhook   { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 45%, var(--border)); }
-.activity-origin-a2a       { color: #f472b6; border-color: color-mix(in srgb, #f472b6 45%, var(--border)); }
-.activity-origin-operator  { color: var(--accent, #7c8cff); border-color: color-mix(in srgb, var(--accent, #7c8cff) 45%, var(--border)); }
-.activity-trigger { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-secondary); }
-.activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }
+/* Activity surface + provenance feed (.activity-*) — moved to src/activity/activity.css (#832). */
 
 /* In-surface sub-nav (grouped rail surfaces) ------------------------------- */
 /* The sub-tab strip is now @protolabsai/ui <Tabs> (.pl-tabs/.pl-tab); the inbox
@@ -1362,57 +1236,7 @@ textarea {
   margin-top: 18px;
 }
 
-/* New-schedule modal (friendly builder) */
-.schedule-card {
-  width: min(560px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.schedule-card .confirm-head { position: relative; }
-.schedule-close {
-  margin-left: auto;
-}
-.schedule-modes {
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  align-self: flex-start;
-}
-.schedule-modes button {
-  border: none;
-  background: transparent;
-  color: var(--fg-secondary);
-  padding: 5px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.schedule-modes button.active {
-  background: var(--accent, #9b87f2);
-  color: #0a0a0c;
-}
-.schedule-repeat {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.schedule-preview {
-  margin: 0;
-  font-size: 13px;
-  color: var(--fg-secondary);
-}
-.schedule-preview code {
-  margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--bg-raised, #131316);
-  border: 1px solid var(--border);
-  font-size: 12px;
-}
-.schedule-preview .muted { color: var(--fg-muted, #71717a); }
+/* New-schedule modal (friendly builder, .schedule-*) — moved to src/schedule/schedule.css (#832). */
 
 .setup-frame {
   width: min(720px, 100%);
@@ -1719,29 +1543,15 @@ textarea {
 }
 
 /* ── Settings surface ─────────────────────────────────────────────────────── */
-/* Banners are DS Alert (pl-alert) now — only the stage spacing lives here. */
-.settings-banner {
-  margin-bottom: 10px;
-}
+/* The settings-form chrome (.settings-banner/.settings-group*/.setting-*, ADR 0047
+   .setting-inheritance) moved to src/settings/settings.css (#832). Left here, shared:
+   .settings-status (SchedulePanel renders it too) + the .settings-help-link / .setup-link
+   rule (it pairs the setup wizard's link styling). */
 .settings-status {
   margin: 0 0 10px;
   font-size: 0.8rem;
   color: var(--fg-muted);
   font-family: var(--font-mono);
-}
-.settings-group {
-  margin-bottom: 40px;
-}
-/* Per-group action row (e.g. the Discord "Test connection" + help link). */
-.settings-group-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 10px;
-}
-.settings-inline-status {
-  font-size: 0.8rem;
-  color: var(--fg-muted);
 }
 .settings-help-link,
 .setup-link {
@@ -1755,88 +1565,6 @@ textarea {
 .settings-help-link:hover,
 .setup-link:hover {
   text-decoration: underline;
-}
-.settings-group-title {
-  margin: 0 0 4px;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--brand-violet-light);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
-}
-.setting-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
-  gap: 28px;
-  align-items: center;
-  padding: 26px 6px;
-  border-bottom: 1px solid var(--border);
-}
-.setting-row.dirty {
-  /* subtle marker that this field has unsaved edits */
-  box-shadow: inset 2px 0 0 var(--brand-violet);
-  padding-left: 10px;
-}
-.setting-meta { min-width: 0; }
-.setting-label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.86rem;
-  color: var(--fg);
-}
-.setting-restart {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(212, 189, 79, 0.16);
-  border: 1px solid rgba(212, 189, 79, 0.3);
-  color: #eadf9a;
-  font-size: 0.62rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.setting-desc {
-  margin: 3px 0 0;
-  font-size: 0.76rem;
-  line-height: 1.45;
-  color: var(--fg-muted);
-}
-/* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
-.setting-inheritance {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 5px 0 0;
-}
-.setting-control { min-width: 0; }
-.setting-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 11px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-.setting-input:focus {
-  outline: none;
-  border-color: var(--brand-violet);
-}
-.setting-textarea {
-  resize: vertical;
-  line-height: 1.45;
-}
-.setting-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--fg-secondary);
-  cursor: pointer;
 }
 
 /* Telemetry dashboard + insights (ADR 0006 Slices 3–4) — the .telemetry-* / .turn-state* /
@@ -1899,25 +1627,11 @@ textarea {
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--bg); display: block; }
 .plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--fg-muted); font-size: 13px; }
 
-/* Plugins panel (ADR 0027) — install from a git URL, under Settings → Integrations. */
-.plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
-.plugin-install-form input { flex: 1; min-width: 220px; padding: 7px 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); font-size: 13px; }
-.plugin-install-status { font-size: 12px; color: var(--fg-secondary); margin: 4px 0 10px; }
-.plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* Plugins panel (ADR 0027, .plugin-install-*/.plugin-list/.plugin-row-main/-title/
+   .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
+   + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare
+   .plugin-row stays here: it's shared with the MCP panel + the Plugins surface. */
 .plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 9px; }
-.plugin-row-main { flex: 1; min-width: 0; }
-.plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.plugin-ver { font-size: 11px; color: var(--fg-muted); }
-.plugin-state { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; }
-.plugin-state.on { background: rgba(70,196,106,.15); color: #46c46a; }
-.plugin-state.off { background: var(--bg-hover); color: var(--fg-muted); }
-.plugin-state.warn { background: rgba(245,180,80,.15); color: #f5b450; display: inline-flex; align-items: center; gap: 3px; }
-.plugin-desc { font-size: 12px; color: var(--fg-secondary); margin: 4px 0; }
-.plugin-meta { font-size: 11px; color: var(--fg-muted); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
-.plugin-review { font-size: 11px; color: var(--fg-muted); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.plugin-review .warn { color: #f5b450; display: inline-flex; align-items: center; gap: 3px; }
-.plugin-enable-hint { font-size: 11px; color: var(--fg-secondary); margin: 6px 0 0; }
-.btn-icon.danger:hover { color: #ef6b6b; }
 
 /* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
 .federated-loading,

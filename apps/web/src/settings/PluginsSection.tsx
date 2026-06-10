@@ -1,3 +1,5 @@
+import "./plugins.css";
+
 import { Input } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Package, Plus, ShieldAlert, Trash2 } from "lucide-react";

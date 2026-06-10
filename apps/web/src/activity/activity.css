@@ -1,0 +1,102 @@
+/* Activity surface (ADR 0003) — moved from app/theme.css (#832). The rail badge
+   (.rail-badge) + the background-stream rail dot (.rail-dot) stay in theme.css:
+   they style the always-mounted shell rail buttons, not the Activity surface. */
+.activity-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.activity-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.activity-empty {
+  color: var(--fg-secondary);
+  font-size: 13px;
+  margin: auto;
+  text-align: center;
+  max-width: 36ch;
+}
+
+.activity-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.activity-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-tertiary, var(--fg-secondary));
+}
+
+.activity-content {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--bg-elevated, #111114);
+  font-size: 14px;
+}
+
+.activity-user .activity-content {
+  background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
+}
+
+.activity-composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.activity-composer textarea {
+  flex: 1;
+  resize: none;
+}
+
+/* Activity provenance feed (ADR 0022) ------------------------------------- */
+.activity-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.activity-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.activity-prov {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.activity-origin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+}
+.activity-origin svg { flex: 0 0 auto; }
+.activity-origin-scheduler { color: #818cf8; border-color: color-mix(in srgb, #818cf8 45%, var(--border)); }
+.activity-origin-inbox     { color: #34d399; border-color: color-mix(in srgb, #34d399 45%, var(--border)); }
+.activity-origin-webhook   { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 45%, var(--border)); }
+.activity-origin-a2a       { color: #f472b6; border-color: color-mix(in srgb, #f472b6 45%, var(--border)); }
+.activity-origin-operator  { color: var(--accent, #7c8cff); border-color: color-mix(in srgb, var(--accent, #7c8cff) 45%, var(--border)); }
+.activity-trigger { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-secondary); }
+.activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }

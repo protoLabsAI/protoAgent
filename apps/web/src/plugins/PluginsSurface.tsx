@@ -1,3 +1,5 @@
+import "../settings/plugins.css";
+
 import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 

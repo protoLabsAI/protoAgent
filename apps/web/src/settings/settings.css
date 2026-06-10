@@ -1,0 +1,105 @@
+/* ── Settings surface ─────────────────────────────────────────────────────── */
+/* Moved from app/theme.css (#832) — settings-form chrome rendered by
+   SettingsCategory + the DelegatesSection footer. Banners are DS Alert (pl-alert)
+   now; only the stage spacing lives here. Left in theme.css: .settings-status
+   (also rendered by SchedulePanel) and the .settings-help-link / .setup-link rule
+   (it pairs the setup wizard's link styling). */
+.settings-banner {
+  margin-bottom: 10px;
+}
+.settings-group {
+  margin-bottom: 40px;
+}
+/* Per-group action row (e.g. the Discord "Test connection" + help link). */
+.settings-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.settings-inline-status {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+.settings-group-title {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--brand-violet-light);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 28px;
+  align-items: center;
+  padding: 26px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row.dirty {
+  /* subtle marker that this field has unsaved edits */
+  box-shadow: inset 2px 0 0 var(--brand-violet);
+  padding-left: 10px;
+}
+.setting-meta { min-width: 0; }
+.setting-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.86rem;
+  color: var(--fg);
+}
+.setting-restart {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(212, 189, 79, 0.16);
+  border: 1px solid rgba(212, 189, 79, 0.3);
+  color: #eadf9a;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.setting-desc {
+  margin: 3px 0 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+/* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
+.setting-inheritance {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 0;
+}
+.setting-control { min-width: 0; }
+.setting-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.setting-input:focus {
+  outline: none;
+  border-color: var(--brand-violet);
+}
+.setting-textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+.setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}

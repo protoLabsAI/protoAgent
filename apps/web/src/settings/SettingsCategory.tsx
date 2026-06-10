@@ -1,3 +1,5 @@
+import "./settings.css";
+
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";

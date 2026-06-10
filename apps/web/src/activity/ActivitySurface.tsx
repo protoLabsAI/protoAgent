@@ -1,3 +1,5 @@
+import "./activity.css";
+
 import { Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
