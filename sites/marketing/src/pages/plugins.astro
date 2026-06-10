@@ -56,13 +56,23 @@ async function ecosystemPlugins() {
       'User-Agent': 'protoagent-marketing-site',
     };
     if (import.meta.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${import.meta.env.GITHUB_TOKEN}`;
-    const res = await fetch(
-      'https://api.github.com/search/repositories?q=org:protoLabsAI+topic:protoagent-plugin&per_page=100&sort=updated',
-      { headers },
-    );
-    if (!res.ok) { console.warn(`[plugins] topic search ${res.status} — skipping ecosystem`); return []; }
-    const data = await res.json();
-    return (data.items || [])
+    // Paginate (search API caps at 100/page) so the catalog stays complete past 100 repos.
+    const items: any[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const res = await fetch(
+        `https://api.github.com/search/repositories?q=org:protoLabsAI+topic:protoagent-plugin&per_page=100&page=${page}&sort=updated`,
+        { headers },
+      );
+      if (!res.ok) {
+        if (page === 1) console.warn(`[plugins] topic search ${res.status} — skipping ecosystem`);
+        break;
+      }
+      const data = await res.json();
+      const batch = data.items || [];
+      items.push(...batch);
+      if (batch.length < 100 || items.length >= (data.total_count || 0)) break;
+    }
+    return items
       .filter((r: any) => !r.archived && !r.disabled && !r.private)
       .map((r: any) => ({
         id: r.name,
@@ -72,7 +82,8 @@ async function ecosystemPlugins() {
         adds: (r.topics || []).filter((t: string) => t !== 'protoagent' && t !== 'protoagent-plugin').slice(0, 5),
         official: true,
         install: r.html_url,
-        links: { source: r.html_url, docs: r.homepage || r.html_url },
+        // No homepage → docs points at the README, not a dead-link back to Source.
+        links: { source: r.html_url, docs: r.homepage || `${r.html_url}#readme` },
       }));
   } catch (e) { console.warn('[plugins] GitHub unreachable — skipping ecosystem', e); return []; }
 }
