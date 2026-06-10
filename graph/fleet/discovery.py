@@ -1,10 +1,15 @@
 """Fleet discovery (ADR 0042 §I) — find OTHER protoAgents to add as remote fleet members.
 
-Two channels, merged:
+Three channels, merged:
   • **Local port-scan** — probe ``127.0.0.1`` ports for ``/.well-known/agent-card.json`` (a
     co-located agent, e.g. a freshly-spun Roxy on another port).
   • **mDNS / Bonjour** — every agent advertises a ``_protoagent._tcp`` service on boot; we
     browse the LAN for siblings on *other* machines.
+  • **Tailnet port-scan** — mDNS is link-local multicast and never crosses a Tailscale
+    overlay, so tailnet siblings are found by asking the local ``tailscale`` CLI for online
+    peers and probing their agent-cards over the same port range. (A machine on both the
+    LAN and the tailnet can surface twice — LAN IP via mDNS, ``100.x`` via this channel;
+    both URLs are real, we don't guess which one to keep.)
 
 Pure discovery: returns reachable protoAgents (name + url). Registering one as a remote fleet
 member + proxying into it is the supervisor/proxy's job. All best-effort — a discovery hiccup
@@ -14,8 +19,11 @@ never blocks the server.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import socket
+import subprocess
 
 import httpx
 
@@ -117,6 +125,49 @@ async def _probe(client: httpx.AsyncClient, host: str, port: int) -> dict | None
     return {"name": card.get("name") or f"{host}:{port}", "url": url, "host": host, "port": port}
 
 
+# macOS App-Store/standalone Tailscale ships the CLI inside the app bundle, not on PATH.
+_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+
+def _tailscale_cli() -> str | None:
+    """The tailscale CLI to ask about the tailnet, or None when not installed."""
+    import shutil
+
+    return shutil.which("tailscale") or (
+        _TAILSCALE_APP_CLI if os.path.exists(_TAILSCALE_APP_CLI) else None)
+
+
+def _tailnet_peer_ips(timeout: float = 3.0) -> list[str]:
+    """IPv4 tailnet addresses of ONLINE peers (sync subprocess — call via
+    ``asyncio.to_thread``). Empty when tailscale isn't installed or isn't up — the
+    channel just goes quiet, never errors."""
+    cli = _tailscale_cli()
+    if not cli:
+        return []
+    try:
+        out = subprocess.run([cli, "status", "--json"], capture_output=True, text=True,
+                             timeout=timeout)
+        if out.returncode != 0:
+            return []
+        peers = (json.loads(out.stdout).get("Peer") or {}).values()
+        return [ip for p in peers if p.get("Online")
+                for ip in (p.get("TailscaleIPs") or []) if "." in ip]
+    except Exception:  # noqa: BLE001 — discovery is best-effort, never blocks the endpoint
+        log.debug("[discovery] tailscale status failed", exc_info=True)
+        return []
+
+
+async def _scan_tailnet(port_range: tuple[int, int], known: set) -> list[dict]:
+    """Probe every online tailnet peer's agent-card over the fleet port range."""
+    ips = await asyncio.to_thread(_tailnet_peer_ips)
+    if not ips:
+        return []
+    async with httpx.AsyncClient() as client:
+        tasks = [_probe(client, ip, p) for ip in ips
+                 for p in range(port_range[0], port_range[1] + 1) if (ip, p) not in known]
+        return [r for r in await asyncio.gather(*tasks) if r]
+
+
 async def _scan_local(port_range: tuple[int, int], skip_ports: set[int]) -> list[dict]:
     async with httpx.AsyncClient() as client:
         tasks = [_probe(client, "127.0.0.1", p)
@@ -160,16 +211,19 @@ def _browse_mdns(timeout: float) -> list[dict]:
 
 async def discover(*, known: set | None = None,
                    port_range: tuple[int, int] = (7860, 7910), timeout: float = 1.5) -> list[dict]:
-    """Other protoAgents (local + LAN) minus the ones already in the fleet.
+    """Other protoAgents (local + LAN + tailnet) minus the ones already in the fleet.
 
     ``known`` is a set of ``(host, port)`` already known (the host itself + existing members);
     those are filtered out. Returns deduped ``[{name, url, host, port}]``."""
     known = known or set()
     skip_local = {p for (h, p) in known if h in ("127.0.0.1", "localhost")}
-    local = await _scan_local(port_range, skip_local)
-    network = await asyncio.to_thread(_browse_mdns, timeout)
+    local, network, tailnet = await asyncio.gather(  # independent channels — scan concurrently
+        _scan_local(port_range, skip_local),
+        asyncio.to_thread(_browse_mdns, timeout),
+        _scan_tailnet(port_range, known),
+    )
     out: dict[tuple, dict] = {}
-    for a in network + local:  # local wins on a url clash (it's the more specific probe)
+    for a in network + tailnet + local:  # local wins on a url clash (it's the more specific probe)
         if (a["host"], a["port"]) in known:
             continue
         out[(a["host"], a["port"])] = a
