@@ -10,12 +10,13 @@ async function run(page, prompt: string) {
   await composer.waitFor({ state: "visible" });
   await composer.fill(prompt);
   await composer.press("Enter");
-  const card = page.locator(".tool-card").first();
+  // Frame is the DS ToolCard (#832): `.pl-toolcard*`; the body slot is ours.
+  const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
-  await expect(card.locator(".tool-card-status.done")).toBeVisible();
-  await card.locator(".tool-card-head").click();
-  await expect(card.locator(".tool-card-body")).toBeVisible();
-  return card.locator(".tool-card-body");
+  await expect(card.locator(".pl-toolcard__status--done")).toBeVisible();
+  await card.locator(".pl-toolcard__head").click();
+  await expect(card.locator(".pl-toolcard__body")).toBeVisible();
+  return card.locator(".pl-toolcard__body");
 }
 
 test("calculator renders expression = result", async ({ page }) => {
@@ -25,8 +26,9 @@ test("calculator renders expression = result", async ({ page }) => {
   await expect(calc.locator("code")).toHaveText("19 * 23");
   await expect(calc.locator("strong")).toHaveText("437");
   await expect(body.locator("pre")).toHaveCount(0);
-  // Header shows the tool-specific icon (not the generic wrench).
-  await expect(page.locator(".tool-card-head .tool-card-icon.lucide-calculator")).toBeVisible();
+  // Header shows the tool-specific icon (not the generic wrench). The DS wraps
+  // the host lucide element in `.pl-toolcard__icon`.
+  await expect(page.locator(".pl-toolcard__head .pl-toolcard__icon .lucide-calculator")).toBeVisible();
 });
 
 test("each tool gets its own header icon", async ({ page }) => {
@@ -36,7 +38,7 @@ test("each tool gets its own header icon", async ({ page }) => {
     ["search for things", "lucide-search"],
   ] as const) {
     await run(page, prompt);
-    await expect(page.locator(`.tool-card-head .tool-card-icon.${icon}`).first()).toBeVisible();
+    await expect(page.locator(`.pl-toolcard__head .pl-toolcard__icon .${icon}`).first()).toBeVisible();
   }
 });
 
@@ -81,11 +83,11 @@ test("a tool whose end frame never arrives still finishes when the turn complete
   await composer.fill("NOEND run the workflow");
   await composer.press("Enter");
 
-  const card = page.locator(".tool-card").first();
+  const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
   // The assistant's final text arrives (turn completed).
   await expect(page.getByText("Workflow finished.")).toBeVisible();
   // The card resolved to done — no lingering spinner.
-  await expect(card).toHaveClass(/tool-card-done/);
-  await expect(card.locator(".tool-card-status.running")).toHaveCount(0);
+  await expect(card).toHaveClass(/pl-toolcard--done/);
+  await expect(card.locator(".pl-toolcard__status--running")).toHaveCount(0);
 });

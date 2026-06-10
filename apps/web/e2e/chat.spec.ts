@@ -33,21 +33,22 @@ test("Enter sends; Ctrl+Enter inserts a newline", async ({ page }) => {
 test("tool-call card is collapsed by default and renders structured components", async ({ page }) => {
   await send(page, "search for AI coding agents");
 
-  const card = page.locator(".tool-card").first();
+  // Frame = DS ToolCard (#832): `.pl-toolcard*`; body slot is ours.
+  const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
-  await expect(card.locator(".tool-card-name")).toHaveText("web_search");
+  await expect(card.locator(".pl-toolcard__name")).toHaveText("web_search");
 
   // Stable default: collapsed — no body rendered until the user opens it.
-  await expect(page.locator(".tool-card-body")).toHaveCount(0);
+  await expect(page.locator(".pl-toolcard__body")).toHaveCount(0);
 
   // The tool finishes → done glyph (not the running spinner).
-  await expect(card.locator(".tool-card-status.done")).toBeVisible();
+  await expect(card.locator(".pl-toolcard__status--done")).toBeVisible();
 
   // A duration pill is stamped on completion (mock gaps frames ~40ms).
-  await expect(card.locator(".tool-card-dur")).toHaveText(/^\d+ms$|^\d+\.\d+s$/);
+  await expect(card.locator(".pl-toolcard__dur")).toHaveText(/^\d+ms$|^\d+\.\d+s$/);
 
-  await card.locator(".tool-card-head").click();
-  const body = card.locator(".tool-card-body");
+  await card.locator(".pl-toolcard__head").click();
+  const body = card.locator(".pl-toolcard__body");
   await expect(body).toBeVisible();
 
   // Input renders as key/value field rows — NOT a raw JSON blob.
@@ -77,10 +78,10 @@ test("expanded state is sticky and the assistant answer renders as markdown", as
 test("long tool values do not overflow the chat horizontally", async ({ page }) => {
   await send(page, "OVERFLOW: trigger a long token");
 
-  const card = page.locator(".tool-card").first();
+  const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
-  await card.locator(".tool-card-head").click();
-  await expect(card.locator(".tool-card-body")).toBeVisible();
+  await card.locator(".pl-toolcard__head").click();
+  await expect(card.locator(".pl-toolcard__body")).toBeVisible();
 
   const metrics = await page.evaluate(() => {
     const body = document.querySelector(".message-assistant .message-body");
