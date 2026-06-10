@@ -556,19 +556,23 @@ def _main():
                 log.exception("[plugins] surface %s failed to start", s.get("name"))
 
         # Fleet discovery (ADR 0042 §I) — advertise this agent on mDNS so siblings on the LAN can
-        # find it. Best-effort; never breaks boot.
+        # find it. Best-effort; never breaks boot. Off the loop (to_thread): sync Zeroconf
+        # constructed on a running event loop attaches to it, then register_service blocks that
+        # same loop waiting on its own future — a guaranteed ~10s EventLoopBlocked boot stall.
         try:
             from graph.fleet import discovery
-            discovery.advertise(agent_name(), int(getattr(STATE, "active_port", 0) or 0))
+            await asyncio.to_thread(
+                discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0))
         except Exception:
             log.exception("[discovery] mDNS advertise failed")
 
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
-        # Withdraw the mDNS advertisement (ADR 0042 §I).
+        # Withdraw the mDNS advertisement (ADR 0042 §I). Off the loop — same deadlock as
+        # advertise (zc.close() posts to and waits on the loop it's called from).
         try:
             from graph.fleet import discovery
-            discovery.stop_advertise()
+            await asyncio.to_thread(discovery.stop_advertise)
         except Exception:
             pass
         # Stop plugin surfaces first (ADR 0018) — best-effort.

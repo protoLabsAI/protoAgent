@@ -40,9 +40,20 @@ def _local_ip() -> str:
 
 # ── mDNS advertise (wired into server startup) ────────────────────────────────
 def advertise(name: str, port: int) -> None:
-    """Announce this agent on mDNS so LAN siblings can discover it. Idempotent + best-effort."""
+    """Announce this agent on mDNS so LAN siblings can discover it. Idempotent + best-effort.
+
+    Sync zeroconf — call via ``asyncio.to_thread`` from async code (the ``_browse_mdns``
+    convention): constructed on a running event loop it attaches to that loop, and
+    ``register_service`` then blocks the same loop waiting on its own future — a ~10s
+    ``EventLoopBlocked`` stall at boot. Guarded below so a regressed call site logs and
+    bails instantly instead.
+    """
     global _zc, _info
     if _zc is not None or not port:
+        return
+    if _on_event_loop():
+        log.warning("[discovery] advertise() called on an event loop thread — refusing "
+                    "(sync zeroconf would deadlock it); call via asyncio.to_thread")
         return
     try:
         from zeroconf import ServiceInfo, Zeroconf
@@ -63,8 +74,24 @@ def advertise(name: str, port: int) -> None:
         _zc = None
 
 
+def _on_event_loop() -> bool:
+    """True when the current thread is running an asyncio loop — where sync zeroconf
+    calls (register/unregister/close all wait on loop-scheduled futures) would deadlock."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 def stop_advertise() -> None:
+    """Withdraw the advertisement. Sync zeroconf — call via ``asyncio.to_thread`` (see
+    ``advertise``); ``unregister``/``close`` block on the loop the same way."""
     global _zc, _info
+    if _zc is not None and _on_event_loop():
+        log.warning("[discovery] stop_advertise() called on an event loop thread — refusing "
+                    "(sync zeroconf would deadlock it); call via asyncio.to_thread")
+        return
     try:
         if _zc is not None:
             if _info is not None:
