@@ -317,7 +317,7 @@ routing:
 
 **Goal mode** (`graph/goals/`) lets you give the agent a *testable outcome* it self-drives toward. After each terminal turn (the agent stops with a final answer), the goal's **verifier** decides whether it's met; if not, the agent is re-invoked with a continuation prompt — carrying the verifier's evidence and a running `<goal_plan>` checklist — until the verifier passes, the iteration budget runs out (`exhausted`), or the goal is flagged `unachievable` (a no-progress streak, or the model emitting `<goal_unachievable reason="…"/>`). Unlike a pure-LLM "are we done?" check, completion is backed by a real verifier.
 
-The machinery is wired when `enabled`, but **no goal is active until one is set** via the `/goal` control message (works over A2A / Gradio / OpenAI-compat) or the `/api/goal/{session_id}` endpoints. State is persisted per session under `GOAL_PATH` → `/sandbox/goals` → `~/.protoagent/goals`.
+The machinery is wired when `enabled`, but **no goal is active until one is set** via the `/goal` control message (works over A2A / the React console / OpenAI-compat) or the `/api/goal/{session_id}` endpoints. State is persisted per session under `GOAL_PATH` → `/sandbox/goals` → `~/.protoagent/goals`.
 
 ```yaml
 goal:

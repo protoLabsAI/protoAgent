@@ -1,8 +1,0 @@
-# READABLE REFERENCE ONLY — the live list lives in pyproject.toml
-# ([project.optional-dependencies].ui). Keep the two in step.
-#
-# UI deps — the Gradio chat console, needed only by the `full` UI tier
-# (ADR 0010). `console`/`none` tiers never import it. Kept separate so a
-# headless server (e.g. `--ui none`) installs only requirements-core.txt and
-# skips Gradio (the heaviest, PyInstaller-hostile dependency).
-gradio>=5.0

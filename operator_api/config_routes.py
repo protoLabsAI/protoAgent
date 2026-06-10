@@ -54,8 +54,8 @@ def register_config_routes(app) -> None:
     """Register the ``/api/config*`` + ``/api/settings*`` routes on ``app``."""
 
     # --- Live config / SOUL editing ----------------------------------------
-    # GET returns the current config + persona so external clients (the
-    # Gradio drawer is one; curl is another) can mirror what's running.
+    # GET returns the current config + persona so external clients (the console
+    # Settings drawer is one; curl is another) can mirror what's running.
     # POST accepts partial edits — pass only the sections you want to
     # change. Reload is automatic.
     @app.get("/api/config")

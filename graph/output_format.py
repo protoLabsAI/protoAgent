@@ -3,7 +3,7 @@
 The model is instructed to wrap internal deliberation in ``<scratch_pad>``
 and the user-facing answer in ``<output>``. Server-side, we parse those
 tags and forward only the ``<output>`` content to consumers (A2A
-artifacts, Gradio chat, subagent return values).
+artifacts, the console + OpenAI-compat chat, subagent return values).
 
 We deliberately do NOT parse the protocol mid-stream — chunk-boundary
 tag splitting turned that into a state-machine rabbit hole and the
@@ -42,7 +42,7 @@ Structure every response as:
     </scratch_pad>
     <output>
     The user-facing answer. This is what lands in the A2A artifact /
-    Discord / Gradio chat. Be clean, scannable, markdown-formatted.
+    Discord / the console chat. Be clean, scannable, markdown-formatted.
     </output>
 
 Rules:

@@ -69,7 +69,8 @@ jobs:
       - name: Build server sidecar (PyInstaller)
         shell: bash
         # Freezes `server` into binaries/protoagent-server-<triple> — the
-        # externalBin Tauri bundles. Gradio/UI extras excluded by the script.
+        # externalBin Tauri bundles. The React console is the UI; no server-side
+        # UI extras are bundled.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller

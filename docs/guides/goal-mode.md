@@ -30,7 +30,7 @@ The loop wraps graph invocation in `server/chat.py` (both the A2A streaming path
 
 ## Setting a goal
 
-Send a control message through any channel (A2A, Gradio chat, OpenAI-compat):
+Send a control message through any channel (A2A, the React console chat, OpenAI-compat):
 
 - **Fuzzy goal** (LLM-verified):
   ```

@@ -124,7 +124,7 @@ async def test_chat_langgraph_stream_logs_traceback_on_exception(caplog):
 
 @pytest.mark.asyncio
 async def test_chat_langgraph_non_stream_logs_traceback_on_exception(caplog):
-    """Same guarantee on the non-streaming path that Gradio chat uses."""
+    """Same guarantee on the non-streaming path the console + OpenAI-compat use."""
     from server import _chat_langgraph
 
     caplog.set_level(logging.ERROR, logger="protoagent.server")
@@ -138,7 +138,7 @@ async def test_chat_langgraph_non_stream_logs_traceback_on_exception(caplog):
     with patch("server.STATE.graph", fake_graph):
         result = await _chat_langgraph("hi", "s-err")
 
-    # Caller (Gradio) still gets a readable assistant message
+    # Caller (the non-streaming chat) still gets a readable assistant message
     assert "**Error:**" in result[0]["content"]
 
     error_records = [r for r in caplog.records if r.levelno == logging.ERROR]

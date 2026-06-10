@@ -46,7 +46,7 @@ rename / release-pipeline wiring.
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
 | Observability | `metrics.py`, `audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
 | Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
-| UI | `apps/web/` (React console), `chat_ui.py` (Gradio) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), and plugin-contributed rail views; legacy Gradio chat (`--ui full`) with PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
+| UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
 | Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
 
 ## Quickstart — from zero to chatting in 5 minutes
@@ -58,19 +58,19 @@ cd my-agent
 
 # 2. Install deps + run — uv (recommended): creates the venv, installs the
 #    core deps from pyproject.toml, and runs the server. No env vars required.
-uv sync && uv run python -m server          # core (--ui console/none)
-# Want the Gradio UI and/or the Google surface? Add the extras:
-#   uv sync --extra ui --extra google && uv run python -m server
+uv sync && uv run python -m server          # core, serves the React console (--ui console)
+# Want the Google surface? Add the extra:
+#   uv sync --extra google && uv run python -m server
 # Already synced? `uv run --no-sync python -m server` skips the re-resolve.
 
-# 2b. Or with pip — `requirements.txt` installs everything (core + Gradio UI):
+# 2b. Or with pip — `requirements.txt` installs core + the Google surface:
 #   python -m venv .venv && source .venv/bin/activate
-#   pip install -r requirements.txt        # == pip install -e .[ui,google]
+#   pip install -r requirements.txt        # == pip install -e .[google]
 #   python -m server
 
 # 3. Open the wizard — pick your endpoint, pick a model, name the
-#    agent, pick a persona preset, hit Launch. The chat UI appears
-#    on the same page.
+#    agent, pick a persona preset, hit Launch. The console chat appears
+#    once setup completes.
 open http://localhost:7870
 ```
 
@@ -97,8 +97,8 @@ curl localhost:7870/v1/chat/completions -H "Authorization: Bearer $TOKEN" \
 curl localhost:7870/.well-known/agent-card.json
 ```
 
-`--ui` tiers: `full` (Gradio + console, default) · `console` (React + API) · `none`
-(headless). See [Run headless](./docs/guides/headless.md).
+`--ui` tiers: `console` (React + API, default) · `none` (headless). `full` is a
+deprecated alias for `console`. See [Run headless](./docs/guides/headless.md).
 
 ## Architecture
 

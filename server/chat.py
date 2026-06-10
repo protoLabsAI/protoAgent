@@ -1,7 +1,7 @@
 """Chat backend — the LangGraph turn loop behind every entry point.
 
 Extracted from ``server/__init__.py`` (ADR 0023, phase 2). This module owns the
-non-streaming ``chat`` (Gradio + OpenAI-compat) and streaming
+non-streaming ``chat`` (the console + OpenAI-compat) and streaming
 ``_chat_langgraph_stream`` (the A2A handler) turn drivers, the shared
 ``_run_turn_stream`` event loop, tool-preview/interrupt shaping, and slash-command
 parsing + execution for workflows and subagents.
@@ -35,7 +35,7 @@ def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
     """Resolve the checkpointer ``thread_id`` for this turn (#571).
 
     Template default keys A2A sessions by conversation id (``a2a:<session_id>``),
-    prefixed to isolate them from Gradio chat in the shared checkpointer. A fork
+    prefixed to isolate them from the non-streaming chat in the shared checkpointer. A fork
     can register a resolver ``(request_metadata, session_id) -> str`` via a plugin
     (``register_thread_id_resolver``) to scope memory off request metadata — e.g.
     per-project working memory — with ZERO edits to this file. Falls back to the
@@ -70,7 +70,7 @@ def _get_acp_runtime(thread_id: str):
 def _setup_required_message() -> list[dict[str, Any]]:
     """Returned by chat endpoints when the wizard hasn't been run.
 
-    The Gradio UI hides the chat pane until setup completes, but the
+    The console hides the chat pane until setup completes, but the
     HTTP /api/chat, OpenAI-compat, and A2A endpoints don't know the
     UI state — so they emit a plain-text "finish setup first"
     message instead of 500ing on ``STATE.graph is None``.
@@ -93,7 +93,7 @@ async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
 
-    This is the non-streaming entry point used by Gradio + the OpenAI-compat
+    This is the non-streaming entry point used by the console + the OpenAI-compat
     endpoint. The A2A handler uses ``_chat_langgraph_stream`` instead to
     capture tool events and emit the cost-v1 DataPart on the terminal
     artifact.
@@ -605,7 +605,7 @@ async def _chat_langgraph_stream(
 
             # thread_id keys this session's history in the checkpointer (bound
             # at compile time in create_agent_graph). The prefix isolates A2A
-            # sessions from Gradio chat in the shared MemorySaver. Derivation is
+            # sessions from the non-streaming chat in the shared MemorySaver. Derivation is
             # a pluggable seam (#571): a fork registers a resolver to scope memory
             # off request metadata (e.g. per-project) without editing this file.
             config = {
@@ -737,7 +737,7 @@ async def _chat_langgraph_stream(
 
 
 async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]:
-    """Non-streaming LangGraph entry — used by Gradio + OpenAI-compat."""
+    """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     import tracing
     from langchain_core.messages import HumanMessage, AIMessage
 
@@ -760,7 +760,11 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
             if parsed is not None:
                 return [{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}]
 
-            config = {"configurable": {"thread_id": f"gradio:{session_id}"}}
+            # `chat:` namespaces non-streaming sessions in the shared checkpointer,
+            # apart from the A2A `a2a:` ones (was `gradio:` — renamed when the Gradio
+            # UI was removed; non-streaming chat is short-lived so the one-time
+            # re-key on upgrade is harmless).
+            config = {"configurable": {"thread_id": f"chat:{session_id}"}}
 
             def _last_ai(result) -> str:
                 for msg in reversed(result.get("messages", [])):

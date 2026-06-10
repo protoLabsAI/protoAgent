@@ -8,7 +8,7 @@ A *skill* is a named capability A2A callers can dispatch to. Skills live on the 
 - You want Workstacean's planner to rank your agent against a specific goal.
 - You want per-skill cost telemetry (cost-v1 samples are keyed by `(agent, skill)`).
 
-You don't need a skill for "things the chat UI does" — the Gradio chat is already covered by the default dispatch path.
+You don't need a skill for "things the chat UI does" — the React console chat is already covered by the default dispatch path.
 
 ## 1. Declare it in config
 

@@ -92,7 +92,7 @@ second process. Revisit if a non-Python consumer needs them — see §7.)
   threshold, admin IDs) + `DISCORD_BOT_TOKEN` in `config/secrets.yaml`
   (gitignored) / env. Sensible defaults so the only required input is the token.
 - **Dependencies:** `httpx` is already core; `websockets` becomes an **optional
-  dep** (like `gradio` in ADR 0010) — the gateway import-guards on it.
+  dep** (like the `google` extra) — the gateway import-guards on it.
 
 ### 2.4 Return-address delivery (closes the proactive loop)
 

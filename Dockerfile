@@ -51,18 +51,15 @@ RUN useradd -m -s /bin/bash -u ${SANDBOX_UID} sandbox
 # the requirements first so this layer stays cached across source-only
 # changes. Forks that need extras (agent-browser, sqlite-vec, pyjwt[crypto])
 # add them to requirements.txt.
-# UI tier (ADR 0010): default 'none' builds the LEAN image (core deps, no
-# Gradio) for a headless server. `--build-arg UI=full` adds the Gradio UI for an
-# all-in-one image. Both requirements files are copied so requirements.txt's
-# `-r` includes resolve. PROTOAGENT_UI is baked so the server runs the matching
-# tier (server.py reads it).
+# UI tier (ADR 0010): the build-arg bakes PROTOAGENT_UI so the image runs the
+# matching tier — default 'none' (API + A2A + /metrics only, the lean headless
+# image) or 'console' (also serves the React console, which ships as COPY'd static
+# assets, not a pip dep). Either tier uses the same lean core deps, so the install
+# is unconditional; forks that need extras (the google/Discord MCP surfaces,
+# agent-browser, …) add them to requirements-core.txt (note above).
 ARG UI=none
 COPY requirements*.txt /tmp/
-RUN if [ "$UI" = "full" ]; then \
-      pip install --no-cache-dir -r /tmp/requirements.txt; \
-    else \
-      pip install --no-cache-dir -r /tmp/requirements-core.txt; \
-    fi
+RUN pip install --no-cache-dir -r /tmp/requirements-core.txt
 
 # Single COPY with a matching .dockerignore covers everything that
 # should ship and excludes .git/, tests/, docs, and dev state. Adding a

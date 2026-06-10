@@ -1,4 +1,4 @@
-"""Config I/O for the live-edit drawer in chat_ui.py.
+"""Config I/O for the console's live-edit Settings drawer (operator_api/config_routes.py).
 
 Three jobs:
 

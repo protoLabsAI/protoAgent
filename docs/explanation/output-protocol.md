@@ -12,7 +12,7 @@ The user-facing answer. Clean, scannable, markdown-formatted.
 </output>
 ```
 
-Server-side, `graph/output_format.py::extract_output` parses tags and forwards only the `<output>` content to consumers (A2A artifacts, Gradio chat, subagent return values).
+Server-side, `graph/output_format.py::extract_output` parses tags and forwards only the `<output>` content to consumers (A2A artifacts, the OpenAI-compatible `/v1` endpoint and the console's non-streaming fallback, subagent return values).
 
 ## Why at all
 

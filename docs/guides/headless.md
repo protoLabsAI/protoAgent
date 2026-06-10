@@ -11,9 +11,12 @@ One flag picks how much UI is served; the **API + A2A always run**.
 
 | `--ui` | Serves | For |
 | --- | --- | --- |
-| `full` *(default)* | Gradio chat + React console + API + A2A | local dev |
-| `console` | React console + API + A2A | the desktop sidecar |
+| `console` *(default)* | React console + API + A2A | local dev, the desktop sidecar |
 | **`none`** | **API + A2A + `/metrics` only** | **headless servers, fleets, CI** |
+
+`full` is still accepted as a **deprecated alias for `console`** (it logs a
+deprecation warning and behaves as `console`) — the old Gradio chat tier it once
+named has been removed.
 
 ```bash
 python -m server --ui none --host 0.0.0.0 --port 7870

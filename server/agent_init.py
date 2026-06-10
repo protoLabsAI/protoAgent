@@ -1388,7 +1388,7 @@ def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
 
 
 def _build_settings_callbacks() -> dict[str, Any]:
-    """Callbacks consumed by the Gradio Configuration drawer + wizard."""
+    """Callbacks consumed by the console Settings (config routes) + the setup wizard."""
     from graph.config_io import (
         config_to_dict,
         is_setup_complete,

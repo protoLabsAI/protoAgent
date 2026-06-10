@@ -10,7 +10,7 @@ This is the main entry point. It:
    ``tasks/*`` CRUD, agent card at ``/.well-known/agent-card.json``.
 3. Mounts an OpenAI-compatible chat-completions endpoint so the agent
    can be registered as a model in the LiteLLM gateway / OpenWebUI.
-4. Optionally mounts a Gradio chat UI for direct operator access.
+4. Mounts the React operator console (the ``/app`` SPA + its ``/_ds`` kit).
 5. Exposes a Prometheus ``/metrics`` endpoint when the ``metrics``
    module is active.
 
@@ -243,7 +243,6 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_mcp,
     _build_plugins,
     _build_scheduler,
-    _build_settings_callbacks,
     _build_skills_index,
     _build_telemetry_store,
     _checkpoint_prune_loop,
@@ -269,7 +268,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 
 
 # ---------------------------------------------------------------------------
-# Main — FastAPI + Gradio + A2A + OpenAI-compat + Prometheus
+# Main — FastAPI + React console + A2A + OpenAI-compat + Prometheus
 # ---------------------------------------------------------------------------
 
 def _main():
@@ -333,12 +332,12 @@ def _main():
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
         "--ui",
-        choices=["full", "console", "none"],
+        choices=["console", "none", "full"],
         default=os.environ.get("PROTOAGENT_UI", "").lower() or None,
-        help="UI deployment tier (ADR 0010): 'full' = Gradio + React console + "
-             "API/A2A (local default); 'console' = React console + API/A2A, no "
-             "Gradio (desktop sidecar); 'none' = API + A2A + /metrics only "
-             "(headless servers / the lighter stack). Env: PROTOAGENT_UI.",
+        help="UI deployment tier (ADR 0010): 'console' (default) = React console at "
+             "/app + API/A2A; 'none' = API + A2A + /metrics only (headless servers / "
+             "the lean stack). 'full' is a DEPRECATED alias for 'console' — the Gradio "
+             "tier was removed. Env: PROTOAGENT_UI.",
     )
     parser.add_argument(
         "--headless",
@@ -356,14 +355,18 @@ def _main():
     STATE.active_port = args.port
 
     # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
-    # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'full'.
+    # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'console' (the
+    # React console — the old 'full' Gradio default was removed).
     if args.ui:
         ui = args.ui
     elif args.headless:
         ui = "console"
         log.warning("--headless / PROTOAGENT_HEADLESS is deprecated — use --ui console.")
     else:
-        ui = "full"
+        ui = "console"
+    if ui == "full":  # the Gradio tier was removed; 'full' is now an alias for console.
+        log.warning("--ui full / PROTOAGENT_UI=full is deprecated (the Gradio UI was removed) — using console.")
+        ui = "console"
 
     # `--setup` one-shot: complete setup headlessly and exit.
     if args.setup:
@@ -392,28 +395,6 @@ def _main():
     metrics.init()
 
     _init_langgraph_agent(headless_setup=headless_setup)
-
-    # Gradio chat UI — only the 'full' tier (ADR 0010). 'console'/'none' never
-    # import Gradio (its biggest, PyInstaller-hostile dep). If it's not installed
-    # in 'full' (lean deps), degrade to 'console' rather than crash.
-    blocks = None
-    if ui == "full":
-        try:
-            from chat_ui import create_chat_app
-            blocks = create_chat_app(
-                chat_fn=chat,
-                title=agent_name(),
-                subtitle="protoAgent",
-                placeholder="Send a message...",
-                pwa=True,
-                settings=_build_settings_callbacks(),
-            )
-        except ImportError:
-            log.warning(
-                "gradio not installed — degrading --ui full to console. "
-                "Install it (`pip install -r requirements-ui.txt`) for the Gradio UI.",
-            )
-            ui = "console"
 
     import uvicorn
     from fastapi import FastAPI, Request
@@ -817,19 +798,19 @@ def _main():
 
         fastapi_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # --- Mount Gradio at root (only the 'full' tier) ------------------------
-    if ui == "full" and blocks is not None:
-        import gradio as gr
+    # --- Bare `/` → the console -------------------------------------------
+    # The React console (at /app) owns the UI; the Gradio root mount was removed.
+    # Redirect a bare `/` to it so the agent's base URL lands on the console instead
+    # of a 404 — only when the console is actually served (not the headless 'none').
+    if ui != "none":
+        from fastapi.responses import RedirectResponse
 
-        app = gr.mount_gradio_app(
-            fastapi_app, blocks, path="/",
-            footer_links=[],
-            favicon_path=str(static_dir / "favicon.svg") if (static_dir / "favicon.svg").exists() else None,
-        )
-        log.info("Starting %s (ui=full) on http://%s:%d", agent_name(), args.host, args.port)
-    else:
-        app = fastapi_app
-        log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
+        @fastapi_app.get("/", include_in_schema=False)
+        async def _root_to_console() -> RedirectResponse:
+            return RedirectResponse(url="/app/")
+
+    app = fastapi_app
+    log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full
     # operator API (plugin install+enable = code execution, config/SOUL

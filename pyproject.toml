@@ -41,10 +41,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ui (the `full` Gradio tier) — mirrors requirements-ui.txt:
-ui = [
-  "gradio>=5.0",
-]
 # google MCP surface (Slice 2) — mirrors requirements-google.txt:
 google = [
   "mcp>=1.2",
@@ -93,7 +89,6 @@ include = [
   "audit.py",
   "autostart.py",
   "cache.py",
-  "chat_ui.py",
   "egress.py",
   "metrics.py",
   "paths.py",

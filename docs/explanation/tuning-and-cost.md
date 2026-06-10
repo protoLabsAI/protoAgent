@@ -88,7 +88,7 @@ traffic it's pure cost.
 ## Conversation history
 
 Each chat session's history is checkpointed per `thread_id` (the chat tab's
-context id, prefixed `a2a:` / `gradio:`), so a turn sees the prior turns instead
+context id, prefixed `a2a:`), so a turn sees the prior turns instead
 of starting fresh — and compaction summarizes the older part near the limit. The
 checkpointer is bound at **graph-compile time** (a checkpointer set only in the
 invoke config is ignored by LangGraph).

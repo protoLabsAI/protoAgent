@@ -6,6 +6,15 @@
 - **Tags:** deployment, setup, ui, dependencies, headless, docker, operator
 - **Supersedes / Superseded by:** generalizes the existing `--headless` flag
 
+> **Amendment (2026-06-10) — the `full` (Gradio) tier was removed.** The Gradio
+> chat UI (`chat_ui.py`) and the `ui`/`gradio` optional dependency are gone; the
+> React console is the only UI. The deployment tiers are now **`console` (the new
+> default) and `none`**. `--ui full` / `PROTOAGENT_UI=full` is kept as a
+> **deprecated alias for `console`** (logs a warning) so existing invocations don't
+> break, and a bare `/` now redirects to the console at `/app`. Everything below
+> describing `full` as a Gradio-bearing tier is the original 2026-06-01 record;
+> read it through this amendment.
+
 > Accepted. Two coupled needs: (1) **complete setup without the wizard UI** —
 > drop a config, supply secrets, the graph compiles (Roxy hit the
 > `.setup-complete` gate with no UI to satisfy it); and (2) **a lighter stack

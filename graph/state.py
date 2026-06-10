@@ -18,7 +18,7 @@ class ProtoAgentState(AgentState):
     Extend this class in your fork to add domain-specific state.
     """
 
-    # Session tracking (A2A / Gradio session ID)
+    # Session tracking (A2A / chat session ID)
     session_id: NotRequired[str]
 
     # Knowledge context injected by KnowledgeMiddleware before LLM call

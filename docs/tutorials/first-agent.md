@@ -19,19 +19,18 @@ modern `uv` and classic `pip` just work.
 **uv (recommended)** — creates the venv, installs the core deps, runs the server:
 
 ```bash
-uv sync && uv run python -m server          # core (--ui console/none)
-# Add the Gradio UI and/or Google surface with extras:
-#   uv sync --extra ui --extra google && uv run python -m server
+uv sync && uv run python -m server          # core, serves the React console (--ui console)
+# Add the Google surface with the extra:
+#   uv sync --extra google && uv run python -m server
 # Re-running and already synced? `uv run --no-sync python -m server`.
 ```
 
-**pip** — `requirements.txt` is a thin `-e .[ui,google]`, so it installs the
-all-in-one (core + Gradio UI) set just like before:
+**pip** — `requirements.txt` installs the core + Google surface set:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt            # == pip install -e .[ui,google]
+pip install -r requirements.txt            # == pip install -e .[google]
 python -m server
 ```
 

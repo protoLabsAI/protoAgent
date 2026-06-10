@@ -79,7 +79,7 @@ In the chat UI:
 
 > What SHA is the agent running right now?
 
-You should see a tool-call card for `git_sha` (running → done, with the result), and then a response weaving the SHA into natural language. (In the React console it renders as a collapsible tool-call card; the legacy Gradio `--ui full` tier shows `🔧`/`✅` frames.)
+You should see a tool-call card for `git_sha` (running → done, with the result), and then a response weaving the SHA into natural language. (In the React console it renders as a collapsible tool-call card.)
 
 ## What to notice
 

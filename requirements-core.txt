@@ -2,8 +2,8 @@
 # ([project.dependencies]). Keep the two in step; pip + uv install via pyproject.
 #
 # Core runtime — API / A2A / LangGraph / stores. Everything the agent needs to
-# run in the `console` and `none` UI tiers (ADR 0010). The Gradio UI lives in
-# requirements-ui.txt; `requirements.txt` = core + ui (the all-in-one install).
+# run in the `console` and `none` UI tiers (ADR 0010). `requirements.txt` = core
+# + the `google` extra (the all-in-one install).
 httpx>=0.27
 # A2A protocol (spec 1.0) — official SDK. Owns JSON-RPC dispatch, SSE streaming,
 # the task lifecycle, the task + push-config stores, and push delivery. The
@@ -18,10 +18,10 @@ a2a-sdk[http-server,fastapi,sqlite]>=1.1
 # the public published repo (single source of truth, no vendored copy). The repo
 # is public so the Docker build needs no auth to clone it.
 protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.2.0
-# Web framework for the API / A2A / operator routes (server.py, operator_api/).
-# Previously satisfied only transitively via Gradio — but the lean tiers
-# (--ui none/console) drop Gradio (requirements-ui.txt), so the lean image had
-# no FastAPI and couldn't serve. Declared here as the core runtime dep it is.
+# Web framework for the API / A2A / operator routes (server/, operator_api/).
+# Declared here as the core runtime dep it is — it was once satisfied only
+# transitively via the (now-removed) Gradio UI, which left the lean tiers with no
+# FastAPI and unable to serve.
 fastapi>=0.115
 python-multipart>=0.0.9   # FastAPI form/multipart parsing (fs/image routes + A2A parts)
 uvicorn>=0.30

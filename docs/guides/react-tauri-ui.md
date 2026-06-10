@@ -331,7 +331,7 @@ frozen build bundles the **`plugins/` tree** (`--add-data plugins:plugins`) and
 **`--collect-all tools`** (alongside `surfaces`, `mcp`, `mcp_servers`, `websockets`)
 — plugins are loaded by file path (importlib), which PyInstaller's import-scan
 misses, so without these the Discord/Google plugins fail to load in the frozen app
-(`No module named 'tools.discord_tools'`). Gradio is excluded. A frozen plugin's
+(`No module named 'tools.discord_tools'`). A frozen plugin's
 managed MCP server is launched via the generic `--mcp-plugin <id>` shim.
 
 ## Migration Slices

@@ -66,7 +66,7 @@ _trace_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_protoagent_trace_id", default="",
 )
 
-# Holds the A2A/Gradio session_id so middleware (AuditMiddleware) and
+# Holds the A2A/chat session_id so middleware (AuditMiddleware) and
 # audit logging can stamp it without needing access to graph state.
 _session_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_protoagent_session_id", default="",

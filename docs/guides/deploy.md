@@ -95,9 +95,9 @@ services:
 Watchtower polls `latest` every 60 seconds and recreates the container when the image hash changes.
 
 > **UI tier (ADR 0010):** the image defaults to **`--ui none`** — API + A2A +
-> `/metrics`, no console, no Gradio, core deps only (the lean server stack). For
-> the Gradio UI in the image, build with **`--build-arg UI=full`** (adds
-> `gradio`); it then runs `full`. Setup is headless in `none` — drop a config +
+> `/metrics`, no console, core deps only (the lean server stack). For the React
+> console in the image, build with **`--build-arg UI=console`**; it then runs
+> `console`. Setup is headless in `none` — drop a config +
 > `OPENAI_API_KEY`, the graph compiles on boot (or run `--setup`); `GET /healthz`
 > reports readiness. See [Sandboxing & egress](/guides/sandboxing) and the
 > [env-vars reference](/reference/environment-variables#deployment-ui-tier-adr-0010).

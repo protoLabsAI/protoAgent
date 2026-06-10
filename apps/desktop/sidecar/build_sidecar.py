@@ -2,9 +2,8 @@
 """Freeze the headless protoAgent server into a single-file Tauri sidecar.
 
 Produces ``apps/desktop/src-tauri/binaries/protoagent-server-<target-triple>``
-— the ``externalBin`` Tauri bundles and launches. Gradio is excluded (the
-desktop app renders the React console itself), so the binary stays as small
-as this dependency stack allows.
+— the ``externalBin`` Tauri bundles and launches. The desktop app renders the
+React console itself, so the binary stays as small as this dependency stack allows.
 
 Run from a venv with the runtime deps + PyInstaller installed:
 
@@ -89,9 +88,9 @@ OPTIONAL_COLLECT_ALL = [
     "googleapiclient",
 ]
 
-# Gradio (and the chat_ui module that imports it) is dead weight in headless
-# mode and the worst thing to freeze — exclude it outright.
-EXCLUDE = ["gradio", "chat_ui", "tkinter"]
+# tkinter is GUI dead weight in a headless server and a freeze hazard — exclude it.
+# (Gradio + the chat_ui module it backed were removed from the project entirely.)
+EXCLUDE = ["tkinter"]
 
 
 def target_triple() -> str:

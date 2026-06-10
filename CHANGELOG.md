@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **The Gradio chat UI (the `--ui full` tier).** `chat_ui.py`, the `gradio` / `ui`
+  optional dependency, and `requirements-ui.txt` are gone — the React console is the
+  only UI. Deployment tiers are now **`console` (the new default)** and **`none`**
+  (ADR 0010, amended). `--ui full` / `PROTOAGENT_UI=full` is kept as a **deprecated
+  alias for `console`** (logs a warning) so existing invocations don't break, and a
+  bare `/` now redirects to the console at `/app`. The Docker image drops the
+  conditional `UI=full` install (it pulled the removed extra) and always installs the
+  lean core; the console ships as static assets, not a pip dep.
+
 ### Fixed
 - **Fleet members render plugin views with no design system (version-coherence
   Axis 3).** The DS plugin-kit (`/_ds/plugin-kit.{css,js}`) was served only by the
