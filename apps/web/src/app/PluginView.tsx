@@ -39,14 +39,69 @@ export function PluginView({ view }: { view: PluginViewType }) {
   }, [tabs, activeTab, view.path]);
 
   const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // null = no error; a string = an actionable failure message to show in the panel.
+  const [error, setError] = useState<string | null>(null);
+  // Probed and reachable (HTTP ok) — only then do we mount the iframe. Until the probe
+  // resolves we show the loading state; this keeps a 404 from ever rendering the server's
+  // bare {"detail":"Not Found"} body as the "view".
+  const [reachable, setReachable] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const pluginId = useMemo(() => pluginIdFromPath(view.path), [view.path]);
-  // Reset load state when the loaded page changes (tab switch).
+
+  // Probe the view URL before mounting the iframe. A same-origin HTTP error (a 404 from an
+  // unmounted /api/plugins/<id>/<view>, FastAPI's {"detail":"Not Found"}) fires the iframe's
+  // onLoad — NOT onError — so trusting onLoad would render the raw 404 as a blank panel. We
+  // must read res.status. On !ok we phrase the cause from the owning plugin's load state:
+  //   • plugin reported an error (missing env / deps not installed) → surface it verbatim
+  //   • enabled but not loaded → the view route isn't serving yet (mount race / restart)
+  //   • otherwise → the HTTP status. One retry covers a sub-second race with a hot-mount reload.
   useEffect(() => {
+    let cancelled = false;
     setLoaded(false);
-    setFailed(false);
-  }, [src]);
+    setError(null);
+    setReachable(false);
+
+    function describeFailure(status: number | null): string {
+      if (view.pluginError) return view.pluginError;
+      if (view.pluginLoaded === false)
+        return `The plugin view at ${src} isn’t mounted yet. If you just enabled it, give it a moment — or restart the server to finish enabling.`;
+      if (status != null) return `The plugin page at ${src} returned HTTP ${status}.`;
+      return `The plugin page at ${src} didn’t respond.`;
+    }
+
+    async function probe(attempt: number): Promise<void> {
+      try {
+        const res = await fetch(apiUrl(src), {
+          headers: { ...(authToken() ? { Authorization: `Bearer ${authToken()}` } : {}) },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          setReachable(true);
+          return;
+        }
+        // Retry once on a server-side miss — covers the brief window where the rail
+        // renders the view before the hot-mount include_router commits (#822 reload race).
+        if (attempt === 0 && (res.status === 404 || res.status >= 500)) {
+          setTimeout(() => void probe(1), 600);
+          return;
+        }
+        setError(describeFailure(res.status));
+      } catch {
+        if (cancelled) return;
+        // True network/CORS failure (connection refused, blocked) — no status to read.
+        if (attempt === 0) {
+          setTimeout(() => void probe(1), 600);
+          return;
+        }
+        setError(describeFailure(null));
+      }
+    }
+
+    void probe(0);
+    return () => {
+      cancelled = true;
+    };
+  }, [src, view.pluginLoaded, view.pluginError]);
 
   // Event-bus relay across the sandbox (ADR 0039). The page subscribes via
   // `protoagent:subscribe {patterns}`; the host forwards matching bus events in
@@ -133,10 +188,10 @@ export function PluginView({ view }: { view: PluginViewType }) {
       )}
       <section className="panel stage-panel plugin-view">
       <div className="plugin-view-body">
-        {failed ? (
+        {error ? (
           <div className="plugin-view-state" role="alert">
             <AlertTriangle size={18} />
-            <span>Couldn’t load “{view.label}”. The plugin page at <code>{src}</code> didn’t respond.</span>
+            <span>Couldn’t load “{view.label}”. {error}</span>
           </div>
         ) : (
           <>
@@ -146,16 +201,21 @@ export function PluginView({ view }: { view: PluginViewType }) {
                 <span>Loading {view.label}…</span>
               </div>
             ) : null}
-            <iframe
-              ref={frameRef}
-              className="plugin-view-frame"
-              src={apiUrl(src)}
-              title={view.label}
-              sandbox="allow-scripts allow-forms allow-same-origin"
-              onLoad={handleLoad}
-              onError={() => setFailed(true)}
-              style={{ visibility: loaded ? "visible" : "hidden" }}
-            />
+            {/* Mount the iframe ONLY after the status probe confirms the route serves —
+                a 404 fires onLoad (not onError), so an unprobed iframe would render the
+                server's raw 404 body as a blank "view". */}
+            {reachable ? (
+              <iframe
+                ref={frameRef}
+                className="plugin-view-frame"
+                src={apiUrl(src)}
+                title={view.label}
+                sandbox="allow-scripts allow-forms allow-same-origin"
+                onLoad={handleLoad}
+                onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
+                style={{ visibility: loaded ? "visible" : "hidden" }}
+              />
+            ) : null}
           </>
         )}
       </div>

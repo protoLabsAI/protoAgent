@@ -49,8 +49,8 @@ export function PluginsSection() {
         <h3><Package size={16} /> Install from a git URL</h3>
         <p className="settings-section-sub">
           Install a plugin from a git URL. Fetching code never runs it — review, then{" "}
-          <strong>enable</strong> it from the <strong>Local</strong> tab (tools apply live; a
-          console view or background surface needs a restart). Untrusted code?
+          <strong>enable</strong> it from the <strong>Local</strong> tab (tools, console
+          views and background surfaces all come up live — no restart). Untrusted code?
           Use an <a href="https://protolabsai.github.io/protoAgent/guides/mcp" target="_blank" rel="noreferrer">MCP server</a> instead.{" "}
           <a href={REGISTRY_GUIDE_URL} target="_blank" rel="noreferrer">Guide</a>.
         </p>

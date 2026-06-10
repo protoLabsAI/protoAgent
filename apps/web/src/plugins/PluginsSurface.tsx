@@ -69,9 +69,12 @@ function LocalTab() {
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      // Enable is fully live now (its router — which serves any console view — hot-mounts
+      // on reload, #822). Only DISABLE leaves a stale route/surface behind (FastAPI can't
+      // unmount), so restart_recommended is set only when turning a view/route plugin OFF.
       setHint(
         res.restart_recommended
-          ? `${p.name} ${res.enabled ? "enabled" : "disabled"} — restart to load its console view or background surface.`
+          ? `${p.name} disabled — restart to fully remove its console view or background surface.`
           : `${p.name} ${res.enabled ? "enabled" : "disabled"}.`,
       );
     },

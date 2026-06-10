@@ -3,8 +3,18 @@
 Backs the console Plugins panel: list installed plugins (with their manifest +
 declared capabilities for review), install from a git URL, uninstall, and
 enable/disable. Install fetches code only (install ≠ enable). Enable/disable edits
-``plugins.enabled`` and hot-reloads — tools/middleware/MCP apply live; a console
-view or background surface (its router mounts at init) needs a restart.
+``plugins.enabled`` and hot-reloads.
+
+ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
+router — which is what serves a console view (the view iframe just points at a
+router route) — is hot-mounted on the same reload (``_mount_plugin_routers`` in
+``server.agent_init``, #822). So enabling a view-contributing plugin needs no
+restart; ``restart_recommended`` stays False for enable.
+
+DISABLE is the residual restart case: FastAPI has no route-removal API, so a
+disabled plugin's view/route lingers on the live app until a process restart
+(documented in ``_mount_plugin_routers``). We flag ``restart_recommended`` only
+when disabling a plugin that contributed a view/route/surface.
 """
 
 from __future__ import annotations
@@ -74,15 +84,22 @@ def register_plugin_routes(app) -> None:
     async def _set_enabled(plugin_id: str, body: dict | None = None):
         """Enable/disable a plugin by editing `plugins.enabled`/`disabled` + hot-reloading.
 
-        Tools / subagents / middleware / MCP servers take effect immediately (the graph
-        rebuilds). A plugin that serves a **console view** or runs a **background surface**
-        (its router/gateway mounts once at init) needs a restart to finish — flagged via
-        ``restart_recommended`` so the UI can say so.
+        ENABLE is fully live: tools / subagents / middleware / MCP rebuild with the graph,
+        and the plugin's router (which serves any **console view** — the view iframe just
+        points at a router route) is hot-mounted on the same reload (#822). So a freshly
+        enabled view-contributing plugin works immediately; ``restart_recommended`` is False.
+
+        DISABLE can't tear a router back down (FastAPI has no route-removal API), so a
+        disabled plugin's view/route/surface lingers until a process restart — only that
+        path flags ``restart_recommended`` so the UI can say so.
         """
         want = bool((body or {}).get("enabled"))
         cfg = STATE.graph_config
         enabled = [p for p in (getattr(cfg, "plugins_enabled", []) or []) if p != plugin_id]
         disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != plugin_id]
+        # Snapshot the plugin's pre-reload meta — on DISABLE the reload clears its views
+        # from STATE.plugin_meta, so we must read "did it contribute a surface?" first.
+        prev_meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
         if want:
             enabled.append(plugin_id)
         else:
@@ -96,9 +113,13 @@ def register_plugin_routes(app) -> None:
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
 
-        # A view (router) only mounts at init, so enabling a view plugin needs a restart.
-        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
-        restart = bool(want and meta and meta.get("views"))
+        # Enabling hot-mounts the router that serves the view (#822) — fully live, no
+        # restart. Only DISABLE leaves a stale route behind (no FastAPI unmount), so we
+        # recommend a restart when turning OFF a plugin that contributed a view/route/surface.
+        def _has_surface(m: dict | None) -> bool:
+            return bool(m and (m.get("views") or m.get("routers") or m.get("surfaces")))
+
+        restart = bool(not want and _has_surface(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
 

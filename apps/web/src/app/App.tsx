@@ -281,7 +281,17 @@ export function App() {
   // "right" (a right-sidebar panel, alongside Notes/Beads/Goals/Schedule — ADR 0026).
   const allDeclaredViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
-    .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
+    .flatMap((p) =>
+      (p.views ?? []).map((v) => ({
+        ...v,
+        key: `plugin:${p.id}:${v.id}`,
+        // Carry the owning plugin's load state so PluginView can phrase a real error
+        // (enabled-but-not-loaded ⇒ missing env / bad deps / mount race; `error` is the
+        // loader's exact diagnostic) instead of a blank "no details" panel.
+        pluginLoaded: p.loaded,
+        pluginError: p.error,
+      })),
+    );
   // A view claiming the chat SLOT (ADR 0045) replaces the built-in chat panel — it
   // renders under the core "chat" rail id, so it's excluded from the dynamic rail
   // list below. First enabled claimant wins (deterministic: plugin load order).

@@ -86,6 +86,21 @@ test("a COLLAPSED right panel still lights its plugin's dot (collapsed ≠ visib
   await expect(scratch.locator(".pl-rail__dot")).toBeVisible();
 });
 
+test("a 404-ing plugin view shows an actionable error, not a blank panel", async ({ page }) => {
+  // P0 regression: a same-origin 404 fires the iframe's onLoad (not onError), so trusting
+  // onLoad rendered the server's bare {"detail":"Not Found"} as the "view" (the blank
+  // "no details" panel). The host now status-PROBES the route and surfaces a real error.
+  await page.route("**/plugins/boardy/stats", (route) =>
+    route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"Not Found"}' }),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Stats", exact: true }).click();
+
+  // No iframe is mounted for an unreachable route; an actionable alert is shown instead.
+  await expect(page.locator(".plugin-view [role=alert]")).toContainText("Couldn’t load");
+  await expect(page.locator(".plugin-view-frame")).toHaveCount(0);
+});
+
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 

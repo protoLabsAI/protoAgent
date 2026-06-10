@@ -93,6 +93,12 @@ export type PluginView = {
   // rail id, stays mounted for the app's lifetime (streaming continuity, #613), and
   // does not get its own rail entry. First enabled claimant wins.
   slot?: "chat";
+  // Owning plugin's load state, stamped on by App so the view host can surface a real,
+  // actionable error (loaded=false ⇒ the view route isn't serving — missing env / bad
+  // deps / mount race; `pluginError` is the loader's exact diagnostic) instead of a
+  // blank panel. Optional: present only for runtime-status-sourced views.
+  pluginLoaded?: boolean;
+  pluginError?: string;
 };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its

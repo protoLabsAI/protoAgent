@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
 from runtime.state import STATE
@@ -17,6 +18,18 @@ def _router(marker: str) -> APIRouter:
     @r.get("/ping")
     def _ping():
         return {"from": marker}
+
+    return r
+
+
+def _view_router(marker: str) -> APIRouter:
+    """A plugin router that serves a console VIEW page (HTML at /view) — the iframe's src
+    points here, so 'mounting the view' == 'mounting this router' (ADR 0026/0038)."""
+    r = APIRouter()
+
+    @r.get("/view", response_class=HTMLResponse)
+    def _view():
+        return f"<html><body>{marker} view</body></html>"
 
     return r
 
@@ -49,6 +62,18 @@ def test_remount_skipped_new_added(app):
     assert c.get("/api/a/ping").json() == {"from": "a"}
     assert c.get("/api/b/ping").json() == {"from": "b"}
     assert STATE.plugin_router_keys == {("a", "/api/a"), ("b", "/api/b")}
+
+
+def test_view_route_resolves_after_enable(app):
+    # The P0 fix: enabling a view-contributing plugin hot-mounts the router that serves
+    # its view page — so /api/plugins/<id>/view 200s immediately, no restart, no 404.
+    _mount_plugin_routers([{"plugin_id": "project_board",
+                            "router": _view_router("project_board"),
+                            "prefix": "/api/plugins/project_board"}])
+    c = TestClient(app)
+    res = c.get("/api/plugins/project_board/view")
+    assert res.status_code == 200
+    assert "project_board view" in res.text
 
 
 def test_noop_without_app(monkeypatch):
