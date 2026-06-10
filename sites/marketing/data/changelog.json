@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.34.0",
+    "date": "2026-06-10",
+    "changes": [
+      "CSS comment corruption that silently shrank plugin iframes (build guard).",
+      "Design-system 0.26 + slug-aware plugin-kit apiFetch/apiUrl (protoContent#208).",
+      "Plugin update / version-awareness."
+    ]
+  },
+  {
     "version": "v0.33.0",
     "date": "2026-06-10",
     "changes": [
