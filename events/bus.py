@@ -19,8 +19,14 @@ the others. A small ring buffer retains the most recent events so a reconnecting
 console can catch up via ``?since=<seq>`` (ephemeral — there is no durable log; the
 Activity thread persists agent-facing events).
 
-``publish`` is synchronous and must be called from the event-loop thread (every
-producer — the A2A terminal hook, the scheduler, the inbox, plugins — runs there).
+``publish`` is synchronous and normally runs on the event-loop thread (every core
+producer — the A2A terminal hook, the scheduler, the inbox — runs there). Plugin
+middleware is the exception: LangGraph may run *sync* hooks (``before_model``,
+``wrap_tool_call``) in worker threads, so ``publish`` detects an off-loop call and
+reroutes itself onto the bound loop via ``call_soon_threadsafe`` — emitting from any
+middleware hook is safe. The loop is captured from normal on-loop use (first publish,
+SSE subscribe, or handler registration); an off-loop publish before any loop is bound
+is dropped with a warning (matches the no-bus-wired semantics elsewhere).
 """
 
 from __future__ import annotations
@@ -63,13 +69,38 @@ class EventBus:
         self._max_queue = max_queue
         self._ring: deque[dict[str, Any]] = deque(maxlen=ring)
         self._seq = 0
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _bind_loop(self) -> None:
+        """Remember the running loop (if any) so off-loop publishes can find it."""
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
 
     def publish(self, event: str, data: dict[str, Any] | None = None) -> None:
         """Fan a topic out to SSE subscribers + matching in-process handlers (ADR 0039).
 
         Fire-and-forget: a handler that raises is logged and isolated — it can never
         break the publisher or another subscriber.
+
+        Thread-safe: asyncio queues are not, so an off-loop call (a plugin middleware
+        emitting from a sync hook LangGraph ran in a worker thread) is rerouted onto
+        the bound event loop instead of corrupting subscriber queues. Delivery stays
+        in publish order per thread; seq is assigned on the loop.
         """
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:  # off-loop (e.g. a sync middleware hook in a worker thread)
+            loop = self._loop
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(self._publish_on_loop, event, data)
+                return
+            # No live loop anywhere (sync tests, CLI): deliver inline. Safe — without
+            # a loop there are no SSE queues to corrupt, and sync handlers run fine.
+        self._publish_on_loop(event, data)
+
+    def _publish_on_loop(self, event: str, data: dict[str, Any] | None) -> None:
         self._seq += 1
         payload = {"event": event, "data": data or {}, "seq": self._seq}
         self._ring.append(payload)
@@ -104,6 +135,7 @@ class EventBus:
         """Register an in-process handler for ``topic`` (ADR 0039). Returns an
         unsubscribe callable. ``handler`` receives the full payload
         ``{"event", "data", "seq"}`` and may be sync or async."""
+        self._bind_loop()
         entry = (topic, handler)
         self._handlers.append(entry)
 
@@ -120,6 +152,7 @@ class EventBus:
 
         If ``since`` is given, first replays any retained ring-buffer events newer than
         that seq (reconnect catch-up), then streams live."""
+        self._bind_loop()
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self._max_queue)
         self._subscribers.add(q)
         try:

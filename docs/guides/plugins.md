@@ -112,7 +112,8 @@ A plugin can contribute a LangGraph **`AgentMiddleware`** — the per-turn hook 
 injection, enforcement, compaction, and audit. The factory gets the live config and
 returns a middleware instance (or `None` to opt out); it's appended to the chain just
 before the internal message-capture middleware, so its hooks run and the turn is still
-captured.
+captured. The full hook inventory, chain order, a worked summarize-and-ship example,
+and the design rules live in the [Middleware guide](/guides/middleware).
 
 For **per-request** data (the A2A request's merged metadata — project scope, origin,
 caller keys), read `current_request_metadata()` — a contextvar bound for the duration
