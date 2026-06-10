@@ -471,3 +471,26 @@ export type DelegateView = {
   health?: DelegateProbe;
   [key: string]: unknown;
 };
+
+// Fleet (ADR 0042) — many workspace agents on one host, switchable in place.
+export type FleetAgent = {
+  name: string; // also the instance id; unique, [A-Za-z0-9-_]
+  id: string;
+  port: number;
+  pid: number | null; // null when stopped
+  running: boolean;
+  bundle: string; // "" for a Basic agent
+  a2a?: string; // the agent's own A2A endpoint (focus-independent)
+  host?: boolean; // the instance serving this console — can't be stopped/removed from itself
+};
+
+// `active` is the focused peer, or null when the host itself is focused (talk /api direct).
+export type FleetStatus = { agents: FleetAgent[]; active: string | null };
+
+export type Archetype = {
+  id: string; // "basic", or a bundle id e.g. "pm-stack"
+  label: string;
+  icon: string; // lucide-react icon name
+  blurb: string;
+  bundle: string | null; // null = Basic; else the bundle git URL
+};

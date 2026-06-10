@@ -39,14 +39,20 @@ _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 # console + OpenAI-compat APIs (which drive subagents, rewrite config/SOUL,
 # schedule jobs, and run turns). The agent card, /healthz, /metrics, and the
 # static console assets live OUTSIDE these prefixes and stay public.
-_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/")
+# /active/* and /agents/<slug>/* are the fleet hub's reverse proxies to an agent (ADR 0042).
+# They must be guarded too — they drive the agent's full API (chat, config, subagents/run, …),
+# and spawned peers carry no token of their own, so the hub is the only gate.
+_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/", "/active/", "/agents/")
 
-# Exempt from the guard: the read-only Server-Sent-Events stream. Browsers'
-# EventSource cannot set an Authorization header, so a bearer can't be presented
-# here — and it only exposes activity/inbox events, not any action. The
-# agent-driving endpoints (/api/subagents/run, /api/config, /api/chat, /a2a, …)
-# stay guarded.
+# Exempt from the guard: the read-only Server-Sent-Events stream (direct + proxied under any
+# slug). Browsers' EventSource cannot set an Authorization header, so a bearer can't be presented
+# here — and it only exposes activity/inbox events, not any action. The proxied path carries a
+# slug (/agents/<slug>/api/events), so match the SSE suffix rather than a fixed prefix.
 _GUARD_EXEMPT = ("/api/events",)
+
+
+def _is_exempt(path: str) -> bool:
+    return path.endswith("/api/events") or any(path.startswith(p) for p in _GUARD_EXEMPT)
 
 
 def set_bearer_token(token: str | None) -> None:
@@ -97,7 +103,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not any(path.startswith(p) for p in _GUARDED_PREFIXES):
             return await call_next(request)
-        if any(path.startswith(p) for p in _GUARD_EXEMPT):
+        if _is_exempt(path):
             return await call_next(request)
 
         # X-API-Key (legacy) — enforced only when configured.

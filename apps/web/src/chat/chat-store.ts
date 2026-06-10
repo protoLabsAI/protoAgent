@@ -26,7 +26,18 @@ export type ChatState = PersistedChatState & {
   sessionStatusMap: Record<string, SessionStatus>;
 };
 
-const STORAGE_KEY = "protoagent.chat.sessions";
+// Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
+// routing), exactly like the per-agent layout. Without this every agent's window restores the
+// same sessions from localStorage and you see one agent's chat under another. host (no /agent/
+// slug) keeps the legacy un-suffixed key. The slug is fixed per page load (switching navigates).
+const STORAGE_KEY = (() => {
+  try {
+    const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
+    return m ? `protoagent.chat.sessions:${decodeURIComponent(m[1])}` : "protoagent.chat.sessions";
+  } catch {
+    return "protoagent.chat.sessions";
+  }
+})();
 
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

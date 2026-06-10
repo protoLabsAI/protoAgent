@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
             alive.add(4242)
 
     monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     app = FastAPI()
@@ -47,7 +48,8 @@ def test_create_list_start_stop_remove(client):
     assert not next(x for x in client.get("/api/fleet").json()["agents"] if x["name"] == "alpha")["running"]
 
     assert client.delete("/api/fleet/alpha").json()["ok"]
-    assert not client.get("/api/fleet").json()["agents"]
+    # The host (this instance) always self-registers, so only the peers are gone.
+    assert not [a for a in client.get("/api/fleet").json()["agents"] if not a.get("host")]
 
 
 def test_create_bad_name_is_400(client):
@@ -76,4 +78,10 @@ def test_stop_entire_fleet(client):
     client.post("/api/fleet", json={"name": "x", "port": 7895})
     client.post("/api/fleet", json={"name": "y", "port": 7896})
     assert client.post("/api/fleet/down").json()["ok"]
-    assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"])
+    # The host can't stop itself; every peer is down.
+    assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"] if not a.get("host"))
+
+
+def test_reserved_host_name_is_400(client):
+    # `host` is the reserved slug for this instance — a peer named `host` would shadow it.
+    assert client.post("/api/fleet", json={"name": "host"}).status_code == 400

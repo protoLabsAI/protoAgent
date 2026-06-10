@@ -26,6 +26,13 @@ class WorkspaceError(Exception):
     """A workspace op was rejected (bad name, collision, missing workspace)."""
 
 
+# Names that collide with the fleet's routing vocabulary (ADR 0042 slug routing). `host` is the
+# reserved slug that addresses THIS instance (`/app/agent/host/` / `/agents/host/*`); a workspace
+# named `host` would shadow it → the peer is permanently unreachable + two switcher entries both
+# claim to be current. Reject at creation.
+_RESERVED_NAMES = {"host"}
+
+
 def workspaces_root() -> Path:
     """Where workspaces live. ``PROTOAGENT_WORKSPACES_DIR`` overrides; default
     ``~/.protoagent/workspaces``."""
@@ -75,6 +82,14 @@ def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
     used = {w["port"] for w in list_workspaces() if w.get("port")}
+    # Don't collide with the HUB itself — the host instance (this process) self-registers as a
+    # fleet agent on its own port but isn't a workspace, so it's invisible to list_workspaces().
+    try:
+        from runtime.state import STATE
+        if getattr(STATE, "active_port", None):
+            used.add(int(STATE.active_port))
+    except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
+        pass
     p = PORT_BASE + 1
     while p in used:
         p += 1
@@ -110,12 +125,21 @@ plugins:
 """
 
 
-def create(name: str, *, from_config: str | None = None, bundle: str | None = None,
-           port: int | None = None, shared_skills: bool = False) -> dict:
+def create(name: str, *, from_config: str | None = None, inherit_model: str | None = None,
+           bundle: str | None = None, port: int | None = None, shared_skills: bool = False) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
-    an installed plugin bundle. Does not start it. ``from_config`` clones an existing
-    agent's config + secrets as the base (instance.id/identity are re-stamped to *name*)."""
+    an installed plugin bundle. Does not start it.
+
+    Config base, in precedence:
+      * ``from_config`` — a FULL clone of another agent's config + secrets (identity re-stamped).
+      * ``inherit_model`` — a BLANK template, but with only that agent's ``model:`` section +
+        secrets popped over (the gateway), so it boots ready-to-chat WITHOUT inheriting its
+        plugins/skills. This is the fleet's default "new agent" (a blank agent, model carried).
+      * neither — the plain blank template.
+    """
     name = _safe(name)
+    if name.lower() in _RESERVED_NAMES:
+        raise WorkspaceError(f"{name!r} is reserved — it's how the fleet addresses this instance")
     ws = _ws_dir(name)
     if ws.exists():
         raise WorkspaceError(f"workspace {name!r} already exists at {ws}")
@@ -136,20 +160,52 @@ def create(name: str, *, from_config: str | None = None, bundle: str | None = No
     else:
         cfg.write_text(_CONFIG_TEMPLATE.format(name=name))
         (ws / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
+        if inherit_model:
+            _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
             _stamp_identity(cfg, name, True)
 
+    import yaml
     assigned = _pick_port(port)
     rec = {"id": name, "name": name, "port": assigned,
            "created": datetime.now(timezone.utc).isoformat(), "bundle": bundle or ""}
-
-    installed: list[str] = []
-    if bundle:
-        installed = _install_bundle_into(ws, bundle)
-
-    import yaml
+    # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
+    # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
+    # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
+    # workspace that's invisible in the list (no workspace.yaml).
     (ws / "workspace.yaml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    installed: list[str] = []
+    try:
+        if bundle:
+            installed = _install_bundle_into(ws, bundle)
+    except Exception:
+        shutil.rmtree(ws, ignore_errors=True)
+        raise
     return {**rec, "path": str(ws), "installed": installed}
+
+
+def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
+    """Pop only the ``model:`` section + secrets from another agent's config into this blank one
+    — the gateway (provider/api_base/key) carries over so the agent boots ready-to-chat, but its
+    plugins/skills/identity stay the blank-template defaults. Best-effort + comment-preserving."""
+    src_path = Path(src).expanduser()
+    src_cfg = src_path / "langgraph-config.yaml" if src_path.is_dir() else src_path
+    if not src_cfg.exists():
+        return
+    import yaml
+
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+
+    # Read the host's model as PLAIN data (not ruamel) — a ruamel node carries a parent ref and
+    # can't be grafted into another document. The destination stays ruamel (comment-preserving).
+    host = yaml.safe_load(src_cfg.read_text()) or {}
+    new = load_yaml_doc(cfg)
+    if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
+        new["model"] = host["model"]
+        save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
+    src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
+    if src_sec.exists():  # carries the api_key so the gateway actually works
+        shutil.copyfile(src_sec, ws / "secrets.yaml")
 
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool) -> None:

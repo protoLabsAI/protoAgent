@@ -89,6 +89,22 @@ export const INBOX_ITEMS = {
   ],
 };
 
+// Fleet (ADR 0042) — mutable so create/start/stop/remove round-trip in e2e. The host (this
+// instance) self-registers (host:true); `active: null` = the host is focused.
+export const FLEET = {
+  agents: [
+    { name: "main", id: "main", port: 7871, pid: 3000, running: true, bundle: "", host: true },
+    { name: "ava", id: "ava", port: 7890, pid: 4001, running: true, bundle: "" },
+    { name: "roxy", id: "roxy", port: 7891, pid: null, running: false, bundle: "pm-stack" },
+  ],
+  active: null,
+};
+
+export const ARCHETYPES = [
+  { id: "basic", label: "Basic", icon: "Sparkles", blurb: "A plain agent — add tools later.", bundle: null },
+  { id: "pm-stack", label: "Project Manager", icon: "LayoutGrid", blurb: "PM tools + board.", bundle: "https://github.com/x/pm-stack" },
+];
+
 export const WORKFLOWS = [
   {
     name: "research-and-brief",

@@ -46,11 +46,18 @@ def register_fleet_routes(app) -> None:
         beyond the warm cap (their sessions persist + resume on a later switch).
         """
         try:
+            # Focusing the host (this instance) drops the proxy pointer — the console
+            # talks to /api directly again, no peer in focus.
+            host = next((a for a in supervisor.status() if a.get("host")), None)
+            if host and name == host["name"]:
+                return {"ok": True, **proxy.clear_active(), "evicted": []}
             if not supervisor.is_running(name):
-                supervisor.start(name)  # resume a cold agent on switch (from checkpoint)
+                await asyncio.to_thread(supervisor.start, name)  # resume from checkpoint
             result = proxy.set_active(name)
             supervisor.touch(name)
-            evicted = supervisor.enforce_warm_cap(protect=name)
+            # Eviction can busy-wait on a SIGTERM (#6) — off the loop so a switch never
+            # freezes the hub / its proxied SSE streams.
+            evicted = await asyncio.to_thread(supervisor.enforce_warm_cap, protect=name)
             return {"ok": True, **result, "evicted": evicted}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
@@ -69,23 +76,47 @@ def register_fleet_routes(app) -> None:
         """
         return await proxy.forward(request, path)
 
+    @app.api_route("/agents/{slug}/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    async def _agent_proxy(slug: str, path: str, request: Request):
+        """Reverse-proxy the console to a specific agent BY SLUG (ADR 0042 slug routing).
+
+        The slug lives in the console URL (``/app/agent/<slug>/``), so each window targets its
+        own agent — two agents can be open in two windows at once, and a reload can't desync
+        (the URL is the source of truth). ``host`` = this instance. Supersedes the single-active
+        ``/active/*`` lens above.
+        """
+        return await proxy.forward_to(slug, request, path)
+
     @app.post("/api/fleet")
     async def _create_agent(body: dict = Body(...)):
         """Create an agent (optionally from a bundle archetype) and start it.
 
         Body: ``{name, bundle?: <git-url>, port?: int, start?: bool=true,
-        shared_skills?: bool}``. A blank ``bundle`` is the built-in **Basic** archetype.
+        shared_skills?: bool, inherit_config?: bool=true}``. A blank ``bundle`` is the built-in
+        **Basic** archetype. By default a new agent is a **blank agent with the host's model
+        config + secrets popped over** (the gateway only — NOT the host's plugins/skills), so it
+        boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll set up.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
+        # Carry the host's MODEL only (gateway) so a new agent works immediately without inheriting
+        # its plugins — only if the host is actually configured (fresh host → plain blank template).
+        inherit_model = None
+        if bool(body.get("inherit_config", True)):
+            from graph.config_io import _live_config_dir
+            cfg_dir = _live_config_dir()
+            if (cfg_dir / "langgraph-config.yaml").exists():
+                inherit_model = str(cfg_dir)
         try:
-            # create() may clone+install a bundle (subprocess) — keep it off the loop.
+            # create() may overlay the host model + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(
-                manager.create, name, bundle=bundle, port=port, shared_skills=shared)
-            agent = supervisor.start(name) if start else {
+                manager.create, name, bundle=bundle, port=port, shared_skills=shared,
+                inherit_model=inherit_model)
+            agent = (await asyncio.to_thread(supervisor.start, name)) if start else {
                 "name": name, "id": ws["id"], "port": ws["port"], "running": False}
             return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}
         except (manager.WorkspaceError, supervisor.FleetError) as exc:
@@ -94,14 +125,14 @@ def register_fleet_routes(app) -> None:
     @app.post("/api/fleet/{name}/start")
     async def _start_agent(name: str):
         try:
-            return {"ok": True, "agent": supervisor.start(name)}
+            return {"ok": True, "agent": await asyncio.to_thread(supervisor.start, name)}
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/fleet/{name}/stop")
     async def _stop_agent(name: str):
         try:
-            return {"ok": True, **supervisor.stop(name)}
+            return {"ok": True, **await asyncio.to_thread(supervisor.stop, name)}  # #6 — off the loop
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
 
@@ -109,16 +140,18 @@ def register_fleet_routes(app) -> None:
     async def _stop_fleet():
         """Shut down the **entire** fleet (every running agent). Mirrors the CLI's
         ``fleet down`` with no args."""
-        return {"ok": True, "stopped": [r["name"] for r in supervisor.down()]}
+        stopped = await asyncio.to_thread(supervisor.down)  # busy-waits per agent (#6)
+        return {"ok": True, "stopped": [r["name"] for r in stopped]}
 
     @app.delete("/api/fleet/{name}")
     async def _remove_agent(name: str, purge: bool = False):
         try:
             try:
-                supervisor.stop(name)  # stop if running; ignore if not
+                await asyncio.to_thread(supervisor.stop, name)  # stop if running (#6)
             except supervisor.FleetError:
                 pass
-            return {"ok": True, **manager.remove(name, purge=purge)}
+            # remove() rmtree's the workspace (purge) — also blocking.
+            return {"ok": True, **await asyncio.to_thread(manager.remove, name, purge=purge)}
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 

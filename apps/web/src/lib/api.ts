@@ -1,12 +1,15 @@
 import type {
   ActivityHistory,
   AgentConfig,
+  Archetype,
   BeadsIssue,
   ChatMessage,
   ConfigPayload,
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
+  FleetAgent,
+  FleetStatus,
   GoalState,
   HitlPayload,
   InboxItem,
@@ -115,10 +118,47 @@ function defaultApiBase() {
   return "";
 }
 
+// Fleet slug routing (ADR 0042). The focused agent lives in the URL — /app/agent/<slug>/ —
+// so each console window targets its own agent: deterministic, survives reload, and two
+// agents can be open in two windows at once. apiUrl() reads that slug and routes agent-level
+// calls through the hub's per-agent proxy (/agents/<slug>/api/*). `host` (or no slug) = this
+// instance, talking to /api directly. Hub control-plane paths (the fleet itself) are never
+// scoped — they're served by the supervisor.
+export function currentSlug(): string {
+  try {
+    const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : "host";
+  } catch {
+    return "host";
+  }
+}
+
+/** URL of the console focused on `slug` (for navigation / opening a new window). */
+export function agentHref(slug: string): string {
+  const base = import.meta.env.BASE_URL || "/"; // "/app/"
+  return slug === "host" ? base : `${base}agent/${encodeURIComponent(slug)}/`;
+}
+
+function isHubPath(path: string) {
+  // The fleet control plane is served by the supervisor itself — never scoped to an agent.
+  return path.startsWith("/api/fleet") || path.startsWith("/api/archetypes");
+}
+function isAgentPath(path: string) {
+  // Everything that drives the focused AGENT: its console API, its A2A brain (streaming chat),
+  // and its OpenAI-compat endpoint. /api/fleet stays on the hub.
+  return (path.startsWith("/api/") && !isHubPath(path)) || path.startsWith("/a2a") || path.startsWith("/v1");
+}
+
 export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
+  // Agent-level paths route through the focused agent's proxy, keyed by the URL slug.
+  let p = path;
+  const slug = currentSlug();
+  if (slug !== "host" && isAgentPath(path)) {
+    p = `/agents/${encodeURIComponent(slug)}${path}`;
+  }
   const base = defaultApiBase();
-  return base ? `${base}${path.startsWith("/") ? path : `/${path}`}` : path;
+  return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;
 }
 
 /** True inside the desktop (Tauri/WKWebView) shell. WKWebView does NOT deliver a
@@ -591,6 +631,57 @@ export const api = {
       method: "POST",
       body: { updates },
     });
+  },
+
+  // --- Fleet (ADR 0042) — many workspace agents on one host ------------------
+  fleet() {
+    return request<FleetStatus>("/api/fleet");
+  },
+  archetypes() {
+    return request<{ archetypes: Archetype[] }>("/api/archetypes");
+  },
+  createAgent(body: { name: string; bundle?: string | null; port?: number; start?: boolean; shared_skills?: boolean }) {
+    return request<{ ok: boolean; agent: FleetAgent; installed: string[] }>("/api/fleet", {
+      method: "POST",
+      body,
+    });
+  },
+  startAgent(name: string) {
+    return request<{ ok: boolean; agent: FleetAgent }>(`/api/fleet/${encodeURIComponent(name)}/start`, {
+      method: "POST",
+    });
+  },
+  stopAgent(name: string) {
+    return request<{ ok: boolean; name: string; stopped: boolean }>(`/api/fleet/${encodeURIComponent(name)}/stop`, {
+      method: "POST",
+    });
+  },
+  removeAgent(name: string, purge = false) {
+    return request<{ ok: boolean; name: string; removed: string[] }>(
+      `/api/fleet/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`,
+      { method: "DELETE" },
+    );
+  },
+  activateAgent(name: string) {
+    return request<{ ok: boolean; active: string; evicted: string[] }>(`/api/fleet/${encodeURIComponent(name)}/activate`, {
+      method: "POST",
+    });
+  },
+  fleetDown() {
+    return request<{ ok: boolean; stopped: string[] }>("/api/fleet/down", { method: "POST" });
+  },
+
+  // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the
+  // server just round-trips JSON. These auto-route to the focused agent via the active prefix
+  // (host → /api/theme, peer → /active/api/theme).
+  getTheme() {
+    return request<{ theme: unknown | null }>("/api/theme");
+  },
+  saveTheme(theme: unknown) {
+    return request<{ ok: boolean }>("/api/theme", { method: "PUT", body: { theme } });
+  },
+  resetTheme() {
+    return request<{ ok: boolean }>("/api/theme", { method: "DELETE" });
   },
 
   chat(message: string, sessionId: string) {

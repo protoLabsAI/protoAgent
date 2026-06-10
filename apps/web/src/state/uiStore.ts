@@ -10,9 +10,30 @@
 // with no visible change.
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { SettingsTab } from "../settings/SettingsSurface";
+
+// Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
+// active surface, plugins out. In the single-agent product that fell out for free (each agent
+// is its own origin → its own localStorage); the unified console collapses that, so we namespace
+// the persisted key by the agent. With slug routing (ADR 0042) the agent IS the URL slug
+// (/app/agent/<slug>/), so derive the layout key from the URL at module load — each window keys
+// its own layout, deterministically, no switch event needed. host = the legacy un-suffixed key.
+let _layoutAgent = (() => {
+  try {
+    const m = globalThis.location?.pathname?.match(/\/agent\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : "";
+  } catch {
+    return "";
+  }
+})();
+const _layoutStorage = createJSONStorage(() => ({
+  getItem: (name: string) => globalThis.localStorage.getItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
+  setItem: (name: string, value: string) =>
+    globalThis.localStorage.setItem(_layoutAgent ? `${name}:${_layoutAgent}` : name, value),
+  removeItem: (name: string) => globalThis.localStorage.removeItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
+}));
 
 // Core surfaces are fixed literals; plugin views (ADR 0026) add dynamic surfaces keyed
 // `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal autocomplete while allowing
@@ -145,7 +166,8 @@ export const useUI = create<UIState>()(
         }),
     }),
     {
-      name: "protoagent.ui", // localStorage key — the single source of truth (ADR 0035 D5)
+      name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
+      storage: _layoutStorage,
       version: 2, // v2: railOf (side map) → railOrder (ordered lists per rail)
       migrate: (persisted: unknown) => {
         // Drop the obsolete railOf; railOrder falls back to the default via merge.

@@ -1,0 +1,103 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
+import { useState } from "react";
+
+import { Button } from "@protolabsai/ui/primitives";
+import { PanelHeader } from "@protolabsai/ui/navigation";
+
+import { api } from "../lib/api";
+import { archetypesQuery, queryKeys } from "../lib/queries";
+import { lucideIcon } from "../lib/lucideIcon";
+import type { Archetype } from "../lib/types";
+
+const NAME_RE = /^[A-Za-z0-9-_]+$/;
+
+// Onboarding / archetype picker (ADR 0042). Pick an archetype (Basic + installed bundles),
+// name the agent, create. Creating from a bundle clones+installs it (a few seconds) — the
+// POST returns once the agent is up, so the button shows a spinner until then.
+export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) => void; onCancel?: () => void }) {
+  const qc = useQueryClient();
+  const archetypes = useQuery(archetypesQuery());
+  const [picked, setPicked] = useState<string>("basic");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const list = archetypes.data?.archetypes ?? [];
+  const archetype = list.find((a) => a.id === picked) ?? list[0];
+  const nameOk = NAME_RE.test(name);
+
+  const create = useMutation({
+    mutationFn: () => api.createAgent({ name: name.trim(), bundle: archetype?.bundle ?? null }),
+    onMutate: () => setError(null),
+    onError: (e: Error) => setError(e.message),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: queryKeys.fleet });
+      onDone?.(res.agent?.name ?? name.trim());
+    },
+  });
+
+  return (
+    <section className="panel stage-panel">
+      <PanelHeader
+        title="New agent"
+        kicker="pick an archetype, name it, and launch — a new workspace agent on this host"
+        actions={
+          onCancel ? (
+            <Button variant="ghost" onClick={onCancel}>
+              <ArrowLeft size={15} /> Back
+            </Button>
+          ) : undefined
+        }
+      />
+      <div className="stage-body">
+        {error ? (
+          <p className="fleet-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <p className="fleet-section-label">Archetype</p>
+        <div className="archetype-grid">
+          {list.map((a: Archetype) => (
+            <button
+              key={a.id}
+              type="button"
+              className={`archetype-card${a.id === picked ? " selected" : ""}`}
+              aria-pressed={a.id === picked}
+              onClick={() => setPicked(a.id)}
+            >
+              <span className="archetype-icon">{lucideIcon(a.icon, 22)}</span>
+              <span className="archetype-label">{a.label}</span>
+              <span className="archetype-blurb">{a.blurb}</span>
+            </button>
+          ))}
+        </div>
+
+        <label className="field archetype-name-field">
+          <span>Name</span>
+          <input
+            value={name}
+            autoFocus
+            placeholder="e.g. ava, roxy, research-bot"
+            aria-label="Agent name"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && nameOk && !create.isPending) create.mutate();
+            }}
+          />
+          <span className="field-hint">Letters, numbers, dashes and underscores — it's the agent's id and URL.</span>
+        </label>
+
+        <div className="panel-actions">
+          <Button
+            variant="primary"
+            disabled={!nameOk || create.isPending}
+            onClick={() => create.mutate()}
+          >
+            {create.isPending ? "Creating…" : archetype?.bundle ? `Create from ${archetype.label}` : "Create agent"}
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}

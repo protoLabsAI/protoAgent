@@ -52,3 +52,9 @@ beautifulsoup4>=4.12
 # Scheduler (scheduler/local.py — cron expression parsing for the
 # bundled local backend; the Workstacean adapter doesn't need this)
 croniter>=2.0
+
+# Fleet supervisor (graph/fleet/supervisor.py — cross-process lock around the
+# fleet.json process registry, ADR 0042). The full tier got this transitively
+# via Gradio → huggingface_hub; the lean tiers must declare it (the #426 class).
+filelock>=3.12
+zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)

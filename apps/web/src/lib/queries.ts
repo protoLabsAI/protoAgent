@@ -19,7 +19,25 @@ export const queryKeys = {
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
   installedPlugins: ["plugins", "installed"] as const,
+  fleet: ["fleet"] as const,
+  archetypes: ["archetypes"] as const,
 };
+
+// The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll
+// while mounted — a crashed agent flips to running:false on the next read.
+export const fleetQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.fleet,
+    queryFn: () => api.fleet(),
+    refetchInterval: 3_000,
+  });
+
+// Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.
+export const archetypesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.archetypes,
+    queryFn: () => api.archetypes(),
+  });
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar and
 // refetches every 5s while mounted — the agent advances/clears goals mid-turn,
