@@ -26,13 +26,18 @@ jobs:
           node-version: "20"
       - name: Verify workspace config (.beads / .automaker / owned runners)
         # The npm package is still 1.0.0 (predates verify-workspace-config),
-        # so run the v1.1.0 script directly. It's zero-dependency (node
-        # builtins only), so no `npm install` is needed. Switch to
+        # so run the script directly. It's zero-dependency (node builtins
+        # only), so no `npm install` is needed. Switch to
         # `npx -p @protolabsai/release-tools verify-workspace-config` once
         # 1.1.0+ is published to npm (protoLabsAI/release-tools#27).
+        # Pinned by commit SHA (same supply-chain posture as the
+        # release-tools action pin in release.yml) so a push to that repo's
+        # main can't change what executes in this PR gate. To bump: pick the
+        # new release-tools SHA/tag and update both the SHA and the version
+        # comment below.
         run: |
-          git clone --depth 1 \
-            https://github.com/protoLabsAI/release-tools /tmp/release-tools
+          git clone https://github.com/protoLabsAI/release-tools /tmp/release-tools
+          git -C /tmp/release-tools checkout 96159f8f3adf3cce60278cc689b67521ff5a547c # v2.3.0
           node /tmp/release-tools/bin/verify-workspace-config.mjs --root "$GITHUB_WORKSPACE"
       - name: Guard against the deleted server.py entrypoint
         # ADR 0023 promoted the monolith to the server/ package (launch:
@@ -55,7 +60,7 @@ jobs:
           echo "ok: no stale single-file launches in deploy artifacts or launchers"
 
   lint:
-    name: Lint (ruff)
+    name: Lint (ruff + import contracts)
     runs-on: namespace-profile-protolabs-linux
     timeout-minutes: 5
     steps:
@@ -69,6 +74,15 @@ jobs:
         run: |
           pip install ruff==0.15.10
           ruff check .
+      - name: Import contracts (import-linter)
+        # Architectural layering gate: graph/ and the infra packages must not
+        # import server/ or operator_api/ (contracts + the grandfathered
+        # burndown list live in pyproject.toml [tool.importlinter]). Static
+        # AST analysis only — catches function-level (lazy) imports too and
+        # needs no project deps installed. Pinned like ruff above.
+        run: |
+          pip install import-linter==2.11
+          lint-imports
 
   tests:
     name: Python tests

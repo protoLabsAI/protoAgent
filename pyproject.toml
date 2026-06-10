@@ -109,6 +109,61 @@ include = [
 # via the [build-system] above.
 package = false
 
+[tool.importlinter]
+# Architectural import contracts (enforced by `lint-imports` in CI — see
+# .github/workflows/checks.yml and docs/dev/prod-readiness-tasklist.md § C2).
+# Layering: graph/ (agent brain) and the infra packages (tools/knowledge/
+# events/scheduler/runtime) must never reach up into the server bootstrap or
+# the operator HTTP surface. import-linter analyzes function-level (lazy)
+# imports too, so the `ignore_imports` lists below are explicit grandfathered
+# violations — a BURNDOWN LIST, not an allowance. Don't add to them; remove
+# entries as the cycles are untangled (the server.agent_init decomposition,
+# tasklist C2, owns most of the burndown).
+root_packages = [
+  "events",
+  "graph",
+  "knowledge",
+  "operator_api",
+  "runtime",
+  "scheduler",
+  "server",
+  "tools",
+]
+
+[[tool.importlinter.contracts]]
+name = "graph does not import server or operator_api"
+type = "forbidden"
+source_modules = ["graph"]
+forbidden_modules = ["server", "operator_api"]
+# Burndown: skills CLI reaches into server bootstrap for seed paths (lazy import).
+ignore_imports = [
+  "graph.skills.cli -> server.agent_init",
+]
+
+[[tool.importlinter.contracts]]
+name = "operator_api does not import server"
+type = "forbidden"
+source_modules = ["operator_api"]
+forbidden_modules = ["server"]
+# Burndown: the route modules still pull settings-apply + chat internals out of
+# the server package (server/__init__ imports operator_api.* lazily inside
+# _main, so these are the other half of the server↔operator_api ring).
+ignore_imports = [
+  "operator_api.chat_routes -> server",
+  "operator_api.chat_routes -> server.agent_init",
+  "operator_api.chat_routes -> server.chat",
+  "operator_api.config_routes -> server.agent_init",
+  "operator_api.console_handlers -> server",
+  "operator_api.mcp_routes -> server.agent_init",
+  "operator_api.plugin_routes -> server.agent_init",
+]
+
+[[tool.importlinter.contracts]]
+name = "infra packages do not import server or operator_api"
+type = "forbidden"
+source_modules = ["events", "knowledge", "runtime", "scheduler", "tools"]
+forbidden_modules = ["server", "operator_api"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

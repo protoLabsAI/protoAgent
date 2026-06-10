@@ -49,6 +49,28 @@ Suggested order (dependency-aware):
 
 ## C. Backend structure
 
+> **Import contracts now CI-enforced (2026-06-10).** `lint-imports`
+> (import-linter, pinned in the checks.yml lint job) gates three layering
+> contracts declared in `pyproject.toml [tool.importlinter]`:
+> 1. **graph → server/operator_api forbidden** — grandfathered:
+>    `graph.skills.cli -> server.agent_init` (lazy import of seed paths).
+> 2. **operator_api → server forbidden** — grandfathered (7): `chat_routes ->
+>    server / server.agent_init / server.chat`, `config_routes ->
+>    server.agent_init`, `console_handlers -> server`, `mcp_routes ->
+>    server.agent_init`, `plugin_routes -> server.agent_init`. These are the
+>    other half of the server↔operator_api ring (server/__init__ imports
+>    operator_api.* lazily inside `_main`).
+> 3. **events/knowledge/runtime/scheduler/tools → server/operator_api
+>    forbidden** — clean today, locked in (no ignores).
+>
+> The `ignore_imports` lists are a **burndown list, not an allowance** —
+> import-linter sees function-level (lazy) imports too, so new violations fail
+> CI even if hidden inside a function. Don't add entries; delete them as C1/C2
+> untangle `_main()`/`agent_init.py`. The graph-internal config ring
+> (`config`/`config_io`/`settings_schema`/`plugins.loader`/`plugins.pconfig`)
+> is B1's territory — same-package cycles, not expressible as a forbidden
+> contract; collapse the triplet instead.
+
 | ID | Task | Evidence | Effort | Disp. |
 |----|------|----------|:------:|:-----:|
 | C1 | Break up `_main()` (534 L); extract host-binding **security gate** into a testable fn | `server/__init__.py:274,794` | M | 🟡 Next |
