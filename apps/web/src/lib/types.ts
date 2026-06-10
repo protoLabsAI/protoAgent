@@ -313,6 +313,9 @@ export type BeadsIssue = {
 };
 
 export type AgentConfig = {
+  // Where turns run: "native" (the built-in LangGraph loop on the model gateway) or
+  // "acp:<agent>" (hand each turn to a CLI coding agent over ACP — ADR 0033).
+  agent_runtime?: string;
   model: {
     provider: string;
     name: string;
