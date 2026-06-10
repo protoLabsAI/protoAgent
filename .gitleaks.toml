@@ -4,9 +4,13 @@
 useDefault = true
 
 [allowlist]
-description = "Examples, lockfiles, and docs — no real secrets here."
+description = "Examples, lockfiles, docs, and the redaction-test fixtures — no real secrets here."
 paths = [
   '''.*\.example\.ya?ml$''',
   '''(^|/)(package-lock\.json|uv\.lock|plugins\.lock)$''',
   '''^docs/''',
+  # These two test the secret-REDACTION middleware, so they hold fake sk-…-shaped strings by
+  # design — flagging them is a false positive (they're what proves we redact real secrets).
+  '''^tests/middleware/test_redaction\.py$''',
+  '''^tests/middleware/test_audit_redaction_integration\.py$''',
 ]
