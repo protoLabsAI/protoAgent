@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-06-10
+
 ### Added
 - **Layered settings cascade — host-shared defaults agents inherit and override**
   (ADR 0047). Settings now resolve **App → Host → Agent** per field. A new **Host

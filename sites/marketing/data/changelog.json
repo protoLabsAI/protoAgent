@@ -1,5 +1,28 @@
 [
   {
+    "version": "v0.32.0",
+    "date": "2026-06-10",
+    "changes": [
+      "Layered settings cascade — host-shared defaults agents inherit and override",
+      "Remote fleet members — the agent there, the UI here",
+      "Tenant guard",
+      "Tailnet discovery",
+      "Co-located-instance warning",
+      "Cross-agent \"turn finished\" toasts",
+      "Opaque agent ids + rename",
+      "Enable delegates without a restart",
+      "Cold agents resume on navigation",
+      "Discover no longer lists a co-located agent twice",
+      "mDNS advertise actually works",
+      "A2A task reconcile had rotted against a2a-sdk 1.1",
+      "Each fleet hub owns its own registry",
+      "pyproject.toml is the dependency source of truth",
+      "Config is a single source of truth",
+      "Shell + settings banners are the design system's Alert",
+      "Retired the deprecated peer_consult / peer_list tools"
+    ]
+  },
+  {
     "version": "v0.31.0",
     "date": "2026-06-10",
     "changes": [
