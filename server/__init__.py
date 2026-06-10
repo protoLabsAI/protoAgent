@@ -550,7 +550,7 @@ def _main():
         # every poll, so the console banners it too). Off the loop: the check shells
         # out to `ps` per sibling.
         try:
-            import paths as _paths
+            from infra import paths as _paths
             _paths.register_instance(int(getattr(STATE, "active_port", 0) or 0) or None,
                                      agent_name())
             _w = await asyncio.to_thread(_paths.colocation_warning)
@@ -563,7 +563,7 @@ def _main():
     async def _scheduler_shutdown() -> None:
         # Drop the co-location heartbeat (#706). Best-effort.
         try:
-            import paths as _paths
+            from infra import paths as _paths
             _paths.unregister_instance()
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             pass

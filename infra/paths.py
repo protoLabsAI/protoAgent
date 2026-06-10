@@ -75,17 +75,24 @@ def package_version() -> str:
 
     import sys
 
-    root = Path(__file__).resolve().parent
-    if getattr(sys, "frozen", False):  # PyInstaller onefile — assets land at _MEIPASS
-        root = Path(getattr(sys, "_MEIPASS", root))
-    try:
-        m = re.search(
-            r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(), re.MULTILINE
-        )
-        if m:
-            return m.group(1)
-    except OSError:
-        pass
+    here = Path(__file__).resolve()
+    if getattr(sys, "frozen", False):  # PyInstaller onefile — pyproject bundled at _MEIPASS (#894)
+        candidates = [Path(getattr(sys, "_MEIPASS", here.parent))]
+    else:
+        # Search UPWARD for pyproject.toml: it's at the repo root (or the `COPY .`
+        # image root), NOT next to this module — paths.py lives in infra/, so a
+        # plain `__file__.parent` would look in infra/ and miss it (the regression
+        # the root-module reorg introduced). The nearest one going up is the repo's.
+        candidates = list(here.parents)
+    for base in candidates:
+        try:
+            m = re.search(
+                r'^version\s*=\s*"([^"]+)"', (base / "pyproject.toml").read_text(), re.MULTILINE
+            )
+            if m:
+                return m.group(1)
+        except OSError:
+            continue
     return "0.0.0"
 
 
