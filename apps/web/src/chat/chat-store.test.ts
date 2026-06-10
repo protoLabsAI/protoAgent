@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ensureActiveSessions, MAX_ACTIVE_SESSIONS, type ChatState } from "./chat-store";
 
 // ensureActiveSessions is the LRU that decides which chat sessions stay mounted.
@@ -67,5 +67,122 @@ describe("ensureActiveSessions", () => {
     const next = ensureActiveSessions(mkState(full, full), "new");
     expect(next[0]).toBe("s1"); // s0 dropped despite streaming — no non-streaming option
     expect(next).not.toContain("s0");
+  });
+});
+
+// Persistence debouncing: the server flushes SSE every ~24 chars and every frame
+// lands in updateMessages, so the localStorage write (full-store serialize +
+// cross-window `storage` event) must NOT run per frame. Streamed updates write
+// on a trailing timer; structural changes and unload flush immediately. The
+// in-memory snapshot must still update synchronously (the UI streams live).
+
+const msg = (content: string) =>
+  [{ id: "m1", role: "assistant" as const, content }] as never[];
+
+describe("persist debouncing", () => {
+  let setItem: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    vi.resetModules(); // fresh module-level store + timer state per test
+    setItem = vi.spyOn(Storage.prototype, "setItem");
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    setItem.mockRestore();
+  });
+
+  async function freshStore() {
+    const mod = await import("./chat-store");
+    setItem.mockClear(); // ignore writes from module init / setup calls
+    return mod;
+  }
+
+  it("coalesces many rapid streamed updates into ONE write", async () => {
+    const { chatStore, PERSIST_DEBOUNCE_MS } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+
+    for (let i = 0; i < 50; i++) {
+      chatStore.updateMessages(sessionId, msg("token ".repeat(i + 1)));
+    }
+    expect(setItem).not.toHaveBeenCalled(); // nothing synchronous
+
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS);
+    expect(setItem).toHaveBeenCalledTimes(1); // one trailing write
+
+    // …and it wrote the LATEST state, not the first frame.
+    const written = JSON.parse(setItem.mock.calls[0][1] as string);
+    const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
+    expect(session.messages[0].content).toBe("token ".repeat(50));
+  });
+
+  it("keeps the in-memory snapshot synchronous while the write is pending", async () => {
+    const { chatStore } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+
+    chatStore.updateMessages(sessionId, msg("live"));
+    const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    expect(session.messages[0]).toMatchObject({ content: "live" }); // before any timer fires
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("flushes immediately on structural changes (create/delete/rename/switch)", async () => {
+    const { chatStore } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+
+    chatStore.updateMessages(sessionId, msg("pending")); // debounced…
+    const created = chatStore.createSession(); // …structural change flushes NOW
+    expect(setItem).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(setItem.mock.calls[0][1] as string);
+    expect(written.sessions.map((s: { id: string }) => s.id)).toContain(created.id);
+    // The pending streamed content rode along with the flush.
+    const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
+    expect(session.messages[0].content).toBe("pending");
+
+    chatStore.renameSession(created.id, "named");
+    expect(setItem).toHaveBeenCalledTimes(2);
+    chatStore.switchSession(sessionId);
+    expect(setItem).toHaveBeenCalledTimes(3);
+    chatStore.deleteSession(created.id);
+    expect(setItem).toHaveBeenCalledTimes(4);
+  });
+
+  it("flushes on stream done (setSessionStatus) so the final answer persists", async () => {
+    const { chatStore } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+
+    chatStore.updateMessages(sessionId, msg("final answer"));
+    chatStore.setSessionStatus(sessionId, "idle"); // ChatSurface's stream-done path
+    expect(setItem).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(setItem.mock.calls[0][1] as string);
+    const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
+    expect(session.messages[0].content).toBe("final answer");
+
+    // No stale trailing write after the flush.
+    vi.runOnlyPendingTimers();
+    expect(setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes pending state on pagehide/beforeunload, and only when dirty", async () => {
+    const { chatStore } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+
+    chatStore.updateMessages(sessionId, msg("about to navigate"));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(setItem).toHaveBeenCalledTimes(1);
+
+    // Clean store → unload is a no-op (a tenant-clear must never be re-written).
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("beforeunload"));
+    expect(setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushChatPersist is a no-op when nothing is pending", async () => {
+    const { flushChatPersist } = await freshStore();
+    flushChatPersist();
+    expect(setItem).not.toHaveBeenCalled();
   });
 });

@@ -336,7 +336,11 @@ class MemoryMiddleware(AgentMiddleware):
         return {"messages": new_msgs}
 
     async def abefore_model(self, state, runtime) -> dict | None:
-        return self.before_model(state, runtime)
+        # before_model reads prior sessions from disk — keep that I/O off the
+        # event loop (same pattern as graph/checkpointer.py).
+        import asyncio
+
+        return await asyncio.to_thread(self.before_model, state, runtime)
 
     # --- Knowledge extraction (existing) ---
 

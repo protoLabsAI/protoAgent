@@ -297,5 +297,17 @@ class KnowledgeMiddleware(AgentMiddleware):
         return {"context": "\n\n".join(parts)}
 
     async def abefore_model(self, state, runtime) -> dict | None:
-        """Async version — same logic."""
-        return self.before_model(state, runtime)
+        """Async version — same logic, off the event loop.
+
+        ``before_model`` blocks: the store search embeds the query over HTTP
+        (HybridKnowledgeStore + create_embed_fn), plus sqlite + disk reads for
+        hot memory / prior sessions / skills. Running it inline here stalled
+        the event loop before *every* LLM call, so it goes through
+        ``asyncio.to_thread`` (same pattern as graph/checkpointer.py). The
+        only state mutated is the prior-sessions cache (str + float
+        assignment), which is benign across threads; the store opens a sqlite
+        connection per call.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(self.before_model, state, runtime)

@@ -10,6 +10,7 @@ off; none ever 500s the console.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from runtime.state import STATE
@@ -84,7 +85,12 @@ def register_knowledge_routes(app) -> None:
         results: list[dict] = []
         try:
             if q and q.strip():
-                results = [_knowledge_row(r) for r in STATE.knowledge_store.search(q, k=k, domain=domain or None)]
+                # search() embeds the query over HTTP on hybrid stores — run it
+                # off the event loop (same pattern as graph/checkpointer.py).
+                rows = await asyncio.to_thread(
+                    STATE.knowledge_store.search, q, k=k, domain=domain or None
+                )
+                results = [_knowledge_row(r) for r in rows]
             else:
                 results = [_knowledge_row(c.as_dict()) for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)]
         except Exception:  # noqa: BLE001 — never 500 the console

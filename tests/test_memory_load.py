@@ -304,3 +304,67 @@ def test_load_memory_standalone_no_knowledge_store(tmp_path):
 
     assert "<prior_sessions>" in result
     assert "standalone" in result
+
+
+# ---------------------------------------------------------------------------
+# 11. abefore_model runs the (blocking) store search OFF the event loop
+# ---------------------------------------------------------------------------
+# The store search embeds the query over HTTP on hybrid stores
+# (HybridKnowledgeStore + create_embed_fn) — running it inline in
+# abefore_model stalled the event loop before every LLM call. The async
+# hook must dispatch the sync before_model via asyncio.to_thread.
+
+async def test_abefore_model_runs_search_off_event_loop():
+    import threading
+
+    from langchain_core.messages import HumanMessage
+
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    seen_threads: list[threading.Thread] = []
+
+    store = MagicMock()
+    store.get_hot_memory.return_value = ""
+
+    def _slow_search(query, k=5):
+        seen_threads.append(threading.current_thread())
+        return [{"table": "chunks", "preview": "remembered fact"}]
+
+    store.search.side_effect = _slow_search
+
+    mw = KnowledgeMiddleware(store, top_k=5)
+    state = {"messages": [HumanMessage(content="what do you remember?")]}
+
+    result = await mw.abefore_model(state, runtime=None)
+
+    # Same behavior as the sync path…
+    assert result is not None
+    assert "remembered fact" in result["context"]
+    # …but the blocking search ran on a worker thread, not the event loop.
+    assert seen_threads, "store.search was never called"
+    assert seen_threads[0] is not threading.main_thread()
+
+
+async def test_memory_middleware_abefore_model_off_loop(tmp_path, monkeypatch):
+    """MemoryMiddleware.abefore_model (standalone mode, disk reads) also
+    dispatches via to_thread."""
+    import threading
+
+    from langchain_core.messages import HumanMessage
+
+    import graph.middleware.memory as memmod
+
+    seen_threads: list[threading.Thread] = []
+
+    def _fake_load(self):
+        seen_threads.append(threading.current_thread())
+        return "<prior_sessions>old</prior_sessions>"
+
+    monkeypatch.setattr(memmod.MemoryMiddleware, "_load_prior_sessions", _fake_load)
+    mw = memmod.MemoryMiddleware(knowledge_store=None)
+
+    state = {"messages": [HumanMessage(content="hello")]}
+    result = await mw.abefore_model(state, runtime=None)
+
+    assert result is not None  # prior sessions injected
+    assert seen_threads and seen_threads[0] is not threading.main_thread()

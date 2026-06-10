@@ -94,6 +94,56 @@ function persist(state: ChatState) {
   }
 }
 
+// ── debounced persistence ─────────────────────────────────────────────────────
+// The server flushes SSE every ~24 chars, and every streamed frame lands in
+// updateMessages → setState. Serializing EVERY session to localStorage per frame
+// is the dominant main-thread cost of a streaming turn (and each write fires a
+// cross-window `storage` event that FleetTurnWatch re-parses). So streaming
+// updates persist on a trailing ~300ms timer; structural changes (session
+// add/remove/rename/switch, stream start/done) and page unload flush
+// immediately. Only the localStorage WRITE is deferred — the in-memory state
+// and listener notify stay synchronous, so the UI streams live.
+
+export const PERSIST_DEBOUNCE_MS = 300;
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistDirty = false;
+
+function schedulePersist() {
+  persistDirty = true;
+  if (persistTimer !== null) return; // trailing write already scheduled
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (persistDirty) {
+      persistDirty = false;
+      persist(state);
+    }
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+/** Write any pending (debounced) state to localStorage NOW. No-op when clean —
+ * so a tenant-clear + reload (lib/tenant.ts) is never undone by an unload
+ * flush that had nothing pending. Exported for tests + the unload hooks. */
+export function flushChatPersist() {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (persistDirty) {
+    persistDirty = false;
+    persist(state);
+  }
+}
+
+// pagehide covers bfcache navigations Safari/iOS never fire beforeunload for;
+// beforeunload covers older flows. flushChatPersist is idempotent.
+try {
+  window.addEventListener("pagehide", flushChatPersist);
+  window.addEventListener("beforeunload", flushChatPersist);
+} catch {
+  // non-browser context (tests without a full window)
+}
+
 export function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
   if (!sessionId) return state.activeSessions;
   if (state.activeSessions.includes(sessionId)) return state.activeSessions;
@@ -118,9 +168,17 @@ let state: ChatState = {
 
 const listeners = new Set<() => void>();
 
-function setState(updater: (current: ChatState) => ChatState) {
+function setState(
+  updater: (current: ChatState) => ChatState,
+  persistMode: "immediate" | "debounced" = "immediate",
+) {
   state = updater(state);
-  persist(state);
+  if (persistMode === "immediate") {
+    persistDirty = true;
+    flushChatPersist(); // cancels any pending timer and writes the full state
+  } else {
+    schedulePersist();
+  }
   listeners.forEach((listener) => listener());
 }
 
@@ -187,19 +245,25 @@ export const chatStore = {
   },
 
   updateMessages(sessionId: string, messages: ChatMessage[]) {
-    setState((current) => ({
-      ...current,
-      sessions: current.sessions.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              title: session.title === "New chat" ? titleFromMessages(messages) : session.title,
-              messages,
-              updatedAt: Date.now(),
-            }
-          : session,
-      ),
-    }));
+    // Fires per streamed SSE frame (~24 chars) — debounce the localStorage
+    // write. The stream-done path flushes via setSessionStatus right after the
+    // final updateMessages, so the terminal state always lands immediately.
+    setState(
+      (current) => ({
+        ...current,
+        sessions: current.sessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                title: session.title === "New chat" ? titleFromMessages(messages) : session.title,
+                messages,
+                updatedAt: Date.now(),
+              }
+            : session,
+        ),
+      }),
+      "debounced",
+    );
   },
 
   renameSession(sessionId: string, title: string) {

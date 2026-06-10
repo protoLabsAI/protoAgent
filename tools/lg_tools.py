@@ -441,7 +441,12 @@ def _build_memory_tools(knowledge_store) -> list:
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
-        chunk_id = knowledge_store.add_chunk(content, domain=domain, heading=heading)
+        # add_chunk embeds over HTTP on hybrid stores — keep it off the loop.
+        import asyncio
+
+        chunk_id = await asyncio.to_thread(
+            knowledge_store.add_chunk, content, domain=domain, heading=heading
+        )
         if chunk_id is None:
             return "Error: failed to store chunk (knowledge store unavailable)."
         return f"Stored chunk {chunk_id} in {domain!r}."
@@ -459,7 +464,10 @@ def _build_memory_tools(knowledge_store) -> list:
         scores above the keyword threshold.
         """
         clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
-        results = knowledge_store.search(query, k=clamped_k)
+        # search embeds the query over HTTP on hybrid stores — keep it off the loop.
+        import asyncio
+
+        results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k)
         if not results:
             return "No matches."
         lines = [f"[{r.get('domain', '?')}] {r['preview']}" for r in results]
