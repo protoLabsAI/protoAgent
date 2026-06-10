@@ -836,7 +836,14 @@ def _main():
     # server orphaned (holding its port). Poll the launcher and exit if it dies.
     _install_parent_death_watchdog()
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    # Bound the graceful drain. The console holds long-lived connections that
+    # never close on their own — SSE streams (chat, runtime status) and the
+    # fleet proxy's stream-to-member. With uvicorn's default (no timeout), the
+    # first Ctrl-C waits forever ("Waiting for connections to close"), forcing a
+    # second Ctrl-C whose KeyboardInterrupt fires mid-request and dumps noisy
+    # CancelledError tracebacks. A bounded timeout lets in-flight work finish,
+    # then force-closes the streams cleanly on a single Ctrl-C.
+    uvicorn.run(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
 
 if __name__ == "__main__":
