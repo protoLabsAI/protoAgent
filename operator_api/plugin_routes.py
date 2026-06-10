@@ -39,7 +39,8 @@ def _sources_allowlist() -> list[str] | None:
 
 
 def register_plugin_routes(app) -> None:
-    """Register `/api/plugins/installed`, `/api/plugins/install`, `/api/plugins/{id}`."""
+    """Register `/api/plugins/installed`, `/install`, `/updates`, `/{id}/enabled`,
+    `/{id}/update`, and DELETE `/{id}`."""
 
     @app.get("/api/plugins/installed")
     async def _installed():
@@ -122,6 +123,97 @@ def register_plugin_routes(app) -> None:
         restart = bool(not want and _has_surface(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
+
+    @app.get("/api/plugins/updates")
+    async def _updates():
+        """Per-plugin update status (behind / up-to-date / pinned / error).
+
+        Pinned-to-SHA plugins skip the network; the rest ls-remote their ref
+        (TTL-cached + timeout-bounded so the poll can't hang). Errors are
+        non-fatal per entry — surfaced in each row's ``error``."""
+        return {"plugins": installer.check_updates()}
+
+    @app.post("/api/plugins/{plugin_id}/update")
+    async def _update(plugin_id: str):
+        """Pull the latest code for an installed plugin at its recorded ref, then
+        hot-reload via the SAME path the enable toggle uses so the new code mounts.
+
+        Re-installs ``source_url`` at ``requested_ref`` (force) — this rewrites the
+        lock with the new ``resolved_sha``. If the plugin is currently ENABLED we
+        reload (so tools/middleware/MCP rebuild and the router re-mounts, #822); if
+        it's installed-but-disabled we just re-install (nothing to reload yet).
+        """
+        entry = next(
+            (e for e in installer.list_installed() if e.get("id") == plugin_id), None
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} is not installed")
+        source_url = entry.get("source_url", "")
+        if not source_url:
+            raise HTTPException(
+                status_code=400,
+                detail=f"plugin {plugin_id!r} has no source_url — cannot update",
+            )
+        ref = (entry.get("requested_ref", "") or None)
+        try:
+            summary = installer.install(
+                source_url, ref, force=True, by="console", allow=_sources_allowlist(),
+            )
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        cfg = STATE.graph_config
+        is_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
+        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+
+        reloaded = False
+        if is_enabled:
+            # Force a genuinely fresh import of the just-pulled code before the
+            # reload. The loader re-execs a plugin's entry __init__ from disk every
+            # reload, but a multi-file plugin's `from .tools import …` resolves the
+            # SUBMODULE through sys.modules — which still holds the OLD code after a
+            # force re-install. Drop this plugin's whole module subtree so the reload
+            # re-execs every file from disk (scoped to its own prefix; the reload
+            # rebuilds it). This is what makes UPDATE deliver fresh code where the
+            # enable path's hot-mount alone wouldn't for a multi-file plugin.
+            import sys
+
+            from graph.plugins.loader import _plugin_module_name
+
+            _mod_prefix = _plugin_module_name(plugin_id)
+            for _name in [
+                n for n in list(sys.modules)
+                if n == _mod_prefix or n.startswith(_mod_prefix + ".")
+            ]:
+                sys.modules.pop(_name, None)
+
+            # Reload through the enable route's path so the freshly pulled code
+            # hot-mounts (router re-mount, tools/middleware/MCP rebuild — #822).
+            from server.agent_init import _apply_settings_changes
+
+            enabled = list(getattr(cfg, "plugins_enabled", []) or [])
+            disabled = list(getattr(cfg, "plugins_disabled", []) or [])
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": enabled, "disabled": disabled}},
+            )
+            if not ok:
+                raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+            reloaded = True
+
+        # FastAPI can't swap an already-mounted router in place, so a view/route-
+        # contributing plugin's OLD route lingers until a process restart — flag it
+        # (mirrors the enable route's surface heuristic).
+        def _has_surface(m: dict | None) -> bool:
+            return bool(m and (m.get("views") or m.get("routers") or m.get("surfaces")))
+
+        return {
+            "ok": True,
+            "id": plugin_id,
+            "version": summary.get("version"),
+            "resolved_sha": summary.get("resolved_sha"),
+            "reloaded": reloaded,
+            "restart_recommended": bool(_has_surface(meta)),
+        }
 
     @app.delete("/api/plugins/{plugin_id}")
     async def _uninstall(plugin_id: str, purge: bool = False):

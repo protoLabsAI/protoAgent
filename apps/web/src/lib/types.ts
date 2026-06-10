@@ -126,6 +126,20 @@ export type InstalledPlugin = {
   };
 };
 
+// Per-plugin update status (GET /api/plugins/updates, ADR 0027). The backend
+// TTL-caches these — a *pinned* plugin (its requested_ref is a full SHA) skips
+// the network; the rest ls-remote their ref. `behind` ⇒ the recorded
+// `current_sha` lags `latest_sha`; a per-entry `error` is non-fatal (the check
+// failed, the row stays usable). `latest_sha` is null when pinned or on error.
+export type PluginUpdate = {
+  id: string;
+  behind: boolean;
+  pinned: boolean;
+  current_sha: string;
+  latest_sha: string | null;
+  error?: string | null;
+};
+
 // The summary returned right after installing (the review card).
 export type PluginInstallSummary = {
   id: string;

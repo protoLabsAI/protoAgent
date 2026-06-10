@@ -19,6 +19,7 @@ export const queryKeys = {
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
   installedPlugins: ["plugins", "installed"] as const,
+  pluginUpdates: ["plugins", "updates"] as const,
   fleet: ["fleet"] as const,
   archetypes: ["archetypes"] as const,
 };
@@ -145,6 +146,18 @@ export const installedPluginsQuery = () =>
   queryOptions({
     queryKey: queryKeys.installedPlugins,
     queryFn: () => api.installedPlugins(),
+    retry: false,
+  });
+
+// Per-plugin update status (ADR 0027) — joined to the installed/runtime rows to
+// render a freshness badge. The backend TTL-caches the ls-remote probe, so the
+// staleTime here is generous: a re-check on every panel mount would just hit the
+// cache anyway. Degrades gracefully (retry:false) if the updates API is absent.
+export const pluginUpdatesQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.pluginUpdates,
+    queryFn: () => api.pluginUpdates(),
+    staleTime: 5 * 60_000,
     retry: false,
   });
 

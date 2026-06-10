@@ -76,6 +76,11 @@ async function readBody(req) {
 // Git-installed plugins (ADR 0027) — mutable so install/uninstall round-trip in e2e.
 let INSTALLED_PLUGINS = [];
 
+// Per-plugin update fixtures, keyed by id — seeds non-default freshness states
+// (behind / pinned / errored) for any pre-seeded plugin. After a successful
+// `POST /{id}/update` the entry is cleared so the row flips to "up to date".
+let PLUGIN_UPDATES = {};
+
 function handleApiGet(pathname) {
   switch (pathname) {
     case "/api/runtime/status":
@@ -127,6 +132,21 @@ function handleApiGet(pathname) {
       return DELEGATES;
     case "/api/plugins/installed":
       return { plugins: INSTALLED_PLUGINS };
+    case "/api/plugins/updates":
+      // Per-plugin freshness (ADR 0027). Console-installed plugins are up to date
+      // (their resolved_sha is the latest); the seeded fixtures exercise the other
+      // states so the badge renders behind/pinned/error in the e2e.
+      return {
+        plugins: INSTALLED_PLUGINS.map((p) => {
+          const seeded = PLUGIN_UPDATES[p.id];
+          if (seeded) return { id: p.id, ...seeded };
+          return {
+            id: p.id, source_url: p.source_url, requested_ref: p.requested_ref,
+            current_sha: p.resolved_sha, latest_sha: p.resolved_sha,
+            behind: false, pinned: false, error: null,
+          };
+        }),
+      };
     case "/api/plugins/workflows/list":
       return { workflows: WORKFLOWS };
     case "/api/theme":
@@ -415,6 +435,22 @@ const server = createServer(async (req, res) => {
         },
         restart_required: true,
       });
+    }
+    {
+      const m = pathname.match(/^\/api\/plugins\/([^/]+)\/update$/);
+      if (m && req.method === "POST") {
+        const id = decodeURIComponent(m[1]);
+        const sha = "fed9876543210abcdef0000000000000000fed98"; // the "latest" sha
+        INSTALLED_PLUGINS = INSTALLED_PLUGINS.map((p) =>
+          p.id === id ? { ...p, resolved_sha: sha } : p,
+        );
+        // Updated to latest → drop the seeded "behind" state so the badge flips.
+        delete PLUGIN_UPDATES[id];
+        return sendJson(res, {
+          ok: true, id, version: "0.2.0", resolved_sha: sha,
+          reloaded: true, restart_recommended: false,
+        });
+      }
     }
     if (req.method === "DELETE" && /^\/api\/plugins\/[^/]+$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split("/").pop());

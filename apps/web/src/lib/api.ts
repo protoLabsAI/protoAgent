@@ -16,6 +16,7 @@ import type {
   InboxItem,
   InstalledPlugin,
   PluginInstallSummary,
+  PluginUpdate,
   KnowledgeChunk,
   RuntimeStatus,
   ScheduledJob,
@@ -1017,6 +1018,20 @@ export const api = {
   },
   uninstallPlugin(id: string) {
     return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+  // Per-plugin freshness (ADR 0027). The backend TTL-caches the ls-remote probe,
+  // so polling is cheap; each row carries behind/pinned/error.
+  pluginUpdates() {
+    return request<{ plugins: PluginUpdate[] }>("/api/plugins/updates");
+  },
+  // Pull the latest code at the plugin's recorded ref + hot-reload (same path as
+  // enable). Returns whether the live reload landed and if a restart is still
+  // recommended (a view/route plugin can't swap its mounted router in place).
+  updatePlugin(id: string) {
+    return request<{ ok: boolean; id: string; version?: string; resolved_sha?: string; reloaded: boolean; restart_recommended: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}/update`,
+      { method: "POST" },
+    );
   },
   setPluginEnabled(id: string, enabled: boolean) {
     return request<{ ok: boolean; enabled: boolean; reloaded: boolean; restart_recommended: boolean }>(

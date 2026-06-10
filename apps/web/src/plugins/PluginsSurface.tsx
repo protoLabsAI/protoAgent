@@ -1,18 +1,19 @@
 import "../settings/plugins.css";
 
 import { Button } from "@protolabsai/ui/primitives";
-import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { Suspense, useState } from "react";
-import { ExternalLink, Github, Loader2, Store } from "lucide-react";
+import { ExternalLink, Github, Loader2, RefreshCw, Store } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { runtimeStatusQuery } from "../lib/queries";
+import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { StatusPill } from "../app/StatusPill";
 import { PluginsSection } from "../settings/PluginsSection";
+import { PluginFreshness } from "./PluginFreshness";
 import { api } from "../lib/api";
-import type { RuntimeStatus } from "../lib/types";
+import type { PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
 
@@ -30,7 +31,21 @@ function contributionsLabel(p: Plugin): string {
   );
 }
 
-function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: (p: Plugin) => void }) {
+function PluginRow({
+  p,
+  update,
+  busy,
+  onToggle,
+  onUpdate,
+  updating,
+}: {
+  p: Plugin;
+  update?: PluginUpdate;
+  busy: boolean;
+  onToggle: (p: Plugin) => void;
+  onUpdate: (p: Plugin) => void;
+  updating: boolean;
+}) {
   const on = p.enabled;
   return (
     <div className="subagent-row" key={p.id}>
@@ -38,6 +53,7 @@ function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: 
         <strong>
           {p.name}
           {p.version ? <span className="muted"> v{p.version}</span> : null}
+          <PluginFreshness update={update} />
         </strong>
         <span>{contributionsLabel(p)}</span>
       </div>
@@ -46,6 +62,17 @@ function PluginRow({ p, busy, onToggle }: { p: Plugin; busy: boolean; onToggle: 
           label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
           tone={p.loaded ? "success" : p.error ? "error" : "muted"}
         />
+        {update?.behind ? (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={updating}
+            onClick={() => onUpdate(p)}
+            title={`Update ${p.name} to the latest commit`}
+          >
+            {updating ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Update
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"
@@ -65,6 +92,9 @@ type PluginsTab = "local" | "market" | "download";
 // Local — installed plugins, grouped Loaded → Disabled (alpha), with enable/disable.
 function LocalTab() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
+  // Update status (ADR 0027) — joined per plugin id; degrades gracefully (non-suspense,
+  // retry:false) so a missing updates API never blanks the Local tab.
+  const updates = useQuery(pluginUpdatesQuery());
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
   const toggle = useMutation({
@@ -85,6 +115,26 @@ function LocalTab() {
   const onToggle = (p: Plugin) => { setHint(null); toggle.mutate(p); };
   const pendingId = toggle.isPending ? toggle.variables?.id : undefined;
 
+  const update = useMutation({
+    mutationFn: (p: Plugin) => api.updatePlugin(p.id),
+    onSuccess: (res, p) => {
+      // Re-read BOTH the runtime plugin roster (new version/sha + reload state) and the
+      // freshness probe (badge flips to "up to date").
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
+      // Same restart-hint contract the enable flow uses: a view/route plugin can't swap
+      // its mounted router live, so updating it recommends a restart.
+      setHint(
+        res.restart_recommended
+          ? `${p.name} updated${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.`
+          : `${p.name} updated${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.`,
+      );
+    },
+    onError: (err: unknown, p) => setHint(`Couldn't update ${p.name}: ${err instanceof Error ? err.message : String(err)}`),
+  });
+  const onUpdate = (p: Plugin) => { setHint(null); update.mutate(p); };
+  const updatingId = update.isPending ? update.variables?.id : undefined;
+  const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
   const plugins = runtime.plugins ?? [];
   const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
@@ -101,13 +151,13 @@ function LocalTab() {
             {loaded.length ? (
               <>
                 <p className="panel-kicker">Loaded <span className="muted">· {loaded.length}</span></p>
-                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} />)}</div>
+                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} />)}</div>
               </>
             ) : null}
             {disabled.length ? (
               <>
                 <p className="panel-kicker">Disabled <span className="muted">· {disabled.length}</span></p>
-                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} busy={pendingId === p.id} onToggle={onToggle} />)}</div>
+                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} />)}</div>
               </>
             ) : null}
           </>

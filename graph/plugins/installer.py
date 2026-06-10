@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +36,13 @@ LOCK_PATH = Path(os.environ.get("PROTOAGENT_PLUGINS_LOCK", str(REPO_ROOT / "plug
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 _ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://", "/")
 
+# `git ls-remote` network safety (check_updates): a bounded timeout so a slow/dead
+# remote can't hang the UI poll, and a small module-level TTL cache keyed by
+# (source_url, ref) so repeated polls don't ls-remote the same source every call.
+_LSREMOTE_TIMEOUT_S = 5.0
+_LSREMOTE_TTL_S = 300.0  # ~5 min
+_lsremote_cache: dict[tuple[str, str], tuple[float, str]] = {}
+
 
 class InstallError(RuntimeError):
     """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
@@ -46,10 +54,10 @@ def live_plugins_dir() -> Path:
     return Path(override).expanduser() if override else (_live_config_dir() / "plugins")
 
 
-def _git(*args: str, cwd: Path | None = None) -> str:
+def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
     proc = subprocess.run(
         ["git", *args], cwd=str(cwd) if cwd else None,
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=timeout,
     )
     if proc.returncode != 0:
         raise InstallError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -382,6 +390,84 @@ def list_installed() -> list[dict]:
     for e in _read_lock()["plugins"]:
         out.append({**e, "present": (root / e["id"]).exists()})
     return out
+
+
+def _ls_remote_sha(source_url: str, ref: str) -> str:
+    """Latest remote commit SHA for ``ref`` (or the default branch / HEAD when
+    ``ref`` is empty) at ``source_url``, via ``git ls-remote``. TTL-cached per
+    (source_url, ref) and bounded by a short timeout so the UI poll can't hang.
+
+    Raises ``InstallError`` (git failure) or ``subprocess.TimeoutExpired`` — both
+    treated as a non-fatal per-plugin error by ``check_updates``."""
+    key = (source_url, ref or "")
+    now = time.monotonic()
+    hit = _lsremote_cache.get(key)
+    if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
+        return hit[1]
+
+    # `git ls-remote <url> <ref>` prints "<sha>\t<refname>" lines; with no ref it
+    # lists everything and we take HEAD. We always pass an explicit refspec when we
+    # have one (branch/tag), else "HEAD".
+    out = _git("ls-remote", source_url, ref or "HEAD", timeout=_LSREMOTE_TIMEOUT_S)
+    sha = ""
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[0].strip():
+            sha = parts[0].strip()
+            break
+    _lsremote_cache[key] = (now, sha)
+    return sha
+
+
+def check_plugin_update(entry: dict) -> dict:
+    """Update status for one ``plugins.lock`` entry. A *pinned* plugin (its
+    ``requested_ref`` is a full/abbrev commit SHA per ``_SHA_RE``) never
+    auto-updates — we skip the network call entirely. Otherwise compare the
+    stored ``resolved_sha`` against the latest remote SHA for its ref. Any
+    network/timeout/lookup failure is reported in ``error`` (non-fatal)."""
+    pid = entry.get("id", "")
+    source_url = entry.get("source_url", "")
+    requested_ref = entry.get("requested_ref", "") or ""
+    current_sha = entry.get("resolved_sha", "") or ""
+
+    pinned = bool(_SHA_RE.match(requested_ref))
+    result = {
+        "id": pid, "source_url": source_url, "requested_ref": requested_ref,
+        "current_sha": current_sha, "latest_sha": None,
+        "behind": False, "pinned": pinned, "error": None,
+    }
+    if pinned or not source_url:
+        if not source_url:
+            result["error"] = "no source_url recorded — cannot check for updates"
+        return result
+
+    try:
+        latest = _ls_remote_sha(source_url, requested_ref)
+    except subprocess.TimeoutExpired:
+        result["error"] = f"ls-remote timed out after {_LSREMOTE_TIMEOUT_S:.0f}s"
+        return result
+    except InstallError as exc:
+        result["error"] = str(exc)
+        return result
+    except Exception as exc:  # noqa: BLE001 — update check must never be fatal
+        result["error"] = str(exc)
+        return result
+
+    if not latest:
+        result["error"] = "could not resolve a remote SHA for the ref"
+        return result
+    result["latest_sha"] = latest
+    # current_sha is a full 40-char SHA from the lock; ls-remote returns full SHAs
+    # too, so a plain (case-insensitive) inequality is the behind signal.
+    result["behind"] = bool(current_sha) and latest.lower() != current_sha.lower()
+    return result
+
+
+def check_updates() -> list[dict]:
+    """Per-plugin update status for every locked plugin (see ``check_plugin_update``).
+    Pinned-to-SHA plugins skip the network; the rest ls-remote their ref (TTL-cached,
+    timeout-bounded) and report ``behind``. Network errors are non-fatal per entry."""
+    return [check_plugin_update(e) for e in _read_lock()["plugins"]]
 
 
 def sync(*, allow: list[str] | None = None) -> list[dict]:

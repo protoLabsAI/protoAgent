@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugin update / version-awareness (ADR 0027 follow-on).** Git-installed
+  plugins now show whether they're current and can be updated in place. A new
+  `GET /api/plugins/updates` reports per-plugin freshness — `git ls-remote` the
+  recorded `source_url` at its ref vs the locked `resolved_sha` (timeout-bounded
+  + TTL-cached so the UI poll can't hang or hammer the remote); a SHA-*pinned*
+  plugin skips the network entirely (it never auto-updates), and any lookup
+  failure is reported per-row without breaking the rest. `POST /api/plugins/{id}/update`
+  pulls the latest code at the recorded ref (force re-install → rewrites the lock)
+  and, if the plugin is enabled, hot-reloads through the same path the enable
+  toggle uses (#822) so the new code mounts without a restart — first dropping the
+  plugin's whole `sys.modules` subtree so a multi-file plugin re-imports fresh code
+  rather than serving a cached submodule. The Plugins rail (Local tab) and Settings →
+  Integrations both render a DS `Badge` freshness indicator next to the version
+  (up to date · update available · pinned · check failed) and an **Update** button
+  when behind, with the same restart-hint contract the enable flow uses.
+
 ## [0.33.0] - 2026-06-10
 
 ### Added

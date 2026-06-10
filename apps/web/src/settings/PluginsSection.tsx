@@ -1,13 +1,15 @@
 import "./plugins.css";
 
+import { Button } from "@protolabsai/ui/primitives";
 import { Input } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Package, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Package, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { installedPluginsQuery, queryKeys } from "../lib/queries";
-import type { InstalledPlugin } from "../lib/types";
+import { installedPluginsQuery, pluginUpdatesQuery, queryKeys } from "../lib/queries";
+import { PluginFreshness } from "../plugins/PluginFreshness";
+import type { InstalledPlugin, PluginUpdate } from "../lib/types";
 
 // Plugins panel (ADR 0027) — install plugins from a git URL, under Settings →
 // Integrations. Mirrors the delegates panel. Read non-suspense so a 404 shows a
@@ -18,11 +20,34 @@ const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plug
 export function PluginsSection() {
   const qc = useQueryClient();
   const list = useQuery(installedPluginsQuery());
+  const updates = useQuery(pluginUpdatesQuery());
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
   const [status, setStatus] = useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
+  // After an update we re-read BOTH the installed list (new resolved_sha) and the
+  // freshness probe (so the badge flips to "up to date").
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
+    qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
+  };
+
+  const updateMut = useMutation({
+    mutationFn: (id: string) => api.updatePlugin(id),
+    onSuccess: (res) => {
+      // Mirror the enable flow's restart-hint contract: a view/route plugin can't
+      // swap its mounted router live, so updating it recommends a restart.
+      setStatus(
+        res.restart_recommended
+          ? `✓ updated ${res.id}${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.`
+          : `✓ updated ${res.id}${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.`,
+      );
+      invalidateAll();
+    },
+    onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "update failed"}`),
+  });
+  const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
   const install = useMutation({
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
@@ -92,14 +117,38 @@ export function PluginsSection() {
         <p className="settings-section-sub">No git-installed plugins yet.</p>
       ) : (
         <ul className="plugin-list">
-          {plugins.map((p) => <PluginRow key={p.id} p={p} onRemove={() => remove.mutate(p.id)} removing={remove.isPending} />)}
+          {plugins.map((p) => (
+            <PluginRow
+              key={p.id}
+              p={p}
+              update={updateById.get(p.id)}
+              onRemove={() => remove.mutate(p.id)}
+              removing={remove.isPending}
+              onUpdate={() => { setStatus(""); updateMut.mutate(p.id); }}
+              updating={updateMut.isPending && updateMut.variables === p.id}
+            />
+          ))}
         </ul>
       )}
     </section>
   );
 }
 
-function PluginRow({ p, onRemove, removing }: { p: InstalledPlugin; onRemove: () => void; removing: boolean }) {
+function PluginRow({
+  p,
+  update,
+  onRemove,
+  removing,
+  onUpdate,
+  updating,
+}: {
+  p: InstalledPlugin;
+  update?: PluginUpdate;
+  onRemove: () => void;
+  removing: boolean;
+  onUpdate: () => void;
+  updating: boolean;
+}) {
   const m = p.manifest;
   const caps = m?.capabilities && Object.keys(m.capabilities).length ? m.capabilities : null;
   return (
@@ -108,6 +157,19 @@ function PluginRow({ p, onRemove, removing }: { p: InstalledPlugin; onRemove: ()
         <div className="plugin-row-title">
           <strong>{m?.name || p.id}</strong>
           {m?.version ? <span className="plugin-ver">v{m.version}</span> : null}
+          <PluginFreshness update={update} />
+          {update?.behind ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={updating}
+              onClick={onUpdate}
+              title={`Update ${m?.name || p.id} to the latest commit`}
+            >
+              {updating ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Update
+            </Button>
+          ) : null}
           <span className={`plugin-state ${p.enabled ? "on" : "off"}`}>{p.enabled ? "enabled" : "not enabled"}</span>
           {!p.present ? <span className="plugin-state warn"><AlertTriangle size={12} /> missing — run sync</span> : null}
         </div>
