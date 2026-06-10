@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The fleet proxy now forwards WebSocket upgrades (#883).** The hub's
+  `/agents/<slug>/*` reverse proxy was HTTP-only (it even stripped `Upgrade`/
+  `Connection`), so a fleet member's plugin that opens a live WS — `agent_browser`'s
+  viewport/feed, say — loaded its panel over HTTP but its socket showed
+  "Disconnected" behind the hub. Added a WS route (`proxy.forward_ws`) that resolves
+  the slug → member, opens a client WS (carrying the bearer + subprotocols), and
+  pumps frames both ways until either side closes. Live plugin sockets now traverse
+  the hub like HTTP does.
+
 ### Changed
 - **Installing a plugin from the console now auto-enables + runs it** (ADR 0027,
   trust-by-default). Previously install ≠ enable: you installed, then had to find the

@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import Request  # module-level so the stringized `request: Request` annotation
-                             # on the proxy route resolves (function-local imports don't,
-                             # under `from __future__ import annotations`).
+from fastapi import Request, WebSocket  # module-level so the stringized `request: Request` /
+                             # `ws: WebSocket` annotations on the proxy routes resolve
+                             # (function-local imports don't, under `from __future__ import annotations`).
 
 log = logging.getLogger("protoagent.server")
 
@@ -115,6 +115,13 @@ def register_fleet_routes(app) -> None:
         its workspace port via the supervisor.
         """
         return await proxy.forward_to(slug, request, path)
+
+    @app.websocket("/agents/{slug}/{path:path}")
+    async def _agent_ws_proxy(ws: WebSocket, slug: str, path: str):
+        """Reverse-proxy a WebSocket to the agent by slug (#883). Same slug routing as the
+        HTTP proxy above, but for WS upgrades — so a plugin's live socket (agent_browser's
+        viewport/feed) traverses the hub instead of showing "Disconnected" behind it."""
+        await proxy.forward_ws(slug, ws, path)
 
     @app.post("/api/fleet")
     async def _create_agent(body: dict = Body(...)):

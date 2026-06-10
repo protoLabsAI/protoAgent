@@ -111,3 +111,84 @@ async def forward_to(slug: str, request, path: str):
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
     base, extra = target
     return await _forward_to_base(base, request, path, extra)
+
+
+async def _pump_ws(client_ws, upstream) -> None:
+    """Relay frames between the browser-side Starlette ``WebSocket`` and the upstream
+    ``websockets`` client until either side closes. First-to-finish wins; the other
+    direction is cancelled and both ends are closed."""
+    import asyncio
+
+    async def client_to_upstream():
+        try:
+            while True:
+                msg = await client_ws.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return
+                if (t := msg.get("text")) is not None:
+                    await upstream.send(t)
+                elif (b := msg.get("bytes")) is not None:
+                    await upstream.send(b)
+        except Exception:  # noqa: BLE001 — a closed/erroring side just ends the relay
+            return
+
+    async def upstream_to_client():
+        try:
+            async for msg in upstream:
+                if isinstance(msg, (bytes, bytearray)):
+                    await client_ws.send_bytes(bytes(msg))
+                else:
+                    await client_ws.send_text(msg)
+        except Exception:  # noqa: BLE001
+            return
+
+    tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+
+
+async def forward_ws(slug: str, ws, path: str) -> None:
+    """Reverse-proxy a **WebSocket** to the agent named by ``slug`` (#883). The HTTP proxy
+    above can't carry a WS upgrade (it strips ``Upgrade``/``Connection``), so a plugin's
+    live WS — agent_browser's viewport/feed, say — couldn't traverse the hub: HTTP loaded
+    the panel but the socket showed "Disconnected". This resolves the slug → member, opens
+    a client WS to it (carrying the bearer + subprotocols), and pumps frames both ways.
+    """
+    import websockets
+
+    target = _target_for_slug(slug)
+    if target is None:
+        await ws.close(code=1011, reason=f"agent {slug!r} is not running")
+        return
+    base, extra = target
+    ws_base = "ws" + base[len("http"):]  # http(s):// → ws(s)://
+    query = ws.url.query
+    upstream_url = f"{ws_base}/{path}" + (f"?{query}" if query else "")
+
+    headers = dict(extra)  # a remote member's bearer; else carry the browser's
+    auth = ws.headers.get("authorization")
+    if auth and not any(k.lower() == "authorization" for k in headers):
+        headers["authorization"] = auth
+    sub = ws.headers.get("sec-websocket-protocol")
+    subprotocols = [s.strip() for s in sub.split(",") if s.strip()] if sub else None
+
+    try:
+        upstream = await websockets.connect(
+            upstream_url, additional_headers=headers or None, subprotocols=subprotocols,
+            open_timeout=5, ping_interval=None, max_size=None,
+        )
+    except Exception as exc:  # noqa: BLE001 — connect refused / handshake failed / not a WS route
+        log.info("[fleet] ws proxy to %s (%s) failed: %s", slug, path, exc)
+        await ws.close(code=1011, reason="upstream websocket unreachable")
+        return
+    try:
+        await ws.accept(subprotocol=upstream.subprotocol)
+        await _pump_ws(ws, upstream)
+    finally:
+        try:
+            await upstream.close()
+        except Exception:  # noqa: BLE001
+            pass
