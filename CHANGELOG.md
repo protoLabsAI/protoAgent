@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Retired the deprecated `peer_consult` / `peer_list` tools** from the core
+  toolset. `delegate_to` over the unified delegate registry (ADR 0025,
+  `plugins/delegates`) has been the federation path since v0.16.0 — it does A2A
+  consult alongside openai/acp delegates behind one tool with a console panel.
+  The env-var `PEER_<HANDLE>_URL` tools are gone; the a2a adapter retains the
+  shared A2A response parse helpers (`tools/peer_tools.py`).
+
 ## [0.31.0] - 2026-06-10
 
 ### Changed

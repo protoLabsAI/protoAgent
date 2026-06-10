@@ -127,9 +127,9 @@ a2a:
   #     # output_schema: { type: object, properties: { ... }, required: [ ... ] }
 
 # Outbound A2A SSRF guard (#572) — opt-in CIDR allowlist for the destinations
-# the agent POSTs to: push-notification callbacks (caller-supplied) + peer_consult
-# (PEER_<HANDLE>_URL). Empty/unset = today's behavior (callbacks keep their
-# default private-IP denylist; peer_consult is unrestricted). When set, a
+# the agent POSTs to: push-notification callbacks (caller-supplied) + delegate_to
+# a2a delegates. Empty/unset = today's behavior (callbacks keep their
+# default private-IP denylist; delegate_to is unrestricted). When set, a
 # destination is allowed only if every resolved IP falls inside a listed CIDR —
 # e.g. lock outbound to your tailnet / private fleet network.
 security:

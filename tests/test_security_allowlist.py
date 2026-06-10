@@ -1,5 +1,5 @@
 """Opt-in CIDR allowlist for outbound A2A destinations (#572) — callbacks +
-peer_consult. Unset = permissive (today's behavior); when set, a destination is
+delegate_to a2a delegates. Unset = permissive (today's behavior); when set, a destination is
 allowed iff every resolved IP is inside a listed CIDR. Uses IP-literal URLs so
 no DNS is involved."""
 

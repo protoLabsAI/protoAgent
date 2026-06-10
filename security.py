@@ -2,13 +2,13 @@
 
 A *positive* CIDR allowlist for the two outbound surfaces that POST to an
 address the agent doesn't fully control — A2A push callbacks (caller-supplied
-webhook URLs) and ``peer_consult`` (operator-configured peer URLs). When the
+webhook URLs) and ``delegate_to`` a2a delegates (operator-configured agent URLs). When the
 allowlist is set, a destination is permitted IFF **every** resolved IP of its
 host falls inside an allowlisted CIDR.
 
 **Empty/unset is permissive** (off): push callbacks keep their default
-private-IP denylist (``a2a_stores.is_safe_webhook_url``) and ``peer_consult``
-is unrestricted — so existing deployments are unchanged until they opt in via
+private-IP denylist (``a2a_stores.is_safe_webhook_url``) and ``delegate_to``
+a2a delegates are unrestricted — so existing deployments are unchanged until they opt in via
 ``security.callback_allowlist``.
 
 Mirrors ``egress.py`` (host allowlist for ``fetch_url``) and the

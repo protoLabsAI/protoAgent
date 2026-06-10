@@ -77,7 +77,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     import egress
     egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts)
-    # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + peer_consult (#572).
+    # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     import security
     security.set_callback_allowlist(STATE.graph_config.security_callback_allowlist)
     # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
