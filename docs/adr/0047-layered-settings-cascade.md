@@ -1,6 +1,6 @@
 # ADR 0047 — Layered settings cascade (App→Host→Agent, per-field, `Field.scope`)
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-06-10; decisions locked in the operator walkthrough — see §2.1)
 - **Date:** 2026-06-10
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** config, settings, fleet, host, architecture, cascade, schema-driven
