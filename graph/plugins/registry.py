@@ -291,7 +291,7 @@ class PluginRegistry:
         ``graph.middleware.request_context.current_request_metadata()``.
 
         This is the last core extension point that previously forced a fork to edit
-        ``graph/agent.py`` / ``a2a_executor.py``.
+        ``graph/agent.py`` / ``executor.py``.
         """
         if not callable(factory):
             log.warning("[plugins] %s: register_middleware needs a callable factory, got %r",

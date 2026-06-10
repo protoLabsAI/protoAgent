@@ -1,6 +1,6 @@
 """Tests for the SHA256/TTL ResponseCache."""
 
-from cache import ResponseCache
+from infra.cache import ResponseCache
 
 
 def test_set_get_roundtrip(tmp_path):

@@ -540,7 +540,7 @@ def test_list_soul_presets_missing_dir_returns_empty(monkeypatch, tmp_path):
 def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) -> None:
     """A PROTOAGENT_INSTANCE-scoped config seeds from the unscoped base (config + secrets +
     setup-marker) so a new instance boots usable instead of into the wizard (ADR 0004)."""
-    import paths
+    from infra import paths
     from graph import config_io
 
     base = tmp_path / "langgraph-config.yaml"; base.write_text("model:\n  name: base-config\n")

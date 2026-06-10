@@ -39,7 +39,7 @@ def register_telemetry_routes(app) -> None:
 
         from fastapi.responses import PlainTextResponse
 
-        from telemetry_store import _COLUMNS
+        from observability.telemetry_store import _COLUMNS
 
         rows = STATE.telemetry_store.recent(limit=10_000_000) if STATE.telemetry_store else []
         if since:
@@ -61,7 +61,7 @@ def register_telemetry_routes(app) -> None:
         # prove the levers we can measure from the per-turn store. Read-only.
         if STATE.telemetry_store is None:
             return {"enabled": False, "insights": None}
-        import pricing
+        from observability import pricing
 
         s = STATE.telemetry_store.summary()
         flagged = STATE.telemetry_store.outliers()

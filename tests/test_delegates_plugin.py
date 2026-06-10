@@ -168,8 +168,8 @@ async def test_a2a_dispatch_inline_reply(monkeypatch):
     # message/send returns an artifact with text → _extract_text picks it up.
     payload = {"result": {"artifacts": [{"parts": [{"kind": "text", "text": "hi from peer"}]}]}}
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(payload))
-    import security
-    monkeypatch.setattr(security, "check_url", lambda url: None)
+    from security import policy
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
     d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
     assert await ADAPTERS["a2a"].dispatch(d, "q") == "hi from peer"
 

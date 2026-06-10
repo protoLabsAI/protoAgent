@@ -31,7 +31,7 @@ def _path() -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     configured = scope_leaf(Path("/sandbox") / _LEAF)
     try:

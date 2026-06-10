@@ -5,9 +5,9 @@ replaced by ``a2a-sdk`` 1.0 + two thin layers:
 
   - ``protolabs_a2a`` — the fleet conventions (the four custom DataPart
     extensions, the 1.0 member-discriminated Part shape, the agent card).
-  - ``a2a_executor.ProtoAgentExecutor`` — bridges protoagent's LangGraph stream
+  - ``executor.ProtoAgentExecutor`` — bridges protoagent's LangGraph stream
     (``(event_type, payload)`` tuples) onto the SDK's event queue.
-  - ``a2a_auth`` — request-time bearer / X-API-Key / origin enforcement.
+  - ``a2a_impl.auth`` — request-time bearer / X-API-Key / origin enforcement.
 
 These tests assert the same behaviors the hand-rolled handler guaranteed, now
 in the 1.0 shapes:
@@ -37,7 +37,7 @@ from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
-from a2a_executor import ProtoAgentExecutor, TurnOutcome, set_terminal_hook
+from a2a_impl.executor import ProtoAgentExecutor, TurnOutcome, set_terminal_hook
 
 A2A_HEADERS = {"A2A-Version": "1.0"}
 
@@ -179,8 +179,8 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
     )
     app = FastAPI()
     if bearer is not None or api_key or allowed_origins is not None:
-        import a2a_auth
-        a2a_auth.install(
+        from a2a_impl import auth
+        auth.install(
             app,
             bearer_token=bearer or "",
             api_key=api_key,
@@ -400,7 +400,7 @@ async def test_input_required_form_carries_hitl_datapart():
     protoAgent-local hitl-v1 DataPart carrying the full payload, plus a text
     part that falls back to the form title — so the console renders the form,
     not just a stringified blob."""
-    from a2a_executor import HITL_MIME
+    from a2a_impl.executor import HITL_MIME
 
     form = {
         "kind": "form",
@@ -473,7 +473,7 @@ async def test_terminal_hook_fires_failed_outcome_on_error():
     assert [o.state for o in outcomes] == ["failed"]
 
 
-# ── Auth + origin enforcement (a2a_auth middleware) ──────────────────────────
+# ── Auth + origin enforcement (a2a_impl.auth middleware) ──────────────────────────
 
 
 @pytest.mark.asyncio

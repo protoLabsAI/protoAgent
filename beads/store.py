@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from paths import scope_leaf
+from infra.paths import scope_leaf
 
 DEFAULT_DB_PATH = "/sandbox/beads/issues.db"
 

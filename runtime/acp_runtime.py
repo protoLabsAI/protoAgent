@@ -160,7 +160,7 @@ class AcpRuntime:
         if cwd:
             self.cwd = cwd
         else:
-            from paths import workspace_dir
+            from infra.paths import workspace_dir
             self.cwd = str(workspace_dir(create=True))
         self._context = context or self._default_context()
         self._client_factory = client_factory or self._default_client_factory

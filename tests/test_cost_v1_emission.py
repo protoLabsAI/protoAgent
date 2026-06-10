@@ -47,7 +47,7 @@ def test_extension_uri_is_the_canonical_workstacean_uri() -> None:
 
 
 def test_record_llm_call_accepts_enriched_signature_when_disabled() -> None:
-    import metrics
+    from observability import metrics
 
     # No init() in tests → disabled → no-op, but the signature must accept the
     # new cache/cost kwargs without error.

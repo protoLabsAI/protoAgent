@@ -115,9 +115,9 @@ def is_safe_webhook_url(url: str) -> bool:
     an operator can permit a specific internal/tailnet range) and rejects
     everything outside it. Unset ⇒ the default denylist below.
     """
-    import security
-    if security.is_enabled():
-        return security.is_allowed(url)
+    from security import policy
+    if policy.is_enabled():
+        return policy.is_allowed(url)
 
     allowed_hosts, allowed_cidrs = _parse_allowlist()
 
@@ -240,7 +240,7 @@ def _resolve_db_path(leaf: str) -> str:
     Both run through ``scope_leaf`` for per-instance scoping (ADR 0004), so the
     instance segment survives the fallback.
     """
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     configured = scope_leaf(Path("/sandbox") / leaf)
     try:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from langchain.agents.middleware import SummarizationMiddleware
 
-import metrics
+from observability import metrics
 from graph.middleware.compaction import CountingSummarizationMiddleware
 
 

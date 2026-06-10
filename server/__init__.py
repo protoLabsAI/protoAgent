@@ -5,7 +5,7 @@ This is the main entry point. It:
 1. Initializes LangGraph (``graph/agent.py``) + the LiteLLM gateway
    connection via ``graph/llm.py``.
 2. Mounts the full A2A 1.0 surface (``a2a-sdk`` ``DefaultRequestHandler`` +
-   ``a2a_executor.ProtoAgentExecutor``, conventions via ``protolabs_a2a``)
+   ``executor.ProtoAgentExecutor``, conventions via ``protolabs_a2a``)
    — JSON-RPC on ``POST /a2a``, SSE streaming, push notifications,
    ``tasks/*`` CRUD, agent card at ``/.well-known/agent-card.json``.
 3. Mounts an OpenAI-compatible chat-completions endpoint so the agent
@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from events import ACTIVITY_CONTEXT, EventBus
-from paths import scope_leaf
+from infra.paths import scope_leaf
 from runtime.state import STATE, get_state
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
@@ -389,8 +389,8 @@ def _main():
     headless_setup = ui == "none" or os.environ.get("PROTOAGENT_HEADLESS_SETUP", "").lower() in ("1", "true", "yes")
 
     # Initialize observability
-    import tracing
-    import metrics
+    from observability import tracing
+    from observability import metrics
     tracing.init()
     metrics.init()
 
@@ -664,15 +664,15 @@ def _main():
     # the task lifecycle, and push delivery. Our ProtoAgentExecutor bridges
     # protoagent's LangGraph stream onto it, and protolabs_a2 builds the card +
     # emits the four custom extensions. Task + push-config state is durable
-    # (SQLite via a2a_stores), and push callbacks are SSRF-guarded.
+    # (SQLite via a2a_impl.stores), and push callbacks are SSRF-guarded.
     from a2a.server.request_handlers import DefaultRequestHandler
     from a2a.server.routes.agent_card_routes import create_agent_card_routes
     from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
-    import a2a_auth
-    from a2a_executor import ProtoAgentExecutor, set_terminal_hook
-    from a2a_stores import (
+    from a2a_impl import auth
+    from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
+    from a2a_impl.stores import (
         build_a2a_stores,
         build_push_sender,
         initialize_a2a_stores,
@@ -691,7 +691,7 @@ def _main():
     # that to ``None`` so configure() applies the documented A2A_AUTH_TOKEN env
     # fallback. (configure() treats an explicit "" as "bearer off, no fallback";
     # protoAgent has no separate apiKey-only flag, so unset ⇒ env, not off.)
-    a2a_auth.install(
+    auth.install(
         fastapi_app,
         bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),
         api_key=os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", ""),
@@ -818,7 +818,7 @@ def _main():
     # PROTOAGENT_ALLOW_OPEN=1 explicitly opts in (the posture for binds fenced
     # by a published-port/network-policy boundary, e.g. compose publishing to
     # 127.0.0.1 only). Loopback (the default) and token-gated binds pass.
-    allowed, gate_msg = a2a_auth.evaluate_open_bind(
+    allowed, gate_msg = auth.evaluate_open_bind(
         args.host,
         bearer_configured=_bearer_configured(),
         allow_open=os.environ.get("PROTOAGENT_ALLOW_OPEN", "") == "1",

@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from paths import scope_leaf
+from infra.paths import scope_leaf
 from runtime.state import STATE
 from server import AGENT_NAME_ENV, _event_bus, agent_name
 from server.chat import chat
@@ -84,7 +84,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
     # Warn loudly if running UNSCOPED while the data home already has state — an unscoped
     # instance shares the loose root and can clobber a co-located sibling (#706).
-    from paths import unscoped_warning
+    from infra.paths import unscoped_warning
     _unscoped = unscoped_warning()
     if _unscoped:
         log.warning("[instance] %s", _unscoped)
@@ -99,11 +99,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     from tools.lg_tools import set_disabled_tools
     set_disabled_tools(STATE.graph_config.tools_disabled)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
-    import egress
+    from security import egress
     egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts)
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
-    import security
-    security.set_callback_allowlist(STATE.graph_config.security_callback_allowlist)
+    from security import policy
+    policy.set_callback_allowlist(STATE.graph_config.security_callback_allowlist)
     # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
     # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
     # under the same id. Opt-in — empty config.instance_id leaves paths unchanged.
@@ -639,7 +639,7 @@ async def _checkpoint_prune_loop() -> None:
         # rather than dispatched to a thread like the sync sqlite neighbors.
         if STATE.a2a_task_engine is not None:
             try:
-                from a2a_stores import sweep_expired_tasks
+                from a2a_impl.stores import sweep_expired_tasks
 
                 swept = await sweep_expired_tasks(STATE.a2a_task_engine)
                 if swept:
@@ -750,7 +750,7 @@ def _build_telemetry_store(config):
     (ADR 0004). Off when ``telemetry.enabled`` is false; best-effort otherwise."""
     if not getattr(config, "telemetry_enabled", True):
         return None
-    from telemetry_store import TelemetryStore
+    from observability.telemetry_store import TelemetryStore
 
     configured = scope_leaf(Path(getattr(config, "telemetry_db_path", "") or "/sandbox/telemetry.db"))
     try:
@@ -1100,19 +1100,19 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta,
     )
     try:
-        import egress
-        import security
+        from security import egress
+        from security import policy
 
         egress.set_allowed_hosts(new_config.egress_allowed_hosts)  # live-reload (ADR 0008)
-        security.set_callback_allowlist(new_config.security_callback_allowlist)  # live-reload (#572)
+        policy.set_callback_allowlist(new_config.security_callback_allowlist)  # live-reload (#572)
     except Exception:  # noqa: BLE001 — never block a reload on the egress update
         pass
     try:
-        import a2a_auth
+        from a2a_impl import auth
 
-        a2a_auth.set_bearer_token(new_config.auth_token or None)
+        auth.set_bearer_token(new_config.auth_token or None)
     except ImportError:
-        # a2a_auth not yet imported (e.g. during early-boot reload before
+        # a2a_impl.auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.
         pass
     STATE.graph = new_graph
@@ -1214,7 +1214,7 @@ def _sync_autostart_with_config(config: dict | None) -> str | None:
     want = bool(config.get("runtime", {}).get("autostart_on_boot", False))
 
     try:
-        from autostart import install_autostart, uninstall_autostart
+        from infra.autostart import install_autostart, uninstall_autostart
 
         as_name = (
             config.get("identity", {}).get("name")
@@ -1307,7 +1307,7 @@ def _apply_settings_changes(
             return False, [f"validation: {err}"]
         if layer == "host":
             try:
-                from paths import host_config_path
+                from infra.paths import host_config_path
 
                 host_only, dropped = _filter_nested_to_host_keys(config)
                 if dropped:
@@ -1530,7 +1530,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         uses this to render the toggle correctly and to print the
         plist path for debugging."""
         try:
-            from autostart import autostart_status
+            from infra.autostart import autostart_status
 
             name = (STATE.graph_config.identity_name if STATE.graph_config else "") or "protoagent"
             return autostart_status(name)
@@ -1542,7 +1542,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
         the YAML field. Called from the drawer's checkbox handler so
         toggling takes effect immediately without waiting for Save."""
         try:
-            from autostart import install_autostart, uninstall_autostart
+            from infra.autostart import install_autostart, uninstall_autostart
 
             name = (STATE.graph_config.identity_name if STATE.graph_config else "") or "protoagent"
             if enabled:

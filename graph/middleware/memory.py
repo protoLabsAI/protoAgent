@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 # Configuration — read once at module init
 # ---------------------------------------------------------------------------
 
-from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
 
 # ``PROTOAGENT_INSTANCE`` is seeded by server init before the graph (and this
 # middleware) is built, so the instance segment applies here too.
@@ -85,7 +85,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
     # ``trace_session`` always sets, so summaries are keyed per session.
     session_id: str = state.get("session_id", "") or ""
     if not session_id:
-        import tracing
+        from observability import tracing
         session_id = tracing.current_session_id() or ""
     messages_raw: list = state.get("messages", []) or []
 
@@ -366,7 +366,7 @@ class MemoryMiddleware(AgentMiddleware):
                 and last_msg.content
                 and not getattr(last_msg, "tool_calls", None)
             ):
-                import tracing
+                from observability import tracing
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
         return None
@@ -378,7 +378,7 @@ class MemoryMiddleware(AgentMiddleware):
 
     def on_session_end(self, state, runtime) -> dict | None:
         """Persist session summary to disk when session reaches terminal state."""
-        import tracing
+        from observability import tracing
         trace_id = tracing.current_trace_id()
         _persist_session(state, trace_id)
         return None

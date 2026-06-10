@@ -75,7 +75,7 @@ PRESETS_DIR = _BUNDLE_CONFIG_DIR / "soul-presets"
 # Instance-scoped (ADR 0004): a per-instance config when PROTOAGENT_INSTANCE is set, so
 # `--instance foo` gets its own config/secrets instead of sharing the default's — a no-op
 # (the base path) for the unscoped default. The unscoped base is kept for graceful seeding.
-from paths import scope_leaf as _scope_leaf
+from infra.paths import scope_leaf as _scope_leaf
 
 _BASE_CONFIG_YAML = _LIVE_CONFIG_DIR / "langgraph-config.yaml"
 CONFIG_YAML_PATH = _scope_leaf(_BASE_CONFIG_YAML)
@@ -154,7 +154,7 @@ def ensure_live_config() -> bool:
         return False
     import shutil
 
-    from paths import instance_id
+    from infra.paths import instance_id
 
     scoped = bool(instance_id())  # PROTOAGENT_INSTANCE set ⇒ this path is instance-scoped
     source = _BASE_CONFIG_YAML if (scoped and _BASE_CONFIG_YAML.exists()) else CONFIG_EXAMPLE_PATH
@@ -203,7 +203,7 @@ def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
     """
     import io
 
-    from paths import atomic_write
+    from infra.paths import atomic_write
 
     buf = io.StringIO()
     if _HAS_RUAMEL:

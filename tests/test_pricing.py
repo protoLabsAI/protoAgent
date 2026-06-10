@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pricing
+from observability import pricing
 
 
 def test_rate_for_exact_match() -> None:

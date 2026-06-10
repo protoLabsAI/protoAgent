@@ -165,7 +165,7 @@ async def _run_subagent(
     """
     from datetime import datetime, timezone
 
-    import tracing
+    from observability import tracing
     from graph.extensions.skills import SkillV1Artifact, emit_skill_artifact
 
     sub_config = SUBAGENT_REGISTRY.get(subagent_type)

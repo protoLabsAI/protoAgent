@@ -75,7 +75,7 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    from paths import atomic_write
+    from infra.paths import atomic_write
 
     atomic_write(_state_path(), json.dumps(state, indent=2) + "\n")
 
@@ -183,7 +183,7 @@ def _host_entry() -> dict:
 
     from runtime.state import STATE
 
-    from paths import package_version
+    from infra.paths import package_version
 
     cfg = getattr(STATE, "graph_config", None)
     name = getattr(cfg, "identity_name", "") or "main"
@@ -239,7 +239,7 @@ def _load_remotes() -> dict:
 
 
 def _save_remotes(remotes: dict) -> None:
-    from paths import atomic_write
+    from infra.paths import atomic_write
 
     # 0600: this file carries the remotes' bearer tokens (matching the
     # secrets.yaml posture — written atomically, never group/world readable).

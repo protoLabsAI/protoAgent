@@ -16,7 +16,7 @@ from langchain.agents.middleware import SummarizationMiddleware
 
 def _count() -> None:
     try:
-        import metrics
+        from observability import metrics
 
         metrics.record_compaction()
     except Exception:  # noqa: BLE001 — telemetry must never break a model call

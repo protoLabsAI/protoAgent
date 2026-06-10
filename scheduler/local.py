@@ -107,7 +107,7 @@ def _resolve_db_path(db_dir: str | Path | None, agent_name: str) -> Path:
     cheap and prevents an exotic typo from putting a sqlite file
     outside the configured scheduler dir.
     """
-    from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+    from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
 
     safe_name = _safe_segment(agent_name)
     raw = os.environ.get("SCHEDULER_DB_DIR") or db_dir or DEFAULT_DB_DIR

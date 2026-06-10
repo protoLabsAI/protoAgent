@@ -1,4 +1,4 @@
-"""Durable A2A stores + push-callback SSRF guard (a2a_stores.py).
+"""Durable A2A stores + push-callback SSRF guard (stores.py).
 
 Two capabilities the a2a-sdk migration dropped, restored on top of the SDK's
 SQLite-backed ``DatabaseTaskStore`` / ``DatabasePushNotificationConfigStore``:
@@ -18,8 +18,8 @@ import pytest
 from a2a.server.context import ServerCallContext
 from a2a.types import TaskPushNotificationConfig
 
-import a2a_stores
-from a2a_stores import (
+from a2a_impl import stores
+from a2a_impl.stores import (
     ValidatingPushNotificationConfigStore,
     initialize_a2a_stores,
     is_safe_webhook_url,
@@ -282,7 +282,7 @@ async def test_send_time_guard_blocks_private_without_network(tmp_path):
     db = str(tmp_path / "a2a-push.db")
     store, engine = await _fresh_push_store(db)
     async with httpx.AsyncClient() as client:
-        sender = a2a_stores.build_push_sender(store, client)
+        sender = stores.build_push_sender(store, client)
         ok = await sender._dispatch_notification(
             None,
             TaskPushNotificationConfig(task_id="t", url="http://127.0.0.1/x"),
@@ -307,7 +307,7 @@ async def test_async_paths_resolve_dns_off_the_event_loop(tmp_path, monkeypatch)
         # (family, type, proto, canonname, sockaddr) for a public address.
         return [(2, 1, 6, "", ("8.8.8.8", 0))]
 
-    monkeypatch.setattr(a2a_stores.socket, "getaddrinfo", _recording_getaddrinfo)
+    monkeypatch.setattr(stores.socket, "getaddrinfo", _recording_getaddrinfo)
 
     db = str(tmp_path / "a2a-push.db")
     store, engine = await _fresh_push_store(db)
@@ -324,7 +324,7 @@ async def test_async_paths_resolve_dns_off_the_event_loop(tmp_path, monkeypatch)
     # resolver that "now" returns a private address — still off the loop.
     resolver_threads.clear()
     monkeypatch.setattr(
-        a2a_stores.socket,
+        stores.socket,
         "getaddrinfo",
         lambda host, port, *a, **kw: (
             resolver_threads.append(threading.get_ident()),
@@ -332,7 +332,7 @@ async def test_async_paths_resolve_dns_off_the_event_loop(tmp_path, monkeypatch)
         )[1],
     )
     async with httpx.AsyncClient() as client:
-        sender = a2a_stores.build_push_sender(store, client)
+        sender = stores.build_push_sender(store, client)
         ok = await sender._dispatch_notification(
             None,
             TaskPushNotificationConfig(task_id="task-dns", url="https://hooks.example.test/x"),

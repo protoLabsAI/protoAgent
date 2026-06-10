@@ -7,12 +7,12 @@ allowlist is set, a destination is permitted IFF **every** resolved IP of its
 host falls inside an allowlisted CIDR.
 
 **Empty/unset is permissive** (off): push callbacks keep their default
-private-IP denylist (``a2a_stores.is_safe_webhook_url``) and ``delegate_to``
+private-IP denylist (``stores.is_safe_webhook_url``) and ``delegate_to``
 a2a delegates are unrestricted — so existing deployments are unchanged until they opt in via
 ``security.callback_allowlist``.
 
 Mirrors ``egress.py`` (host allowlist for ``fetch_url``) and the
-``PUSH_NOTIFICATION_ALLOWED_CIDRS`` bypass in ``a2a_stores`` — this is the
+``PUSH_NOTIFICATION_ALLOWED_CIDRS`` bypass in ``a2a_impl.stores`` — this is the
 unified, config-driven knob covering both outbound A2A surfaces. Set once at
 startup and on live config reload (``server/agent_init``).
 """
@@ -56,7 +56,7 @@ def is_enabled() -> bool:
 def _resolve_ips(host: str) -> list[str] | None:
     """Resolve ``host`` to IP literals (one-shot). ``None`` on failure. A literal
     IP is returned as-is. (One-time resolution isn't a full DNS-rebinding defence
-    but closes the trivial literal-address vector — same posture as a2a_stores.)"""
+    but closes the trivial literal-address vector — same posture as stores.)"""
     try:
         ipaddress.ip_address(host)
         return [host]

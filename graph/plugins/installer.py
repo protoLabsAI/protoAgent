@@ -98,7 +98,7 @@ def _write_lock(data: dict) -> None:
 def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
     """Record install/uninstall/install-deps to the audit log (ADR 0027 D5)."""
     try:
-        from audit import audit_logger
+        from observability.audit import audit_logger
         audit_logger.log(
             session_id="plugins", tool=f"plugin.{action}", args=args,
             result_summary=summary, duration_ms=0, success=success,

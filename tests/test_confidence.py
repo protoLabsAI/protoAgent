@@ -71,6 +71,6 @@ def test_emit_confidence_includes_explanation_and_success_false():
 def test_confidence_clamp_is_executor_side():
     """The executor clamps a model-reported confidence to [0, 1] before
     emitting, so the DataPart is always in-spec. Verify the clamp contract
-    that ``a2a_executor`` applies (max(0, min(1, x)))."""
+    that ``a2a_impl.executor`` applies (max(0, min(1, x)))."""
     assert max(0.0, min(1.0, 1.7)) == 1.0
     assert max(0.0, min(1.0, -0.5)) == 0.0

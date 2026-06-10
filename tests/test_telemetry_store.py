@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from telemetry_store import TelemetryStore, _percentile
+from observability.telemetry_store import TelemetryStore, _percentile
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ def test_outliers_empty_store(store):
 
 
 def test_cache_read_savings_usd():
-    import pricing
+    from observability import pricing
 
     # opus input rate 0.000015, discount 0.9 → 10000 cached reads save ~0.135
     saved = pricing.cache_read_savings_usd("claude-opus-4-8", 10000)
@@ -124,7 +124,7 @@ def test_cache_read_savings_usd():
 
 
 def test_median_helper():
-    from telemetry_store import _median
+    from observability.telemetry_store import _median
 
     assert _median([]) == 0
     assert _median([5]) == 5
@@ -158,7 +158,7 @@ def telemetry_server(store):
 
 
 def _outcome(**kw):
-    from a2a_executor import TurnOutcome
+    from a2a_impl.executor import TurnOutcome
 
     return TurnOutcome(**kw)
 
@@ -214,7 +214,7 @@ def test_executor_accumulates_distinct_models_in_first_seen_order():
     from a2a.server.events.event_queue import EventQueueLegacy as EventQueue
     from a2a.types import Message, Part, Role, SendMessageRequest
 
-    from a2a_executor import ProtoAgentExecutor, set_terminal_hook
+    from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
 
     captured = []
     set_terminal_hook(captured.append)
@@ -243,7 +243,7 @@ def test_executor_accumulates_distinct_models_in_first_seen_order():
 
 
 def test_record_tools_deferred_noop_when_disabled():
-    import metrics
+    from observability import metrics
 
     metrics.record_tools_deferred(5)  # disabled in tests → no-op, no error
 

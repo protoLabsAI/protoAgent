@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-import paths
+from infra import paths
 from scheduler.local import (
     LocalScheduler,
     _acquire_jobs_lock,

@@ -172,8 +172,8 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         if resume_value is not None
         else {"messages": [HumanMessage(content=message)], "session_id": session_id}
     )
-    import metrics
-    import pricing
+    from observability import metrics
+    from observability import pricing
 
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
@@ -441,7 +441,7 @@ async def _chat_langgraph_stream(
     request_metadata: dict | None = None,
 ):
     """Async generator — yields (event_type, payload) tuples from the
-    LangGraph run. Consumed by ``a2a_executor.ProtoAgentExecutor`` to
+    LangGraph run. Consumed by ``executor.ProtoAgentExecutor`` to
     drive the SDK task lifecycle + SSE streaming.
 
     Event contract (matches what the A2A handler expects):
@@ -460,7 +460,7 @@ async def _chat_langgraph_stream(
     the pluggable ``thread_id`` resolver (#571) so a fork can scope memory off
     it (e.g. per-project working memory) without editing this file.
     """
-    import tracing
+    from observability import tracing
 
     from graph.goals.goal_turn import goal_turn
     from graph.middleware.request_context import request_metadata_scope
@@ -738,7 +738,7 @@ async def _chat_langgraph_stream(
 
 async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
-    import tracing
+    from observability import tracing
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
