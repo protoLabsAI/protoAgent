@@ -1,16 +1,117 @@
 ---
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import BaseLayout from '../layouts/BaseLayout.astro';
-import plugins from '../../data/plugins.json';
+import overrides from '../../data/plugins.json';
 
 const topic = 'https://github.com/topics/protoagent-plugin';
 const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json';
 const publishDocs = '/docs/guides/plugin-registry';
 const lavender = 'var(--pl-color-brand-lavender)';
 
+// ── The plugin catalog is built automatically at deploy time ──────────────────────────
+// (1) BUNDLED plugins: parse every plugins/<id>/protoagent.plugin.yaml manifest in the
+//     protoAgent app, so a new first-party plugin lists itself.
+// (2) ECOSYSTEM plugins: GitHub repos in the org tagged `protoagent-plugin`, so a newly-
+//     tagged repo lands here on the next build — no PR.
+// data/plugins.json is now just OPTIONAL editorial polish, keyed by id (nicer category /
+// tagline). Everything degrades gracefully: a YAML/FS/GitHub hiccup never breaks the build.
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+function bundledPlugins() {
+  const out: any[] = [];
+  try {
+    const dir = path.join(repoRoot, 'plugins');
+    for (const id of fs.readdirSync(dir)) {
+      const mf = path.join(dir, id, 'protoagent.plugin.yaml');
+      if (!fs.existsSync(mf)) continue;
+      let m: any = {};
+      try { m = parseYaml(fs.readFileSync(mf, 'utf8')) || {}; } catch { continue; }
+      out.push({
+        id: m.id || id,
+        name: m.name || id,
+        tagline: String(m.description || '').replace(/\s+/g, ' ').trim(),
+        category: 'Bundled',
+        adds: Object.keys(m.capabilities || {}),
+        official: true,
+        bundled: true,
+        enable: m.id || id,
+        links: {
+          source: `https://github.com/protoLabsAI/protoAgent/tree/main/plugins/${id}`,
+          docs: '/docs/guides/plugins',
+        },
+      });
+    }
+  } catch { /* no plugins dir reachable — ecosystem + overrides still render */ }
+  return out;
+}
+
+async function ecosystemPlugins() {
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'protoagent-marketing-site',
+    };
+    if (import.meta.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${import.meta.env.GITHUB_TOKEN}`;
+    // Paginate (search API caps at 100/page) so the catalog stays complete past 100 repos.
+    const items: any[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const res = await fetch(
+        `https://api.github.com/search/repositories?q=org:protoLabsAI+topic:protoagent-plugin&per_page=100&page=${page}&sort=updated`,
+        { headers },
+      );
+      if (!res.ok) {
+        if (page === 1) console.warn(`[plugins] topic search ${res.status} — skipping ecosystem`);
+        break;
+      }
+      const data = await res.json();
+      const batch = data.items || [];
+      items.push(...batch);
+      if (batch.length < 100 || items.length >= (data.total_count || 0)) break;
+    }
+    return items
+      .filter((r: any) => !r.archived && !r.disabled && !r.private)
+      .map((r: any) => ({
+        id: r.name,
+        name: r.name,
+        tagline: String(r.description || 'A protoAgent plugin.').trim(),
+        category: 'Ecosystem',
+        adds: (r.topics || []).filter((t: string) => t !== 'protoagent' && t !== 'protoagent-plugin').slice(0, 5),
+        official: true,
+        install: r.html_url,
+        // No homepage → docs points at the README, not a dead-link back to Source.
+        links: { source: r.html_url, docs: r.homepage || `${r.html_url}#readme` },
+      }));
+  } catch (e) { console.warn('[plugins] GitHub unreachable — skipping ecosystem', e); return []; }
+}
+
+// Merge: discovered (bundled ∪ ecosystem), de-duped by id, then editorial overrides applied.
+const ovById: Record<string, any> = Object.fromEntries(
+  (overrides as any[]).map((o) => [(o.id || o.name || '').toLowerCase(), o]),
+);
+const discovered = [...bundledPlugins(), ...(await ecosystemPlugins())];
+const seen = new Set<string>();
+const merged: any[] = [];
+for (const p of discovered) {
+  const k = (p.id || p.name || '').toLowerCase();
+  if (seen.has(k)) continue;
+  seen.add(k);
+  merged.push({ ...p, ...(ovById[k] || {}) }); // overrides win for category/tagline polish
+}
+// Keep any override-only entries (curated for something not auto-discovered).
+for (const o of overrides as any[]) {
+  const k = (o.id || o.name || '').toLowerCase();
+  if (!seen.has(k)) { seen.add(k); merged.push(o); }
+}
+const plugins = merged;
+
 // Category chips (built from the data, with counts) for quick navigation.
-const categories = [...new Set(plugins.map((p) => p.category || 'Other'))].sort();
+const categories = [...new Set(plugins.map((p: any) => p.category || 'Other'))].sort();
 const counts = Object.fromEntries(
-  categories.map((c) => [c, plugins.filter((p) => (p.category || 'Other') === c).length]),
+  categories.map((c) => [c, plugins.filter((p: any) => (p.category || 'Other') === c).length]),
 );
 ---
 
@@ -112,9 +213,9 @@ const counts = Object.fromEntries(
       </p>
       <ol class="space-y-3 text-sm text-zinc-300 mb-6">
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">1.</span>
-          <span>Tag your repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> GitHub topic — that makes it discoverable across GitHub.</span></li>
+          <span>Tag your repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> GitHub topic — that's it. This page <strong>auto-discovers</strong> tagged repos in the org on the next deploy; no PR needed.</span></li>
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">2.</span>
-          <span>Open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> (with a <code class="font-mono">category</code>) to feature it on this page.</span></li>
+          <span><em>Optional:</em> for nicer copy or a specific category, add an override entry (keyed by <code class="font-mono">id</code>) to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a>.</span></li>
       </ol>
       <div class="flex flex-wrap items-center gap-4">
         <a href={publishDocs} target="_blank" rel="noopener noreferrer"
