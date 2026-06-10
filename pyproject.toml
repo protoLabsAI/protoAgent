@@ -47,8 +47,8 @@ google = [
   "google-api-python-client>=2.120",
   "google-auth-oauthlib>=1.2",
 ]
-# convenience: everything (core + ui + google), what `requirements.txt` installs:
-all = ["protoagent[ui,google]"]
+# convenience: everything (core + google), what `requirements.txt` installs:
+all = ["protoagent[google]"]
 
 [build-system]
 # Needed so `pip install -e .` / `uv pip install -e .` can build the project and
