@@ -114,6 +114,66 @@ home these concerns lack.
 > so fork-cleanliness is no longer a design constraint — the Host file living
 > outside the tracked `config/` tree carries no fork-merge cost.
 
+## 2.1 Decisions locked (operator walkthrough, 2026-06-10)
+
+These settle the open questions the draft left to the operator. They **supersede**
+the corresponding items in §7.
+
+1. **`Field.scope` is git-style advisory, not ownership.** `scope` is a field's
+   *home / default* layer (where the UI edits it and where a shared default
+   lives), but **any field stays overridable at a lower layer** (`system → global
+   → local`). No `locked` state is introduced now — none of the current 47 FIELDS
+   needs it (the lock candidates — bind interface, port range — aren't FIELDS yet;
+   D8). Add `locked:bool` only when a concrete box-policy field demands it.
+
+2. **Per-field `host` vs `agent` assignment (the rest = `agent`; App = dataclass
+   defaults only, no writable App file):**
+
+   | `host` field | rationale |
+   |---|---|
+   | `model.api_base`, `model.provider` | the LiteLLM **gateway** is machine infra |
+   | `model.name` | the box's default model — this IS today's "model-only inheritance", now via the cascade; **agents override freely** (their own `model.name` in the leaf wins) |
+   | `routing.aux_model`, `routing.fallback_models` | gateway routing |
+   | `prompt_cache.enabled/ttl/warm.enabled/warm.interval_seconds` | cache tier is gateway/deployment-dependent |
+   | `telemetry.enabled`, `telemetry.retention_days` | observability is machine-wide |
+   | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
+
+   Everything else is `agent`: `identity.name/operator`, `model.temperature/max_tokens/max_iterations`,
+   `agent_runtime` (each agent picks **native or `acp:*`** independently), `operator_mcp.tools`,
+   `goal.*`, `compaction.*`, `execute_code.*`, `knowledge.*`, `skills.*`, `middleware.*`,
+   `checkpoint.*`, `operator.allowed_dirs`, `runtime.autostart_on_boot`. Secrets
+   (`model.api_key`, `auth.token`) stay **leaf-only** (D5). An agent overriding
+   `model.name` or running on ACP pairs with its own leaf-scoped key.
+
+3. **Host file is `scope_leaf`'d (per-hub), NOT unscoped `data_home()`.** This
+   rides the same isolation as `fleet.json` / `remotes.json` (hub-scoped, #813) —
+   one-hub-per-box ≡ per-box; multiple instances on one box stay isolated (no #706
+   regression). True multi-tenant on one box uses **containers** (ADR 0004's
+   recommended boundary), so each tenant gets its own `data_home` → its own host
+   policy. (Corrects D2's earlier unscoped-`data_home()` proposal.)
+
+4. **Host-change propagation = banner now, broadcast later.** A host-layer change
+   re-merges for free on each co-located agent's next reload (`_reload_langgraph_agent`
+   re-runs `from_yaml` → the cascade). v1: the host console shows "host config
+   changed — agents apply on next reload." Live broadcast over the event bus
+   (ADR 0039) is a follow-up. (Resolves §7 item 6.)
+
+5. **Remote-agent boundary is concrete (verified against #839).** A remote member
+   is a `remotes.json` entry `{opaque-id, name, url, token?}` next to `fleet.json`
+   (hub-scoped, #813), reverse-proxied by URL with its bearer replacing the
+   browser's at the proxy boundary (`graph/fleet/proxy.py` `_target_for_slug`).
+   "The remote agent itself is untouched" — `activate` no-ops, no start/stop. Its
+   App→Host→Agent cascade resolves **on its own machine**; we never load remote
+   config into ours. (D7, now grounded in #839 rather than the abstract delegate ref.)
+
+6. **Open follow-ups still genuinely undecided** (carried to implementation): the
+   D8 env-knob promotion order + env-vs-file precedence; corrupt/unparseable
+   `host-config.yaml` handling (must not crash boot — degrade to App+Agent with a
+   warning); whether `validate_flat` rejects a wrong-layer save at the API boundary
+   (defense-in-depth, recommended yes); and the one-time treatment of existing
+   eager model-copy blocks (`manager._overlay_model`) when new-agent creation flips
+   to inherit-from-host.
+
 ## 3. Decision
 
 ### D1 — `Field.scope`: one attribute, mirroring `restart`
