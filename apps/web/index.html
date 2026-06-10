@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!-- data-theme="dark" pins the @protolabsai/design tokens to dark from first paint.
+     Without it the tokens follow @media (prefers-color-scheme), so on a light-mode
+     OS the DS components (.pl-input/.pl-btn/text) drift light while the hand-rolled
+     dark chrome stays dark. The console is dark-first; an explicit user/agent theme
+     still overrides this at runtime (agentTheme.ts / ThemePanel). -->
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

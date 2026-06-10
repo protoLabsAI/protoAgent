@@ -40,7 +40,10 @@ export function applyAgentTheme(theme: unknown, animate = true) {
       } catch {
         /* ignore */
       }
-      root().removeAttribute("data-theme"); // back to the OS/default
+      root().setAttribute("data-theme", "dark"); // the console's dark baseline — NOT the OS
+      // default. The @protolabsai/design tokens follow @media (prefers-color-scheme) when
+      // unpinned, so removing the attribute on a light-mode OS drifts DS components light
+      // while the hand-rolled chrome stays dark. Pin dark; an explicit theme still overrides.
     }
   };
 
