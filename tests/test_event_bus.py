@@ -204,3 +204,61 @@ def test_registry_emit_namespaces_topic():
     reg.emit("created", {"id": "a1"})            # bare → namespaced
     reg.emit("artifact.deleted", {"id": "x"})    # already namespaced → unchanged
     assert sent == [("artifact.created", {"id": "a1"}), ("artifact.deleted", {"id": "x"})]
+
+
+def test_publish_from_worker_thread_reroutes_to_loop():
+    """An off-loop publish (a sync middleware hook in a worker thread) lands on the
+    bound loop instead of touching asyncio queues cross-thread."""
+    import threading
+
+    async def run():
+        bus = EventBus()
+        got: list[dict] = []
+        bus.subscribe_handler("mw.#", got.append)  # binds the loop
+
+        def emit_from_thread():
+            bus.publish("mw.summary", {"ok": True})
+
+        t = threading.Thread(target=emit_from_thread)
+        t.start()
+        await asyncio.to_thread(t.join)
+        # call_soon_threadsafe needs a loop tick to deliver.
+        for _ in range(10):
+            if got:
+                break
+            await asyncio.sleep(0.01)
+        return got
+
+    got = asyncio.run(run())
+    assert got and got[0]["event"] == "mw.summary" and got[0]["data"] == {"ok": True}
+
+
+def test_publish_with_no_loop_anywhere_delivers_inline():
+    """Sync/no-loop contexts (unit tests, CLI) keep the original inline delivery."""
+    bus = EventBus()
+    seen: list[str] = []
+    bus.subscribe_handler("#", lambda p: seen.append(p["event"]))
+    bus.publish("orphan.event", {"x": 1})
+    assert seen == ["orphan.event"]
+
+
+def test_seq_stays_monotonic_across_threads():
+    """seq is assigned on the loop, so threaded publishers can't fork it."""
+    import threading
+
+    async def run():
+        bus = EventBus()
+        got: list[dict] = []
+        bus.subscribe_handler("#", got.append)
+        threads = [threading.Thread(target=bus.publish, args=(f"t.{i}", {})) for i in range(5)]
+        for t in threads:
+            t.start()
+        await asyncio.to_thread(lambda: [t.join() for t in threads])
+        for _ in range(20):
+            if len(got) == 5:
+                break
+            await asyncio.sleep(0.01)
+        return got
+
+    got = asyncio.run(run())
+    assert [p["seq"] for p in got] == [1, 2, 3, 4, 5]

@@ -97,6 +97,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Plugins", link: "/guides/plugins" },
+            { text: "Middleware", link: "/guides/middleware" },
             { text: "Plugin console views", link: "/guides/plugin-views" },
             { text: "Build a communication plugin", link: "/guides/communication-plugins" },
             { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
