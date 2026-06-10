@@ -103,24 +103,6 @@ export function PluginView({ view }: { view: PluginViewType }) {
     };
   }, [src, pluginId]);
 
-  // Live theme updates — re-post the current tokens to the iframe whenever the console theme
-  // changes (a live edit, a save, or an agent switch). The page handles `protoagent:theme`
-  // the same way it handles the initial `protoagent:init.theme`.
-  useEffect(() => {
-    const repost = () => {
-      const win = frameRef.current?.contentWindow;
-      if (!win) return;
-      try {
-        const origin = new URL(apiUrl(src), window.location.href).origin;
-        win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);
-      } catch {
-        /* cross-origin / detached — best effort */
-      }
-    };
-    window.addEventListener("protoagent:theme", repost);
-    return () => window.removeEventListener("protoagent:theme", repost);
-  }, [src]);
-
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
     setLoaded(true);
     const win = e.currentTarget.contentWindow;
@@ -142,9 +124,13 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // Federation + the in-process `ui: react` path were retired; rich plugins serve their own UI.
   return (
     <>
-      {/* Sub-tab strip above the panel card — shared DS Tabs (single source of truth). */}
-      <Tabs responsive active={activeTab} onSelect={setActiveTab}
-            items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
+      {/* Sub-tab strip above the panel card — only when there's more than one tab. A
+          single-/no-tab view (e.g. Notes) has nothing to switch, so we skip the strip;
+          rendering it anyway showed an empty <select> on mobile (responsive Tabs). */}
+      {tabs.length > 1 && (
+        <Tabs responsive active={activeTab} onSelect={setActiveTab}
+              items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
+      )}
       <section className="panel stage-panel plugin-view">
       <div className="plugin-view-body">
         {failed ? (
