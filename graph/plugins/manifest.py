@@ -61,7 +61,9 @@ class PluginManifest:
     #   requires_pip: declared pip deps. NOT auto-installed (install ≠ code exec);
     #     the operator installs them explicitly. Missing → clear error on enable.
     #   repository/homepage: provenance, shown in the install review.
-    #   min_protoagent_version: compat guard (warn/refuse on an older host).
+    #   min_protoagent_version: compat guard — the loader refuses to load the
+    #     plugin when the host is older than declared (malformed strings only
+    #     warn and load).
     requires_pip: list[str] = field(default_factory=list)
     repository: str = ""
     homepage: str = ""

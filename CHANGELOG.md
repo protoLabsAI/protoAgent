@@ -35,6 +35,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FIELDS key with a non-default sentinel (a missing parse line used to mean
   the YAML held the value, the UI showed it saved, and the runtime silently
   read the default — audited: zero such drops today). (#865)
+- **A2A task records no longer accumulate forever on an always-on agent** — the
+  24h task-TTL sweep ran only inside `initialize_a2a_stores` at boot, so a
+  long-running process grew `a2a-tasks.db` unbounded between restarts. The
+  sweep now also runs from the existing hourly prune loop (alongside the
+  checkpoint + telemetry pruning), best-effort with a log line.
+- **Webhook DNS resolution no longer blocks the event loop** — the push-callback
+  SSRF guard (`is_safe_webhook_url`) calls `socket.getaddrinfo` synchronously,
+  and it ran *on* the loop at push-config set-time and before **every** push
+  POST (the send-time re-validation backstop) — one slow resolver stalled every
+  stream, health check and A2A peer for the OS timeout. Both async call sites
+  now dispatch the check via `asyncio.to_thread`; the guard itself stays sync
+  and its policy is unchanged.
+- **`min_protoagent_version` is actually enforced** — the plugin manifest field
+  was parsed and documented as a compat guard ("warn/refuse on an older host")
+  but never compared against anything. The loader now refuses to load an
+  enabled plugin that declares a newer minimum than the running host (clear
+  `log.error` naming both versions, surfaced in the plugin's status meta,
+  before any plugin code imports); a malformed version string on either side
+  only warns and loads, so a typo can't brick a plugin. Adds `packaging` to
+  `[project.dependencies]` (it was only a transitive dep; the loader now
+  imports it directly).
 - **Autostart launches the server again** — the macOS LaunchAgent installer still
   pointed at the single-file `server.py` that ADR 0023 promoted into the `server/`
   package: the install-time existence check always failed (the login-launch toggle

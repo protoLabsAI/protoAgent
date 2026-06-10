@@ -633,6 +633,19 @@ async def _checkpoint_prune_loop() -> None:
                     log.info("[telemetry-prune] removed %d turn(s) older than %dd", removed, keep_days)
             except Exception:
                 log.exception("[telemetry-prune] sweep failed")
+        # A2A task TTL sweep (24h) — used to run only at boot, so an always-on
+        # agent accumulated task rows forever between restarts. The store is
+        # async (aiosqlite engine on this same loop), so it's awaited directly
+        # rather than dispatched to a thread like the sync sqlite neighbors.
+        if STATE.a2a_task_engine is not None:
+            try:
+                from a2a_stores import sweep_expired_tasks
+
+                swept = await sweep_expired_tasks(STATE.a2a_task_engine)
+                if swept:
+                    log.info("[a2a-task-prune] removed %d expired task record(s) (24h TTL)", swept)
+            except Exception:
+                log.exception("[a2a-task-prune] sweep failed")
         # Tick at the checkpoint interval if set, else hourly (so telemetry pruning
         # still runs when checkpoint pruning is off).
         await asyncio.sleep(max(1, interval_h or 1) * 3600)

@@ -28,6 +28,9 @@ uvicorn>=0.30
 langfuse>=3.0
 prometheus-client>=0.20
 pyyaml>=6.0
+# imported directly by graph/plugins/loader.py (min_protoagent_version gate);
+# was previously only a transitive dep (a2a-sdk, langchain-core, langfuse).
+packaging>=23.2
 ruamel.yaml>=0.18  # round-trip YAML that preserves comments in config/langgraph-config.yaml when the drawer writes back edits
 websockets>=12.0
 
