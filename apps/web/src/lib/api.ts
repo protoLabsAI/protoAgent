@@ -140,6 +140,26 @@ export function agentHref(slug: string): string {
   return slug === "host" ? base : `${base}agent/${encodeURIComponent(slug)}/`;
 }
 
+/** Boot hook (ADR 0042 slug routing → #806): a window opening `/app/agent/<slug>/` ensures
+ * its agent is RUNNING — `POST /api/fleet/<name>/activate` resumes a cold agent from its
+ * checkpoint and touches it for keep-N-warm LRU. Every slug navigation is a full page load
+ * (FleetSwitcher navigates), so this one boot call covers switch, reload and new-window.
+ * Fire-and-forget: the shell's queries already retry through the resume window, and any
+ * failure (non-fleet backend, unknown slug) just leaves today's behavior. The slug is the
+ * agent's `id`; activate wants its `name` — map via the hub's fleet status. */
+export async function activateSlugAgent(): Promise<void> {
+  const slug = currentSlug();
+  if (slug === "host") return;
+  try {
+    const fleet = await api.fleet(); // hub control-plane path — never slug-scoped
+    const agent = fleet.agents.find((a) => a.id === slug || a.name === slug);
+    if (!agent || agent.host) return;
+    await api.activateAgent(agent.name);
+  } catch {
+    // best-effort — the proxy 502s + query retries surface a truly unreachable agent
+  }
+}
+
 function isHubPath(path: string) {
   // The fleet control plane is served by the supervisor itself — never scoped to an agent.
   return path.startsWith("/api/fleet") || path.startsWith("/api/archetypes");
@@ -667,7 +687,8 @@ export const api = {
     );
   },
   activateAgent(name: string) {
-    return request<{ ok: boolean; active: string; evicted: string[] }>(`/api/fleet/${encodeURIComponent(name)}/activate`, {
+    // #806: ensure-running + keep-N-warm touch (no server-side active pointer since slug routing).
+    return request<{ ok: boolean; evicted: string[] }>(`/api/fleet/${encodeURIComponent(name)}/activate`, {
       method: "POST",
     });
   },

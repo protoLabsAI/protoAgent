@@ -10,10 +10,12 @@ import "@protolabsai/design/css/tokens";
 import "./app/tailwind.css";
 import "@protolabsai/ui/styles.css";
 import "./app/theme.css";
+import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
+void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
