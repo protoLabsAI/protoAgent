@@ -1,5 +1,31 @@
 [
   {
+    "version": "v0.33.0",
+    "date": "2026-06-10",
+    "changes": [
+      "Architectural import contracts in CI",
+      "Hub↔remote version handshake — fleet version skew is visible now",
+      "Design-system 0.25 adoption + theme.css decomposition (#832).",
+      "Layered settings cascade + settings IA.",
+      "Plugin-view authoring hardening (#884).",
+      "Light mode works on the hand-rolled chrome (#842).",
+      "**Enabling a plugin's console view works immediately",
+      "Plugin views resolve on fleet members, not the hub (#879).",
+      "Host defaults renders as one cohesive panel (#878)",
+      "A single Ctrl-C shuts the server down cleanly (#882).",
+      "config_to_dict now emits the complete plugins section",
+      "A2A task records no longer accumulate forever on an always-on agent",
+      "Webhook DNS resolution no longer blocks the event loop",
+      "min_protoagent_version is actually enforced",
+      "Autostart launches the server again",
+      "Knowledge embedding no longer blocks the event loop",
+      "Chat no longer rewrites localStorage on every streamed token",
+      "Token-less non-loopback binds now refuse to start.",
+      "**Persistence hardening",
+      "Pinned the release-tools clone in the PR gate"
+    ]
+  },
+  {
     "version": "v0.32.0",
     "date": "2026-06-10",
     "changes": [

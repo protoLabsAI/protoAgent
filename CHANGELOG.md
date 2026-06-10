@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-06-10
+
 ### Added
 - **Architectural import contracts in CI** — `lint-imports` (import-linter,
   pinned) now gates three layering contracts declared in `pyproject.toml
