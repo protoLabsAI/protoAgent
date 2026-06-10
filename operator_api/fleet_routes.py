@@ -75,8 +75,8 @@ def register_fleet_routes(app) -> None:
 
         The slug lives in the console URL (``/app/agent/<slug>/``), so each window targets its
         own agent — two agents can be open in two windows at once, and a reload can't desync
-        (the URL is the source of truth). ``host`` = this instance. Supersedes the single-active
-        ``/active/*`` lens above.
+        (the URL is the source of truth). ``host`` = this instance; any other slug resolves to
+        its workspace port via the supervisor.
         """
         return await proxy.forward_to(slug, request, path)
 

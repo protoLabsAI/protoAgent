@@ -1,6 +1,6 @@
 # ADR 0037 — Design-system foundation: Tailwind + `@protolabsai/design` + shadcn/Radix
 
-**Status:** Proposed
+**Status:** Accepted (shipped)
 
 ## Context
 

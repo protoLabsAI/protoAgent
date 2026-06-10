@@ -2,7 +2,7 @@
 
 Each agent (workspace) saves its **own** theme, so the in-place switch repaints the
 console to the focused agent's look — the theme is just another per-``PROTOAGENT_CONFIG_DIR``
-setting, and the proxy already routes ``/active/api/theme`` to the active agent.
+setting, and the proxy routes ``/agents/<slug>/api/theme`` to that agent (ADR 0042 slug routing).
 
 Storage is **opaque**: the front-end's ThemePanel owns the token schema (@protolabsai/ui);
 the server just persists the blob in ``<config_dir>/theme.json`` and hands it back. So new

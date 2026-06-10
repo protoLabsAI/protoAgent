@@ -1,6 +1,6 @@
 # ADR 0035 — Console layout: symmetric dual-rail, mobile-first, persisted UI state
 
-**Status:** Proposed
+**Status:** Accepted (shipped)
 
 ## Context
 

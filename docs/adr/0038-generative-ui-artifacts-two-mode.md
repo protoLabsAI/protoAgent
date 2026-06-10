@@ -1,6 +1,6 @@
 # ADR 0038 — Generative-UI artifacts + a two-mode plugin UI (retire federation)
 
-**Status:** Proposed — supersedes the federation parts of [ADR 0034](./0034-plugin-ui-first-class-react.md).
+**Status:** Accepted — supersedes the federation parts of [ADR 0034](./0034-plugin-ui-first-class-react.md).
 
 ## Context
 
