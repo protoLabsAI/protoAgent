@@ -38,24 +38,27 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
 // TODO(ADR 0047 §7): gate to the host console (slug=host); for now it renders for any
 // focused agent, clearly labeled "box-shared", so the slice isn't blocked on gating.
 export function HostDefaultsPanel({ categories = ["Agent", "System"] }: { categories?: string[] }) {
+  // ONE panel — the host-scoped fields across all the given categories render
+  // together under a single header + Save bar + explainer (grouped by their
+  // section). Previously this mapped one full SettingsCategory PER category, which
+  // stacked duplicate panels each with its own scroll/Save/explainer.
   return (
     <section className="panel stage-panel settings-panel">
-      {categories.map((category) => (
-        <QueryErrorResetBoundary key={category}>
-          {({ reset }) => (
-            <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="host defaults" />}>
-              <Suspense fallback={<PanelSkeleton label="Loading host defaults…" />}>
-                <SettingsCategory
-                  category={category}
-                  title={`Host defaults · ${category}`}
-                  emptyHint={`No box-shared defaults under ${category}.`}
-                  hostLayer
-                />
-              </Suspense>
-            </ErrorBoundary>
-          )}
-        </QueryErrorResetBoundary>
-      ))}
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="host defaults" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading host defaults…" />}>
+              <SettingsCategory
+                category={categories[0]}
+                categories={categories}
+                title="Host defaults"
+                emptyHint="No box-shared defaults on this box yet."
+                hostLayer
+              />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
     </section>
   );
 }
@@ -72,6 +75,10 @@ const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google
 
 export function SettingsCategory({
   category,
+  // Host-defaults view aggregates several categories into ONE panel; when set,
+  // `categories` supersedes `category` — the fields across all of them render
+  // together under a single Save bar (ADR 0047).
+  categories,
   title = "Settings",
   emptyHint,
   footer,
@@ -82,6 +89,7 @@ export function SettingsCategory({
   hostLayer = false,
 }: {
   category: string;
+  categories?: string[];
   title?: string;
   emptyHint?: string;
   footer?: ReactNode;
@@ -90,13 +98,16 @@ export function SettingsCategory({
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(settingsSchemaQuery());
   const groups = useMemo(() => {
-    const byCategory = data.groups.filter((g) => (g.category || "Plugins") === category);
-    if (!hostLayer) return byCategory;
+    // One category, or (host-defaults view) several aggregated into one panel.
+    const inScope = (g: SettingsGroup) =>
+      categories ? categories.includes(g.category || "Plugins") : (g.category || "Plugins") === category;
+    const selected = data.groups.filter(inScope);
+    if (!hostLayer) return selected;
     // Host-defaults view: keep only the host-scoped fields, dropping now-empty groups.
-    return byCategory
+    return selected
       .map((g) => ({ ...g, fields: g.fields.filter((f) => f.scope === "host") }))
       .filter((g) => g.fields.length);
-  }, [data.groups, category, hostLayer]);
+  }, [data.groups, category, categories, hostLayer]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
   const dirtyKeys = Object.keys(dirty);
