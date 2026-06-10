@@ -155,3 +155,32 @@ def test_discover_merges_three_channels(monkeypatch):
     ])
     found = asyncio.run(discovery.discover(known={("192.168.5.41", 7871)}))
     assert sorted(f["name"] for f in found) == ["ava-agent", "lan", "loc"]
+
+
+def test_discover_collapses_colocated_mdns_with_local_scan(monkeypatch):
+    """A co-located agent surfaces via BOTH channels (loopback scan + its own mDNS advert
+    carrying the machine's LAN IP) — discover() must normalize the advert to loopback so
+    the (host, port) dedupe collapses the pair into one entry."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.5.31")
+
+    async def fake_local(port_range, skip):
+        return [{"name": "roxy", "url": "http://127.0.0.1:7874", "host": "127.0.0.1", "port": 7874}]
+
+    async def fake_tailnet(port_range, known):
+        return []
+
+    monkeypatch.setattr(discovery, "_scan_local", fake_local)
+    monkeypatch.setattr(discovery, "_scan_tailnet", fake_tailnet)
+    monkeypatch.setattr(discovery, "_browse_mdns", lambda timeout: [
+        {"name": "roxy", "url": "http://192.168.5.31:7874", "host": "192.168.5.31", "port": 7874},
+        {"name": "remote", "url": "http://192.168.5.40:7871", "host": "192.168.5.40", "port": 7871},
+    ])
+    found = asyncio.run(discovery.discover())
+    assert sorted((f["name"], f["host"]) for f in found) == [
+        ("remote", "192.168.5.40"),   # a genuinely-remote sibling keeps its LAN address
+        ("roxy", "127.0.0.1"),        # the co-located pair collapsed to the loopback entry
+    ]
+
+    # And a KNOWN fleet peer's own advert (LAN ip + its port) is excluded the same way.
+    found = asyncio.run(discovery.discover(known={("127.0.0.1", 7874)}))
+    assert [f["name"] for f in found] == ["remote"]
