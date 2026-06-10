@@ -292,11 +292,19 @@ const server = createServer(async (req, res) => {
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
     const body = await readBody(req);
     if (pathname === "/api/settings") {
+      // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"
+      // (box-shared host-config.yaml). The mock just echoes which layer it wrote.
+      const layer = body.layer === "host" ? "host" : "agent";
       return sendJson(res, {
         ok: true,
-        messages: ["config saved", "reloaded • model=protolabs/reasoning"],
+        messages: [`config saved (${layer})`, "reloaded • model=protolabs/reasoning"],
         restart_required: settingsRestartRequired(body.updates),
       });
+    }
+    if (pathname === "/api/settings/reset") {
+      // ADR 0047 reset-to-inherited: pop the given keys from the agent leaf.
+      const keys = Array.isArray(body.keys) ? body.keys : [];
+      return sendJson(res, { ok: true, messages: [`reset ${keys.length} setting(s) to inherited`] });
     }
     if (/^\/api\/plugins\/workflows\/[^/]+\/run$/.test(pathname)) {
       return sendJson(res, WORKFLOW_RUN_RESULT);

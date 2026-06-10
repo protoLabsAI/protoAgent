@@ -82,3 +82,88 @@ def test_save_settings_rejects_invalid(monkeypatch):
     )
     resp = _client().post("/api/settings", json={"updates": {"x": 1}}).json()
     assert resp["ok"] is False and "validation: bad key" in resp["messages"]
+
+
+def test_save_settings_threads_layer(monkeypatch):
+    """POST /api/settings passes the chosen cascade layer to _apply_settings_changes."""
+    import operator_api.config_routes as cr
+
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module(
+            "graph.settings_schema",
+            validate_flat=lambda u: (True, None),
+            nest_updates=lambda u: {"nested": u},
+            restart_keys=lambda u: [],
+        ),
+    )
+    captured = {}
+
+    def _apply(config=None, layer="agent"):
+        captured["config"], captured["layer"] = config, layer
+        return True, ["host config saved"]
+
+    monkeypatch.setattr(cr, "_apply_settings_changes", _apply)
+    resp = _client().post("/api/settings", json={"updates": {"model.name": "m"}, "layer": "host"}).json()
+    assert resp["ok"] is True
+    assert captured["layer"] == "host"
+    assert captured["config"] == {"nested": {"model.name": "m"}}
+
+
+def test_save_settings_defaults_to_agent_layer(monkeypatch):
+    """No layer in the body ⇒ the agent leaf (today's behavior)."""
+    import operator_api.config_routes as cr
+
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module(
+            "graph.settings_schema",
+            validate_flat=lambda u: (True, None),
+            nest_updates=lambda u: u,
+            restart_keys=lambda u: [],
+        ),
+    )
+    captured = {}
+
+    def _apply(config=None, layer="agent"):
+        captured["layer"] = layer
+        return True, ["config saved"]
+
+    monkeypatch.setattr(cr, "_apply_settings_changes", _apply)
+    _client().post("/api/settings", json={"updates": {"x": 1}})
+    assert captured["layer"] == "agent"
+
+
+def test_reset_settings_pops_known_keys(monkeypatch):
+    """POST /api/settings/reset delegates to _reset_settings_keys for known keys."""
+    import operator_api.config_routes as cr
+
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module("graph.settings_schema", is_known_key=lambda k: k == "model.name"),
+    )
+    captured = {}
+
+    def _reset(keys):
+        captured["keys"] = keys
+        return True, ["reset 1 key(s) to inherited", "reloaded"]
+
+    monkeypatch.setattr(cr, "_reset_settings_keys", _reset)
+    resp = _client().post("/api/settings/reset", json={"keys": ["model.name"]}).json()
+    assert resp["ok"] is True
+    assert captured["keys"] == ["model.name"]
+
+
+def test_reset_settings_rejects_unknown_key(monkeypatch):
+    """An unknown key is rejected before any disk touch."""
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.settings_schema",
+        _fake_module("graph.settings_schema", is_known_key=lambda k: False),
+    )
+    resp = _client().post("/api/settings/reset", json={"keys": ["bogus.key"]}).json()
+    assert resp["ok"] is False
+    assert any("unknown setting: bogus.key" in m for m in resp["messages"])

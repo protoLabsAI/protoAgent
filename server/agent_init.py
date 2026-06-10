@@ -1186,15 +1186,58 @@ def _sync_autostart_with_config(config: dict | None) -> str | None:
     return f"autostart: {msg}"
 
 
+def _filter_nested_to_host_keys(config: dict) -> tuple[dict, list[str]]:
+    """Keep only host-scoped (ADR 0047 ``scope=="host"``) leaves of a nested config
+    dict; return ``(host_only, dropped)`` where ``dropped`` is the dotted keys that
+    were not host-scoped (agent-only / secret) and so are refused on the Host layer.
+
+    Mirrors ``graph.config._filter_to_host_keys`` (the READ-side guard) so the host
+    file can't accumulate agent keys, and enforces D5: secret-typed keys are never
+    written to the non-secret host file."""
+    from graph.config import _get_dotted, _set_dotted
+    from graph.settings_schema import host_keys, is_secret_key
+
+    allowed = host_keys()
+    host_only: dict = {}
+    dropped: list[str] = []
+
+    def _walk(node: Any, prefix: str) -> None:
+        if not isinstance(node, dict):
+            return
+        for k, v in node.items():
+            dotted = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                _walk(v, dotted)
+                continue
+            if dotted in allowed and not is_secret_key(dotted):
+                found, val = _get_dotted(config, dotted)
+                if found:
+                    _set_dotted(host_only, dotted, val)
+            else:
+                dropped.append(dotted)
+
+    _walk(config, "")
+    return host_only, dropped
+
+
 def _apply_settings_changes(
     config: dict | None = None,
     soul: str | None = None,
+    layer: str = "agent",
 ) -> tuple[bool, list[str]]:
     """Persist config YAML + SOUL.md then reload the graph once.
 
     Passing ``None`` for either argument skips that write — a bare
     call with both None acts as a pure reload (useful for picking up
     external file edits).
+
+    ``layer`` selects the cascade file the config write lands in (ADR 0047 slice 3):
+
+    * ``"agent"`` (default) — TODAY's exact behavior: write the agent leaf
+      ``langgraph-config.yaml`` (secrets split out to the sibling ``secrets.yaml``).
+    * ``"host"`` — write the box-shared host file (``paths.host_config_path()``),
+      filtered to host-scoped FIELDS keys only. No secrets land on the host layer
+      (D5): a secret-typed key is refused. SOUL writes are agent-local regardless.
     """
     from graph.config_io import (
         apply_updates_to_yaml,
@@ -1213,17 +1256,37 @@ def _apply_settings_changes(
         ok, err = validate_config_dict(config)
         if not ok:
             return False, [f"validation: {err}"]
-        try:
-            main_config, secret_updates = split_secret_updates(config)
-            save_secrets(secret_updates)
-            doc = load_yaml_doc()
-            apply_updates_to_yaml(doc, main_config)
-            strip_secrets_from_doc(doc)
-            save_yaml_doc(doc)
-            messages.append("config saved")
-        except Exception as e:
-            log.exception("[config] YAML write failed")
-            return False, [f"config write: {e}"]
+        if layer == "host":
+            try:
+                from paths import host_config_path
+
+                host_only, dropped = _filter_nested_to_host_keys(config)
+                if dropped:
+                    messages.append(f"host layer: ignored non-host key(s) {', '.join(sorted(dropped))}")
+                hp = host_config_path()
+                doc = load_yaml_doc(hp)
+                apply_updates_to_yaml(doc, host_only)
+                strip_secrets_from_doc(doc)  # belt-and-suspenders: never a secret on host
+                save_yaml_doc(doc, hp)
+                messages.append("host config saved")
+            except Exception as e:
+                log.exception("[config] host YAML write failed")
+                return False, [f"host config write: {e}"]
+        else:
+            try:
+                import graph.config_io as _cio
+
+                main_config, secret_updates = split_secret_updates(config)
+                save_secrets(secret_updates)
+                leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+                doc = load_yaml_doc(leaf)
+                apply_updates_to_yaml(doc, main_config)
+                strip_secrets_from_doc(doc)
+                save_yaml_doc(doc, leaf)
+                messages.append("config saved")
+            except Exception as e:
+                log.exception("[config] YAML write failed")
+                return False, [f"config write: {e}"]
 
     if soul is not None:
         try:
@@ -1235,10 +1298,39 @@ def _apply_settings_changes(
 
     # Drawer toggles of runtime.autostart_on_boot ride this path,
     # not the wizard's finish_setup, so the LaunchAgent plist has
-    # to be installed/removed here too.
-    as_msg = _sync_autostart_with_config(config)
-    if as_msg:
-        messages.append(as_msg)
+    # to be installed/removed here too. runtime.* is agent-scoped, so this
+    # only fires on the agent layer (a host write never carries it).
+    if layer != "host":
+        as_msg = _sync_autostart_with_config(config)
+        if as_msg:
+            messages.append(as_msg)
+
+    ok, reload_msg = _reload_langgraph_agent()
+    messages.append(reload_msg)
+    return ok, messages
+
+
+def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
+    """Reset-to-inherited (ADR 0047 slice 3): pop ``keys`` from the AGENT leaf
+    YAML, then reload so each field falls back to the Host/App layer.
+
+    Always operates on the leaf (the layer the settings UI edits per-agent); the
+    Host file is left untouched, so resetting an agent override surfaces the host
+    default. A pure reload when ``keys`` is empty."""
+    import graph.config_io as _cio
+    from graph.config_io import load_yaml_doc, pop_keys_from_yaml, save_yaml_doc
+
+    messages: list[str] = []
+    if keys:
+        try:
+            leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+            doc = load_yaml_doc(leaf)
+            pop_keys_from_yaml(doc, keys)
+            save_yaml_doc(doc, leaf)
+            messages.append(f"reset {len(keys)} key(s) to inherited")
+        except Exception as e:
+            log.exception("[config] reset (pop keys) failed")
+            return False, [f"reset: {e}"]
 
     ok, reload_msg = _reload_langgraph_agent()
     messages.append(reload_msg)

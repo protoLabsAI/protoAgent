@@ -152,6 +152,14 @@ export type SettingsField = {
   is_set?: boolean; // secrets only
   minimum?: number;
   maximum?: number;
+  // Cascade layer this field's shared default lives at (ADR 0047): "agent" (the
+  // per-agent leaf) or "host" (the box-shared host-config.yaml). Where the
+  // Settings UI writes a "save to default" edit.
+  scope: "agent" | "host";
+  // Which cascade layer the live value came from: set in the agent leaf, inherited
+  // from the host file, or the App (dataclass) default. Drives the
+  // inherited-vs-overridden badge + the "reset to inherited" affordance.
+  source: "agent" | "host" | "default";
 };
 
 export type SettingsGroup = {

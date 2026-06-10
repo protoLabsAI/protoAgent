@@ -182,36 +182,43 @@ export const NOTES_WORKSPACE = {
 
 // Settings schema the Settings surface renders. Exercises every input type
 // plus a restart-flagged field.
+// Each field carries the ADR 0047 cascade tags: `scope` (where a "save to default"
+// edit is written — "agent" leaf or the box-shared "host" file) and `source` (where
+// the live value came from — "agent" set / "host" inherited / "default" App default).
 export const SETTINGS_SCHEMA = [
   {
     section: "Model",
     category: "Agent",
     fields: [
-      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/reasoning" },
-      { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2 },
-      { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true },
+      // model.name is host-scoped + inherited from the host layer (inheritance badge).
+      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], value: "protolabs/reasoning", default: "protolabs/reasoning", scope: "host", source: "host" },
+      // host-scoped but overridden in this agent (overridden-here badge + reset link).
+      { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2, scope: "host", source: "agent" },
+      { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true, scope: "agent", source: "agent" },
     ],
   },
   {
     section: "Routing",
     category: "Agent",
     fields: [
-      { key: "routing.aux_model", label: "Auxiliary (fast) model", type: "string", section: "Routing", restart: false, description: "Cheap alias for aux calls.", options: [], value: "protolabs/fast", default: "" },
-      { key: "routing.fallback_models", label: "Fallback models", type: "string_list", section: "Routing", restart: false, description: "", options: [], value: [], default: [] },
+      // App default (inherited-from-default badge).
+      { key: "routing.aux_model", label: "Auxiliary (fast) model", type: "string", section: "Routing", restart: false, description: "Cheap alias for aux calls.", options: [], value: "protolabs/fast", default: "", scope: "host", source: "default" },
+      // a plain per-agent setting — no badge.
+      { key: "routing.fallback_models", label: "Fallback models", type: "string_list", section: "Routing", restart: false, description: "", options: [], value: [], default: [], scope: "agent", source: "agent" },
     ],
   },
   {
     section: "Compaction",
     category: "System",
     fields: [
-      { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true },
+      { key: "compaction.enabled", label: "Enable compaction", type: "bool", section: "Compaction", restart: false, description: "", options: [], value: true, default: true, scope: "host", source: "host" },
     ],
   },
   {
     section: "Runtime",
     category: "System",
     fields: [
-      { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false },
+      { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false, scope: "agent", source: "agent" },
     ],
   },
 ];

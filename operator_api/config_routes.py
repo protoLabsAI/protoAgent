@@ -19,7 +19,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from runtime.state import STATE
-from server.agent_init import _apply_settings_changes, _build_settings_callbacks
+from server.agent_init import (
+    _apply_settings_changes,
+    _build_settings_callbacks,
+    _reset_settings_keys,
+)
 
 
 class ConfigReloadRequest(BaseModel):
@@ -37,6 +41,13 @@ class ModelsProbeRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     updates: dict[str, Any] = {}
+    # Cascade layer the write lands in (ADR 0047 slice 3): "agent" (the leaf, default)
+    # or "host" (the box-shared host-config.yaml, host-scoped non-secret keys only).
+    layer: str = "agent"
+
+
+class SettingsResetRequest(BaseModel):
+    keys: list[str] = []
 
 
 def register_config_routes(app) -> None:
@@ -166,9 +177,10 @@ def register_config_routes(app) -> None:
 
     @app.post("/api/settings")
     async def _api_save_settings(req: SettingsUpdateRequest):
-        """Validate a flat {key: value} payload, persist it to YAML (secrets
-        split out), and hot-reload the graph. Returns any keys that need a
-        full process restart to take effect."""
+        """Validate a flat {key: value} payload, persist it to the chosen cascade
+        layer (``layer``: "agent" leaf, default, or "host" box-shared file; secrets
+        split out / refused on host), and hot-reload the graph. Returns any keys that
+        need a full process restart to take effect."""
         from graph.settings_schema import nest_updates, restart_keys, validate_flat
 
         ok, err = validate_flat(req.updates)
@@ -176,6 +188,20 @@ def register_config_routes(app) -> None:
             return {"ok": False, "messages": [f"validation: {err}"], "restart_required": []}
         # Offload off the event loop (#497) — a model change recompiles the graph.
         ok, messages = await asyncio.to_thread(
-            _apply_settings_changes, config=nest_updates(req.updates)
+            _apply_settings_changes, config=nest_updates(req.updates), layer=req.layer
         )
         return {"ok": ok, "messages": messages, "restart_required": restart_keys(req.updates)}
+
+    @app.post("/api/settings/reset")
+    async def _api_reset_settings(req: SettingsResetRequest):
+        """Reset-to-inherited (ADR 0047 slice 3): pop the given dotted keys from the
+        agent leaf YAML + reload, so each falls back to the Host/App layer. Only
+        known settings keys are accepted (existence-gated against the registry —
+        a reset carries no value, so the per-type validate_flat checks don't apply)."""
+        from graph.settings_schema import is_known_key
+
+        for k in req.keys:
+            if not is_known_key(k):
+                return {"ok": False, "messages": [f"validation: unknown setting: {k}"]}
+        ok, messages = await asyncio.to_thread(_reset_settings_keys, req.keys)
+        return {"ok": ok, "messages": messages}

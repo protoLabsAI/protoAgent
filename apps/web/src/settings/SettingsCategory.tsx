@@ -1,6 +1,6 @@
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
@@ -31,6 +31,33 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
   );
 }
 
+// Host / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
+// categories, editable, saving to the host layer. Surfaced as its own Settings tab.
+// TODO(ADR 0047 §7): gate to the host console (slug=host); for now it renders for any
+// focused agent, clearly labeled "box-shared", so the slice isn't blocked on gating.
+export function HostDefaultsPanel({ categories = ["Agent", "System"] }: { categories?: string[] }) {
+  return (
+    <section className="panel stage-panel settings-panel">
+      {categories.map((category) => (
+        <QueryErrorResetBoundary key={category}>
+          {({ reset }) => (
+            <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="host defaults" />}>
+              <Suspense fallback={<PanelSkeleton label="Loading host defaults…" />}>
+                <SettingsCategory
+                  category={category}
+                  title={`Host defaults · ${category}`}
+                  emptyHint={`No box-shared defaults under ${category}.`}
+                  hostLayer
+                />
+              </Suspense>
+            </ErrorBoundary>
+          )}
+        </QueryErrorResetBoundary>
+      ))}
+    </section>
+  );
+}
+
 // Setup walkthroughs live in the template's docs (forks don't ship their own site).
 const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
 const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google#oauth-client";
@@ -46,18 +73,28 @@ export function SettingsCategory({
   title = "Settings",
   emptyHint,
   footer,
+  // ADR 0047 host-defaults view: when true this renders ONLY the host-scoped
+  // (box-shared) fields and a Save writes to the host layer instead of the agent
+  // leaf. The default (false) is the per-agent Settings — every field, with the
+  // inherited-vs-overridden badge + reset-to-inherited affordance.
+  hostLayer = false,
 }: {
   category: string;
   title?: string;
   emptyHint?: string;
   footer?: ReactNode;
+  hostLayer?: boolean;
 }) {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(settingsSchemaQuery());
-  const groups = useMemo(
-    () => data.groups.filter((g) => (g.category || "Plugins") === category),
-    [data.groups, category],
-  );
+  const groups = useMemo(() => {
+    const byCategory = data.groups.filter((g) => (g.category || "Plugins") === category);
+    if (!hostLayer) return byCategory;
+    // Host-defaults view: keep only the host-scoped fields, dropping now-empty groups.
+    return byCategory
+      .map((g) => ({ ...g, fields: g.fields.filter((f) => f.scope === "host") }))
+      .filter((g) => g.fields.length);
+  }, [data.groups, category, hostLayer]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
   const dirtyKeys = Object.keys(dirty);
@@ -81,7 +118,7 @@ export function SettingsCategory({
   }, [groups, dirty]);
 
   const save = useMutation({
-    mutationFn: () => api.saveSettings(dirty),
+    mutationFn: () => api.saveSettings(dirty, hostLayer ? "host" : "agent"),
     onMutate: () => setStatus("saving…"),
     onSuccess: (r) => {
       if (!r.ok) { setStatus(`save failed: ${r.messages.join(" · ")}`); return; }
@@ -91,6 +128,22 @@ export function SettingsCategory({
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
     onError: (e) => setStatus(`save failed: ${e instanceof Error ? e.message : String(e)}`),
+  });
+
+  // ADR 0047 reset-to-inherited — pop one (or more) overridden keys from the agent
+  // leaf so each falls back to the Host/App layer. Invalidate the schema on success
+  // so the badges + values re-resolve to the inherited source (consistent with save).
+  const reset = useMutation({
+    mutationFn: (keys: string[]) => api.resetSettings(keys),
+    onMutate: () => setStatus("resetting to inherited…"),
+    onSuccess: (r, keys) => {
+      if (!r.ok) { setStatus(`reset failed: ${r.messages.join(" · ")}`); return; }
+      setStatus(r.messages.join(" · "));
+      // Drop any pending edit on the reset keys — the inherited value is now authoritative.
+      setDirty((d) => { const next = { ...d }; for (const k of keys) delete next[k]; return next; });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+    onError: (e) => setStatus(`reset failed: ${e instanceof Error ? e.message : String(e)}`),
   });
 
   const asStr = (v: unknown) => (typeof v === "string" ? v : "");
@@ -149,9 +202,11 @@ export function SettingsCategory({
         kicker={
           dirtyKeys.length
             ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}`
-            : runtimeField
-              ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
-              : "applies on save"
+            : hostLayer
+              ? "saves to the box-shared host defaults"
+              : runtimeField
+                ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
+                : "applies on save"
         }
         actions={
           <>
@@ -172,6 +227,16 @@ export function SettingsCategory({
         }
       />
       <div className="stage-body">
+        {hostLayer ? (
+          <Alert status="info" className="settings-banner">
+            <strong>Host / box-shared defaults</strong> (ADR 0047) — edits here write to the
+            box's <code>host-config.yaml</code> and become the inherited default for every agent
+            on this box that hasn't set its own value. Per-agent overrides win.
+            {/* TODO(ADR 0047 §7): gate this view to the host console (slug=host). For now it
+                renders for any focused agent — clearly labeled as box-shared — so the slice
+                isn't blocked on host-console gating. */}
+          </Alert>
+        ) : null}
         {acpAgent ? (
           <Alert status="info" className="settings-banner">
             Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
@@ -197,6 +262,12 @@ export function SettingsCategory({
                 dirty={field.key in dirty}
                 value={field.key in dirty ? dirty[field.key] : field.value}
                 onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
+                // The host-defaults view edits the host layer directly — every field IS the
+                // shared default there, so the per-agent inheritance badge would be noise. The
+                // per-agent view shows the badge + reset affordance.
+                showInheritance={!hostLayer}
+                onReset={() => reset.mutate([field.key])}
+                resetting={reset.isPending}
               />
             ))}
             {hasDiscord && group.section === "Discord" ? (
@@ -255,7 +326,36 @@ export function SettingsCategory({
   );
 }
 
-function SettingRow({ field, value, dirty, onChange }: { field: SettingsField; value: unknown; dirty: boolean; onChange: (value: unknown) => void }) {
+// The inheritance state of a field, derived from ADR 0047 `source`+`scope`:
+//   source=="host"                    → inherited from Host
+//   source=="default"                 → inherited from default (App dataclass)
+//   source=="agent" && scope=="host"  → overridden here (offer reset-to-inherited)
+//   source=="agent" && scope=="agent" → a plain agent setting (no badge)
+function inheritance(field: SettingsField): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
+  if (field.source === "host") return { label: "inherited from Host", status: "neutral", overridden: false };
+  if (field.source === "default") return { label: "inherited from default", status: "neutral", overridden: false };
+  if (field.source === "agent" && field.scope === "host") return { label: "overridden here", status: "warning", overridden: true };
+  return null; // source=="agent" && scope=="agent" — just an agent setting.
+}
+
+function SettingRow({
+  field,
+  value,
+  dirty,
+  onChange,
+  showInheritance = true,
+  onReset,
+  resetting = false,
+}: {
+  field: SettingsField;
+  value: unknown;
+  dirty: boolean;
+  onChange: (value: unknown) => void;
+  showInheritance?: boolean;
+  onReset?: () => void;
+  resetting?: boolean;
+}) {
+  const inherit = showInheritance ? inheritance(field) : null;
   return (
     <div className={`setting-row${dirty ? " dirty" : ""}`} data-key={field.key}>
       <div className="setting-meta">
@@ -264,6 +364,17 @@ function SettingRow({ field, value, dirty, onChange }: { field: SettingsField; v
           {field.restart ? <span className="setting-restart">restart</span> : null}
         </label>
         {field.description ? <p className="setting-desc">{field.description}</p> : null}
+        {inherit ? (
+          <p className="setting-inheritance">
+            <Badge status={inherit.status}>{inherit.label}</Badge>
+            {inherit.overridden && onReset ? (
+              <Button variant="ghost" size="sm" type="button" onClick={onReset} disabled={resetting}>
+                {resetting ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />}
+                Reset to inherited
+              </Button>
+            ) : null}
+          </p>
+        ) : null}
       </div>
       <div className="setting-control">
         <SettingInput field={field} value={value} onChange={onChange} />

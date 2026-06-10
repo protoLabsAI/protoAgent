@@ -304,6 +304,42 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     return d
 
 
+def pop_keys_from_yaml(doc: Any, dotted_keys: list[str]) -> Any:
+    """Delete each dotted key (``"model.name"``, ``"prompt_cache.warm.enabled"``)
+    from the loaded YAML document, pruning any parent maps left empty by the
+    deletion.
+
+    Reset-to-inherited (ADR 0047 slice 3): removing a key from the leaf doc makes
+    the cascade fall back to the Host/App layer for that field. Preserves comments +
+    key order on the surviving sections (mutates the ruamel ``CommentedMap`` in
+    place). A key that isn't present is silently skipped — reset is idempotent.
+    """
+    for dotted in dotted_keys:
+        parts = dotted.split(".")
+        # Walk to the leaf's parent, remembering the chain so we can prune
+        # now-empty ancestors after the delete.
+        chain: list[tuple[Any, str]] = []
+        cur = doc
+        ok = True
+        for part in parts[:-1]:
+            if not isinstance(cur, dict) or part not in cur or not isinstance(cur.get(part), dict):
+                ok = False
+                break
+            chain.append((cur, part))
+            cur = cur[part]
+        if not ok or not isinstance(cur, dict) or parts[-1] not in cur:
+            continue
+        del cur[parts[-1]]
+        # Prune empty parents from the deepest outward.
+        for parent, key in reversed(chain):
+            child = parent.get(key)
+            if isinstance(child, dict) and not child:
+                del parent[key]
+            else:
+                break
+    return doc
+
+
 def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
     """Merge a nested updates dict into the loaded YAML document.
 

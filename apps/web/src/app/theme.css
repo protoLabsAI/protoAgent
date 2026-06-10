@@ -2881,6 +2881,13 @@ textarea {
   line-height: 1.45;
   color: var(--fg-muted);
 }
+/* ADR 0047 inheritance row — the source Badge + reset-to-inherited link aligned. */
+.setting-inheritance {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 0;
+}
 .setting-control { min-width: 0; }
 .setting-input {
   width: 100%;

@@ -647,10 +647,22 @@ export const api = {
     });
   },
 
-  saveSettings(updates: Record<string, unknown>) {
+  // Save a flat {key: value} payload to a cascade layer (ADR 0047): "agent" (the
+  // per-agent leaf, default) or "host" (the box-shared host-config.yaml). Secrets
+  // are refused on the host layer server-side.
+  saveSettings(updates: Record<string, unknown>, layer: "agent" | "host" = "agent") {
     return request<{ ok: boolean; messages: string[]; restart_required: string[] }>("/api/settings", {
       method: "POST",
-      body: { updates },
+      body: { updates, layer },
+    });
+  },
+
+  // Reset-to-inherited (ADR 0047): pop the given keys from the agent leaf so each
+  // falls back to the Host/App layer.
+  resetSettings(keys: string[]) {
+    return request<{ ok: boolean; messages: string[] }>("/api/settings/reset", {
+      method: "POST",
+      body: { keys },
     });
   },
 

@@ -170,6 +170,29 @@ FIELDS: list[Field] = [
 
 _BY_KEY = {f.key: f for f in FIELDS}
 _SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
+_HOST_KEYS = {f.key for f in FIELDS if getattr(f, "scope", "agent") == "host"}
+
+
+def host_keys() -> set[str]:
+    """Dotted keys whose home/default cascade layer is the Host file (ADR 0047
+    ``scope=="host"``). The write path filters host-layer saves to these so the
+    host file can't accumulate agent-only settings (D1/D4)."""
+    return set(_HOST_KEYS)
+
+
+def is_secret_key(key: str) -> bool:
+    """True for a secret-typed FIELD (ADR 0047 D5 — secrets are agent-leaf only,
+    never written to the non-secret Host file)."""
+    return key in _SECRET_KEYS
+
+
+def is_known_key(key: str) -> bool:
+    """True iff ``key`` is a known core or plugin-declared settings key. The
+    reset path uses this as an existence-only gate (a reset has no value, so the
+    per-type ``validate_flat`` checks don't apply)."""
+    if key in _BY_KEY:
+        return True
+    return any(full == key for _, full, _, _ in _plugin_field_specs())
 
 
 def _plugin_field_specs():
