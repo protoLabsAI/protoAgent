@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Fleet members render plugin views with no design system (version-coherence
+  Axis 3).** The DS plugin-kit (`/_ds/plugin-kit.{css,js}`) was served only by the
+  console tier (`mount_react_app`), so a `--ui none` fleet member served its plugins'
+  view *pages* but 404'd the kit they `<link>` — proxied plugin views rendered
+  unstyled. The kit now mounts in **every** tier via a dedicated `mount_ds_plugin_kit`,
+  independent of the console SPA.
+
+### Added
+- **Spin local fleet members down when the host exits (version-coherence Axis 1).**
+  Members are spawned detached (so they survive the launching CLI) — but that also
+  let a member outlive a hub rebuild+restart and keep running *old* code. The hub now
+  stops its local members on shutdown by default ("host down → fleet down"); sessions
+  resume from their `instance.id`-scoped checkpoints on the next switch, so it stops
+  processes, not work. Opt out with `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT=1` for
+  long-running detached agents. Hub-only (a member's scoped registry is empty),
+  bounded teardown (concurrent SIGTERM → one shared wait → SIGKILL stragglers). See
+  `docs/dev/version-coherence.md`.
+
 ## [0.34.0] - 2026-06-10
 
 ### Fixed

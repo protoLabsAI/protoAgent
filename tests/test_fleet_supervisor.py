@@ -232,3 +232,92 @@ def test_remotes_lock_serializes_concurrent_adds(tmp_path, monkeypatch):
         t.join()
     assert not errs
     assert {r["name"] for r in supervisor.list_remotes()} == {"r-one", "r-two"}
+
+
+# ── spin-down on host exit (version-coherence Axis 1) ─────────────────────────
+def _multi_fleet(tmp_path, monkeypatch):
+    """Fleet with INCREMENTING fake pids (distinct members) + a recording kill.
+    Returns (alive set, killed list of (pid, signal))."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    alive: set[int] = set()
+    seq = {"n": 6000}
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
+
+    class FakeProc:
+        def __init__(self, *a, **k):
+            seq["n"] += 1
+            self.pid = seq["n"]
+            alive.add(self.pid)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+
+    def fake_kill(pid, sig):
+        killed.append((int(pid), int(sig)))
+        alive.discard(int(pid))  # the fake dies on its first signal (SIGTERM)
+
+    monkeypatch.setattr(supervisor.os, "kill", fake_kill)
+    return alive, killed
+
+
+def test_shutdown_all_stops_every_member(tmp_path, monkeypatch):
+    alive, _ = _multi_fleet(tmp_path, monkeypatch)
+    for nm in ("a", "b", "c"):
+        manager.create(nm)
+        supervisor.start(nm)
+    assert len(alive) == 3
+
+    stopped = supervisor.shutdown_all(timeout=1.0)
+
+    assert len(stopped) == 3
+    assert not alive  # every member signalled dead
+    # registry reaped — nothing running but the always-present host entry
+    assert not any(s["running"] for s in supervisor.status() if not s.get("host"))
+
+
+def test_shutdown_all_opt_out_keeps_members(tmp_path, monkeypatch):
+    alive, killed = _multi_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT", "1")
+    manager.create("a")
+    supervisor.start("a")
+
+    assert supervisor.shutdown_all(timeout=1.0) == []  # opt-out → no-op
+    assert len(alive) == 1 and not killed              # member untouched
+    assert supervisor.is_running("a")
+
+
+def test_shutdown_all_no_members_is_noop(tmp_path, monkeypatch):
+    _multi_fleet(tmp_path, monkeypatch)  # mocks wired, nothing started
+    # Empty registry — also the member-scope case (a member's own fleet.json is empty).
+    assert supervisor.shutdown_all(timeout=1.0) == []
+
+
+def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    alive: set[int] = set()
+    seq = {"n": 7000}
+    sigs: list[int] = []
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
+
+    class FakeProc:
+        def __init__(self, *a, **k):
+            seq["n"] += 1
+            self.pid = seq["n"]
+            alive.add(self.pid)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+
+    def stubborn_kill(pid, sig):  # ignores SIGTERM; dies only on SIGKILL
+        sigs.append(int(sig))
+        if int(sig) == int(supervisor.signal.SIGKILL):
+            alive.discard(int(pid))
+
+    monkeypatch.setattr(supervisor.os, "kill", stubborn_kill)
+    manager.create("a")
+    supervisor.start("a")
+
+    assert supervisor.shutdown_all(timeout=0.2)  # returns the stopped member
+    assert not alive  # SIGKILL'd after the bounded wait
+    assert int(supervisor.signal.SIGTERM) in sigs and int(supervisor.signal.SIGKILL) in sigs

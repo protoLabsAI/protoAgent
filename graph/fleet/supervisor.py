@@ -397,6 +397,67 @@ def down(names: list[str] | None = None) -> list[dict]:
     return out
 
 
+def keep_members_on_exit() -> bool:
+    """Opt out of spin-down-on-host-exit (``PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT``).
+    Default False — the host owns its fleet, so "host down → fleet down" is the
+    expected lifecycle. Set it for genuinely long-running detached agents that must
+    survive a hub restart."""
+    return os.environ.get("PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT", "").strip().lower() in ("1", "true", "yes")
+
+
+def shutdown_all(*, timeout: float = 3.0) -> list[str]:
+    """Stop every running LOCAL member — called from the hub's shutdown hook so a
+    member can't outlive the host that spawned it.
+
+    Members are spawned detached (``start_new_session=True`` in ``start``) so they
+    survive the CLI/hub that launched them — durable by design, but it also means a
+    hub rebuild+restart strands a member running the OLD code (it's in its own
+    session, gets no signal, and is never re-execed — see
+    ``docs/dev/version-coherence.md`` Axis 1). "Host down → fleet down" is the
+    expected default; opt out via ``PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT=1``.
+    Sessions are ``instance.id``-scoped checkpoints, so a stopped member resumes on
+    its next ``activate`` — this stops PROCESSES, not work.
+
+    **Hub-only by construction:** a member runs ``PROTOAGENT_INSTANCE``-scoped (#813),
+    so inside a member ``_load_state`` reads its own (empty) ``fleet.json`` and this
+    no-ops. Only the hub's registry holds members.
+
+    SIGTERMs all members **at once** (not sequentially), then waits one shared
+    ``timeout`` before SIGKILLing stragglers — so teardown stays bounded regardless of
+    member count and fits the hub's graceful-shutdown window. Best-effort throughout.
+    """
+    if keep_members_on_exit():
+        return []
+    with _state_lock():
+        state = _load_state()
+        # PID-reuse guard (#10): only ours; reserve all stops under the lock.
+        live = [(k, int(r["pid"])) for k, r in state.items()
+                if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
+        if not live:
+            return []
+        for k, _ in live:
+            state.pop(k, None)
+        _save_state(state)
+    for _, pid in live:  # SIGTERM everyone first — concurrent, not 8s-each
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + timeout
+    pending = [pid for _, pid in live]
+    while pending and time.monotonic() < deadline:
+        time.sleep(0.1)
+        pending = [pid for pid in pending if _alive(pid)]
+    for pid in pending:  # SIGKILL stragglers past the shared deadline
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    names = [k for k, _ in live]
+    log.info("[fleet] host exiting — spun down %d member(s): %s", len(names), ", ".join(names))
+    return names
+
+
 # ── Keep-N-warm policy (ADR 0042 §G) ──────────────────────────────────────────
 # Bound how many agents stay hot (a laptop won't run a big fleet). On a switch the
 # target is resumed and the least-recently-active agents beyond the cap are stopped —
