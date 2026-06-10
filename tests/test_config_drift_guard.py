@@ -14,6 +14,11 @@ shows a field that never persists (missing dataclass attr), or a save round-trip
 through a serializer that drops the section on the floor. These tests turn any
 such drift into a CI failure.
 
+Test #5 (2026-06-10) guards the third direction: ``LangGraphConfig.from_dict``
+must CONSUME every FIELDS key — a missing parse line means the YAML holds the
+value, config_to_dict shows it "saved", but the runtime silently reads the
+default.
+
 NOTE on the import path: ``config_to_dict`` lives in ``graph.config_io`` (not
 ``graph.config``) — it is imported from there below.
 
@@ -257,3 +262,103 @@ def test_field_scope_assignment_matches_adr_0047():
     # Only "agent" / "host" are valid today (App layer = dataclass defaults, no field scope).
     bad = {f.scope for f in FIELDS} - {"agent", "host"}
     assert not bad, f"unexpected Field.scope value(s): {bad}"
+
+
+# --------------------------------------------------------------------------- #
+# 5) Every non-secret FIELDS key is CONSUMED by from_dict (third direction).
+# --------------------------------------------------------------------------- #
+
+# The third drift direction tests #1-#2 don't cover: a FIELDS key whose parse
+# line is missing from ``LangGraphConfig.from_dict``. That failure is the
+# nastiest of the three — the YAML holds the value, config_to_dict echoes it
+# back (so the Settings UI shows it "saved"), but the live config silently
+# reads the default. Audited 2026-06-10: EMPTY — every FIELDS key has its
+# parse line today. If a field legitimately can't round-trip (computed /
+# env-only), add its key here WITH a comment saying why; a bare addition to
+# silence a red test is exactly the drift this set exists to make explicit.
+FROM_DICT_UNCONSUMED_KEYS: set[str] = set()
+
+_FROM_DICT_REASON = (
+    "from_dict has no parse line for this FIELDS key — the YAML value is "
+    "silently ignored and the dataclass default wins. Add the kwarg line in "
+    "LangGraphConfig.from_dict."
+)
+
+
+def _sentinel_for(field) -> object:
+    """A guaranteed NON-default value of the right shape for ``field``.
+
+    Derived from the dataclass default's Python type (bool checked before int —
+    it's an int subclass), falling back to the Field's declared UI type when the
+    default is ``None``. Using the default as the base means the sentinel can
+    never accidentally equal it.
+    """
+    default = getattr(LangGraphConfig(), field.attr)
+    if isinstance(default, bool):
+        return not default
+    if isinstance(default, int):
+        return default + 1
+    if isinstance(default, float):
+        return default + 0.5
+    if isinstance(default, str):
+        return "__drift__"
+    if isinstance(default, list):
+        return ["__drift__"]
+    if isinstance(default, dict):
+        return {"__drift__": 1}
+    # default is None (e.g. nullable sampler knobs) — pick by declared UI type.
+    return 1 if field.type == "number" else "__drift__"
+
+
+def _nest(dotted: str, value: object) -> dict:
+    """Build the minimal nested config dict setting ``dotted`` to ``value``."""
+    d: dict = {}
+    cursor = d
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        cursor = cursor.setdefault(part, {})
+    cursor[parts[-1]] = value
+    return d
+
+
+def _from_dict_consumes(field) -> tuple[object, object]:
+    """Run from_dict over a sentinel-bearing dict; return (sentinel, parsed)."""
+    sentinel = _sentinel_for(field)
+    cfg = LangGraphConfig.from_dict(_nest(field.key, sentinel))
+    return sentinel, getattr(cfg, field.attr)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [_param(f, FROM_DICT_UNCONSUMED_KEYS, _FROM_DICT_REASON) for f in _NON_SECRET_FIELDS],
+)
+def test_from_dict_consumes_every_fields_key(field):
+    """A non-default sentinel placed at the dotted YAML key must land on the
+    mapped dataclass attr after ``from_dict``.
+
+    Secrets are excluded: their YAML value competes with the secrets-overlay
+    path and config_to_dict redacts them anyway, so the sentinel contract
+    doesn't hold (and #2 already excludes them for the same reason).
+    """
+    sentinel, parsed = _from_dict_consumes(field)
+    assert parsed == sentinel, (
+        f"FIELDS key {field.key!r}: from_dict left LangGraphConfig.{field.attr} "
+        f"at {parsed!r} instead of the sentinel {sentinel!r} — the parse line "
+        "is missing or reads a different key."
+    )
+
+
+def test_from_dict_unconsumed_set_is_exactly_as_expected():
+    """Belt-and-suspenders (same pattern as tests #1/#2): the live set of
+    FIELDS keys from_dict drops equals the documented exception set, so a new
+    field can't silently join it and a stale exception can't linger."""
+    live_unconsumed = set()
+    for f in _NON_SECRET_FIELDS:
+        sentinel, parsed = _from_dict_consumes(f)
+        if parsed != sentinel:
+            live_unconsumed.add(f.key)
+    assert live_unconsumed == FROM_DICT_UNCONSUMED_KEYS, (
+        f"from_dict consumption drift: {live_unconsumed} "
+        f"(expected {FROM_DICT_UNCONSUMED_KEYS}). Add the missing parse line in "
+        "LangGraphConfig.from_dict, or document the exception here with a reason."
+    )

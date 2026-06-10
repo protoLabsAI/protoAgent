@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`config_to_dict` now emits the complete plugins section** — the serialized
+  config dict (the `/api/config` payload and anything else treating it as the
+  full config) carried only `plugins.{enabled, dir}`, silently dropping
+  `plugins.disabled` and `plugins.sources.allow` (2026-06-10 prod-readiness
+  audit, N6). The YAML file itself was never at risk — saves merge in place and
+  never delete absent keys — but dict consumers lost the values and the
+  Settings UI could never surface them; this unblocks the plugin-hardening
+  work that writes `sources.*`. A new drift-guard test also pins the third
+  triplet direction: `LangGraphConfig.from_dict` must consume every settings
+  FIELDS key with a non-default sentinel (a missing parse line used to mean
+  the YAML held the value, the UI showed it saved, and the runtime silently
+  read the default — audited: zero such drops today). (#865)
 - **Autostart launches the server again** — the macOS LaunchAgent installer still
   pointed at the single-file `server.py` that ADR 0023 promoted into the `server/`
   package: the install-time existence check always failed (the login-launch toggle

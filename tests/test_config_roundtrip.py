@@ -227,7 +227,11 @@ CONFIG_TO_DICT_GOLDEN = {
     },
     "plugins": {
         "dir": "",
+        "disabled": [],
         "enabled": [],
+        "sources": {
+            "allow": [],
+        },
     },
     "prompt_cache": {
         "enabled": True,
@@ -307,9 +311,13 @@ EMITTED_ATTRS = {
     "mcp_servers",
     "mcp_timeout_seconds",
     "mcp_denylist",
-    # plugins.*
+    # plugins.* (disabled + sources.allow added by the 2026-06-10 N6 fix —
+    # config_to_dict used to emit only enabled/dir, so any complete-dict
+    # consumer lost them)
     "plugins_enabled",
+    "plugins_disabled",
     "plugins_dir",
+    "plugins_sources_allow",
     # identity.*
     "identity_name",
     "identity_operator",
@@ -743,3 +751,28 @@ def test_plugins_sources_empty_section_is_empty_list(tmp_path):
     path = _write_yaml(tmp_path, "plugins:\n  sources:\n")
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.plugins_sources_allow == []
+
+
+def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
+    """N6 (2026-06-10 prod-readiness audit): config_to_dict emitted only
+    plugins.{enabled, dir}, dropping `disabled` + `sources.allow`. The YAML file
+    round-trip was never lossy (apply_updates_to_yaml merges in place and never
+    deletes absent keys) — the DICT was: any consumer treating it as the complete
+    config lost them, and the Settings UI could never display/edit them. This
+    pins the full plugins.* section round-tripping through from_dict ->
+    config_to_dict with NON-default values."""
+    cfg = LangGraphConfig.from_dict({
+        "plugins": {
+            "enabled": ["alpha"],
+            "disabled": ["beta"],
+            "dir": "/custom/plugins",
+            "sources": {"allow": ["github.com/protolabsai/*"]},
+        },
+    })
+    d = config_to_dict(cfg)
+    assert d["plugins"] == {
+        "enabled": ["alpha"],
+        "disabled": ["beta"],
+        "dir": "/custom/plugins",
+        "sources": {"allow": ["github.com/protolabsai/*"]},
+    }

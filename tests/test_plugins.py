@@ -154,9 +154,21 @@ def test_requires_env_gating(tmp_path, monkeypatch) -> None:
 def test_config_round_trip() -> None:
     from graph.config_io import config_to_dict
 
-    cfg = LangGraphConfig(plugins_enabled=["a", "b"], plugins_dir="/x")
+    cfg = LangGraphConfig(
+        plugins_enabled=["a", "b"],
+        plugins_disabled=["c"],
+        plugins_dir="/x",
+        plugins_sources_allow=["github.com/protolabsai/*"],
+    )
     d = config_to_dict(cfg)
-    assert d["plugins"] == {"enabled": ["a", "b"], "dir": "/x"}
+    # The dict must carry EVERY plugins.* key from_dict consumes (N6,
+    # 2026-06-10 audit) — it used to emit only enabled/dir.
+    assert d["plugins"] == {
+        "enabled": ["a", "b"],
+        "disabled": ["c"],
+        "dir": "/x",
+        "sources": {"allow": ["github.com/protolabsai/*"]},
+    }
 
 
 def test_from_yaml_parses_plugins(tmp_path) -> None:

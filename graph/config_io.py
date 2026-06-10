@@ -277,9 +277,17 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             "db_path": config.skills_db_path,
             "dir": config.skills_dir,
         },
+        # Every plugins.* key from_dict consumes must be emitted here, or any
+        # consumer treating this dict as the COMPLETE config silently loses it
+        # (the YAML file itself was never at risk — apply_updates_to_yaml merges
+        # in place). `disabled` + `sources.allow` were omitted until the
+        # 2026-06-10 prod-readiness audit (N6); plugin-hardening P1 writes
+        # `sources.*`, so the dict has to carry them.
         "plugins": {
             "enabled": list(config.plugins_enabled),
+            "disabled": list(config.plugins_disabled),
             "dir": config.plugins_dir,
+            "sources": {"allow": list(config.plugins_sources_allow)},
         },
         "subagents": {
             "researcher": {
