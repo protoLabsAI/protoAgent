@@ -5,24 +5,51 @@
 # create-protoagent-sandbox.sh (the agent is NOT a plain compose service; the
 # gateway spins its container with the Landlock/seccomp/egress policy applied).
 #
-# Gateway config below is verbatim from OpenShell's "Running the Gateway as a
-# Container" docs (TLS disabled = local/dev; enable mTLS for anything shared).
-# Verify image tag + env names against your installed OpenShell release.
+# Validated against OpenShell v0.0.59 (gateway image + CLI). Required env:
+#
+#   OPENSHELL_STATE_DIR  absolute host dir for gateway state. Mounted at the
+#                        SAME path inside the container — the gateway extracts
+#                        the sandbox supervisor binary here and bind-mounts it
+#                        into sandboxes via the host docker daemon, so the path
+#                        must be valid on both sides. mkdir it before first up.
+#   DOCKER_GID           gid of /var/run/docker.sock, so the gateway (uid 1000,
+#                        distroless) can drive the docker API:
+#                          DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+#
+# One-time: generate the sandbox-JWT keypair the docker driver requires
+# (see README.md § Gateway setup) into ./jwt/ before first up.
+#
+# Port notes: the gateway ADVERTISES its bind port to sandbox supervisors
+# (http://host.openshell.internal:<port>), so the published host port must
+# equal the container bind port — keep the two OPENSHELL_GATEWAY_PORT uses in
+# sync (the command below overrides the image CMD, which hardcodes 8080).
+# DOCKER_BRIDGE_IP is your docker bridge gateway IP (`ip addr show docker0`,
+# commonly 172.17.0.1; custom `bip` daemons differ) so sandboxes can reach the
+# gateway without exposing it beyond loopback + the bridge. Hosts with a
+# default-DROP INPUT policy (ufw) also need an accept rule — see README.md.
 
 services:
   openshell-gateway:
     image: ghcr.io/nvidia/openshell/gateway:latest
     container_name: openshell-gateway
     restart: unless-stopped
+    command: ["--bind-address", "0.0.0.0", "--port", "${OPENSHELL_GATEWAY_PORT:-8080}"]
     ports:
-      - "127.0.0.1:8080:8080"      # localhost only
+      - "127.0.0.1:${OPENSHELL_GATEWAY_PORT:-8080}:${OPENSHELL_GATEWAY_PORT:-8080}"
+      - "${DOCKER_BRIDGE_IP:-172.17.0.1}:${OPENSHELL_GATEWAY_PORT:-8080}:${OPENSHELL_GATEWAY_PORT:-8080}"
+    group_add:
+      - "${DOCKER_GID:?run with DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)}"
     volumes:
-      - openshell-state:/var/openshell
-      - /var/run/docker.sock:/var/run/docker.sock   # docker driver provisions sandboxes
+      - "${OPENSHELL_STATE_DIR:?set OPENSHELL_STATE_DIR to an absolute host dir (identical-path mount)}:${OPENSHELL_STATE_DIR}"
+      - ./jwt:/etc/openshell/jwt:ro                  # sandbox-JWT keypair (README § Gateway setup)
+      - ./gateway.toml:/etc/openshell/gateway.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock    # docker driver provisions sandboxes
     environment:
-      OPENSHELL_DRIVERS: docker
-      OPENSHELL_DB_URL: sqlite:/var/openshell/openshell.db
-      OPENSHELL_DISABLE_TLS: "true"   # DEV ONLY — set OPENSHELL_ENABLE_MTLS_AUTH=true + certs for shared hosts
-
-volumes:
-  openshell-state:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      # sqlx refuses to CREATE a missing sqlite file without mode=rwc.
+      OPENSHELL_DB_URL: "sqlite://${OPENSHELL_STATE_DIR}/openshell.db?mode=rwc"
+      OPENSHELL_DISABLE_TLS: "true"   # DEV ONLY — enable mTLS for shared hosts
+      # The image is distroless with no HOME; point the XDG fallbacks at the
+      # state dir or the supervisor cache lands at unwritable /.local/share.
+      HOME: "${OPENSHELL_STATE_DIR}"
+      XDG_DATA_HOME: "${OPENSHELL_STATE_DIR}/data"

@@ -62,25 +62,29 @@ model gateway become the network allowlist:
 python scripts/gen_openshell_policy.py --config config/langgraph-config.yaml --out openshell-policy.yaml
 ```
 
-The output maps directly:
+The output maps directly (OpenShell **v1 policy schema**, validated against
+v0.0.59):
 
-- `filesystem.projects` → `filesystem.read_only` / `read_write` (a `write:false`
-  project becomes a **kernel-enforced** read-only mount — so a monitor like Roxy
-  *cannot* write even if something tried);
-- `egress.allowed_hosts` + `model.api_base` → `network.allow` (everything else
-  denied);
-- `process.seccomp: default` → real syscall filtering for `execute_code`;
-- `inference.route_to` → the gateway.
+- `filesystem.projects` → `filesystem_policy.read_only` / `read_write` (a
+  `write:false` project becomes a **kernel-enforced** read-only path — so a
+  monitor like Roxy *cannot* write even if something tried), plus an OS
+  baseline under `landlock.compatibility: best_effort`;
+- `egress.allowed_hosts` + `model.api_base` → `network_policies` endpoints,
+  scoped to the agent's binaries (everything else denied by the per-sandbox
+  proxy);
+- `process.run_as_user: sandbox` → the unprivileged image user (root is
+  rejected by OpenShell).
 
-> The generated policy targets OpenShell's **documented** four-domain model —
-> verify field names against your installed OpenShell release before applying.
+> OpenShell is pre-1.0 — re-verify against your installed release when
+> upgrading (`openshell policy prove` can check properties of the output).
 > It's a generated starting point, derived from real config, not a guess.
 
 ### Run it
 
 ```bash
-# install OpenShell (see its docs), then wrap the agent's container/command:
-openshell sandbox create --policy openshell-policy.yaml -- python -m server
+# install OpenShell (see its docs), then wrap the agent's image/command:
+openshell sandbox create --policy openshell-policy.yaml --from protoagent:local \
+  --env PYTHONPATH=/opt/protoagent -- python -m server
 ```
 
 Credentials are injected as env at runtime (never on disk); egress is
@@ -96,9 +100,10 @@ deny-by-default through the proxy; the filesystem is locked to the policy paths.
   `k8s/protoagent-sandbox.yaml` (Agent-Sandbox CRD + policy ConfigMap) — after
   installing the Agent Sandbox CRDs.
 
-See [`deploy/openshell/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/deploy/openshell/README.md). The gateway/Helm
-commands are verbatim from OpenShell's docs; the sandbox/CRD wiring is a
-starting template (OpenShell is pre-1.0 — verify fields against your release).
+See [`deploy/openshell/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/deploy/openshell/README.md). The Docker path is
+**validated end-to-end against OpenShell v0.0.59** (including a gotcha table
+from the validation run); the k8s CRD wiring is still a starting template
+(OpenShell is pre-1.0 — verify fields against your release).
 
 ## Recommended posture
 

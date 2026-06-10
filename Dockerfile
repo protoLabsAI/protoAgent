@@ -1,8 +1,10 @@
 FROM python:3.12-slim
 
-# System deps
+# System deps. iproute2 is required when running under NVIDIA OpenShell —
+# the sandbox supervisor shells out to `ip` to build the network namespace
+# that enforces deny-by-default egress (sandbox creation fails without it).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates build-essential gettext-base gnupg \
+    git curl ca-certificates build-essential gettext-base gnupg iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI — optional for forks that call `gh` from tools. Kept in the

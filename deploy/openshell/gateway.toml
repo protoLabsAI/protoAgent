@@ -1,0 +1,26 @@
+# OpenShell gateway config for the local docker-driver deployment (ADR 0008).
+# Mounted by compose.yml; validated against OpenShell v0.0.59.
+# Precedence: CLI flags > OPENSHELL_* env > this file.
+
+[openshell]
+version = 1
+
+[openshell.gateway]
+compute_drivers = ["docker"]
+
+# Docker sandboxes REQUIRE gateway-minted sandbox JWTs (the supervisor inside
+# each sandbox authenticates back to the gateway with one). Generate the
+# keypair into deploy/openshell/jwt/ — see README.md § Gateway setup.
+# ttl omitted = non-expiring sandbox JWTs: acceptable for local single-player
+# gateways only; set a positive ttl_secs on anything shared.
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/etc/openshell/jwt/signing.pem"
+public_key_path  = "/etc/openshell/jwt/public.pem"
+kid_path         = "/etc/openshell/jwt/kid"
+gateway_id       = "local"
+
+# Local single-player escape hatch: CLI/API calls skip OIDC/mTLS while sandbox
+# supervisors still authenticate with JWTs. NEVER set true on a shared host —
+# wire up [openshell.gateway.oidc] or mtls_auth instead.
+[openshell.gateway.auth]
+allow_unauthenticated_users = true

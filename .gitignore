@@ -95,3 +95,7 @@ config/*/.setup-complete
 
 # Playwright run artifacts
 test-results/
+
+# OpenShell local deployment artifacts (deploy/openshell/)
+deploy/openshell/jwt/
+deploy/openshell/openshell-policy.yaml
