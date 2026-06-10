@@ -28,6 +28,17 @@ def mount_react_app(app, dist_dir: str | Path, *, app_path: str = "/app") -> boo
             name="operator_assets",
         )
 
+    # The design-system plugin-kit, served same-origin at /_ds/plugin-kit.css (root,
+    # alongside /plugins/<id>/…). Plugin iframe views `<link>` this one path instead
+    # of pinning a CDN copy, so every view matches the console's installed DS version.
+    # Emitted to dist/_ds/ by the web build (apps/web/scripts/copy-plugin-kit.mjs).
+    ds_kit = dist / "_ds" / "plugin-kit.css"
+    if ds_kit.is_file():
+
+        @app.get("/_ds/plugin-kit.css", include_in_schema=False)
+        async def _ds_plugin_kit() -> FileResponse:
+            return FileResponse(str(ds_kit), media_type="text/css")
+
     @app.get(app_path, include_in_schema=False)
     async def _operator_index() -> FileResponse:
         return FileResponse(str(index_path))
