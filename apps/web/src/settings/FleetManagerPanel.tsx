@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Plus, Square, Trash2 } from "lucide-react";
+import { Link2, Play, Plus, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@protolabsai/ui/primitives";
@@ -37,6 +37,29 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     setBusy(name);
     run.mutate(fn);
   };
+
+  // Agent-to-agent flows (ADR 0042 + 0025): add another agent as a `delegate_to` target of the
+  // FOCUSED agent (this window's slug), pointing at its A2A endpoint — then this agent can
+  // delegate work to it. The delegates query/POST is slug-scoped, so it lands on the focused agent.
+  const delegatesQ = useQuery({ queryKey: ["delegates"], queryFn: () => api.delegates(), retry: false });
+  const delegateNames = new Set((delegatesQ.data?.delegates ?? []).map((d) => d.name));
+  const addDelegate = useMutation({
+    // Fleet agents ship with the `delegates` plugin enabled (ADR 0042), so this is a straight add
+    // — no enable step, no restart. The host carries no plugins by default, so adding delegates
+    // FROM the host's window needs delegates enabled there first; surface that clearly on 404.
+    mutationFn: (a: FleetAgent) => api.createDelegate({ name: a.name, type: "a2a", url: a.a2a }),
+    onMutate: () => setError(null),
+    onError: (e: Error) =>
+      setError(
+        /404|not found/i.test(e.message)
+          ? "This agent can't hold delegates yet — enable the delegates plugin on it (new fleet agents get it automatically; the host needs it enabled + a restart)."
+          : e.message,
+      ),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["delegates"] });
+      void delegatesQ.refetch();
+    },
+  });
 
   return (
     <section className="panel stage-panel">
@@ -82,26 +105,41 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       {a.bundle ? ` · ${a.bundle}` : ""}
                     </span>
                   </div>
-                  {/* The host serves this console — it can't stop or remove itself. */}
-                  {a.host ? null : (
-                    <div className="fleet-row-actions">
-                      {a.running ? (
-                        <Button icon variant="ghost" title="Stop" disabled={busy === a.name}
-                          onClick={() => act(a.name, () => api.stopAgent(a.name))}>
-                          <Square size={14} />
-                        </Button>
+                  <div className="fleet-row-actions">
+                    {/* Add as a delegate of the focused agent → enables delegate_to flows. Any
+                        agent but the one you're on (it can't delegate to itself). */}
+                    {!isActive ? (
+                      delegateNames.has(a.name) ? (
+                        <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
                       ) : (
-                        <Button icon variant="ghost" title="Start" disabled={busy === a.name}
-                          onClick={() => act(a.name, () => api.startAgent(a.name))}>
-                          <Play size={14} />
+                        <Button icon variant="ghost" title="Add as a delegate of this agent (delegate_to)"
+                          disabled={addDelegate.isPending || !a.a2a}
+                          onClick={() => addDelegate.mutate(a)}>
+                          <Link2 size={14} />
                         </Button>
-                      )}
-                      <Button icon variant="ghost" title="Remove" disabled={busy === a.name}
-                        onClick={() => { setPurge(false); setConfirmRemove(a); }}>
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
-                  )}
+                      )
+                    ) : null}
+                    {/* The host serves this console — it can't stop or remove itself. */}
+                    {a.host ? null : (
+                      <>
+                        {a.running ? (
+                          <Button icon variant="ghost" title="Stop" disabled={busy === a.name}
+                            onClick={() => act(a.name, () => api.stopAgent(a.name))}>
+                            <Square size={14} />
+                          </Button>
+                        ) : (
+                          <Button icon variant="ghost" title="Start" disabled={busy === a.name}
+                            onClick={() => act(a.name, () => api.startAgent(a.name))}>
+                            <Play size={14} />
+                          </Button>
+                        )}
+                        <Button icon variant="ghost" title="Remove" disabled={busy === a.name}
+                          onClick={() => { setPurge(false); setConfirmRemove(a); }}>
+                          <Trash2 size={14} />
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </li>
               );
             })}
