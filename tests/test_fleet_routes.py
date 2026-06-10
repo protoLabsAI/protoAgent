@@ -58,20 +58,23 @@ def test_create_bad_name_is_400(client):
 
 def test_activate_unknown_400_and_proxy_409(client):
     assert client.post("/api/fleet/ghost/activate").status_code == 400  # no such workspace
-    assert client.get("/active/whatever").status_code == 409            # nothing active
+    assert client.get("/agents/ghost/whatever").status_code == 409      # slug not running
 
 
 def test_activate_autostarts_a_stopped_agent(client):
     client.post("/api/fleet", json={"name": "delta", "start": False})  # created, not running
-    r = client.post("/api/fleet/delta/activate")                       # switch → resume + activate
-    assert r.status_code == 200 and r.json()["active"] == "delta"
+    # activate = ensure-running + keep-warm (no server 'active' pointer — slug routing).
+    r = client.post("/api/fleet/delta/activate")
+    assert r.status_code == 200 and r.json()["ok"]
+    assert next(x for x in client.get("/api/fleet").json()["agents"] if x["name"] == "delta")["running"]
 
 
-def test_activate_running_sets_active(client):
+def test_activate_ensures_running_and_keeps_warm(client):
     client.post("/api/fleet", json={"name": "gamma", "port": 7891})  # create + (mocked) start
-    assert client.post("/api/fleet/gamma/activate").json()["active"] == "gamma"
-    assert client.get("/api/fleet/active").json()["active"] == "gamma"
-    assert client.get("/api/fleet").json()["active"] == "gamma"
+    r = client.post("/api/fleet/gamma/activate").json()
+    assert r["ok"] and "evicted" in r
+    # no server-side active pointer anymore — the focused agent is the URL slug
+    assert "active" not in client.get("/api/fleet").json()
 
 
 def test_stop_entire_fleet(client):
