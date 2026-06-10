@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   Loader2,
   MessageSquare,
+  PanelLeft,
   PanelRight,
   Plus,
   Puzzle,
@@ -235,6 +236,8 @@ export function App() {
   const setRightPanel = useUI((s) => s.setRightPanel);
   const rightCollapsed = useUI((s) => s.rightCollapsed);
   const setRightCollapsed = useUI((s) => s.setRightCollapsed);
+  const leftCollapsed = useUI((s) => s.leftCollapsed);
+  const setLeftCollapsed = useUI((s) => s.setLeftCollapsed);
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
   const railOrder = useUI((s) => s.railOrder);
@@ -700,6 +703,8 @@ export function App() {
         onRightWidthChange={setRightWidth}
         rightCollapsed={rightCollapsed}
         onCollapse={setRightCollapsed}
+        leftCollapsed={leftCollapsed}
+        onLeftCollapse={setLeftCollapsed}
         mobileItems={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
           ...s,
           dot: pluginDots[s.id] || undefined,
@@ -754,16 +759,28 @@ export function App() {
               </>
             }
             end={
-              <button
-                type="button"
-                className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
-                onClick={() => setRightCollapsed(!rightCollapsed)}
-                title={rightCollapsed ? "Show side panel" : "Hide side panel"}
-                aria-label="Toggle side panel"
-                data-testid="toggle-right"
-              >
-                <PanelRight size={14} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
+                  onClick={() => setLeftCollapsed(!leftCollapsed)}
+                  title={leftCollapsed ? "Show left panel" : "Hide left panel"}
+                  aria-label="Toggle left panel"
+                  data-testid="toggle-left"
+                >
+                  <PanelLeft size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
+                  onClick={() => setRightCollapsed(!rightCollapsed)}
+                  title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+                  aria-label="Toggle side panel"
+                  data-testid="toggle-right"
+                >
+                  <PanelRight size={14} />
+                </button>
+              </>
             }
           />
         }

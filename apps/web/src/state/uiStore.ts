@@ -59,6 +59,7 @@ type UIState = {
   settingsTab: SettingsTab;
   activityTab: ActivityTab;
   rightCollapsed: boolean;
+  leftCollapsed: boolean;
   rightWidth: number;
   // Ordered surface lists per rail (ADR 0035 D2 + 0036) — a surface is on exactly one side, at a
   // position. Core surfaces seeded below; plugin views append by their manifest `placement`. Chat
@@ -83,6 +84,7 @@ type UIState = {
   setSettingsTab: (t: SettingsTab) => void;
   setActivityTab: (t: ActivityTab) => void;
   setRightCollapsed: (b: boolean) => void;
+  setLeftCollapsed: (b: boolean) => void;
   setRightWidth: (w: number) => void;
   // Notification dots (ADR 0039) — a plugin surface key (`plugin:<id>:<view>`) with unseen
   // bus activity shows a rail dot until opened. Persisted so the dot survives a refresh.
@@ -101,6 +103,7 @@ export const useUI = create<UIState>()(
       settingsTab: "overview" as SettingsTab,
       activityTab: "thread",
       rightCollapsed: false,
+      leftCollapsed: false,
       rightWidth: 360,
       railOrder: {
         left: ["chat", "activity", "studio", "knowledge", "agent", "plugins", "settings"],
@@ -154,6 +157,7 @@ export const useUI = create<UIState>()(
       setSettingsTab: (settingsTab) => set({ settingsTab }),
       setActivityTab: (activityTab) => set({ activityTab }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
+      setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
       setRightWidth: (w) => set({ rightWidth: clampWidth(w) }),
       pluginDots: {},
       setPluginDot: (key, on) =>
