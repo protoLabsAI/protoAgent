@@ -1,3 +1,4 @@
+import "./chat.css";
 import { EditableText } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {

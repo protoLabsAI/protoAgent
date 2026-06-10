@@ -1,3 +1,4 @@
+import "./hitl.css";
 import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useState } from "react";

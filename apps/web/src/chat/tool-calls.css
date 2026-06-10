@@ -1,0 +1,345 @@
+/* tool-calls.css — the agent's tool-call cards + per-tool renderers.
+   Carved out of app/theme.css (#832, Axis-A step 2). Imported by ToolCalls.tsx;
+   classes are also used by tool-renderers.tsx (rendered only by ToolCalls).
+   Move verbatim — no restyle. */
+
+/* Tool-call cards — the agent's tool activity streamed into an assistant
+   message (name, running→done/error state, expandable input/result). */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 0.6em;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+.tool-card {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+/* Subagent grouping: a `task` card with its children nested beneath it. */
+.tool-card-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tool-children {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tool-card-running {
+  border-color: var(--warning);
+}
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 9px;
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-card-head:disabled {
+  cursor: default;
+}
+.tool-card-caret {
+  flex: none;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+.tool-card-caret.open {
+  transform: rotate(90deg);
+}
+.tool-card-caret-spacer {
+  width: 13px;
+  flex: none;
+}
+.tool-card-icon {
+  flex: none;
+  color: var(--brand-violet-light);
+}
+.tool-card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+.tool-card-dur {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tool-card-status {
+  flex: none;
+}
+.tool-card-status.done {
+  color: var(--success);
+}
+.tool-card-status.error {
+  color: var(--error);
+}
+.tool-card-status.running {
+  color: var(--warning);
+}
+.tool-card-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tool-card-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.tool-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tool-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.tool-copy:hover {
+  opacity: 1;
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.tool-card-body pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* Rendered tool values — structured components instead of a raw JSON blob.
+   The shared surface for a scalar/text value is a padded, monospace-ish box. */
+.tool-card-section .tool-text,
+.tool-fetch-body {
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  min-width: 0;
+}
+
+/* Key/value field rows for object inputs/outputs. */
+.tool-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tool-kv-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 22%) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.tool-kv-key {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--fg-muted);
+  word-break: break-word;
+}
+.tool-kv-val {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+.tool-scalar {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--brand-violet-light);
+}
+.tool-null {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.tool-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--brand-violet-light);
+  text-decoration: none;
+  word-break: break-all;
+}
+.tool-link:hover {
+  text-decoration: underline;
+}
+.tool-link svg {
+  flex: none;
+  opacity: 0.7;
+}
+.tool-vlist {
+  margin: 0;
+  padding-left: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Error result — any tool output starting with "Error:". */
+.tool-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(240, 116, 88, 0.12);
+  border: 1px solid rgba(240, 116, 88, 0.28);
+  color: #f4b09f;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.tool-error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* calculator: expr = result */
+.tool-calc {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.84rem;
+}
+.tool-calc code {
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+}
+.tool-calc-eq {
+  color: var(--fg-muted);
+}
+.tool-calc strong {
+  font-family: var(--font-mono);
+  color: var(--brand-violet-light);
+}
+
+/* current_time */
+.tool-time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-time .tool-mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg);
+}
+.tool-time-human {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+
+/* fetch_url: status badge + url + body */
+.tool-fetch {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tool-fetch-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.tool-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(65, 196, 141, 0.16);
+  border: 1px solid rgba(65, 196, 141, 0.28);
+  color: #a9e8c9;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+/* web_search: result cards */
+.tool-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tool-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.tool-result-snippet {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
