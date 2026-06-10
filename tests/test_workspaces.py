@@ -52,3 +52,26 @@ def test_from_config_clones_and_restamps(root, tmp_path):
 def test_bad_name_rejected(root):
     with pytest.raises(manager.WorkspaceError):
         manager.create("bad name")
+
+
+def test_root_is_instance_scoped(root, monkeypatch):
+    """ADR 0004: a scoped instance owns its own workspaces root (and so its own
+    fleet.json) — two co-located hubs must not share one fleet registry."""
+    assert manager.workspaces_root() == root  # unscoped → the plain root
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    scoped = manager.workspaces_root()
+    assert scoped == root.parent / "roxy" / root.name  # scope_leaf nesting
+    assert scoped != root
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "other")
+    assert manager.workspaces_root() != scoped  # siblings don't share
+
+
+def test_fleet_state_follows_scoped_root(root, monkeypatch):
+    """fleet.json lives under the scoped root — a scoped hub's registry is its own."""
+    from graph.fleet import supervisor
+
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    assert supervisor._state_path() == manager.workspaces_root() / "fleet.json"
+    assert "roxy" in supervisor._state_path().parts

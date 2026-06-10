@@ -35,9 +35,20 @@ _RESERVED_NAMES = {"host"}
 
 def workspaces_root() -> Path:
     """Where workspaces live. ``PROTOAGENT_WORKSPACES_DIR`` overrides; default
-    ``~/.protoagent/workspaces``."""
+    ``~/.protoagent/workspaces``.
+
+    Instance-scoped (ADR 0004) like every other store — ``scope_leaf`` on the final
+    resolved path, so a scoped hub owns its own fleet (``~/.protoagent/<iid>/workspaces``
+    + its ``fleet.json``) instead of sharing one registry with every co-located instance
+    (two hubs pruning/evicting each other's agents). This also fences peers: workspace
+    agents run with ``PROTOAGENT_INSTANCE=<name>``, so a peer's fleet view is its own,
+    not the parent hub's. Unscoped stays the shared legacy root (#706 warning covers it).
+    """
+    from paths import scope_leaf
+
     override = os.environ.get("PROTOAGENT_WORKSPACES_DIR", "").strip()
-    return Path(override).expanduser() if override else (Path.home() / ".protoagent" / "workspaces")
+    base = Path(override).expanduser() if override else (Path.home() / ".protoagent" / "workspaces")
+    return scope_leaf(base)
 
 
 def _safe(name: str) -> str:
