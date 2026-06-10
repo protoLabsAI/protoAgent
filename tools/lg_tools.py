@@ -266,7 +266,7 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
 
     # Egress allowlist (ADR 0008) — deny-by-default when configured; permissive
     # (no-op) otherwise. fetch_url is the model-chosen-host exfil/SSRF vector.
-    import egress
+    from security import egress
     blocked = egress.check_url(url)
     if blocked:
         return blocked
@@ -712,7 +712,7 @@ def _build_set_goal_tool():
         verifiers are allowed — shell/test/data goals are operator-only via /goal.
         Returns the goal status, or an error if goal mode is off / `check` is unknown.
         """
-        import tracing
+        from observability import tracing
         from runtime.state import STATE
         if STATE.goal_controller is None:
             return "Goal mode is not enabled."

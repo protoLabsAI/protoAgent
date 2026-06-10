@@ -25,7 +25,7 @@ def _resolve_base() -> Path:
     # agents on one machine don't share a goals dir — without this, scheduled /
     # activity turns (shared session id "system:activity") collide and goals leak
     # across agents. No-op when PROTOAGENT_INSTANCE is unset (single instance).
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     candidates = []
     env = os.environ.get("GOAL_PATH", "").strip()

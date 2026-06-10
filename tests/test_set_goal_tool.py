@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import tracing
+from observability import tracing
 from graph.goals.controller import GoalController
 from graph.goals.store import GoalStore
 from runtime.state import STATE

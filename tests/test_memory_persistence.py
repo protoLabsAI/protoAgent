@@ -66,7 +66,7 @@ def test_persist_session_creates_json_file(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = _make_state("abc-123")
-    with patch("tracing.current_trace_id", return_value="trace-xyz"):
+    with patch("observability.tracing.current_trace_id", return_value="trace-xyz"):
         mod._persist_session(state, "trace-xyz")
 
     expected = tmp_path / "abc-123.json"
@@ -84,7 +84,7 @@ def test_persist_session_json_has_required_fields(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = _make_state("req-fields")
-    with patch("tracing.current_trace_id", return_value="t1"):
+    with patch("observability.tracing.current_trace_id", return_value="t1"):
         mod._persist_session(state, "t1")
 
     data = json.loads((tmp_path / "req-fields.json").read_text())
@@ -394,7 +394,7 @@ def test_persist_session_falls_back_to_contextvar_session_id(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = {"session_id": "", "messages": [], "context": "", "captured_messages": []}
-    with patch("tracing.current_session_id", return_value="ctx-sid-42"):
+    with patch("observability.tracing.current_session_id", return_value="ctx-sid-42"):
         mod._persist_session(state, "t-ctx")
 
     assert (tmp_path / "ctx-sid-42.json").exists()
@@ -409,7 +409,7 @@ def test_persist_session_unknown_only_when_no_session_id_anywhere(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = {"session_id": "", "messages": [], "context": "", "captured_messages": []}
-    with patch("tracing.current_session_id", return_value=""):
+    with patch("observability.tracing.current_session_id", return_value=""):
         mod._persist_session(state, "t-none")
 
     assert (tmp_path / "unknown.json").exists()
@@ -430,7 +430,7 @@ def test_on_session_end_calls_persist_session(tmp_path):
     runtime = MagicMock()
 
     with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("tracing.current_trace_id", return_value="trace-hook"):
+         patch("observability.tracing.current_trace_id", return_value="trace-hook"):
         result = mw.on_session_end(state, runtime)
 
     mock_persist.assert_called_once_with(state, "trace-hook")
@@ -456,7 +456,7 @@ def test_after_agent_persists_on_terminal_turn(tmp_path):
     runtime = MagicMock()
 
     with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("tracing.current_trace_id", return_value="trace-after"):
+         patch("observability.tracing.current_trace_id", return_value="trace-after"):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_called_once_with(state, "trace-after")
@@ -478,7 +478,7 @@ def test_after_agent_does_not_dump_findings_to_store(tmp_path):
     state = _make_state("after-agent-no-dump", messages=messages)
 
     with patch.object(mod, "_persist_session"), \
-         patch("tracing.current_trace_id", return_value="t"):
+         patch("observability.tracing.current_trace_id", return_value="t"):
         mw.after_agent(state, MagicMock())
 
     store.add_finding.assert_not_called()
@@ -502,7 +502,7 @@ def test_after_agent_does_not_persist_when_tool_calls_pending(tmp_path):
     runtime = MagicMock()
 
     with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("tracing.current_trace_id", return_value="trace-pending"):
+         patch("observability.tracing.current_trace_id", return_value="trace-pending"):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_not_called()
@@ -524,7 +524,7 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
     runtime = MagicMock()
 
     with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("tracing.current_trace_id", return_value="trace-human"):
+         patch("observability.tracing.current_trace_id", return_value="trace-human"):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_not_called()

@@ -26,9 +26,9 @@ class AuditMiddleware(AgentMiddleware):
 
     def _handle_tool_call(self, request, handler):
         """Sync wrapper — times and logs tool execution."""
-        from audit import audit_logger
-        import tracing
-        import metrics
+        from observability.audit import audit_logger
+        from observability import tracing
+        from observability import metrics
 
         tool_name = request.tool_call.get("name", "unknown")
         args = request.tool_call.get("args", {})
@@ -79,9 +79,9 @@ class AuditMiddleware(AgentMiddleware):
 
     async def _ahandle_tool_call(self, request, handler):
         """Async wrapper — same logic, async execution."""
-        from audit import audit_logger
-        import tracing
-        import metrics
+        from observability.audit import audit_logger
+        from observability import tracing
+        from observability import metrics
 
         tool_name = request.tool_call.get("name", "unknown")
         args = request.tool_call.get("args", {})

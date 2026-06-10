@@ -28,7 +28,7 @@ _RECIPES = Path(__file__).parent / "recipes"
 def _build_registry(extra_dirs: list[str] | None) -> WorkflowRegistry:
     """Bundled recipes + other enabled plugins' recipe dirs (ADR 0027) + a writable dir
     (user/agent-saved recipes win on a name clash)."""
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     dirs: list[str] = [str(_RECIPES)]
     for d in extra_dirs or []:

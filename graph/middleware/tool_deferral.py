@@ -98,7 +98,7 @@ class ToolDeferralMiddleware(AgentMiddleware):
         log.debug("[tool-deferral] exposing %d/%d tools this turn", len(kept), len(tools))
         # Prove the lever: count withheld tool schemas (ADR 0006 Slice 4b).
         try:
-            import metrics
+            from observability import metrics
             metrics.record_tools_deferred(deferred)
         except Exception:  # noqa: BLE001 — telemetry must never break a model call
             pass

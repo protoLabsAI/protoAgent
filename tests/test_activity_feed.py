@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import server
-from a2a_executor import TurnOutcome
+from a2a_impl.executor import TurnOutcome
 from activity.store import ActivityLog
 
 

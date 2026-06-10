@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import plistlib
 
-import autostart
+from infra import autostart
 
 
 def _render(**overrides) -> bytes:

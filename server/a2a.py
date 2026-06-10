@@ -113,7 +113,7 @@ def _package_version() -> str:
     the runtime status, and the fleet version handshake can never disagree.
     Kept as a name here for its existing importers (``server.__init__`` re-exports it).
     """
-    from paths import package_version
+    from infra.paths import package_version
 
     return package_version()
 
@@ -218,7 +218,7 @@ def _record_a2a_telemetry(outcome) -> None:
     # Prometheus turn counter (independent of the SQL telemetry store) — lets
     # /metrics alert on a failing/backed-up agent. Best-effort.
     try:
-        import metrics
+        from observability import metrics
         metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
     except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
         pass

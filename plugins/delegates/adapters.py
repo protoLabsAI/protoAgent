@@ -165,10 +165,10 @@ class A2aAdapter(Adapter):
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         import httpx
 
-        import security
+        from security import policy
         from tools.peer_tools import _extract_text, _is_terminal
 
-        blocked = security.check_url(d.url)
+        blocked = policy.check_url(d.url)
         if blocked:
             raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
         headers = {"Content-Type": "application/json"}
@@ -218,10 +218,10 @@ class A2aAdapter(Adapter):
     async def probe(self, d: Delegate) -> dict:
         import httpx
 
-        import security
+        from security import policy
         origin = d.url.split("/a2a")[0].rstrip("/") if "/a2a" in d.url else d.url.rstrip("/")
         card = f"{origin}/.well-known/agent-card.json"
-        blocked = security.check_url(card)
+        blocked = policy.check_url(card)
         if blocked:
             return {"ok": False, "error": blocked}
         try:

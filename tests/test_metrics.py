@@ -1,7 +1,7 @@
 """The A2A-turn metrics emit safely (prod-readiness: /metrics can alert on a
 failing/backed-up agent) and never break a turn."""
 
-import metrics
+from observability import metrics
 
 
 def test_record_a2a_turn_safe_when_disabled():

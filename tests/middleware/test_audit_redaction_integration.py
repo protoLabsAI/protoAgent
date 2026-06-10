@@ -39,7 +39,7 @@ class TestAuditMiddlewareSyncRedaction:
         """Credentials in tool args must not appear in audit.jsonl."""
         audit_file = tmp_path / "audit.jsonl"
 
-        from audit import AuditLogger
+        from observability.audit import AuditLogger
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -50,11 +50,11 @@ class TestAuditMiddlewareSyncRedaction:
         result_msg = _make_tool_message("some plain result")
 
         with (
-            patch("audit.audit_logger", fake_logger),
-            patch("tracing.current_session_id", return_value="sess-1"),
-            patch("tracing.current_trace_id", return_value="trace-1"),
-            patch("tracing.trace_tool_call"),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger", fake_logger),
+            patch("observability.tracing.current_session_id", return_value="sess-1"),
+            patch("observability.tracing.current_trace_id", return_value="trace-1"),
+            patch("observability.tracing.trace_tool_call"),
+            patch("observability.metrics.record_tool_call"),
         ):
             middleware._handle_tool_call(request, lambda r: result_msg)
 
@@ -68,7 +68,7 @@ class TestAuditMiddlewareSyncRedaction:
         """OpenAI keys in tool results must not appear in audit.jsonl."""
         audit_file = tmp_path / "audit.jsonl"
 
-        from audit import AuditLogger
+        from observability.audit import AuditLogger
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -77,11 +77,11 @@ class TestAuditMiddlewareSyncRedaction:
         result_msg = _make_tool_message(f"api_key={secret_key}")
 
         with (
-            patch("audit.audit_logger", fake_logger),
-            patch("tracing.current_session_id", return_value="sess-2"),
-            patch("tracing.current_trace_id", return_value="trace-2"),
-            patch("tracing.trace_tool_call"),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger", fake_logger),
+            patch("observability.tracing.current_session_id", return_value="sess-2"),
+            patch("observability.tracing.current_trace_id", return_value="trace-2"),
+            patch("observability.tracing.trace_tool_call"),
+            patch("observability.metrics.record_tool_call"),
         ):
             middleware._handle_tool_call(request, lambda r: result_msg)
 
@@ -105,10 +105,10 @@ class TestAuditMiddlewareSyncRedaction:
             captured_trace_args.update(args)
 
         with (
-            patch("audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
-            patch("tracing.current_session_id", return_value="sess-3"),
-            patch("tracing.trace_tool_call", side_effect=fake_trace),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
+            patch("observability.tracing.current_session_id", return_value="sess-3"),
+            patch("observability.tracing.trace_tool_call", side_effect=fake_trace),
+            patch("observability.metrics.record_tool_call"),
         ):
             middleware._handle_tool_call(request, lambda r: result_msg)
 
@@ -118,7 +118,7 @@ class TestAuditMiddlewareSyncRedaction:
         """Non-credential args must pass through unchanged."""
         audit_file = tmp_path / "audit.jsonl"
 
-        from audit import AuditLogger
+        from observability.audit import AuditLogger
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -126,11 +126,11 @@ class TestAuditMiddlewareSyncRedaction:
         result_msg = _make_tool_message("3 results found")
 
         with (
-            patch("audit.audit_logger", fake_logger),
-            patch("tracing.current_session_id", return_value="sess-4"),
-            patch("tracing.current_trace_id", return_value=""),
-            patch("tracing.trace_tool_call"),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger", fake_logger),
+            patch("observability.tracing.current_session_id", return_value="sess-4"),
+            patch("observability.tracing.current_trace_id", return_value=""),
+            patch("observability.tracing.trace_tool_call"),
+            patch("observability.metrics.record_tool_call"),
         ):
             middleware._handle_tool_call(request, lambda r: result_msg)
 
@@ -154,7 +154,7 @@ class TestAuditMiddlewareAsyncRedaction:
     async def test_bearer_token_in_args_redacted_async(self, tmp_path):
         audit_file = tmp_path / "audit.jsonl"
 
-        from audit import AuditLogger
+        from observability.audit import AuditLogger
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -168,11 +168,11 @@ class TestAuditMiddlewareAsyncRedaction:
             return result_msg
 
         with (
-            patch("audit.audit_logger", fake_logger),
-            patch("tracing.current_session_id", return_value="sess-async-1"),
-            patch("tracing.current_trace_id", return_value="trace-async-1"),
-            patch("tracing.trace_tool_call"),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger", fake_logger),
+            patch("observability.tracing.current_session_id", return_value="sess-async-1"),
+            patch("observability.tracing.current_trace_id", return_value="trace-async-1"),
+            patch("observability.tracing.trace_tool_call"),
+            patch("observability.metrics.record_tool_call"),
         ):
             await middleware._ahandle_tool_call(request, fake_handler)
 
@@ -198,10 +198,10 @@ class TestAuditMiddlewareAsyncRedaction:
             raise ValueError("tool failure")
 
         with (
-            patch("audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
-            patch("tracing.current_session_id", return_value="sess-exc"),
-            patch("tracing.trace_tool_call"),
-            patch("metrics.record_tool_call"),
+            patch("observability.audit.audit_logger") as fake_audit,  # noqa: F841 (used below; ruff misreads the parenthesized with)
+            patch("observability.tracing.current_session_id", return_value="sess-exc"),
+            patch("observability.tracing.trace_tool_call"),
+            patch("observability.metrics.record_tool_call"),
         ):
             fake_audit.log.side_effect = fake_log
             with pytest.raises(ValueError):

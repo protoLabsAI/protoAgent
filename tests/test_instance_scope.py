@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import paths
+from infra import paths
 
 
 def test_explicit_instance_always_wins(monkeypatch):

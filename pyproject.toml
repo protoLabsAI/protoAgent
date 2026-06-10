@@ -63,10 +63,14 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-# Top-level packages (dirs with __init__.py) plus the root-level runtime modules.
+# Top-level packages (dirs with __init__.py). The former root-level runtime modules
+# were grouped into cohesive packages: a2a_impl/ (A2A auth/executor/stores — named to
+# avoid shadowing the a2a-sdk's `a2a`), observability/ (metrics/tracing/telemetry/
+# pricing/audit), security/ (egress/policy), and infra/ (paths/cache/autostart).
 # Excludes apps/, sites/, static/, docs/, deploy/, scripts/, examples/, config/,
 # mcp_servers/ and tests/ — those aren't part of the import surface a wheel needs.
 packages = [
+  "a2a_impl",
   "activity",
   "beads",
   "enforcement",
@@ -74,28 +78,16 @@ packages = [
   "events",
   "graph",
   "inbox",
+  "infra",
   "knowledge",
+  "observability",
   "operator_api",
   "runtime",
   "scheduler",
+  "security",
   "server",
   "surfaces",
   "tools",
-]
-include = [
-  "a2a_auth.py",
-  "a2a_executor.py",
-  "a2a_stores.py",
-  "audit.py",
-  "autostart.py",
-  "cache.py",
-  "egress.py",
-  "metrics.py",
-  "paths.py",
-  "pricing.py",
-  "security.py",
-  "telemetry_store.py",
-  "tracing.py",
 ]
 
 [tool.uv]
@@ -110,20 +102,24 @@ package = false
 [tool.importlinter]
 # Architectural import contracts (enforced by `lint-imports` in CI — see
 # .github/workflows/checks.yml and docs/dev/prod-readiness-tasklist.md § C2).
-# Layering: graph/ (agent brain) and the infra packages (tools/knowledge/
-# events/scheduler/runtime) must never reach up into the server bootstrap or
-# the operator HTTP surface. import-linter analyzes function-level (lazy)
+# Layering: graph/ (agent brain) and the infra packages (a2a_impl/observability/
+# security/infra/tools/knowledge/events/scheduler/runtime) must never reach up into
+# the server bootstrap or the operator HTTP surface. import-linter analyzes function-level (lazy)
 # imports too, so the `ignore_imports` lists below are explicit grandfathered
 # violations — a BURNDOWN LIST, not an allowance. Don't add to them; remove
 # entries as the cycles are untangled (the server.agent_init decomposition,
 # tasklist C2, owns most of the burndown).
 root_packages = [
+  "a2a_impl",
   "events",
   "graph",
+  "infra",
   "knowledge",
+  "observability",
   "operator_api",
   "runtime",
   "scheduler",
+  "security",
   "server",
   "tools",
 ]
@@ -159,7 +155,10 @@ ignore_imports = [
 [[tool.importlinter.contracts]]
 name = "infra packages do not import server or operator_api"
 type = "forbidden"
-source_modules = ["events", "knowledge", "runtime", "scheduler", "tools"]
+source_modules = [
+  "a2a_impl", "events", "infra", "knowledge", "observability",
+  "runtime", "scheduler", "security", "tools",
+]
 forbidden_modules = ["server", "operator_api"]
 
 [tool.pytest.ini_options]

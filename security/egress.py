@@ -10,7 +10,7 @@ out of the box. Public hosts still work with no allowlist; allowlisting a host
 explicitly trusts it (bypasses the denylist).
 
 Mirrors the ``PUSH_NOTIFICATION_ALLOWED_HOSTS`` SSRF-guard pattern in
-``a2a_stores``. Wildcards: a leading ``*.`` matches any subdomain
+``a2a_impl.stores``. Wildcards: a leading ``*.`` matches any subdomain
 (``*.proto-labs.ai`` allows ``api.proto-labs.ai`` and ``proto-labs.ai``).
 
 This is the in-process half. Process-level egress (subprocess escapes via
@@ -59,7 +59,7 @@ def _blocked_ip(host: str) -> str | None:
     """Resolve ``host`` and return the first address that is a private/internal
     SSRF target (loopback / link-local / private / multicast / reserved /
     unspecified), or the literal ``"unresolvable"`` when DNS fails (treated as
-    unsafe, matching ``a2a_stores``). ``None`` ⇒ the host resolves only to
+    unsafe, matching ``a2a_impl.stores``). ``None`` ⇒ the host resolves only to
     globally-routable addresses. One-shot resolution — not a DNS-rebinding
     defence, but closes the trivial literal/redirect-to-internal vector."""
     try:

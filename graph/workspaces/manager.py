@@ -19,7 +19,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from paths import atomic_write
+from infra.paths import atomic_write
 
 PORT_BASE = 7870  # workspaces get PORT_BASE+1, +2, … unless an explicit port is given
 
@@ -46,7 +46,7 @@ def workspaces_root() -> Path:
     agents run with ``PROTOAGENT_INSTANCE=<name>``, so a peer's fleet view is its own,
     not the parent hub's. Unscoped stays the shared legacy root (#706 warning covers it).
     """
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     override = os.environ.get("PROTOAGENT_WORKSPACES_DIR", "").strip()
     base = Path(override).expanduser() if override else (Path.home() / ".protoagent" / "workspaces")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import egress
+from security import egress
 
 
 @pytest.fixture(autouse=True)

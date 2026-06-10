@@ -30,7 +30,7 @@ from fastapi import FastAPI
 
 import protolabs_a2a as pa
 import evals.client as ec
-from a2a_executor import ProtoAgentExecutor, set_terminal_hook
+from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
 
 
 async def _hello_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):

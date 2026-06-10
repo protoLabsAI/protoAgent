@@ -42,7 +42,7 @@ jobs:
       - name: Guard against the deleted server.py entrypoint
         # ADR 0023 promoted the monolith to the server/ package (launch:
         # `python -m server`). A launcher pointing at the old single-file binary
-        # CrashLoopBackOffs (deploy) or silently no-ops (autostart.py's exists()
+        # CrashLoopBackOffs (deploy) or silently no-ops (infra/autostart.py's exists()
         # check — missed by the original *.sh/*.yml-only net, fixed alongside this
         # guard's *.py extension). Two patterns: shell-style `python server.py`
         # launches, and Python-side quoted "server.py" path constructions

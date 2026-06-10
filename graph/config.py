@@ -135,7 +135,7 @@ def _load_host_layer() -> dict:
     then collapses to App defaults + the agent leaf. Best-effort: a corrupt host
     file must never crash boot."""
     try:
-        from paths import host_config_path
+        from infra.paths import host_config_path
 
         hp = host_config_path()
     except Exception:  # noqa: BLE001 — never let host-path resolution break config load
@@ -542,7 +542,7 @@ class LangGraphConfig:
     # delegate_to a2a delegates (#572). Empty/unset = today's behavior (callbacks keep their
     # default private-IP denylist; delegate_to unrestricted). When set, an
     # outbound destination is allowed iff every resolved IP is inside a listed
-    # CIDR. Enforced via ``security.set_callback_allowlist``.
+    # CIDR. Enforced via ``policy.set_callback_allowlist``.
     security_callback_allowlist: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -564,7 +564,7 @@ class LangGraphConfig:
             return self.filesystem_projects
         if not self.filesystem_enabled:
             return []
-        from paths import workspace_dir
+        from infra.paths import workspace_dir
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
 
     @classmethod

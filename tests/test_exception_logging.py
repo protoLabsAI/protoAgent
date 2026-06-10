@@ -61,7 +61,7 @@ def _stub_tracing():
 
     import contextlib
 
-    tracing = types.ModuleType("tracing")
+    tracing = types.ModuleType("observability.tracing")
 
     @contextlib.asynccontextmanager
     async def _noop_session(*args, **kwargs):
@@ -73,7 +73,7 @@ def _stub_tracing():
     tracing.current_trace_id = lambda: ""
     tracing.current_session_id = lambda: ""
     tracing.trace_tool_call = lambda *a, **k: None
-    sys.modules["tracing"] = tracing
+    sys.modules["observability.tracing"] = tracing
 
 
 _stub_langchain_core()

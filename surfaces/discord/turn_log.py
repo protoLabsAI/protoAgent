@@ -57,7 +57,7 @@ def _default_db_path() -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    from paths import scope_leaf
+    from infra.paths import scope_leaf
 
     leaf = Path("discord") / "turns.db"
     configured = scope_leaf(Path("/sandbox") / leaf)

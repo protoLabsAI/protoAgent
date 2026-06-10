@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Grouped the loose root-level modules into packages** (pure restructure — no
+  behavior change). The 13 modules that sat at the repo root are now cohesive
+  packages: **`a2a_impl/`** (`auth`/`executor`/`stores` — named to avoid shadowing
+  the a2a-sdk's top-level `a2a`), **`observability/`** (`metrics`/`tracing`/
+  `telemetry_store`/`pricing`/`audit`), **`security/`** (`egress`/`policy`), and
+  **`infra/`** (`paths`/`cache`/`autostart`). Imports were updated repo-wide and the
+  new packages join the import-linter "no `server`/`operator_api`" layering contract
+  (#866). Forks merging this re-point their imports of these modules (e.g.
+  `import metrics` → `from observability import metrics`; `import paths` →
+  `from infra import paths`).
+
 ### Removed
 - **The Gradio chat UI (the `--ui full` tier).** `chat_ui.py`, the `gradio` / `ui`
   optional dependency, and `requirements-ui.txt` are gone — the React console is the

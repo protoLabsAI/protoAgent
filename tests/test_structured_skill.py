@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 import protolabs_a2a as pa
-from a2a_executor import _extract_caller_trace, _extract_skill_hint, _request_metadata
+from a2a_impl.executor import _extract_caller_trace, _extract_skill_hint, _request_metadata
 from graph.structured_skill import finalize_structured
 
 _SCHEMA = {

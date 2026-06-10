@@ -34,11 +34,11 @@ def _reload_tracing():
     from pathlib import Path
 
     if "tracing" in sys.modules:
-        del sys.modules["tracing"]
-    real_path = Path(__file__).parents[1] / "tracing.py"
-    spec = importlib.util.spec_from_file_location("tracing", real_path)
+        del sys.modules["observability.tracing"]
+    real_path = Path(__file__).parents[1] / "observability" / "tracing.py"
+    spec = importlib.util.spec_from_file_location("observability.tracing", real_path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["tracing"] = module
+    sys.modules["observability.tracing"] = module
     spec.loader.exec_module(module)
     return module
 

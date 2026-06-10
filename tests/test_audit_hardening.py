@@ -3,7 +3,7 @@ get_recent reads only a bounded tail (no unbounded growth / full-file OOM)."""
 
 import json
 
-from audit import AuditLogger
+from observability.audit import AuditLogger
 
 
 def _log_n(a: AuditLogger, n: int):
@@ -21,7 +21,7 @@ def test_writes_and_get_recent_tail(tmp_path):
 
 
 def test_rotates_at_size_cap(tmp_path, monkeypatch):
-    import audit
+    from observability import audit
     monkeypatch.setattr(audit, "_MAX_BYTES", 2_000)  # tiny cap to force a rotation
     a = AuditLogger(path=tmp_path / "audit.jsonl")
     _log_n(a, 200)
@@ -34,7 +34,7 @@ def test_rotates_at_size_cap(tmp_path, monkeypatch):
 
 
 def test_session_stats_capped(tmp_path, monkeypatch):
-    import audit
+    from observability import audit
     monkeypatch.setattr(audit, "_MAX_SESSIONS", 5)
     a = AuditLogger(path=tmp_path / "audit.jsonl")
     for i in range(20):

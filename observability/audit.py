@@ -39,7 +39,7 @@ class AuditLogger:
         nothing is writable (audit then degrades to a no-op)."""
         if self._resolved is not None:
             return self._resolved
-        from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+        from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
 
         candidate = scope_leaf(self._base)
         try:
@@ -79,7 +79,7 @@ class AuditLogger:
     ) -> None:
         trace_id = None
         try:
-            import tracing
+            from observability import tracing
             trace_id = tracing.current_trace_id() or None
         except Exception:
             pass
@@ -170,7 +170,7 @@ class AuditLogger:
 def scope_leaf_safe(p: Path) -> Path:
     """``scope_leaf`` without raising — used only for the ``.path`` fallback."""
     try:
-        from paths import scope_leaf
+        from infra.paths import scope_leaf
         return scope_leaf(p)
     except Exception:
         return p

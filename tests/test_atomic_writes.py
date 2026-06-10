@@ -23,7 +23,7 @@ import threading
 import time
 
 
-from paths import atomic_write
+from infra.paths import atomic_write
 
 # ── 1. atomic_write ──────────────────────────────────────────────────────────
 

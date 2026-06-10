@@ -98,7 +98,7 @@ class Chunk:
 
 def _resolve_path(db_path: str | Path | None) -> Path:
     """Pick a writable DB path. Env > arg > default; fall back to ~/.protoagent."""
-    from paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+    from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
 
     raw = os.environ.get("KNOWLEDGE_DB_PATH") or db_path or DEFAULT_DB_PATH
     p = scope_leaf(raw)
