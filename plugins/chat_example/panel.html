@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Chat (example plugin)</title>
+<style>
+  /* Defaults match the console's dark ground; protoagent:init overrides them with
+     the live theme tokens so the panel re-skins with the agent's theme. */
+  :root {
+    --bg: #0a0f14; --bg-panel: #11161d; --fg: #e6e6e6; --fg-muted: #9aa0aa;
+    --brand: #9b87f2; --border: #232a33;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  .wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); font-size: 13px; color: var(--fg-muted); }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+  header button { margin-left: auto; background: none; border: 1px solid var(--border);
+    color: var(--fg-muted); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  header button:hover { color: var(--fg); border-color: var(--brand); }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 72ch; padding: 9px 13px; border-radius: 12px; font-size: 14px;
+    line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--brand); color: #0a0f14; border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--bg-panel);
+    border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg.pending { color: var(--fg-muted); font-style: italic; }
+  .msg.error { align-self: stretch; background: none; border: 1px solid #b3404a; color: #e08089; }
+  .empty { margin: auto; text-align: center; color: var(--fg-muted); font-size: 13px; max-width: 44ch; line-height: 1.7; }
+  .empty b { color: var(--brand); }
+  form { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }
+  textarea { flex: 1; resize: none; background: var(--bg-panel); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font: inherit;
+    font-size: 14px; min-height: 20px; max-height: 140px; }
+  textarea:focus { outline: none; border-color: var(--brand); }
+  form button { background: var(--brand); color: #0a0f14; border: 0; border-radius: 10px;
+    padding: 0 18px; font-weight: 600; font-size: 14px; cursor: pointer; }
+  form button:disabled { opacity: 0.5; cursor: default; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span class="dot"></span> chat_example — a slot-claiming chat panel (ADR 0045)
+    <button id="reset" type="button" title="Start a fresh session">New session</button>
+  </header>
+  <div id="log">
+    <div class="empty">This is the <b>example chat plugin</b> rendering in the chat slot.
+      Send a message — it drives the agent over <b>POST /api/chat</b> with the bearer from
+      the <b>protoagent:init</b> handshake. Disable the plugin to restore the built-in chat.</div>
+  </div>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Message the agent…"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</div>
+<script>
+  "use strict";
+  // ── Console handshake (ADR 0038): bearer + theme arrive via postMessage. ─────
+  let token = null;
+  function applyTheme(theme) {
+    if (!theme) return;
+    const map = { bg: "--bg", bgPanel: "--bg-panel", fg: "--fg", fgMuted: "--fg-muted",
+                  brand: "--brand", border: "--border" };
+    for (const [k, v] of Object.entries(map)) {
+      if (theme[k]) document.documentElement.style.setProperty(v, theme[k]);
+    }
+  }
+  window.addEventListener("message", (e) => {
+    const m = e.data || {};
+    if (m.type === "protoagent:init") { token = m.token || null; applyTheme(m.theme); }
+    else if (m.type === "protoagent:theme") applyTheme(m.theme); // live re-theme
+  });
+
+  // ── Slug-aware base (ADR 0042): the iframe lives at /plugins/... (host window)
+  // or /agents/<slug>/plugins/... (peer window) — keep API calls on OUR agent. ──
+  const base = location.pathname.split("/plugins/")[0];
+
+  // ── One session per agent, persisted; New session rotates it. ────────────────
+  const SKEY = "chat-example.session:" + (base || "host");
+  let sessionId = localStorage.getItem(SKEY) ||
+    "chx-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  localStorage.setItem(SKEY, sessionId);
+
+  const log = document.getElementById("log");
+  const input = document.getElementById("input");
+  const send = document.getElementById("send");
+
+  function bubble(cls, text) {
+    const div = document.createElement("div");
+    div.className = "msg " + cls;
+    div.textContent = text;
+    const empty = log.querySelector(".empty");
+    if (empty) empty.remove();
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    return div;
+  }
+
+  // The documented NON-STREAMING path (one request, full reply). A production
+  // panel streams via A2A SendStreamingMessage and reconciles with tasks/get —
+  // see the ADR 0045 conformance checklist before shipping one for real.
+  async function sendTurn(message) {
+    const pending = bubble("assistant pending", "thinking…");
+    try {
+      const res = await fetch(base + "/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json",
+                   ...(token ? { Authorization: "Bearer " + token } : {}) },
+        body: JSON.stringify({ message, session_id: sessionId }),
+      });
+      if (!res.ok) {
+        let detail = res.status + " " + res.statusText;
+        try { detail = (await res.json()).detail || detail; } catch { /* keep status */ }
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      pending.classList.remove("pending");
+      pending.textContent = (data.response || "").trim() || "(the turn returned no content)";
+    } catch (err) {
+      pending.remove();
+      bubble("error", "Turn failed: " + (err && err.message ? err.message : err));
+    } finally {
+      send.disabled = false;
+      input.focus();
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  document.getElementById("composer").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const message = input.value.trim();
+    if (!message || send.disabled) return;
+    input.value = "";
+    send.disabled = true;
+    bubble("user", message);
+    void sendTurn(message);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById("composer").requestSubmit();
+    }
+  });
+  document.getElementById("reset").addEventListener("click", () => {
+    localStorage.removeItem(SKEY);
+    location.reload(); // a fresh session id mints on load
+  });
+</script>
+</body>
+</html>
