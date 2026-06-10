@@ -6,6 +6,10 @@ import { expect, test } from "@playwright/test";
 
 test("a different backend uid clears the previous tenant's chat view", async ({ page }) => {
   await page.addInitScript(() => {
+    // Seed ONCE: addInitScript re-runs on every navigation — including the guard's own
+    // reload — and re-seeding the stale uid there would loop the guard forever.
+    if (window.sessionStorage.getItem("e2e-tenant-seeded")) return;
+    window.sessionStorage.setItem("e2e-tenant-seeded", "1");
     window.localStorage.setItem("protoagent.tenant.uid", "previous-agent-uid");
     window.localStorage.setItem(
       "protoagent.chat.sessions",
