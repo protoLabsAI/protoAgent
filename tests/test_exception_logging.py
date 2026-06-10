@@ -53,7 +53,7 @@ def _stub_tracing():
     other tests that patch tracing attributes it omits (e.g. the audit
     redaction suite patches tracing.trace_tool_call). See protoAgent#176."""
     try:
-        import tracing  # noqa: F401
+        from observability import tracing  # noqa: F401
 
         return  # real module present — never stub
     except Exception:

@@ -10,8 +10,7 @@ from __future__ import annotations
 import importlib.metadata
 import sys
 
-import paths
-
+from infra import paths
 
 def _force_no_installed_metadata(monkeypatch):
     """Make ``importlib.metadata.version("protoagent")`` raise, so resolution falls
