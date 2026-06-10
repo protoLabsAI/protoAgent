@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plist now runs `python -m server` with the repo root as `WorkingDirectory` +
   `PYTHONPATH` (the `entrypoint.sh` recipe); re-enabling autostart overwrites a
   stale plist in place. The CI stale-path guard — which only scanned
-  `*.sh`/`*.yml`/`Dockerfile*` and so missed this — now also covers `*.py`.
+  `*.sh`/`*.yml`/`Dockerfile*` and so missed this — now also covers `*.py`. (#855)
 
 ## [0.32.0] - 2026-06-10
 
