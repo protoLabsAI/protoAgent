@@ -8,8 +8,8 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[-]` won't-fix/
 
 ## Sorted backlog (the result of the 1×1 triage)
 
-**🔴 NOW — before ship (8):** `A1 A2 A3 A4 A5 A6 A7 G1`
-The doc-truth pass (A1–A6) + untrack `uv.lock` (A7) + prune the stale worktree (G1). A1–A6 fold into **one doc PR**; the fleet ADR (0042) is currently marked *Proposed* while you ship it.
+**🟢 NOW — DONE (8):** `A1 A2 A3 A4 A5 A6 A7 G1`
+Doc-truth pass (A1–A6) + prune the stale worktree (G1) **merged in #814**. **A7 was reversed:** rather than untrack `uv.lock`, the project *adopted uv* in **#811** — `pyproject [project.dependencies]` is now the dep source of truth, `uv.lock` is tracked + in sync, and `requirements-*.txt` are kept as readable references.
 
 **🟡 NEXT SPRINT (14):** `E1 E2 · D1 D2 D3 D5 D6 · C1 C5 C6 · B1 B2 · F5 F1`
 Suggested order (dependency-aware):
@@ -35,7 +35,7 @@ Suggested order (dependency-aware):
 | A4 | Fix false `get_github_tools` docstring + audit "appended by get_all_tools" claims | `tools/github_tools.py:12` | S | ✅ Done |
 | A5 | Delete dead `cn.ts` | `apps/web/src/lib/cn.ts` | XS | ✅ Done |
 | A6 | Fix `src/ext` invariant comment vs shipped `workflows.tsx` | `apps/web/src/ext/index.ts:3` | XS | ✅ Done |
-| A7 | **Untrack `uv.lock`** (stale stub, pins 0.30.0 vs 0.31.0; nothing uses uv) | `uv.lock` | S | ✅ Done |
+| A7 | ~~Untrack `uv.lock`~~ → **superseded by #811**: adopt uv properly — `pyproject [project.dependencies]` is dep source of truth, `uv.lock` tracked + in sync (`uv lock --check` clean), `requirements-*.txt` = readable references | `pyproject.toml`, `uv.lock` | S | ✅ Done (#811) |
 
 ## B. Config + fork hygiene
 
