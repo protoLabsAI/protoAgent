@@ -117,7 +117,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       </div>
 
       <p className="playbook-foot">
-        <Brain size={13} /> This is the memory the agent retrieves into context before each turn (ADR 0020) — search it to see what it knows.
+        <Brain size={13} /> This is the memory the agent retrieves into context before each turn — search it to see what it knows.
       </p>
     </section>
   );
