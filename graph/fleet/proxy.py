@@ -19,7 +19,6 @@ import httpx
 from starlette.responses import JSONResponse, StreamingResponse
 
 from graph.fleet import supervisor
-from graph.workspaces import manager
 
 log = logging.getLogger("protoagent.server")
 
