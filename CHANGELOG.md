@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias for `console`** (logs a warning) so existing invocations don't break, and a
   bare `/` now redirects to the console at `/app`. The Docker image drops the
   conditional `UI=full` install (it pulled the removed extra) and always installs the
-  lean core; the console ships as static assets, not a pip dep.
+  lean core; the console ships as static assets, not a pip dep. **Migration note:** the
+  non-streaming `chat()` thread_id prefix is renamed `gradio:` → `chat:`, so any
+  in-flight non-streaming (OpenAI-compat) conversation re-keys once on upgrade
+  (streaming/A2A sessions, keyed `a2a:`, are unaffected).
 
 ### Fixed
 - **Fleet members render plugin views with no design system (version-coherence
