@@ -38,13 +38,14 @@ test("tool-call cards survive navigating away and back", async ({ page }) => {
   // This prompt makes the mock stream a web_search tool-call card.
   await composer.fill("search for AI coding agents");
   await composer.press("Enter");
-  const card = page.locator(".tool-card").first();
+  // Frame = DS ToolCard (#832): `.pl-toolcard*`.
+  const card = page.locator(".pl-toolcard").first();
   await expect(card).toBeVisible();
-  await expect(card.locator(".tool-card-name")).toHaveText("web_search");
+  await expect(card.locator(".pl-toolcard__name")).toHaveText("web_search");
 
   // Leave and return — the tool card must still be there (not torn down).
   await rail(page, "Activity");
-  await expect(page.locator(".tool-card")).toHaveCount(1); // still in the DOM while away
+  await expect(page.locator(".pl-toolcard")).toHaveCount(1); // still in the DOM while away
   await rail(page, "Chat");
-  await expect(page.locator(".tool-card").first().locator(".tool-card-name")).toHaveText("web_search");
+  await expect(page.locator(".pl-toolcard").first().locator(".pl-toolcard__name")).toHaveText("web_search");
 });

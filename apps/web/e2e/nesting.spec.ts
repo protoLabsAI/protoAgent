@@ -11,17 +11,18 @@ test("subagent child tools nest under the task card", async ({ page }) => {
   await composer.fill("SUBAGENT delegate this");
   await composer.press("Enter");
 
-  // The parent task card is top-level inside a group.
-  const group = page.locator(".tool-calls > .tool-card-group");
+  // The parent task card is top-level inside a group. Frame = DS ToolCard (#832):
+  // `.pl-toolcard-group` / `.pl-toolcard` / `.pl-toolcard__children`.
+  const group = page.locator(".tool-calls > .pl-toolcard-group");
   await expect(group).toHaveCount(1);
-  await expect(group.locator("> .tool-card .tool-card-name")).toHaveText("task");
+  await expect(group.locator("> .pl-toolcard .pl-toolcard__name")).toHaveText("task");
 
   // The web_search child renders inside the nested children container.
-  const children = group.locator("> .tool-children");
+  const children = group.locator("> .pl-toolcard__children");
   await expect(children).toBeVisible();
-  await expect(children.locator(".tool-card-name")).toHaveText("web_search");
+  await expect(children.locator(".pl-toolcard__name")).toHaveText("web_search");
 
   // And it is NOT also rendered as a sibling top-level card.
-  await expect(page.locator(".tool-calls > .tool-card-group")).toHaveCount(1);
-  await expect(page.locator(".tool-calls > .tool-card")).toHaveCount(0);
+  await expect(page.locator(".tool-calls > .pl-toolcard-group")).toHaveCount(1);
+  await expect(page.locator(".tool-calls > .pl-toolcard")).toHaveCount(0);
 });

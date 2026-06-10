@@ -11,17 +11,18 @@ test("copy button writes the raw value to the clipboard", async ({ page }) => {
   await composer.fill("CALC compute it");
   await composer.press("Enter");
 
-  const card = page.locator(".tool-card").first();
-  await expect(card.locator(".tool-card-status.done")).toBeVisible();
-  await card.locator(".tool-card-head").click();
+  // Frame + copy button are the DS ToolCard/ToolSection (#832): `.pl-toolcard*`.
+  const card = page.locator(".pl-toolcard").first();
+  await expect(card.locator(".pl-toolcard__status--done")).toBeVisible();
+  await card.locator(".pl-toolcard__head").click();
 
   // Copy the input section's raw value.
-  const inputSection = card.locator(".tool-card-section").first();
-  await expect(inputSection.locator(".tool-copy")).toBeVisible();
-  await inputSection.locator(".tool-copy").click();
+  const inputSection = card.locator(".pl-toolcard__section").first();
+  await expect(inputSection.locator(".pl-toolcard__copy")).toBeVisible();
+  await inputSection.locator(".pl-toolcard__copy").click();
 
   // Button flips to the copied (check) state.
-  await expect(inputSection.locator(".tool-copy")).toHaveAttribute("aria-label", "Copied");
+  await expect(inputSection.locator(".pl-toolcard__copy")).toHaveAttribute("aria-label", "Copied");
 
   // Clipboard holds the raw tool input (JSON for the calculator expression).
   const clip = await page.evaluate(() => navigator.clipboard.readText());
