@@ -118,3 +118,32 @@ test("rename edits the display name; the id/slug stays", async ({ page }) => {
   await page.getByRole("menuitem", { name: /nova/ }).click();
   await expect(page).toHaveURL(/\/app\/agent\/ava\//);
 });
+
+test("discover → add to fleet → switch into the remote member (ADR 0042 §I)", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: /Discover agents/ }).click();
+  const found = page.locator(".fleet-row", { hasText: "remy" });
+  await expect(found).toBeVisible();
+
+  await found.getByRole("button", { name: "Add to this fleet (a switchable remote member)" }).click();
+
+  // Now a fleet member: remote tag + its URL, no start/stop controls.
+  const member = page.locator(".fleet-row", { hasText: "http://192.168.5.50:7871" });
+  await expect(member).toBeVisible();
+  await expect(member.getByText("remote", { exact: true })).toBeVisible();
+  await expect(member.getByRole("button", { name: "Stop" })).toHaveCount(0);
+
+  // And switchable: the topbar switcher navigates to its slug window, where the hub
+  // proxies the console (the mock strips /agents/<slug>/ — the app boots normally).
+  await page.getByTestId("fleet-switcher").click();
+  await page.getByRole("menuitem", { name: /remy/ }).click();
+  await expect(page).toHaveURL(/\/app\/agent\/remy-re01\//);
+  await expect(page.getByTestId("fleet-switcher")).toContainText("remy");
+
+  // Unregister from the fleet manager (the remote agent itself is untouched).
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Agents", exact: true }).click();
+  await page.locator(".fleet-row", { hasText: "remy" })
+    .getByRole("button", { name: /Remove from this fleet/ }).click();
+  await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);
+});

@@ -680,6 +680,19 @@ export const api = {
       method: "POST",
     });
   },
+  addRemoteAgent(body: { name: string; url: string; token?: string }) {
+    // Register a remote protoAgent as a SWITCHABLE fleet member (ADR 0042 §I) —
+    // it gets a slug window; the hub reverse-proxies its console + A2A.
+    return request<{ ok: boolean; agent: FleetAgent }>("/api/fleet/remotes", {
+      method: "POST",
+      body,
+    });
+  },
+  removeRemoteAgent(ident: string) {
+    return request<{ ok: boolean; id: string; name: string }>(`/api/fleet/remotes/${encodeURIComponent(ident)}`, {
+      method: "DELETE",
+    });
+  },
   renameAgent(ident: string, name: string) {
     // Display rename only — the id (URL slug + data scope) is immutable.
     return request<{ ok: boolean; id: string; name: string }>(`/api/fleet/${encodeURIComponent(ident)}`, {

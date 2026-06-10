@@ -194,8 +194,108 @@ def _host_entry() -> dict:
     }
 
 
+# ── remote fleet members (ADR 0042 §I, the proxy half) ────────────────────────
+# A remote member is another protoAgent reachable by URL (LAN / tailnet / anywhere) that
+# joins this fleet as a SWITCHABLE agent: it gets a slug window like a local peer, with the
+# hub reverse-proxying its console + A2A. We can't start/stop it — `running` is a cached
+# reachability probe. Registry: `<workspaces_root>/remotes.json` (hub-scoped, #813);
+# an optional bearer token is stored alongside (plaintext, same posture as secrets.yaml)
+# and attached by the proxy — `status()` never returns it.
+
+
+def _remotes_path() -> Path:
+    return manager.workspaces_root() / "remotes.json"
+
+
+def _load_remotes() -> dict:
+    try:
+        return json.loads(_remotes_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_remotes(remotes: dict) -> None:
+    p = _remotes_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(remotes, indent=2))
+
+
+def list_remotes() -> list[dict]:
+    """Registered remote members, tokens INCLUDED — internal/proxy use only."""
+    return list(_load_remotes().values())
+
+
+def remote_for_slug(slug: str) -> dict | None:
+    """The remote record for a slug (id), or None. Token included — proxy use."""
+    return _load_remotes().get(slug)
+
+
+def add_remote(name: str, url: str, token: str = "") -> dict:
+    """Register a remote protoAgent as a fleet member. Name follows the workspace
+    charset + uniqueness rules; the id is opaque like a local agent's (#823)."""
+    name = manager._safe(name)
+    if name.lower() in manager._RESERVED_NAMES:
+        raise FleetError(f"{name!r} is reserved — it's how the fleet addresses this instance")
+    url = (url or "").strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        raise FleetError(f"remote url must be http(s), got {url!r}")
+    with _state_lock():
+        remotes = _load_remotes()
+        taken = ({r["name"] for r in remotes.values()}
+                 | {w["name"] for w in manager.list_workspaces()})
+        if name in taken:
+            raise FleetError(f"an agent named {name!r} already exists")
+        if any(r["url"] == url for r in remotes.values()):
+            raise FleetError(f"a remote at {url} is already in the fleet")
+        rid = manager._new_id(name)
+        rec = {"id": rid, "name": name, "url": url, "token": token,
+               "added": datetime.now(timezone.utc).isoformat()}
+        remotes[rid] = rec
+        _save_remotes(remotes)
+    log.info("[fleet] remote member added: %s (%s)", name, url)
+    return {k: v for k, v in rec.items() if k != "token"}
+
+
+def remove_remote(ident: str) -> dict:
+    """Unregister a remote member (by id or name) — the remote agent itself is untouched."""
+    with _state_lock():
+        remotes = _load_remotes()
+        rid = ident if ident in remotes else next(
+            (k for k, r in remotes.items() if r["name"] == ident), None)
+        if rid is None:
+            raise FleetError(f"no remote member {ident!r}")
+        rec = remotes.pop(rid)
+        _save_remotes(remotes)
+    log.info("[fleet] remote member removed: %s", rec["name"])
+    return {"id": rid, "name": rec["name"], "removed": ["remote"]}
+
+
+# Reachability probes are network calls — keep them OFF the status() path (it runs on
+# every 3s console poll). `refresh_remote_probes()` is sync + TTL-guarded; the fleet
+# route calls it via asyncio.to_thread before status(), so the loop never blocks.
+_PROBE_TTL = 10.0
+_probe_cache: dict[str, tuple[bool, float]] = {}
+
+
+def refresh_remote_probes(timeout: float = 1.0) -> None:
+    import httpx
+
+    now = time.monotonic()
+    for rec in list_remotes():
+        hit = _probe_cache.get(rec["id"])
+        if hit and now - hit[1] < _PROBE_TTL:
+            continue
+        try:
+            r = httpx.get(f"{rec['url']}/.well-known/agent-card.json", timeout=timeout)
+            alive = r.status_code == 200
+        except httpx.HTTPError:
+            alive = False
+        _probe_cache[rec["id"]] = (alive, now)
+
+
 def status() -> list[dict]:
-    """The host (this instance) + every workspace, with live status (running/stopped)."""
+    """The host (this instance) + every workspace + remote members, with live status
+    (running/stopped; for remotes, the last cached reachability probe)."""
     with _state_lock():
         state = _load_state()
         dirty = False
@@ -218,6 +318,11 @@ def status() -> list[dict]:
                     # focused agent can `delegate_to` an unfocused sibling here. Live only
                     # while running, but the address is stable.
                     "a2a": f"http://127.0.0.1:{port}/a2a" if port else None})
+    for rec in list_remotes():
+        alive = _probe_cache.get(rec["id"], (False, 0.0))[0]
+        out.append({"name": rec["name"], "id": rec["id"], "port": None, "pid": None,
+                    "running": alive, "bundle": "", "remote": True, "url": rec["url"],
+                    "a2a": f"{rec['url']}/a2a"})
     return out
 
 

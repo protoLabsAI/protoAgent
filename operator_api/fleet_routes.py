@@ -29,17 +29,48 @@ def register_fleet_routes(app) -> None:
 
     @app.get("/api/fleet")
     async def _list_fleet():
-        """Every workspace agent + live status (running/stopped, port, pid, bundle). The focused
-        agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active' pointer."""
+        """Every workspace agent + remote member + live status. The focused agent is the URL
+        slug now (ADR 0042 slug routing) — no server-side 'active' pointer. Remote probes are
+        TTL-cached + refreshed off the loop, so the 3s console poll stays cheap."""
+        await asyncio.to_thread(supervisor.refresh_remote_probes)
         return {"agents": supervisor.status()}
+
+    @app.post("/api/fleet/remotes")
+    async def _add_remote(req: dict):
+        """Register a remote protoAgent as a SWITCHABLE fleet member (ADR 0042 §I): it gets a
+        slug window like a local peer, with this hub reverse-proxying its console + A2A. An
+        optional bearer ``token`` is stored for the proxy to attach (never returned)."""
+        try:
+            rec = supervisor.add_remote(str((req or {}).get("name", "")),
+                                        str((req or {}).get("url", "")),
+                                        token=str((req or {}).get("token", "") or ""))
+            return {"ok": True, "agent": rec}
+        except (supervisor.FleetError, manager.WorkspaceError) as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.delete("/api/fleet/remotes/{ident}")
+    async def _remove_remote(ident: str):
+        """Unregister a remote member (the remote agent itself is untouched)."""
+        try:
+            return {"ok": True, **supervisor.remove_remote(ident)}
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/api/fleet/discover")
     async def _discover():
-        """Discover OTHER protoAgents on the box + LAN (local port-scan + mDNS, ADR 0042 §I) —
-        candidates to add as remote delegates. Excludes agents already in this fleet (+ self)."""
+        """Discover OTHER protoAgents on the box + LAN + tailnet (ADR 0042 §I) — candidates to
+        add as remote delegates or remote fleet members. Excludes agents already in this fleet
+        (+ self + registered remotes)."""
+        from urllib.parse import urlparse
+
         from graph.fleet import discovery
         fleet = supervisor.status()
         known = {("127.0.0.1", a["port"]) for a in fleet if a.get("port")}
+        for a in fleet:  # registered remote members aren't 'discoveries' either
+            if a.get("remote") and a.get("url"):
+                u = urlparse(a["url"])
+                if u.hostname and u.port:
+                    known.add((u.hostname, u.port))
         try:  # also exclude our own mDNS self-advert (LAN ip + the host's port)
             host_port = next((a["port"] for a in fleet if a.get("host")), None)
             if host_port:
@@ -56,8 +87,13 @@ def register_fleet_routes(app) -> None:
         sessions persist + resume on a later visit). The host is this instance (always up) → no-op.
         """
         try:
-            host = next((a for a in supervisor.status() if a.get("host")), None)
+            agents = supervisor.status()
+            host = next((a for a in agents if a.get("host")), None)
             if host and name in (host["name"], host["id"]):
+                return {"ok": True, "evicted": []}
+            # A remote member can't be started/evicted from here — reachability is its
+            # own deployment's business. No-op so slug navigation stays uniform.
+            if any(a.get("remote") and name in (a["name"], a["id"]) for a in agents):
                 return {"ok": True, "evicted": []}
             if not supervisor.is_running(name):
                 await asyncio.to_thread(supervisor.start, name)  # resume from checkpoint

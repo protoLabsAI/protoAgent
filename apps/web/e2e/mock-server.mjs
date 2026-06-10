@@ -133,6 +133,12 @@ function handleApiGet(pathname) {
       return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
     case "/api/fleet":
       return { agents: FLEET.agents };
+    case "/api/fleet/discover":
+      // One discoverable sibling on the LAN (not in the fleet) — candidates for
+      // add-as-delegate or add-to-fleet (remote member).
+      return { discovered: FLEET.agents.some((a) => a.name === "remy") ? [] : [
+        { name: "remy", url: "http://192.168.5.50:7871", host: "192.168.5.50", port: 7871 },
+      ] };
     case "/api/archetypes":
       return { archetypes: ARCHETYPES };
     case "/api/activity":
@@ -309,6 +315,20 @@ const server = createServer(async (req, res) => {
       const agent = { name, id: `${name}-ab12`, port: 7899, pid: 5000, running: true, bundle: body.bundle || "" };
       FLEET.agents.push(agent);
       return sendJson(res, { ok: true, agent, installed: [] });
+    }
+    if (pathname === "/api/fleet/remotes" && req.method === "POST") {
+      const name = String(body.name || "").trim();
+      if (FLEET.agents.some((a) => a.name === name)) return sendJson(res, { detail: "an agent named " + name + " already exists" }, 400);
+      const agent = { name, id: `${name}-re01`, port: null, pid: null, running: true, bundle: "", remote: true, url: body.url, a2a: `${body.url}/a2a` };
+      FLEET.agents.push(agent);
+      return sendJson(res, { ok: true, agent });
+    }
+    if (req.method === "DELETE" && /^\/api\/fleet\/remotes\/[^/]+$/.test(pathname)) {
+      const ident = decodeURIComponent(pathname.split("/").pop());
+      const a = FLEET.agents.find((x) => x.remote && (x.id === ident || x.name === ident));
+      if (!a) return sendJson(res, { detail: "no remote member" }, 400);
+      FLEET.agents = FLEET.agents.filter((x) => x !== a);
+      return sendJson(res, { ok: true, id: a.id, name: a.name });
     }
     if (req.method === "PATCH" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
       const ident = decodeURIComponent(pathname.split("/").pop());

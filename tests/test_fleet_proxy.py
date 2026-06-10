@@ -67,32 +67,54 @@ class FakeClient:
         return self._upstream
 
 
-# --- _port_for_slug -------------------------------------------------------
+# --- _target_for_slug -------------------------------------------------------
 
 def test_host_slug_uses_active_port(monkeypatch):
     from runtime import state as state_mod
     monkeypatch.setattr(state_mod.STATE, "active_port", 7870, raising=False)
-    assert proxy._port_for_slug("host") == 7870
+    assert proxy._target_for_slug("host") == ("http://127.0.0.1:7870", {})
 
 
 def test_peer_slug_resolves_when_alive(monkeypatch):
     monkeypatch.setattr(proxy.supervisor, "_load_state",
                         lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
-    assert proxy._port_for_slug("alice") == 7001
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
 
 
 def test_peer_slug_is_none_when_dead(monkeypatch):
     monkeypatch.setattr(proxy.supervisor, "_load_state",
                         lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: False)
-    assert proxy._port_for_slug("alice") is None
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    assert proxy._target_for_slug("alice") is None
 
 
 def test_unknown_slug_is_none(monkeypatch):
     monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
-    assert proxy._port_for_slug("ghost") is None
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    assert proxy._target_for_slug("ghost") is None
+
+
+def test_remote_slug_resolves_to_url_with_bearer(monkeypatch):
+    """A REMOTE member resolves to its registered URL; its stored bearer rides as an
+    Authorization override (the browser's header carries the HUB's token, not the remote's)."""
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: False)
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug",
+                        lambda slug: {"id": "ava-1a2b", "name": "ava",
+                                      "url": "http://100.101.189.45:7871", "token": "sek"})
+    assert proxy._target_for_slug("ava-1a2b") == (
+        "http://100.101.189.45:7871", {"authorization": "Bearer sek"})
+
+
+def test_remote_without_token_adds_no_header(monkeypatch):
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug",
+                        lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": ""})
+    assert proxy._target_for_slug("r1") == ("http://h:1", {})
 
 
 def test_resolution_is_cached_within_ttl(monkeypatch):
@@ -104,8 +126,9 @@ def test_resolution_is_cached_within_ttl(monkeypatch):
 
     monkeypatch.setattr(proxy.supervisor, "_load_state", load)
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
-    assert proxy._port_for_slug("alice") == 7001
-    assert proxy._port_for_slug("alice") == 7001
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
+    assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
     assert calls["n"] == 1  # second hit served from the 1s TTL cache
 
 
@@ -113,35 +136,36 @@ def test_cache_expires_after_ttl(monkeypatch):
     monkeypatch.setattr(proxy.supervisor, "_load_state",
                         lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
-    assert proxy._port_for_slug("alice") == 7001
-    proxy._slug_cache["alice"] = (9999, time.monotonic() - 2.0)  # force stale
-    assert proxy._port_for_slug("alice") == 7001  # re-resolved, not the stale 9999
+    monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
+    assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
+    proxy._slug_cache["alice"] = (("http://127.0.0.1:9999", {}), time.monotonic() - 2.0)  # stale
+    assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})  # re-resolved
 
 
 # --- forward_to -----------------------------------------------------------
 
 async def test_forward_to_returns_409_when_not_running(monkeypatch):
-    monkeypatch.setattr(proxy, "_port_for_slug", lambda slug: None)
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: None)
     resp = await proxy.forward_to("ghost", FakeRequest(), "api/x")
     assert resp.status_code == 409
     assert b"is not running" in resp.body
 
 
-async def test_forward_to_delegates_to_port_when_running(monkeypatch):
-    monkeypatch.setattr(proxy, "_port_for_slug", lambda slug: 7001)
+async def test_forward_to_delegates_to_target_when_running(monkeypatch):
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
     seen = {}
 
-    async def fake_fwd(port, request, path):
-        seen.update(port=port, path=path)
+    async def fake_fwd(base, request, path, extra=None):
+        seen.update(base=base, path=path, extra=extra)
         return "OK"
 
-    monkeypatch.setattr(proxy, "_forward_to_port", fake_fwd)
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
     out = await proxy.forward_to("alice", FakeRequest(), "api/chat")
     assert out == "OK"
-    assert seen == {"port": 7001, "path": "api/chat"}
+    assert seen == {"base": "http://127.0.0.1:7001", "path": "api/chat", "extra": {}}
 
 
-# --- _forward_to_port -----------------------------------------------------
+# --- _forward_to_base -----------------------------------------------------
 
 async def test_forward_strips_hop_headers_and_pipes_body(monkeypatch):
     up = FakeUpstream(
@@ -158,7 +182,7 @@ async def test_forward_strips_hop_headers_and_pipes_body(monkeypatch):
         query={"stream": "1"},
         body=b"{}",
     )
-    resp = await proxy._forward_to_port(7001, req, "api/chat")
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", req, "api/chat")
 
     # request: hop-by-hop headers dropped, app headers + target preserved
     assert "host" not in client.built["headers"]
@@ -180,7 +204,7 @@ async def test_forward_strips_hop_headers_and_pipes_body(monkeypatch):
 async def test_forward_returns_502_on_connect_error(monkeypatch):
     client = FakeClient(raise_exc=httpx.ConnectError("refused"))
     monkeypatch.setattr(proxy, "_get_client", lambda: client)
-    resp = await proxy._forward_to_port(7001, FakeRequest(), "api/x")
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "api/x")
     assert resp.status_code == 502
     assert b"not reachable" in resp.body
 

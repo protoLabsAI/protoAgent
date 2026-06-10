@@ -43,32 +43,44 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-# Per-slug port resolution (ADR 0042 slug routing) — each console window targets an agent by URL
-# slug (/agents/<slug>/…) instead of a single global "active". 'host' = this instance; a peer =
-# its workspace port. 1s TTL cache, keyed by slug, to keep the proxy hot path cheap.
+# Per-slug target resolution (ADR 0042 slug routing) — each console window targets an agent by
+# URL slug (/agents/<slug>/…) instead of a single global "active". 'host' = this instance; a
+# local peer = its workspace port; a REMOTE member = its registered URL (+ its bearer, if one
+# was stored — replacing the browser's Authorization, which carries the HUB's token, not the
+# remote's). 1s TTL cache, keyed by slug, to keep the proxy hot path cheap.
 _slug_cache: dict = {}
 
 
-def _port_for_slug(slug: str) -> int | None:
+def _target_for_slug(slug: str) -> tuple[str, dict] | None:
+    """``(base_url, extra_headers)`` for a slug, or None when it isn't reachable."""
     now = time.monotonic()
     hit = _slug_cache.get(slug)
     if hit and now - hit[1] < 1.0:
         return hit[0]
+    target: tuple[str, dict] | None = None
     if slug == "host":
         from runtime.state import STATE
         port = getattr(STATE, "active_port", None)
+        target = (f"http://127.0.0.1:{port}", {}) if port else None
     else:
         rec = supervisor._load_state().get(slug)
-        port = rec.get("port") if rec and supervisor._alive(rec.get("pid")) else None
-    _slug_cache[slug] = (port, now)
-    return port
+        if rec and supervisor._alive(rec.get("pid")):
+            target = (f"http://127.0.0.1:{rec['port']}", {})
+        else:
+            remote = supervisor.remote_for_slug(slug)
+            if remote:
+                extra = {"authorization": f"Bearer {remote['token']}"} if remote.get("token") else {}
+                target = (remote["url"], extra)
+    _slug_cache[slug] = (target, now)
+    return target
 
 
-async def _forward_to_port(port: int, request, path: str):
-    """Stream-proxy ``request`` to ``/<path>`` on 127.0.0.1:<port> (SSE-safe)."""
-    url = f"http://127.0.0.1:{port}/{path}"
+async def _forward_to_base(base: str, request, path: str, extra_headers: dict | None = None):
+    """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe)."""
+    url = f"{base}/{path}"
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+    headers.update(extra_headers or {})
 
     client = _get_client()
     upstream_req = client.build_request(
@@ -92,8 +104,10 @@ async def _forward_to_port(port: int, request, path: str):
 
 async def forward_to(slug: str, request, path: str):
     """Reverse-proxy to the agent named by ``slug`` (/agents/<slug>/* route, ADR 0042 slug
-    routing). ``host`` targets this instance; 409 if the agent isn't running."""
-    port = _port_for_slug(slug)
-    if port is None:
+    routing). ``host`` targets this instance; a remote member targets its URL; 409 if the
+    agent isn't running/registered."""
+    target = _target_for_slug(slug)
+    if target is None:
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
-    return await _forward_to_port(port, request, path)
+    base, extra = target
+    return await _forward_to_base(base, request, path, extra)

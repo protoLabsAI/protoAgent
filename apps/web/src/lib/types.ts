@@ -499,6 +499,8 @@ export type FleetAgent = {
   bundle: string; // "" for a Basic agent
   a2a?: string; // the agent's own A2A endpoint (focus-independent)
   host?: boolean; // the instance serving this console — can't be stopped/removed from itself
+  remote?: boolean; // a REMOTE member (ADR 0042 §I) — proxied by URL, no start/stop from here
+  url?: string; // the remote member's base URL
 };
 
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.

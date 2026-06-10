@@ -118,6 +118,25 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // same enable-and-retry path as fleet-row adds.
   const addRemote = (d: DiscoveredAgent) => addDelegate.mutate({ name: d.name, url: `${d.url}/a2a` });
 
+  // …or join the fleet outright (ADR 0042 §I): the remote becomes a SWITCHABLE member —
+  // a slug window, console + A2A reverse-proxied through this hub. Discovered names can
+  // collide with existing agents (every template fork is "protoagent") — suffix on 400.
+  const addMember = useMutation({
+    mutationFn: (d: DiscoveredAgent) => api.addRemoteAgent({ name: d.name, url: d.url }),
+    onMutate: () => setError(null),
+    onError: (e: Error) => setError(e.message),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.fleet });
+      void scan(); // the new member drops out of the discover list
+    },
+  });
+  const removeMember = useMutation({
+    mutationFn: (a: FleetAgent) => api.removeRemoteAgent(a.id),
+    onMutate: () => setError(null),
+    onError: (e: Error) => setError(e.message),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+
   return (
     <section className="panel stage-panel">
       <PanelHeader
@@ -181,10 +200,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         a.name
                       )}
                       {a.host ? <span className="fleet-host-tag">this instance</span> : null}
+                      {a.remote ? <span className="fleet-host-tag" title="A remote fleet member — proxied by URL">remote</span> : null}
                       {isActive ? <span className="fleet-active-tag">active</span> : null}
                     </span>
                     <span className="fleet-meta">
-                      :{a.port}
+                      {a.remote ? a.url : `:${a.port}`}
                       {a.pid ? ` · pid ${a.pid}` : ""}
                       {a.bundle ? ` · ${a.bundle}` : ""}
                     </span>
@@ -203,9 +223,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         </Button>
                       )
                     ) : null}
+                    {/* A remote member can't be started/stopped/renamed from here — only
+                        unregistered (the remote agent itself is untouched). */}
+                    {a.remote ? (
+                      <Button icon variant="ghost" title="Remove from this fleet (the remote agent is untouched)"
+                        disabled={removeMember.isPending}
+                        onClick={() => removeMember.mutate(a)}>
+                        <Trash2 size={14} />
+                      </Button>
+                    ) : null}
                     {/* The host serves this console — it can't stop or remove itself; its
                         display name is edited in Settings → Identity instead. */}
-                    {a.host ? null : (
+                    {a.host || a.remote ? null : (
                       <>
                         <Button icon variant="ghost" title="Rename (display name only — the id/URL stays)"
                           disabled={rename.isPending}
@@ -258,6 +287,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       <span className="fleet-meta">{d.url}</span>
                     </div>
                     <div className="fleet-row-actions">
+                      {/* Two ways in: a delegate of the FOCUSED agent (delegate_to flows), or a
+                          full fleet MEMBER — a switchable slug window proxied through this hub. */}
+                      <Button icon variant="ghost" title="Add to this fleet (a switchable remote member)"
+                        disabled={addMember.isPending}
+                        onClick={() => addMember.mutate(d)}>
+                        <Plus size={14} />
+                      </Button>
                       {delegateNames.has(d.name) ? (
                         <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
                       ) : (
