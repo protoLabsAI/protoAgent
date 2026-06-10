@@ -27,7 +27,7 @@ Every plugin view should follow these. Each links a section below.
 |---|---|
 | **1. Serve the path you declare** — the manifest's `views[].path` MUST equal a path your `register_router` actually serves. | The console iframes exactly that path. Default router prefix is `/plugins/<id>`; a custom prefix (as the artifact plugin uses) is fine — just keep `path` in sync with it. A mismatch is a blank iframe. |
 | **2. Gate by default** — mount the router under `prefix="/api/plugins/<id>"`. | Routes under `/api/*` inherit the operator **bearer gate** (ADR 0026 D5). Use the ungated `/plugins/<id>` prefix **only** for genuinely public assets (e.g. the page itself — see [why the page is public](#why-the-page-is-public-but-its-data-is-gated)). |
-| **3. Same-origin, slug-aware, never hardcode** — derive `base = location.pathname.split("/plugins/")[0]` and prefix every fetch/asset with it. | Never hardcode an absolute `/api/.../`, `/plugins/.../`, or `http://localhost:PORT`. On the host window `base=""`; through the ADR 0042 `/agents/<slug>/` fleet proxy `base="/agents/<slug>"`. Hardcoding talks to the wrong agent and breaks the same-origin token handshake. |
+| **3. Same-origin, slug-aware, never hardcode** — for DATA calls just use the kit's slug-aware `apiFetch`/`apiUrl` (plugin-kit 0.26+): `kit.apiFetch("/api/plugins/<id>/x")` resolves itself. Only the kit's OWN `<link>`/`<script>` need a hand-derived `base = location.pathname.split("/plugins/")[0]` — they load *before* the kit exists. | Never hardcode an absolute `/api/.../`, `/plugins/.../`, or `http://localhost:PORT`. On the host window `base=""`; through the ADR 0042 `/agents/<slug>/` fleet proxy `base="/agents/<slug>"`. `apiFetch` reaches the right agent on both; hardcoding talks to the wrong agent and breaks the same-origin token handshake. |
 | **4. Link the DS kit** — load `<base>/_ds/plugin-kit.css` + `<base>/_ds/plugin-kit.js`. | Pull colors/components/handshake from the console's own design system instead of hand-rolling a hex map or pinning a CDN. The kit's `--pl-*` tokens re-skin to the operator's live theme for free. See [the kit helpers](#the-kit-helpers-plugin-kitjs). |
 
 ## The shape
@@ -185,15 +185,16 @@ module (`import { initPluginView } from ".../plugin-kit.js"`). The API:
 |---|---|
 | `initPluginView(onInit?)` | Starts listening for the handshake. Maps the console `theme` onto the DS `--pl-*` tokens on the initial `protoagent:init` **and** on every live `protoagent:theme` re-theme. `onInit({ token, theme })` (optional) fires on both. Call once on load. |
 | `getToken()` | The captured operator bearer (null until the handshake delivers one). |
-| `apiFetch(input, init?)` | A same-origin `fetch` with `Authorization: Bearer <token>` attached when a token is present. Use it for every gated `/api/...` call. |
-| `window.protoPluginView` | The same three helpers as a global, for no-build classic script-tag pages. |
+| `apiUrl(path)` | Resolves a root-relative `path` to its **slug-aware** URL — prepends `/agents/<slug>` under the fleet proxy, leaves it untouched on the host window (plugin-kit 0.26+). Idempotent: a path already under the base is returned as-is. |
+| `apiFetch(input, init?)` | A same-origin `fetch` that resolves `input` through `apiUrl` (**slug-aware** — pass a bare `/api/...`, no manual base) **and** attaches `Authorization: Bearer <token>` when present. Use it for every gated `/api/...` call. |
+| `window.protoPluginView` | The same helpers as a global, for no-build classic script-tag pages. |
 
 So a whole view's handshake + authed fetch is:
 
 ```js
 const kit = window.protoPluginView;
 kit.initPluginView();                         // handshake + live re-theme, hands-free
-const res = await kit.apiFetch(base + "/api/chat", { method: "POST", body: ... });
+const res = await kit.apiFetch("/api/chat", { method: "POST", body: ... });  // slug-aware, no manual base
 ```
 
 Prefer the kit over hardcoding hex values, a theme map, or a CDN — colors and the handshake both come

@@ -18,11 +18,14 @@
        public chrome on purpose: a browser iframe page-load can't carry an
        Authorization header — so only the page is public; all its data is gated.)
 
-    3. SAME-ORIGIN, SLUG-AWARE, NEVER HARDCODE — derive `base` from the iframe's
-       OWN path and prefix EVERY fetch/asset with it. On the host window base=""
-       (so /api/chat); through the fleet proxy base="/agents/<slug>" (so
-       /agents/<slug>/api/chat) — the panel always talks to ITS agent, never the
-       host's (ADR 0042). Hardcoding "/api/chat" is the fleet-UNSAFE antipattern.
+    3. SAME-ORIGIN, SLUG-AWARE, NEVER HARDCODE — the kit's apiFetch/apiUrl derive
+       the slug-aware base FOR you (plugin-kit 0.26+), so a DATA call is just
+       `kit.apiFetch("/api/chat")`. On the host window that resolves to /api/chat;
+       through the fleet proxy to /agents/<slug>/api/chat — the panel always talks
+       to ITS agent, never the host's (ADR 0042). The ONLY thing you base-prefix by
+       hand is the kit's OWN <link>/<script> (rule 4): those load before the kit
+       exists, so there's nothing yet to resolve them. Hardcoding "/api/chat" with
+       no kit, or "http://localhost:PORT", is the fleet-UNSAFE antipattern.
 
     4. LINK THE KIT — pull the design system from the console's own, same-origin
        <base>/_ds/plugin-kit.{css,js} instead of hand-rolling a hex/theme map or
@@ -130,8 +133,10 @@
   async function sendTurn(message) {
     const pending = bubble("assistant pending", "thinking…");
     try {
-      // RULE 2 + 3: kit.apiFetch attaches the bearer; base keeps it on OUR agent.
-      const res = await kit.apiFetch(base + "/api/chat", {
+      // RULE 2 + 3: kit.apiFetch attaches the bearer AND derives the slug-aware
+      // base (plugin-kit 0.26+) — a bare "/api/chat" reaches OUR agent on the host
+      // window and through the fleet proxy alike. No manual base for data calls.
+      const res = await kit.apiFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, session_id: sessionId }),
