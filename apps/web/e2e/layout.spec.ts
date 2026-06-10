@@ -22,7 +22,7 @@ test("right panel resizes by dragging its handle and the width persists", async 
   const right = page.locator(".pl-appshell__col--right");
   const before = (await right.boundingBox())!.width;
 
-  const handle = page.getByRole("separator", { name: "Resize right panel" });
+  const handle = page.getByRole("separator", { name: "Resize panels" });
   const hb = (await handle.boundingBox())!;
   // Drag the handle left ~120px → the panel grows.
   await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
@@ -42,7 +42,7 @@ test("right panel resizes by dragging its handle and the width persists", async 
 test("right panel is keyboard-resizable + double-click collapses (ADR 0035 S3)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const right = page.locator(".pl-appshell__col--right");
-  const handle = page.getByRole("separator", { name: "Resize right panel" });
+  const handle = page.getByRole("separator", { name: "Resize panels" });
   const before = (await right.boundingBox())!.width;
 
   // ArrowLeft widens the panel (handle is on its left edge).
