@@ -214,7 +214,9 @@ async def discover(*, known: set | None = None,
     """Other protoAgents (local + LAN + tailnet) minus the ones already in the fleet.
 
     ``known`` is a set of ``(host, port)`` already known (the host itself + existing members);
-    those are filtered out. Returns deduped ``[{name, url, host, port}]``."""
+    those are filtered out. Returns ``[{name, url, host, port}]`` — duplicates by
+    ``(host, port)`` are collapsed; a dual-homed machine (LAN IP via mDNS + ``100.x``
+    via tailnet) intentionally keeps both addresses."""
     known = known or set()
     skip_local = {p for (h, p) in known if h in ("127.0.0.1", "localhost")}
     local, network, tailnet = await asyncio.gather(  # independent channels — scan concurrently
