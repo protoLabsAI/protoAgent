@@ -21,6 +21,28 @@ const lavender = 'var(--pl-color-brand-lavender)';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
+// Derive a tidy category from a repo's topics so cards group sensibly with no manual
+// upkeep. A small keyword map covers common domains; anything else falls back to its
+// first real topic (and plugins.json can always override the category per id).
+const CAT_MAP: [RegExp, string][] = [
+  [/browser|automation|cdp|chrome|playwright|scrape/, 'Automation'],
+  [/board|kanban|beads|orchestrat|coding/, 'Orchestration'],
+  [/finance|trading|trade|market|spacetrader/, 'Finance'],
+  [/doom|game|arcade/, 'Games'],
+  [/artifact|generative|render|canvas|\bui\b/, 'Generative UI'],
+  [/langgraph|\bsdk\b|framework|devkit/, 'Framework'],
+  [/discord|slack|telegram|\bchat\b|email|gmail|calendar/, 'Comms'],
+];
+const title = (s: string) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+function categoryFromTopics(topics: string[]): string {
+  const hay = (topics || []).join(' ').toLowerCase();
+  for (const [re, cat] of CAT_MAP) if (re.test(hay)) return cat;
+  const first = (topics || []).find(
+    (t) => !['protoagent', 'protoagent-plugin', 'protoagent-bundle'].includes(t),
+  );
+  return first ? title(first) : 'Ecosystem';
+}
+
 function bundledPlugins() {
   const out: any[] = [];
   try {
@@ -34,7 +56,7 @@ function bundledPlugins() {
         id: m.id || id,
         name: m.name || id,
         tagline: String(m.description || '').replace(/\s+/g, ' ').trim(),
-        category: 'Bundled',
+        category: 'Built-in',
         adds: Object.keys(m.capabilities || {}),
         official: true,
         bundled: true,
@@ -74,17 +96,25 @@ async function ecosystemPlugins() {
     }
     return items
       .filter((r: any) => !r.archived && !r.disabled && !r.private)
-      .map((r: any) => ({
-        id: r.name,
-        name: r.name,
-        tagline: String(r.description || 'A protoAgent plugin.').trim(),
-        category: 'Ecosystem',
-        adds: (r.topics || []).filter((t: string) => t !== 'protoagent' && t !== 'protoagent-plugin').slice(0, 5),
-        official: true,
-        install: r.html_url,
-        // No homepage → docs points at the README, not a dead-link back to Source.
-        links: { source: r.html_url, docs: r.homepage || `${r.html_url}#readme` },
-      }));
+      .map((r: any) => {
+        const isBundle = (r.topics || []).includes('protoagent-bundle');
+        const topics = (r.topics || []).filter(
+          (t: string) => !['protoagent', 'protoagent-plugin', 'protoagent-bundle'].includes(t),
+        );
+        return {
+          id: r.name,
+          name: r.name,
+          tagline: String(r.description || (isBundle ? 'A protoAgent plugin bundle.' : 'A protoAgent plugin.')).trim(),
+          // Bundles are kept in their OWN group; plugins auto-group by domain topic.
+          category: isBundle ? 'Bundle' : categoryFromTopics(topics),
+          adds: topics.slice(0, 5),
+          official: true,
+          bundle: isBundle,
+          install: r.html_url,
+          // No homepage → docs points at the README, not a dead-link back to Source.
+          links: { source: r.html_url, docs: r.homepage || `${r.html_url}#readme` },
+        };
+      });
   } catch (e) { console.warn('[plugins] GitHub unreachable — skipping ecosystem', e); return []; }
 }
 
@@ -145,9 +175,9 @@ const counts = Object.fromEntries(
         <label for="plugin-sort">Sort</label>
         <select id="plugin-sort"
           class="rounded-lg bg-[var(--pl-color-bg-raised)] border border-[var(--pl-color-border)] px-2.5 py-2 text-sm text-zinc-200 focus:outline-none focus:border-[color:var(--pl-color-brand-lavender)]">
+          <option value="category" selected>Category</option>
           <option value="featured">Featured</option>
           <option value="name">Name A–Z</option>
-          <option value="category">Category</option>
         </select>
       </div>
     </div>
@@ -207,15 +237,19 @@ const counts = Object.fromEntries(
     <!-- Publish your own -->
     <div class="mt-16 card p-8">
       <h2 class="text-2xl font-semibold mb-2">Publish your own</h2>
-      <p class="text-zinc-400 mb-6 max-w-2xl text-sm">
-        A plugin is a public repo with a <code class="font-mono text-zinc-300">protoagent.plugin.yaml</code> manifest.
-        Anyone can install it from its git URL. To get it discovered + listed here:
+      <p class="text-zinc-400 mb-4 max-w-2xl text-sm">
+        A plugin is a public repo with a <code class="font-mono text-zinc-300">protoagent.plugin.yaml</code> manifest —
+        anyone can install one from its git URL with <code class="font-mono text-zinc-300">plugin install &lt;git-url&gt;</code>.
+      </p>
+      <p class="text-zinc-500 mb-6 max-w-2xl text-sm">
+        For safety, this page only auto-lists plugins from the <strong class="text-zinc-300">protoLabsAI</strong> org —
+        tagging an outside repo never links it here on its own.
       </p>
       <ol class="space-y-3 text-sm text-zinc-300 mb-6">
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">1.</span>
-          <span>Tag your repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> GitHub topic — that's it. This page <strong>auto-discovers</strong> tagged repos in the org on the next deploy; no PR needed.</span></li>
+          <span><strong>First-party</strong> (in our org): tag the repo with the <a href={topic} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">protoagent-plugin</code></a> topic and it lists itself on the next deploy.</span></li>
         <li class="flex gap-3"><span style={`color:${lavender}`} class="font-mono">2.</span>
-          <span><em>Optional:</em> for nicer copy or a specific category, add an override entry (keyed by <code class="font-mono">id</code>) to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a>.</span></li>
+          <span><strong>Community</strong>: tag the topic so it's discoverable across GitHub, then open a PR adding it to <a href={listFile} target="_blank" rel="noopener noreferrer" class="underline underline-offset-2 hover:text-white"><code class="font-mono">plugins.json</code></a> — we review it before it's listed here.</span></li>
       </ol>
       <div class="flex flex-wrap items-center gap-4">
         <a href={publishDocs} target="_blank" rel="noopener noreferrer"
