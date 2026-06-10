@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any `*/` glued to identifier characters inside a `src` CSS file — so this class
   of corruption can never reach `dist` silently again.
 ### Added
+- **Design-system 0.26 + slug-aware plugin-kit `apiFetch`/`apiUrl` (protoContent#208).**
+  Bumped `@protolabsai/ui` to 0.26, whose served plugin-kit now derives the
+  `/agents/<slug>/` fleet-proxy base itself — a plugin view's data call is just
+  `kit.apiFetch("/api/plugins/<id>/x")`, no manual
+  `location.pathname.split("/plugins/")[0]` prefixing, and it stays correct on the
+  host window **and** through the fleet proxy (ADR 0042). View-authoring rule 3 is
+  now automatic for data. Updated the `chat_example` gold-standard + the
+  building-a-view guide (rule 3 + the kit-helper table, now documenting the new
+  `apiUrl`) to model the simpler pattern; the only thing a view still base-prefixes
+  by hand is the kit's own `<link>`/`<script>` (they load before the kit exists).
+  0.26 is a **kit-only** DS release — no console component changed (verified by
+  diffing the package), so the bump carries no console visual risk.
 - **Plugin update / version-awareness (ADR 0027 follow-on).** Git-installed
   plugins now show whether they're current and can be updated in place. A new
   `GET /api/plugins/updates` reports per-plugin freshness — `git ls-remote` the
