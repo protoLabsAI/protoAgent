@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Remote fleet members — the agent there, the UI here** (ADR 0042 §I). Register any
+  reachable protoAgent by URL (Discover → *Add to this fleet*, or
+  `POST /api/fleet/remotes`) and it becomes a switchable member: a slug window like a
+  local peer, console + A2A reverse-proxied through the hub, with the remote's bearer
+  attached server-side. Run agents fully headless on other machines and operate them
+  all from one console. (#839)
+- **Tenant guard** — when a *different* backend reuses this console's address (a port
+  handed between agents), the previous tenant's persisted chat view is dropped (one
+  reload + a toast) instead of rendering another agent's transcripts. Same-agent
+  restarts/upgrades never trip it. (#831)
 - **Tailnet discovery** — fleet discovery gains a third channel: online **Tailscale**
   peers (via the local `tailscale` CLI) are probed for agent-cards over the fleet port
   range, since mDNS multicast never crosses a WireGuard overlay. All three channels
@@ -37,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proxy. (#819)
 
 ### Fixed
+- **Discover no longer lists a co-located agent twice** — its mDNS advert (LAN IP) now
+  collapses with the local-scan hit (loopback), and a fleet peer's own advert no longer
+  reappears as "discovered". (#837)
 - **mDNS advertise actually works** — `Zeroconf.register_service` was called on the
   event loop and deadlocked it: a ~10s stall at every boot, then a swallowed failure,
   so **no agent had ever advertised** since the feature shipped. Now runs off-loop,
