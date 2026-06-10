@@ -45,6 +45,14 @@ def _operator_allowed_dirs() -> list[str]:
 
 
 def _operator_runtime_status():
+    # Live co-location check (#706) — re-evaluated per poll so the shell banner
+    # appears/clears as siblings come and go. Quiet (empty `.instances/`) costs one
+    # is_dir(); the `ps` guard only runs when sibling heartbeats actually exist.
+    from paths import colocation_warning
+    try:
+        warnings = [w for w in (colocation_warning(),) if w]
+    except Exception:  # noqa: BLE001 — status must never raise
+        warnings = []
     return _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),
@@ -64,6 +72,7 @@ def _operator_runtime_status():
         plugins=STATE.plugin_meta,
         telemetry_store=STATE.telemetry_store,
         checkpoint_path=STATE.checkpoint_path,
+        warnings=warnings,
     )
 
 

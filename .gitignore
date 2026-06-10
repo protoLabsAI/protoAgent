@@ -51,7 +51,10 @@ HANDOFF.md
 handoffs/
 
 # VitePress build artifacts + node modules
+# (both forms: `node_modules/` only matches real dirs — a worktree's symlinked
+# node_modules needs the bare pattern too)
 node_modules/
+node_modules
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 

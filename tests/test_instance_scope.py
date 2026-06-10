@@ -62,3 +62,65 @@ def test_skills_tier_config_parses(tmp_path):
     c = LangGraphConfig.from_yaml(str(cfg))
     assert c.skills_shared is True
     assert c.commons_path == "/tmp/commons"
+
+
+# ── co-location heartbeats (#706) ─────────────────────────────────────────────
+def _home(monkeypatch, tmp_path):
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    monkeypatch.delenv("PROTOAGENT_AUTO_SCOPE", raising=False)
+    monkeypatch.setattr(paths, "data_home", lambda: tmp_path)
+    return tmp_path
+
+
+def test_register_unregister_heartbeat(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    paths.register_instance(7871, "protoagent")
+    import os
+    f = home / ".instances" / f"{os.getpid()}.json"
+    assert f.exists()
+    assert paths.colocated_instances() == []  # self doesn't count as a sibling
+    paths.unregister_instance()
+    assert not f.exists()
+
+
+def test_scoped_heartbeats_live_in_scoped_root(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
+    paths.register_instance(7874, "roxy")
+    import os
+    assert (tmp_path / "roxy" / ".instances" / f"{os.getpid()}.json").exists()
+    paths.unregister_instance()
+
+
+def test_colocated_sibling_detected_and_warned(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    d = home / ".instances"; d.mkdir()
+    (d / "12345.json").write_text('{"pid": 12345, "port": 7871, "identity": "roxy"}')
+    monkeypatch.setattr(paths, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: True)
+    sibs = paths.colocated_instances()
+    assert sibs == [{"pid": 12345, "port": 7871, "identity": "roxy"}]
+    w = paths.colocation_warning()
+    assert "roxy" in w and "PROTOAGENT_INSTANCE" in w and str(home) in w
+
+
+def test_stale_heartbeats_pruned(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    d = home / ".instances"; d.mkdir()
+    (d / "12345.json").write_text('{"pid": 12345}')      # dead pid
+    (d / "23456.json").write_text('{"pid": 23456}')      # recycled pid (not a server)
+    (d / "not-a-pid.json").write_text("{}")              # garbage name → ignored
+    monkeypatch.setattr(paths, "_pid_alive", lambda pid: pid == 23456)
+    monkeypatch.setattr(paths, "_is_protoagent_pid", lambda pid: False)
+    assert paths.colocated_instances() == []
+    assert not (d / "12345.json").exists() and not (d / "23456.json").exists()
+    assert paths.colocation_warning() is None
+
+
+def test_runtime_status_carries_warnings():
+    from operator_api.runtime import build_runtime_status
+    s = build_runtime_status(config=None, setup_complete=False, graph_loaded=False,
+                             warnings=["sibling alert", ""])
+    assert s["warnings"] == ["sibling alert"]            # empties filtered
+    s2 = build_runtime_status(config=None, setup_complete=False, graph_loaded=False)
+    assert s2["warnings"] == []
