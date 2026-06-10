@@ -87,6 +87,7 @@ import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
+import { Alert } from "@protolabsai/ui/data";
 import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useActiveTheme } from "../lib/useActiveTheme";
@@ -679,12 +680,12 @@ export function App() {
       </div>
 
       {/* Operational warnings from the runtime status (#706 co-located instances etc.) —
-          a slim alert strip under the topbar. Server-driven: appears/clears with the poll. */}
+          a slim alert strip under the topbar. Server-driven: appears/clears with the poll.
+          DS Alert owns the visuals; the class is placement + the e2e hook. */}
       {(runtime?.warnings ?? []).map((w) => (
-        <div className="shell-warning-banner" role="alert" key={w}>
-          <CircleAlert size={14} />
-          <span>{w}</span>
-        </div>
+        <Alert status="warning" className="shell-warning-banner" key={w}>
+          {w}
+        </Alert>
       ))}
 
       {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +

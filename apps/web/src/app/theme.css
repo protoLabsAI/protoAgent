@@ -110,19 +110,14 @@ h2 {
 
 /* Operational warning strip under the topbar (#706 co-located instances etc.) —
    server-driven via runtime-status `warnings`; appears/clears with the poll. */
+/* Placement only — DS Alert (pl-alert) owns the visuals. Square it off: it's a strip
+   between the topbar and the shell, not a floating card. */
 .shell-warning-banner {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  font-size: 12.5px;
-  line-height: 1.4;
-  color: var(--warning, #d29922);
-  background: color-mix(in srgb, var(--warning, #d29922) 12%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--warning, #d29922) 35%, transparent);
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
 }
-.shell-warning-banner svg { flex: none; }
 
 /* Topbar health light — one dot, detail on hover, click to refresh. */
 .status-dot {
@@ -2888,24 +2883,9 @@ textarea {
 }
 
 /* ── Settings surface ─────────────────────────────────────────────────────── */
+/* Banners are DS Alert (pl-alert) now — only the stage spacing lives here. */
 .settings-banner {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
   margin-bottom: 10px;
-  border-radius: var(--radius);
-  background: rgba(212, 189, 79, 0.14);
-  border: 1px solid rgba(212, 189, 79, 0.32);
-  color: #eadf9a;
-  font-size: 0.82rem;
-}
-.settings-banner svg { flex: none; }
-/* Active-runtime banner (ADR 0033) — info tone (brand violet), not the amber warning. */
-.settings-banner.runtime-banner {
-  background: color-mix(in srgb, var(--pl-color-brand-lavender) 14%, transparent);
-  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 32%, transparent);
-  color: inherit;
 }
 .settings-status {
   margin: 0 0 10px;
