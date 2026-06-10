@@ -36,6 +36,16 @@ Every env var the template reads at runtime.
 
 Setup without the wizard: `python -m server --setup` validates the live config (`model.api_base` set + key resolvable via `secrets.yaml`/`OPENAI_API_KEY`) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
 
+## Fleet (ADR 0042)
+
+The hub spawns local fleet members as detached `--ui none` processes on their own ports.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` | (unset) | By default the hub **spins its local members down when it shuts down** ("host down → fleet down" — keeps a rebuilt hub from leaving members running stale code; sessions resume from their `instance.id`-scoped checkpoints on the next switch, so it stops processes, not work). Set `1`/`true` to keep members running across a hub restart — for genuinely long-running detached agents. |
+| `PROTOAGENT_FLEET_MAX_WARM` | `0` | Keep-N-warm cap: at most this many members stay running; switching to another resumes it and evicts the least-recently-active beyond the cap (`0`/unset = unlimited). |
+| `PROTOAGENT_FLEET_WARM_GRACE` | `0` | Seconds a just-active member is spared from keep-warm eviction (may be mid background turn); `0` = pure LRU. |
+
 ## Authentication — A2A bearer token
 
 | Variable | Default | What |

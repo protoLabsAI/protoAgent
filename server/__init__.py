@@ -586,6 +586,18 @@ def _main():
             _paths.unregister_instance()
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             pass
+        # Spin down LOCAL fleet members so they don't outlive the host running OLD
+        # code (the stale-member desync — docs/dev/version-coherence.md Axis 1).
+        # Default on; opt out with PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT=1. Hub-only
+        # (a member's scoped fleet.json is empty), bounded + off the loop, best-effort.
+        # Done early so members start exiting while the hub tears down the rest.
+        try:
+            from graph.fleet import supervisor as _sup
+            stopped = await asyncio.to_thread(_sup.shutdown_all)
+            if stopped:
+                log.info("[fleet] spun down %d member(s) on host exit", len(stopped))
+        except Exception:  # noqa: BLE001 — member teardown is best-effort on shutdown
+            log.exception("[fleet] spin-down on host exit failed")
         # Withdraw the mDNS advertisement (ADR 0042 §I). Off the loop — same deadlock as
         # advertise (zc.close() posts to and waits on the loop it's called from).
         try:
@@ -763,12 +775,18 @@ def _main():
 
     # --- React operator console (tiers full/console; skipped in 'none') ------
     static_dir = _bundle_root() / "static"
-    if ui != "none":
-        from operator_api.web import mount_react_app
+    web_dist_dir = _bundle_root() / "apps" / "web" / "dist"
+    from operator_api.web import mount_ds_plugin_kit, mount_react_app
 
-        web_dist_dir = _bundle_root() / "apps" / "web" / "dist"
-        if mount_react_app(fastapi_app, web_dist_dir):
-            log.info("React operator console mounted at /app")
+    # The DS plugin-kit (/_ds/plugin-kit.{css,js}) rides EVERY tier — including
+    # `--ui none` fleet members, which serve their plugins' view pages but never
+    # mount the console SPA. Without it, a proxied plugin view renders with no design
+    # system (Axis 3 of docs/dev/version-coherence.md). Independent of the SPA mount.
+    mount_ds_plugin_kit(fastapi_app, web_dist_dir)
+
+    # The console SPA (/app) — console/full tiers only; 'none' (members/headless) skip it.
+    if ui != "none" and mount_react_app(fastapi_app, web_dist_dir):
+        log.info("React operator console mounted at /app")
 
     # --- Static + PWA assets (skipped in 'none') ---------------------------
     if ui != "none" and static_dir.exists():
