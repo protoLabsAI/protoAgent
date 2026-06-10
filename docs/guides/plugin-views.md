@@ -37,6 +37,41 @@ PascalCase (`LineChart`) or kebab-case (`line-chart`). A curated common set
 limited to an allowlist and the console bundle stays lean. An unknown name falls back
 to a generic plugin glyph.
 
+## Claim the chat slot (`slot: "chat"`)
+
+The chat surface is a **slot** (ADR 0045): your view can *replace* the built-in chat
+panel instead of adding a rail icon.
+
+```yaml
+views:
+  - id: panel
+    label: "My chat"
+    icon: MessageSquare
+    path: /plugins/mychat/panel
+    slot: chat          # replace the built-in chat panel
+```
+
+What changes versus a normal view:
+
+- Your page renders under the core **Chat** rail id — you get **no separate icon**,
+  and the first enabled claimant wins.
+- You inherit chat's mount contract: the iframe is kept mounted for the **app's
+  lifetime** (a normal view unmounts when you switch away); visibility toggles only.
+  That's what keeps an in-flight streamed turn alive across surface switches.
+- Without a claimant, the built-in chat renders — the console is never chat-less.
+
+Your page speaks the same protocol the built-in panel does: the
+[init handshake](#the-init-handshake-bearer--theme) hands you the bearer + theme, and
+the agent itself is driven over **A2A 1.0** (`SendStreamingMessage` for the streaming
+turn, `tasks/get` for reconciliation) plus three REST endpoints (`/api/chat/commands`,
+`DELETE /api/chat/sessions/{id}`, non-streaming `POST /api/chat`). Before shipping,
+read the **conformance checklist in ADR 0045** — it encodes the hard-won invariants
+(never remount mid-turn, reconcile stuck streams on load, render terminal text once,
+key local state per agent slug).
+
+Forks have an in-process alternative: register a `src/ext` surface with `id: "chat"`
+(ADR 0038 D3) — it overrides the slot ahead of plugin claims, with full React context.
+
 ## Serve the page
 
 The page is yours — any framework, or plain HTML. Serve it from the plugin's

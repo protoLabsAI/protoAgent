@@ -67,7 +67,7 @@ import { BootGate } from "./BootGate";
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { InboxPanel } from "../inbox/InboxPanel";
-import { ChatSurface } from "../chat/ChatSurface";
+import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
@@ -273,9 +273,14 @@ export function App() {
   // the rail into a full registry.
   // A plugin view declares its placement: "rail" (default — a left-rail surface) or
   // "right" (a right-sidebar panel, alongside Notes/Beads/Goals/Schedule — ADR 0026).
-  const allPluginViews = (runtime?.plugins ?? [])
+  const allDeclaredViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })));
+  // A view claiming the chat SLOT (ADR 0045) replaces the built-in chat panel — it
+  // renders under the core "chat" rail id, so it's excluded from the dynamic rail
+  // list below. First enabled claimant wins (deterministic: plugin load order).
+  const chatSlotView = allDeclaredViews.find((v) => v.slot === "chat");
+  const allPluginViews = allDeclaredViews.filter((v) => v.slot !== "chat");
   // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
   const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
 
@@ -468,6 +473,9 @@ export function App() {
     const ext = registeredSurfaces()
       .filter((s) => (s.placement ?? "left") === side)
       .filter((s) => !s.requiresPlugin || enabledPluginIds.has(s.requiresPlugin))
+      // id "chat" claims the chat SLOT (ADR 0045) — it replaces the core chat surface
+      // rather than adding a second rail item.
+      .filter((s) => s.id !== "chat")
       .map((s): RailItem => ({ id: s.id, label: s.label, icon: s.icon }));
     return [...ordered, ...extra, ...ext];
   }
@@ -708,7 +716,12 @@ export function App() {
               </div>
             ) : null}
             {chatRail === "left" || isMobile ? (
-              <ChatSurface onError={setError} active={(isMobile ? mobileActive : leftActive) === "chat"} />
+              <ChatSlot
+                onError={setError}
+                active={(isMobile ? mobileActive : leftActive) === "chat"}
+                pluginView={chatSlotView}
+                enabledPluginIds={enabledPluginIds}
+              />
             ) : null}
             {(isMobile ? mobileActive : leftActive) !== "chat"
               ? renderSurface(isMobile ? mobileActive : leftActive)
@@ -717,7 +730,14 @@ export function App() {
         }
         rightContent={
           <>
-            {chatRail === "right" ? <ChatSurface onError={setError} active={rightActive === "chat"} /> : null}
+            {chatRail === "right" ? (
+              <ChatSlot
+                onError={setError}
+                active={rightActive === "chat"}
+                pluginView={chatSlotView}
+                enabledPluginIds={enabledPluginIds}
+              />
+            ) : null}
             {rightActive !== "chat" ? renderSurface(rightActive) : null}
           </>
         }
