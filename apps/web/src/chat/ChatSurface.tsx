@@ -1,13 +1,11 @@
 import "./chat.css";
-import { EditableText } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
+import { TabBar } from "@protolabsai/ui/navigation";
 import {
   Loader2,
-  Plus,
   Send,
   Square,
   TerminalSquare,
-  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -63,7 +61,6 @@ export function ChatSurface({
 }) {
   const chat = useChatState();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
 
@@ -82,95 +79,29 @@ export function ChatSurface({
 
   return (
     <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active}>
-      {/* One row: a tab per session (status dot · title · close), then "+".
-          Double-click a title to rename. Below ~26rem of container width it collapses
-          to a session dropdown + add (the per-session strip can't fit) — container query. */}
-      <div className="chat-tabbar-wrap">
-      <div className="chat-tabbar" role="tablist" aria-label="Chat sessions">
-        {chat.sessions.map((session) => {
-          const active = session.id === chat.currentSessionId;
+      {/* DS TabBar (#832): a tab per session (status dot · title · close) + "+".
+          Double-click a title to rename (TabBar owns the inline EditableText).
+          `responsive` collapses to a DS-native <select> + add in a narrow panel
+          (container query). The status dot rides the `icon` slot — wide-strip only:
+          the collapsed <option> can't host markup, matching the old behavior. */}
+      <TabBar
+        ariaLabel="Chat sessions"
+        responsive
+        activeId={chat.currentSessionId ?? ""}
+        items={chat.sessions.map((session) => {
           const status = chat.sessionStatusMap[session.id] || "idle";
-          return (
-            <div className={`chat-tab ${active ? "active" : ""}`} role="tab" aria-selected={active} key={session.id}>
-              <span className={`session-dot ${status}`} title={status} />
-              {editingId === session.id ? (
-                <EditableText
-                  className="chat-tab-label"
-                  inputClassName="chat-tab-edit"
-                  value={session.title}
-                  aria-label="Rename session"
-                  editing
-                  onEditingChange={(e) => setEditingId(e ? session.id : null)}
-                  onCommit={(next) => chatStore.renameSession(session.id, next)}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="chat-tab-label"
-                  onClick={() => chatStore.switchSession(session.id)}
-                  onDoubleClick={() => { chatStore.switchSession(session.id); setEditingId(session.id); }}
-                  title={`${session.title} — double-click to rename`}
-                >
-                  {session.title}
-                </button>
-              )}
-              <button
-                type="button"
-                className="chat-tab-close"
-                title="Close session"
-                aria-label={`Close ${session.title}`}
-                onClick={() => setPendingClose(session.id)}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          );
+          return {
+            id: session.id,
+            label: session.title,
+            icon: <span className={`session-dot ${status}`} title={status} />,
+          };
         })}
-        <button
-          type="button"
-          className="chat-tab-new"
-          title="New chat"
-          aria-label="New chat"
-          onClick={() => chatStore.createSession()}
-        >
-          <Plus size={15} />
-        </button>
-      </div>
-
-      {/* Narrow (container query) — the per-session strip collapses to a dropdown
-          (switch) + close-current + add. Distinct classes so e2e's .chat-tab-* keep
-          matching only the strip. */}
-      <div className="chat-tabbar-compact">
-        <select
-          className="chat-session-select"
-          value={chat.currentSessionId ?? ""}
-          aria-label="Chat session"
-          onChange={(e) => chatStore.switchSession(e.target.value)}
-        >
-          {chat.sessions.map((s) => (
-            <option key={s.id} value={s.id}>{s.title}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="chat-compact-btn"
-          title="Close session"
-          aria-label="Close current session"
-          onClick={() => chat.currentSessionId && setPendingClose(chat.currentSessionId)}
-        >
-          <X size={12} />
-        </button>
-        <button
-          type="button"
-          className="chat-compact-btn"
-          title="New chat"
-          aria-label="New chat"
-          onClick={() => chatStore.createSession()}
-        >
-          <Plus size={15} />
-        </button>
-      </div>
-      </div>
+        onSelect={(id) => chatStore.switchSession(id)}
+        onClose={(id) => setPendingClose(id)}
+        onRename={(id, label) => chatStore.renameSession(id, label)}
+        onAdd={() => chatStore.createSession()}
+        addLabel="New chat"
+      />
 
       <div className="chat-session-pool">
         {chat.activeSessions.map((sessionId) => (
