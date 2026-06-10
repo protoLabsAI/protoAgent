@@ -1283,7 +1283,12 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # unreachable gateway is caught here and returned to the wizard verbatim
         # (e.g. "expected to start with 'sk-'"). Setup stays incomplete, so the
         # operator fixes it in the UI and retries — no file editing required.
-        if config is not None and isinstance(config.get("model"), dict):
+        # …unless the runtime is ACP (acp:<agent>): the coding agent is the brain and
+        # may have no gateway key at all (ADR 0033). Probing a gateway we won't use would
+        # wrongly block setup, so skip it — the model block is still persisted for native
+        # delegates/fallback if the operator filled it in.
+        _runtime = str((config or {}).get("agent_runtime", "native") or "native")
+        if not _runtime.startswith("acp:") and config is not None and isinstance(config.get("model"), dict):
             m = config["model"]
             test_base = m.get("api_base") or (STATE.graph_config.api_base if STATE.graph_config else "")
             test_key = m.get("api_key") or (STATE.graph_config.api_key if STATE.graph_config else "")

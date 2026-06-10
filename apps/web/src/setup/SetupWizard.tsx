@@ -28,6 +28,14 @@ type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace"
 
 const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "discord", "google", "finish"];
 
+// CLI coding agents that can be the runtime over ACP (ADR 0033) — agent_runtime: acp:<id>.
+const ACP_AGENTS: { id: string; label: string; hint: string }[] = [
+  { id: "proto", label: "proto", hint: "protoLabs CLI — proto --acp" },
+  { id: "codex", label: "Codex", hint: "OpenAI Codex — npx @zed-industries/codex-acp" },
+  { id: "claude", label: "Claude", hint: "Claude agent — npx @agentclientprotocol/claude-agent-acp" },
+  { id: "opencode", label: "OpenCode", hint: "OpenCode — opencode acp" },
+];
+
 // Setup walkthroughs live in the template's (protoAgent) canonical docs — forks
 // don't ship their own docs site, so the in-app help links point there.
 const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
@@ -36,6 +44,10 @@ const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google
 type WizardState = {
   agentName: string;
   operatorName: string;
+  // Where turns run. "native" = the LangGraph loop on the gateway below; "acp" = hand
+  // each turn to the chosen CLI coding agent (agent_runtime: acp:<acpAgent>) — ADR 0033.
+  runtimeKind: "native" | "acp";
+  acpAgent: string;
   apiBase: string;
   apiKey: string;
   modelName: string;
@@ -66,6 +78,8 @@ function defaultState(): WizardState {
   return {
     agentName: "protoagent",
     operatorName: "",
+    runtimeKind: "native",
+    acpAgent: "proto",
     apiBase: "https://api.proto-labs.ai/v1",
     apiKey: "",
     modelName: "protolabs/reasoning",
@@ -96,9 +110,12 @@ function defaultState(): WizardState {
 
 function hydrateState(payload: ConfigPayload, status: SetupStatus | null): WizardState {
   const config = payload.config;
+  const rt = String(config.agent_runtime || "native");
   return {
     agentName: config.identity.name || "protoagent",
     operatorName: config.identity.operator || "",
+    runtimeKind: rt.startsWith("acp:") ? "acp" : "native",
+    acpAgent: rt.startsWith("acp:") ? rt.slice(4) || "proto" : "proto",
     apiBase: config.model.api_base || "https://api.proto-labs.ai/v1",
     apiKey: "",
     modelName: config.model.name || "protolabs/reasoning",
@@ -187,10 +204,12 @@ export function SetupWizard({
   }, [state.discordToken]);
 
   const canGoNext = useMemo(() => {
-    if (step === "model") return state.apiBase.trim() && state.modelName.trim();
+    // ACP runtime needs no gateway, so don't gate the step on the model fields.
+    if (step === "model")
+      return Boolean(state.runtimeKind === "acp" || (state.apiBase.trim() && state.modelName.trim()));
     if (step === "workspace") return state.knowledgePath.trim();
     return true;
-  }, [state.apiBase, state.knowledgePath, state.modelName, step]);
+  }, [state.apiBase, state.knowledgePath, state.modelName, state.runtimeKind, step]);
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
@@ -300,6 +319,7 @@ export function SetupWizard({
       );
       const response = await api.finishSetup(
         {
+          agent_runtime: state.runtimeKind === "acp" ? `acp:${state.acpAgent}` : "native",
           model,
           identity: {
             name: state.agentName.trim() || "protoagent",
@@ -404,7 +424,68 @@ export function SetupWizard({
           ) : null}
 
           {step === "model" ? (
-            <StepBody icon={<KeyRound size={20} />} title="Model Gateway" kicker="OpenAI-compatible">
+            <StepBody
+              icon={<KeyRound size={20} />}
+              title="Runtime"
+              kicker={state.runtimeKind === "acp" ? "coding agent over ACP" : "OpenAI-compatible gateway"}
+            >
+              {/* How this agent thinks: native LangGraph loop on a gateway, or hand each
+                  turn to a CLI coding agent over ACP (ADR 0033). */}
+              <label className="field">
+                <span>How this agent thinks</span>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  {([
+                    ["native", "Native model", "Run turns on an OpenAI-compatible gateway."],
+                    ["acp", "Coding agent (ACP)", "Hand each turn to a CLI coding agent — it's the brain, no gateway key needed."],
+                  ] as const).map(([kind, label, blurb]) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      onClick={() => update({ runtimeKind: kind })}
+                      style={{
+                        flex: 1,
+                        textAlign: "left",
+                        padding: "0.6rem 0.7rem",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        color: "inherit",
+                        border: `1px solid ${state.runtimeKind === kind ? "var(--brand-violet-light, #a78bfa)" : "var(--border, #333)"}`,
+                        background:
+                          state.runtimeKind === kind
+                            ? "color-mix(in srgb, var(--brand-violet-light, #a78bfa) 14%, transparent)"
+                            : "transparent",
+                      }}
+                    >
+                      <strong style={{ display: "block", fontSize: 13 }}>{label}</strong>
+                      <small style={{ opacity: 0.7 }}>{blurb}</small>
+                    </button>
+                  ))}
+                </div>
+              </label>
+              {state.runtimeKind === "acp" ? (
+                <label className="field">
+                  <span>Coding agent</span>
+                  <select
+                    value={state.acpAgent}
+                    onChange={(event) => update({ acpAgent: event.target.value })}
+                    style={{
+                      padding: "0.5rem",
+                      borderRadius: 8,
+                      color: "inherit",
+                      background: "var(--bg-panel, #1a1a1a)",
+                      border: "1px solid var(--border, #333)",
+                    }}
+                  >
+                    {ACP_AGENTS.map((a) => (
+                      <option key={a.id} value={a.id}>{a.label}</option>
+                    ))}
+                  </select>
+                  <small style={{ opacity: 0.7 }}>
+                    {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
+                    <code>acp:{state.acpAgent}</code>. The gateway below is <strong>optional</strong> (only for native delegates / fallback).
+                  </small>
+                </label>
+              ) : null}
               <div className="setup-grid two">
                 <label className="field">
                   <span>API base</span>
