@@ -691,10 +691,11 @@ export function App() {
           dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
         }))}
         rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
-        activeLeft={leftActive}
+        activeLeft={leftCollapsed ? "" : leftActive}
         activeRight={rightCollapsed ? "" : rightActive}
         onSelect={(side, id) => {
-          if (side === "left") setSurface(id);
+          // Mirror the right: selecting a rail view re-opens its panel if collapsed.
+          if (side === "left") { setSurface(id); setLeftCollapsed(false); }
           else { setRightPanel(id); setRightCollapsed(false); }
         }}
         onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
