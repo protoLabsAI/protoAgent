@@ -20,12 +20,11 @@ test("install a plugin from a git URL, then uninstall it", async ({ page }) => {
   await page.getByLabel("plugin git URL").fill("https://github.com/acme/protoagent-plugin-widgets");
   await page.getByRole("button", { name: "Install", exact: true }).click();
 
-  // Row appears, marked NOT enabled (install ≠ enable).
+  // Row appears, AUTO-ENABLED — installing enables + runs the plugin (trust-by-default).
   const row = page.locator(".plugin-row");
   await expect(row).toHaveCount(1);
   await expect(row.locator(".plugin-row-title")).toContainText("protoagent-plugin-widgets");
-  await expect(row.getByText("not enabled", { exact: true })).toBeVisible();
-  await expect(row.getByText(/add .*to.*plugins\.enabled/i)).toBeVisible();
+  await expect(row.getByText("enabled", { exact: true })).toBeVisible();
 
   // Uninstall
   await row.getByRole("button", { name: /uninstall/i }).click();

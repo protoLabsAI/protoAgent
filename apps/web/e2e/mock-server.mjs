@@ -424,7 +424,7 @@ const server = createServer(async (req, res) => {
       const sha = "abc1234567def8900000000000000000000abcd";
       INSTALLED_PLUGINS = INSTALLED_PLUGINS.filter((p) => p.id !== id).concat({
         id, source_url: body.url, requested_ref: body.ref || "", resolved_sha: sha,
-        present: true, enabled: false,
+        present: true, enabled: true,   // install AUTO-ENABLES + runs it (trust-by-default)
         manifest: { name: id, version: "0.1.0", description: "installed via console", requires_pip: [], views: [] },
       });
       return sendJson(res, {
@@ -433,7 +433,10 @@ const server = createServer(async (req, res) => {
           resolved_sha: sha, source_url: body.url, requires_pip: [], capabilities: {},
           contributes: { views: [], secrets: [] },
         },
-        restart_required: true,
+        enabled: [id],
+        reloaded: true,
+        restart_recommended: false,
+        enable_error: null,
       });
     }
     {
