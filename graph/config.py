@@ -336,7 +336,7 @@ class LangGraphConfig:
     # The default path lives under ``/sandbox/`` to play well with the
     # bundled Docker volume; the store falls back to
     # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
-    # is read-only or absent (e.g. local ``python server.py``).
+    # is read-only or absent (e.g. local ``python -m server``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
     # Knowledge backend selector (ADR 0031) — "" = the built-in SQLite/FTS5 store;
     # otherwise the name of a plugin-registered backend (register_knowledge_store).

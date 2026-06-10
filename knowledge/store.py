@@ -16,7 +16,7 @@ The store is path-aware and degradation-aware:
   config default ``/sandbox/knowledge/agent.db``.
 - If the configured path is unwritable (running locally outside the
   container, no /sandbox), falls back to ``~/.protoagent/knowledge/agent.db``
-  so a fresh ``python server.py`` works without sudo.
+  so a fresh ``python -m server`` works without sudo.
 - All write operations swallow ``sqlite3.DatabaseError`` (covers
   OperationalError, IntegrityError, and corruption variants) and log;
   the store never crashes the agent loop on a corrupt or read-only DB.

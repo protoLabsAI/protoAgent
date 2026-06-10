@@ -8,7 +8,7 @@ swap the default.
 
 How it works (per model):
 
-1. Launch ``server.py --port <p> --ui none`` with ``PROTOAGENT_MODEL=<model>``
+1. Launch ``python -m server --port <p> --ui none`` with ``PROTOAGENT_MODEL=<model>``
    (the env override added in ``graph/config.py``) and a unique
    ``PROTOAGENT_INSTANCE`` so the models never share scoped data.
 2. Wait for ``GET /healthz`` to report the graph compiled.

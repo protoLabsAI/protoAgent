@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Autostart launches the server again** — the macOS LaunchAgent installer still
+  pointed at the single-file `server.py` that ADR 0023 promoted into the `server/`
+  package: the install-time existence check always failed (the login-launch toggle
+  was dead), and any plist installed before the rename crash-looped at login. The
+  plist now runs `python -m server` with the repo root as `WorkingDirectory` +
+  `PYTHONPATH` (the `entrypoint.sh` recipe); re-enabling autostart overwrites a
+  stale plist in place. The CI stale-path guard — which only scanned
+  `*.sh`/`*.yml`/`Dockerfile*` and so missed this — now also covers `*.py`.
+
 ## [0.32.0] - 2026-06-10
 
 ### Added

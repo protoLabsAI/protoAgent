@@ -104,7 +104,7 @@ def autostart_status(agent_name: str = "protoagent") -> dict:
             "installed": plist.exists(),
             "plist_path": str(plist),
             "python": sys.executable,
-            "server_path": str(REPO_ROOT / "server.py"),
+            "server_package": str(REPO_ROOT / "server"),
         }
     return {"supported": False, "installed": False, "reason": "unreachable"}
 
@@ -146,9 +146,9 @@ def _install_macos_launchagent(agent_name: str, port: int) -> tuple[bool, str]:
     missing label on unload is a no-op.
     """
     python = sys.executable
-    server_py = REPO_ROOT / "server.py"
-    if not server_py.exists():
-        return False, f"server.py not found at {server_py}"
+    server_pkg = REPO_ROOT / "server" / "__init__.py"
+    if not server_pkg.exists():
+        return False, f"server package not found at {server_pkg}"
 
     label = _macos_label(agent_name)
     plist_path = _macos_plist_path(agent_name)
@@ -158,7 +158,6 @@ def _install_macos_launchagent(agent_name: str, port: int) -> tuple[bool, str]:
     plist = _render_launchagent_plist(
         label=label,
         python=python,
-        server_py=str(server_py),
         port=port,
         working_dir=str(REPO_ROOT),
         agent_name=agent_name,
@@ -186,7 +185,7 @@ def _install_macos_launchagent(agent_name: str, port: int) -> tuple[bool, str]:
                or f"launchctl load exit={result.returncode}")
         return False, f"plist written but launchctl load failed: {err.strip()}"
 
-    return True, f"installed • {plist_path.name} • runs `{shlex.quote(python)} server.py` on login"
+    return True, f"installed • {plist_path.name} • runs `{shlex.quote(python)} -m server` on login"
 
 
 def _uninstall_macos_launchagent(agent_name: str) -> tuple[bool, str]:
@@ -211,7 +210,6 @@ def _render_launchagent_plist(
     *,
     label: str,
     python: str,
-    server_py: str,
     port: int,
     working_dir: str,
     agent_name: str,
@@ -226,6 +224,13 @@ def _render_launchagent_plist(
     otherwise produce a malformed or injection-vulnerable plist.
     ``port`` is an int so it's safe as-is, but we coerce+escape it
     anyway for consistency.
+
+    ADR 0023: the server is launched as a module (``python -m server``),
+    not the deleted single-file ``server.py``. ``WorkingDirectory`` is the
+    repo root (``python -m`` puts the cwd on ``sys.path``) and
+    ``PYTHONPATH`` is set to it as well — same belt-and-braces as
+    ``entrypoint.sh`` — so the ``server`` package and its sibling
+    top-level modules (``paths``, ``events``, ``graph``, …) resolve.
     """
     e = xml_escape
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -237,7 +242,8 @@ def _render_launchagent_plist(
     <key>ProgramArguments</key>
     <array>
         <string>{e(python)}</string>
-        <string>{e(server_py)}</string>
+        <string>-m</string>
+        <string>server</string>
         <string>--port</string>
         <string>{e(str(port))}</string>
     </array>
@@ -249,6 +255,8 @@ def _render_launchagent_plist(
         <string>{e(agent_name)}</string>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>PYTHONPATH</key>
+        <string>{e(working_dir)}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

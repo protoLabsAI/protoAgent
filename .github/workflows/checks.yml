@@ -36,17 +36,23 @@ jobs:
           node /tmp/release-tools/bin/verify-workspace-config.mjs --root "$GITHUB_WORKSPACE"
       - name: Guard against the deleted server.py entrypoint
         # ADR 0023 promoted the monolith to the server/ package (launch:
-        # `python -m server`). A deploy file launching the old single-file binary
-        # CrashLoopBackOffs. Fail CI if any deploy artifact still does. Scoped to
-        # deploy surfaces (excludes .github so this guard can't match itself).
+        # `python -m server`). A launcher pointing at the old single-file binary
+        # CrashLoopBackOffs (deploy) or silently no-ops (autostart.py's exists()
+        # check — missed by the original *.sh/*.yml-only net, fixed alongside this
+        # guard's *.py extension). Two patterns: shell-style `python server.py`
+        # launches, and Python-side quoted "server.py" path constructions
+        # (e.g. `REPO_ROOT / "server.py"`). Excludes .github (self-match) and
+        # tests/ (regression tests assert on the literal string).
         run: |
-          if grep -rnE 'python[0-9]* +server\.py' \
+          if grep -rnE '(python[0-9]* +server\.py|"server\.py")' \
                --include='*.sh' --include='*.yaml' --include='*.yml' \
-               --include='Dockerfile*' --exclude-dir=.github . ; then
+               --include='Dockerfile*' --include='*.py' \
+               --exclude-dir=.github --exclude-dir=tests \
+               --exclude-dir=node_modules --exclude-dir=.venv . ; then
             echo "::error::Stale single-file launch found — use 'python -m server' (ADR 0023)."
             exit 1
           fi
-          echo "ok: no stale single-file launches in deploy artifacts"
+          echo "ok: no stale single-file launches in deploy artifacts or launchers"
 
   lint:
     name: Lint (ruff)
