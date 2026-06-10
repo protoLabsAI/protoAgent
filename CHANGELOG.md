@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stale plist in place. The CI stale-path guard — which only scanned
   `*.sh`/`*.yml`/`Dockerfile*` and so missed this — now also covers `*.py`. (#855)
 
+### Security
+- **Token-less non-loopback binds now refuse to start.** Binding a host other
+  than loopback with no A2A auth token used to log a warning and boot anyway —
+  leaving the full operator API (plugin install+enable = code execution,
+  config/SOUL rewrite, subagent runs) open to anything that could reach the
+  port. The boot gate (`a2a_auth.evaluate_open_bind`) now exits with an error
+  unless `PROTOAGENT_ALLOW_OPEN=1` explicitly opts in for fenced deployments.
+  The bundled `docker-compose.yml` publishes the port to **127.0.0.1 only** by
+  default, passes `A2A_AUTH_TOKEN` through, and opts in (the localhost publish
+  is its boundary). **Upgrade note:** an existing deployment binding
+  `0.0.0.0` without a token must set `A2A_AUTH_TOKEN` (recommended) or
+  `PROTOAGENT_ALLOW_OPEN=1` to boot.
+
 ## [0.32.0] - 2026-06-10
 
 ### Added

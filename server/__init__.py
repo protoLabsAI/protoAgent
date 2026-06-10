@@ -809,17 +809,22 @@ def _main():
         app = fastapi_app
         log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
 
-    # Loud warning when exposed on all interfaces with no A2A auth token: the
-    # operator/console API (/api/*, /api/chat, /v1/*) is reachable by untrusted
-    # callers. Loopback (the default) is safe; a container behind a network
-    # policy is the intended 0.0.0.0 case.
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not _bearer_configured():
-        log.warning(
-            "[security] binding %s with NO A2A auth token — the agent + operator "
-            "API are open to anything that can reach this port. Set auth.token / "
-            "A2A_AUTH_TOKEN, or bind 127.0.0.1 (the default), or front it with a "
-            "network policy.", args.host,
-        )
+    # Boot gate: a non-loopback bind with no A2A auth token exposes the full
+    # operator API (plugin install+enable = code execution, config/SOUL
+    # rewrite) to anything that can reach the port — refuse to start unless
+    # PROTOAGENT_ALLOW_OPEN=1 explicitly opts in (the posture for binds fenced
+    # by a published-port/network-policy boundary, e.g. compose publishing to
+    # 127.0.0.1 only). Loopback (the default) and token-gated binds pass.
+    allowed, gate_msg = a2a_auth.evaluate_open_bind(
+        args.host,
+        bearer_configured=_bearer_configured(),
+        allow_open=os.environ.get("PROTOAGENT_ALLOW_OPEN", "") == "1",
+    )
+    if not allowed:
+        log.error("%s", gate_msg)
+        raise SystemExit(2)
+    if gate_msg:
+        log.warning("%s", gate_msg)
 
     # Don't outlive the launcher. When run as a desktop sidecar the Tauri shell
     # sets PROTOAGENT_PARENT_PID; a PyInstaller-frozen onefile runs as a

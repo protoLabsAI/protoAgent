@@ -141,3 +141,40 @@ def install(app, *, bearer_token: str | None, api_key: str, allowed_origins_raw:
         allowed_origins_raw=allowed_origins_raw,
     )
     app.add_middleware(A2AAuthMiddleware)
+
+
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def evaluate_open_bind(
+    host: str, *, bearer_configured: bool, allow_open: bool
+) -> tuple[bool, str | None]:
+    """Boot-time gate for binding a non-loopback host without an auth token.
+
+    An unauthenticated non-loopback bind exposes the full operator API
+    (plugin install+enable = code execution, config/SOUL rewrite, subagent
+    runs) to anything that can reach the port — so it is refused unless the
+    operator explicitly opts in with ``PROTOAGENT_ALLOW_OPEN=1`` (the posture
+    for binds fenced by a published-port/network-policy boundary, e.g. a
+    container publishing to 127.0.0.1 only).
+
+    Returns ``(allowed, message)``: ``(True, None)`` silent, ``(True, msg)``
+    allowed with a warning to log, ``(False, msg)`` refuse startup.
+    """
+    if host in _LOOPBACK_HOSTS or bearer_configured:
+        return True, None
+    if allow_open:
+        return True, (
+            f"[security] binding {host} with NO A2A auth token "
+            "(PROTOAGENT_ALLOW_OPEN=1) — the agent + operator API are open to "
+            "anything that can reach this port. Make sure a network boundary "
+            "(localhost-published port, firewall, network policy) fences it."
+        )
+    return False, (
+        f"[security] refusing to bind {host} with NO A2A auth token — the "
+        "operator API (/api/*, /v1/*) includes plugin install/enable (code "
+        "execution) and config rewrite. Set auth.token in "
+        "langgraph-config.yaml or A2A_AUTH_TOKEN, bind 127.0.0.1 (the "
+        "default), or set PROTOAGENT_ALLOW_OPEN=1 if a network boundary "
+        "fences this port."
+    )

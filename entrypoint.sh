@@ -28,5 +28,11 @@ fi
 # Bind all interfaces inside the container — the boundary is the published port
 # + network policy, not the in-container bind. (The server defaults to loopback
 # for local/desktop runs; PROTOAGENT_HOST overrides either way.)
+#
+# NOTE: a non-loopback bind with no A2A_AUTH_TOKEN refuses to start unless
+# PROTOAGENT_ALLOW_OPEN=1 — the deployment artifact (compose/k8s) must either
+# set a token or explicitly opt in after fencing the port. The bundled
+# docker-compose.yml publishes to 127.0.0.1 only and opts in; a raw
+# `docker run -p 7870:7870` with no token is exactly the case the gate blocks.
 exec env PYTHONPATH="/opt/protoagent${PYTHONPATH:+:$PYTHONPATH}" \
     python -m server --host "${PROTOAGENT_HOST:-0.0.0.0}"

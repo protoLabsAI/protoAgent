@@ -48,12 +48,22 @@ services:
       - protoagent-sandbox:/sandbox
       - protoagent-config:/opt/protoagent/config
 
+    # Published to LOOPBACK only by default: the container binds 0.0.0.0
+    # internally (entrypoint), so this host-side port binding is the network
+    # boundary. To expose the agent beyond this machine, set A2A_AUTH_TOKEN
+    # below AND widen the binding (e.g. "7870:7870").
     ports:
-      - "7870:7870"
+      - "127.0.0.1:7870:7870"
 
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - AGENT_NAME=${AGENT_NAME:-protoagent}
+      # Bearer for the A2A + operator API — REQUIRED if the port is exposed
+      # beyond loopback. With the default 127.0.0.1 publish above, the
+      # in-container 0.0.0.0 bind is fenced by the port binding, so the
+      # token-less boot gate is opted out via PROTOAGENT_ALLOW_OPEN below.
+      - A2A_AUTH_TOKEN=${A2A_AUTH_TOKEN:-}
+      - PROTOAGENT_ALLOW_OPEN=${PROTOAGENT_ALLOW_OPEN:-1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # Optional Langfuse tracing — left blank disables it.
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}

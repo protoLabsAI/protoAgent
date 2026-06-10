@@ -73,6 +73,10 @@ services:
     environment:
       AGENT_NAME: my-agent
       OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      # REQUIRED for a port published beyond loopback: the server refuses a
+      # token-less non-loopback bind (set PROTOAGENT_ALLOW_OPEN=1 instead only
+      # if a firewall/network policy fences the port).
+      A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
     ports:

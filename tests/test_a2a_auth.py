@@ -141,3 +141,29 @@ def test_apis_open_when_no_token(monkeypatch):
     # default (no token) → everything open (local console keeps working)
     for p in ("/a2a", "/api/config", "/v1/chat/completions", "/api/events", "/healthz"):
         assert c.post(p).status_code in (200, 405)  # 405 only if method not allowed
+
+
+# ── 4. boot gate: non-loopback bind without a token ──────────────────────────
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_open_bind_loopback_always_allowed(host):
+    allowed, msg = a2a_auth.evaluate_open_bind(host, bearer_configured=False, allow_open=False)
+    assert allowed and msg is None
+
+
+def test_open_bind_with_token_allowed_silently():
+    allowed, msg = a2a_auth.evaluate_open_bind("0.0.0.0", bearer_configured=True, allow_open=False)
+    assert allowed and msg is None
+
+
+def test_open_bind_without_token_refused():
+    allowed, msg = a2a_auth.evaluate_open_bind("0.0.0.0", bearer_configured=False, allow_open=False)
+    assert not allowed
+    assert "refusing" in msg and "0.0.0.0" in msg
+
+
+def test_open_bind_optin_allowed_with_warning():
+    allowed, msg = a2a_auth.evaluate_open_bind("0.0.0.0", bearer_configured=False, allow_open=True)
+    assert allowed
+    assert msg is not None and "0.0.0.0" in msg and "PROTOAGENT_ALLOW_OPEN" in msg
