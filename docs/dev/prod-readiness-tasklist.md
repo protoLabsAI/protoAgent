@@ -11,17 +11,17 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[-]` won't-fix/
 **🟢 NOW — DONE (8):** `A1 A2 A3 A4 A5 A6 A7 G1`
 Doc-truth pass (A1–A6) + prune the stale worktree (G1) **merged in #814**. **A7 was reversed:** rather than untrack `uv.lock`, the project *adopted uv* in **#811** — `pyproject [project.dependencies]` is now the dep source of truth, `uv.lock` is tracked + in sync, and `requirements-*.txt` are kept as readable references.
 
-**🟡 NEXT SPRINT (14):** `E1 E2 · D1 D2 D3 D5 D6 · C1 C5 C6 · B1 B2 · F5 F1`
+**🟡 NEXT SPRINT (13):** `E1 E2 · D1 D2 D3 D5 D6 · C1 C5 C6 · B1 · F5 F1`
 Suggested order (dependency-aware):
 1. **E1** (vitest + pure-logic tests) — gates C3 & D1; do first.
 2. **E2** (fleet proxy/discovery tests) — newest network code.
 3. **D1** (useChatStream/updateAssistant — needs E1) → **D2 D3** (frontend structure) → **D5 D6**.
 4. **C1** (_main split + security-gate extraction) → **C5** (retire peer_consult) → **C6** (except fixes).
-5. **B1** (config-triplet → single source) **+ B2** (identity_name CI guard) — together; double-counts as fork hygiene.
+5. **B1** (config-triplet → single source) — kills the 3-file config-sync hazard.
 6. **F5** (DS `Grid` — reference adoption) → **F1** (token sweep).
 
-**⚪ BACKLOG (11 + 1 blocked):** `C2 C3 C4 · D4 · B3 · F2 F3 F4 F6 F7 · G2` · *(F4b blocked on DS ToolCard #187)*
-`C3` gated on E1. `B3` is fork-repo work, after B1 ships the seam. DS phases F2/F3/F4 follow F1/F5.
+**⚪ BACKLOG (10 + F4b):** `C2 C3 C4 · D4 · F2 F3 F4 F4b F6 F7 · G2` · *(B2/B3 dropped — forks retired)*
+`C3` gated on E1. `F4b` (tool-* → `ToolCard`) is now **unblocked** (protoContent #191 merged) — sits with the DS phases F2/F3/F4 after F1/F5.
 
 ---
 
@@ -37,13 +37,15 @@ Suggested order (dependency-aware):
 | A6 | Fix `src/ext` invariant comment vs shipped `workflows.tsx` | `apps/web/src/ext/index.ts:3` | XS | ✅ Done |
 | A7 | ~~Untrack `uv.lock`~~ → **superseded by #811**: adopt uv properly — `pyproject [project.dependencies]` is dep source of truth, `uv.lock` tracked + in sync (`uv lock --check` clean), `requirements-*.txt` = readable references | `pyproject.toml`, `uv.lock` | S | ✅ Done (#811) |
 
-## B. Config + fork hygiene
+## B. Config
+
+> **Fork hygiene dropped (2026-06-10): the forks (gina/roxy/protoTrader) are being retired as outdated.** B2/B3 existed only to keep those forks' upstream syncs clean — both now moot. B1 stands on its own (the maintenance hazard).
 
 | ID | Task | Evidence | Effort | Disp. |
 |----|------|----------|:------:|:-----:|
-| B1 | **Collapse the config triplet to one source of truth.** Fixes 3-file-sync hazard **and** the #1 fork conflict | `graph/config.py` + `config_io.py` + `settings_schema.py` | L | 🟡 Next (w/ B2) |
-| B2 | CI guard: fail if `LangGraphConfig.identity_name` default ≠ `"protoagent"` | `graph/config.py:391` | S | 🟡 Next (w/ B1) |
-| B3 | Fork-side: gina `briefing_*`→ADR-0019 plugin; both forks `identity_name`→YAML | gina/protoTrader | M | ⚪ Backlog (after B1) |
+| B1 | **Collapse the config triplet to one source of truth.** Fixes the 3-file-sync hazard (add a config field → touch `config.py`/`config_io.py`/`settings_schema.py` or the settings UI silently drops it) | `graph/config.py` + `config_io.py` + `settings_schema.py` | L | 🟡 Next |
+| B2 | ~~`identity_name` CI guard~~ | — | S | ⬛ Dropped (fork-only; forks retired) |
+| B3 | ~~Fork-side gina/protoTrader cleanup~~ | — | M | ⬛ Dropped (forks retired) |
 
 ## C. Backend structure
 
@@ -87,7 +89,7 @@ Suggested order (dependency-aware):
 | F2 | DS Phase 2 — forms (`field`/`setting-input` → DS `forms`) | 9 files | M | ⚪ Backlog |
 | F3 | DS Phase 3 — panel/card backbone (`.panel`/`.stage-panel` → `Card`+`PanelHeader`) | 24 files | L | ⚪ Backlog |
 | F4 | DS Phase 4 — chat renderers (`.markdown-*` prose may stay app-side) | chat | L | ⚪ Backlog |
-| F4b | `.tool-*` adoption once DS `ToolCard` lands | chat | L | 🚧 Blocked (#187) |
+| F4b | **Migrate the 52-class `tool-*` family onto DS `ToolCard`** (frame → DS; `tool-renderers.tsx` values stay app-side as the body slot) | `chat/ToolCalls.tsx` | L | ⚪ Backlog (unblocked — `ToolCard` shipped, protoContent #191) |
 
 ## G. Cleanup
 
