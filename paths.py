@@ -117,3 +117,115 @@ def workspace_dir(*, create: bool = False) -> Path:
     if create:
         base.mkdir(parents=True, exist_ok=True)
     return base.resolve()
+
+
+# ── co-location detection (#706) ──────────────────────────────────────────────
+# `unscoped_warning` above is a static boot hint — it fires for every normal
+# single-instance setup, so it stays a log line. The signal worth a console
+# banner is a LIVE sibling sharing this data root (two unscoped instances, or
+# two scoped ones with the same id — the exact two-hubs bug): each instance
+# drops a `<pid>.json` heartbeat under `<root>/.instances/` at boot, removes it
+# at shutdown, and anyone can ask who else is alive in the same root.
+
+
+def _instances_dir() -> Path:
+    """`.instances/` under THIS instance's data root (scoped or shared)."""
+    home = data_home()
+    iid = instance_id()
+    return (home / _safe_segment(iid) if iid else home) / ".instances"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _is_protoagent_pid(pid: int) -> bool:
+    """PID-reuse guard (the supervisor's #10 pattern): a heartbeat survives a crash, so a
+    recycled pid could make a dead sibling look alive. Only trust a pid whose command line
+    is actually a protoAgent server; if we can't inspect it, trust the pid (don't go
+    quiet on odd platforms)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if not out.strip():
+        return False
+    return "-m server" in out or ("python" in out.lower() and "server" in out)
+
+
+def register_instance(port: int | None = None, identity: str = "") -> None:
+    """Drop this process's heartbeat in the data root. Best-effort — never blocks boot."""
+    import json
+
+    try:
+        d = _instances_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{os.getpid()}.json").write_text(json.dumps(
+            {"pid": os.getpid(), "port": port, "identity": identity}))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def unregister_instance() -> None:
+    """Remove this process's heartbeat (shutdown). Best-effort."""
+    try:
+        (_instances_dir() / f"{os.getpid()}.json").unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def colocated_instances() -> list[dict]:
+    """OTHER live protoAgent processes sharing this data root (stale entries pruned)."""
+    import json
+
+    out: list[dict] = []
+    try:
+        d = _instances_dir()
+        if not d.is_dir():
+            return out
+        for f in d.glob("*.json"):
+            try:
+                pid = int(f.stem)
+            except ValueError:
+                continue
+            if pid == os.getpid():
+                continue
+            if not _pid_alive(pid) or not _is_protoagent_pid(pid):
+                f.unlink(missing_ok=True)  # stale heartbeat (crash / pid recycled)
+                continue
+            try:
+                rec = json.loads(f.read_text())
+            except (OSError, ValueError):
+                rec = {}
+            out.append({"pid": pid, "port": rec.get("port"),
+                        "identity": rec.get("identity") or ""})
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
+def colocation_warning() -> str | None:
+    """A user-facing warning when another live instance shares this data root, else None."""
+    others = colocated_instances()
+    if not others:
+        return None
+    who = ", ".join(
+        f"{o['identity'] or 'unknown'} (pid {o['pid']}"
+        + (f", port {o['port']})" if o.get("port") else ")")
+        for o in others)
+    iid = instance_id()
+    root = (data_home() / _safe_segment(iid)) if iid else data_home()
+    return (f"Another running instance shares this agent's data ({root}): {who}. "
+            "They can clobber each other's chat history, knowledge and stores — give each "
+            "instance its own PROTOAGENT_INSTANCE id (or stop the extra one).")

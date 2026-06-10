@@ -21,6 +21,7 @@ def build_runtime_status(
     plugins: list[dict[str, Any]] | None = None,
     telemetry_store: Any = None,
     checkpoint_path: str = "",
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -29,7 +30,11 @@ def build_runtime_status(
 
     ``allowed_dirs`` is the operator-console sandbox the client uses to
     populate the project-path picker; the server still enforces it.
+
+    ``warnings`` are user-facing operational alerts (e.g. a live co-located
+    instance sharing this data root, #706) — the shell banners them.
     """
+    warnings_block = [w for w in (warnings or []) if w]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
 
     skill_count = 0
@@ -57,6 +62,7 @@ def build_runtime_status(
             "scheduler": {"enabled": False, "backend": "disabled"},
             "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
+            "warnings": warnings_block,
         }
 
     return {
@@ -125,6 +131,7 @@ def build_runtime_status(
             "skills_bytes": _file_size(getattr(skills_index, "path", None)),
             "telemetry_retention_days": getattr(config, "telemetry_retention_days", None),
         },
+        "warnings": warnings_block,
     }
 
 

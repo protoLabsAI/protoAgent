@@ -678,6 +678,15 @@ export function App() {
       />
       </div>
 
+      {/* Operational warnings from the runtime status (#706 co-located instances etc.) —
+          a slim alert strip under the topbar. Server-driven: appears/clears with the poll. */}
+      {(runtime?.warnings ?? []).map((w) => (
+        <div className="shell-warning-banner" role="alert" key={w}>
+          <CircleAlert size={14} />
+          <span>{w}</span>
+        </div>
+      ))}
+
       {/* The dual-rail shell is now the DS AppShell (ADR 0035 + #144): rails (drag-to-reorder +
           cross-rail via dnd-kit), resizable right column, mobile shell, and the utility bar — all
           controlled. We own the surface registry + persistence (railOrder/widths/active in the UI

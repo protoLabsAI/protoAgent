@@ -47,6 +47,9 @@ export type RuntimeStatus = {
     skills_bytes?: number | null;
     telemetry_retention_days?: number | null;
   };
+  /** User-facing operational alerts (e.g. a live co-located instance sharing
+   *  this data root, #706) — the shell banners them under the topbar. */
+  warnings?: string[];
   skills?: {
     enabled: boolean;
     count: number;

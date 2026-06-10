@@ -566,8 +566,28 @@ def _main():
         except Exception:
             log.exception("[discovery] mDNS advertise failed")
 
+        # Co-location heartbeat (#706) — mark this process in the data root and warn
+        # loudly if a live sibling already shares it (the runtime status re-checks on
+        # every poll, so the console banners it too). Off the loop: the check shells
+        # out to `ps` per sibling.
+        try:
+            import paths as _paths
+            _paths.register_instance(int(getattr(STATE, "active_port", 0) or 0) or None,
+                                     agent_name())
+            _w = await asyncio.to_thread(_paths.colocation_warning)
+            if _w:
+                log.warning("[instance] %s", _w)
+        except Exception:
+            log.exception("[instance] co-location check failed")
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
+        # Drop the co-location heartbeat (#706). Best-effort.
+        try:
+            import paths as _paths
+            _paths.unregister_instance()
+        except Exception:
+            pass
         # Withdraw the mDNS advertisement (ADR 0042 §I). Off the loop — same deadlock as
         # advertise (zc.close() posts to and waits on the loop it's called from).
         try:
