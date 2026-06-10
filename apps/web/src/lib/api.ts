@@ -680,6 +680,13 @@ export const api = {
       method: "POST",
     });
   },
+  renameAgent(ident: string, name: string) {
+    // Display rename only — the id (URL slug + data scope) is immutable.
+    return request<{ ok: boolean; id: string; name: string }>(`/api/fleet/${encodeURIComponent(ident)}`, {
+      method: "PATCH",
+      body: { name },
+    });
+  },
   removeAgent(name: string, purge = false) {
     return request<{ ok: boolean; name: string; removed: string[] }>(
       `/api/fleet/${encodeURIComponent(name)}${purge ? "?purge=true" : ""}`,

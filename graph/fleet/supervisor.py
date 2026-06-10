@@ -86,60 +86,69 @@ def _alive(pid: int | None) -> bool:
         return False
 
 
-def _log_path(name: str) -> Path:
-    return manager.workspaces_root() / manager._safe(name) / "agent.log"
+def _resolve_key(ident: str) -> str:
+    """The fleet-state key for an id-or-display-name: the workspace's immutable ``id``
+    (display names are editable — keying runtime state by them would orphan a running
+    agent across a rename). Unknown idents pass through (state-only entries)."""
+    ws = manager._find(manager._safe(ident))
+    return ws["id"] if ws else manager._safe(ident)
 
 
-def is_running(name: str) -> bool:
-    rec = _load_state().get(manager._safe(name))
+def _log_path(ws: dict) -> Path:
+    return Path(ws["path"]) / "agent.log"
+
+
+def is_running(ident: str) -> bool:
+    rec = _load_state().get(_resolve_key(ident))
     return bool(rec) and _alive(rec.get("pid"))
 
 
-def start(name: str) -> dict:
-    """Spawn the workspace's agent as a detached background process. No-op (returns
-    the live record) if it's already running."""
-    name = manager._safe(name)
-    ws = next((w for w in manager.list_workspaces() if w["name"] == name), None)
+def start(ident: str) -> dict:
+    """Spawn the workspace's agent (by id or display name) as a detached background
+    process. No-op (returns the live record) if it's already running."""
+    ws = manager._find(manager._safe(ident))
     if ws is None:
-        raise FleetError(f"no workspace {name!r} — create it: workspace new {name}")
+        raise FleetError(f"no workspace {ident!r} — create it: workspace new {ident}")
+    wid, name = ws["id"], ws["name"]
 
     with _state_lock():
         state = _load_state()
-        rec = state.get(name)
+        rec = state.get(wid)
         if rec and _alive(rec.get("pid")):
             return {**rec, "name": name, "running": True, "already": True}
 
-        env, argv = manager.run_exec(name, ["--ui", "none"])
+        env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
-        log_path = _log_path(name)
+        log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
         # start_new_session detaches it from this CLI's process group so it survives exit.
         proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
         now = datetime.now(timezone.utc).isoformat()
-        rec = {"pid": proc.pid, "port": ws.get("port"), "id": ws.get("id", name),
+        rec = {"pid": proc.pid, "port": ws.get("port"), "id": wid,
                "started_at": now, "last_active": now, "log": str(log_path)}
-        state[name] = rec
+        state[wid] = rec
         _save_state(state)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
     return {**rec, "name": name, "running": True, "already": False}
 
 
-def stop(name: str, *, timeout: float = 8.0) -> dict:
-    """SIGTERM the agent and reap its registry entry (SIGKILL if it lingers).
+def stop(ident: str, *, timeout: float = 8.0) -> dict:
+    """SIGTERM the agent (by id or display name) and reap its registry entry (SIGKILL
+    if it lingers).
 
     NOTE: this blocks (busy-wait) up to ``timeout`` — call it off the event loop
     (``asyncio.to_thread``); the routes do. The registry entry is removed under the lock
     first, then the kill happens OUTSIDE the lock so the wait can't freeze other state ops.
     """
-    name = manager._safe(name)
+    name = _resolve_key(ident)
     with _state_lock():
         state = _load_state()
         rec = state.get(name)
         if not rec or not _alive(rec.get("pid")):
             state.pop(name, None)
             _save_state(state)
-            raise FleetError(f"{name!r} is not running")
+            raise FleetError(f"{ident!r} is not running")
         pid = int(rec["pid"])
         state.pop(name, None)  # reserve the stop while we hold the lock
         _save_state(state)
@@ -198,7 +207,7 @@ def status() -> list[dict]:
             _save_state(state)
     out: list[dict] = [_host_entry()]
     for ws in manager.list_workspaces():
-        rec = state.get(ws["name"]) or {}
+        rec = state.get(ws["id"]) or {}  # state is keyed by the immutable id
         running = _alive(rec.get("pid"))
         port = ws.get("port")
         out.append({"name": ws["name"], "id": ws.get("id", ws["name"]),
@@ -244,12 +253,12 @@ def max_warm() -> int:
         return 0
 
 
-def touch(name: str) -> None:
-    """Mark an agent as most-recently-active (drives LRU eviction)."""
-    name = manager._safe(name)
+def touch(ident: str) -> None:
+    """Mark an agent (by id or display name) as most-recently-active (drives LRU eviction)."""
+    key = _resolve_key(ident)
     with _state_lock():
         state = _load_state()
-        rec = state.get(name)
+        rec = state.get(key)
         if rec:
             rec["last_active"] = datetime.now(timezone.utc).isoformat()
             _save_state(state)
@@ -261,6 +270,7 @@ def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> 
     keep = max_warm() if keep is None else keep
     if keep <= 0:
         return []
+    protect = _resolve_key(protect) if protect else None  # state keys are ids
     running = [(n, r) for n, r in _load_state().items() if _alive(r.get("pid"))]
     if len(running) <= keep:
         return []

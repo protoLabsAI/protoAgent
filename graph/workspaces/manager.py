@@ -62,6 +62,27 @@ def _ws_dir(name: str) -> Path:
     return workspaces_root() / _safe(name)
 
 
+def _find(ident: str) -> dict | None:
+    """Resolve a workspace by ``id`` OR display ``name`` (ids are opaque + immutable —
+    the slug/scoping key; names are editable display labels). Id match wins."""
+    ws = list_workspaces()
+    return (next((w for w in ws if w["id"] == ident), None)
+            or next((w for w in ws if w["name"] == ident), None))
+
+
+def _new_id(name: str) -> str:
+    """An opaque, immutable workspace id: ``<name>-<4hex>`` (e.g. ``ava-7f3a``). The id keys
+    the dir, the URL slug and the data scope (``~/.protoagent/<id>/*``), so a display rename
+    never moves storage or breaks open windows."""
+    import uuid
+
+    existing = {w["id"] for w in list_workspaces()}
+    while True:
+        cand = f"{_safe(name)}-{uuid.uuid4().hex[:4]}"
+        if cand not in existing:
+            return cand
+
+
 def _read_record(ws: Path) -> dict | None:
     import yaml
     f = ws / "workspace.yaml"
@@ -115,9 +136,10 @@ identity:
   name: {name}
 
 # Data isolation (ADR 0004/0041) — scopes this agent's private stores to
-# ~/.protoagent/{name}/* so it never collides with other agents on this host.
+# ~/.protoagent/{id}/* so it never collides with other agents on this host.
+# The id is opaque + immutable (renames only change the display name above).
 instance:
-  id: {name}
+  id: {id}
 
 model:
   provider: openai
@@ -154,9 +176,13 @@ def create(name: str, *, from_config: str | None = None, inherit_model: str | No
     name = _safe(name)
     if name.lower() in _RESERVED_NAMES:
         raise WorkspaceError(f"{name!r} is reserved — it's how the fleet addresses this instance")
-    ws = _ws_dir(name)
+    if _find(name) is not None:
+        raise WorkspaceError(f"an agent named {name!r} already exists")
+    # Opaque id keys the dir + slug + data scope; `name` is the editable display label.
+    wid = _new_id(name)
+    ws = _ws_dir(wid)
     if ws.exists():
-        raise WorkspaceError(f"workspace {name!r} already exists at {ws}")
+        raise WorkspaceError(f"workspace {wid!r} already exists at {ws}")
     ws.mkdir(parents=True)
 
     cfg = ws / "langgraph-config.yaml"
@@ -170,18 +196,18 @@ def create(name: str, *, from_config: str | None = None, inherit_model: str | No
         src_sec = (src if src.is_dir() else src.parent) / "secrets.yaml"
         if src_sec.exists():
             shutil.copyfile(src_sec, ws / "secrets.yaml")
-        _stamp_identity(cfg, name, shared_skills)
+        _stamp_identity(cfg, name, shared_skills, instance_id=wid)
     else:
-        cfg.write_text(_CONFIG_TEMPLATE.format(name=name))
+        cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid))
         (ws / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n")
         if inherit_model:
             _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
         if shared_skills:
-            _stamp_identity(cfg, name, True)
+            _stamp_identity(cfg, name, True, instance_id=wid)
 
     import yaml
     assigned = _pick_port(port)
-    rec = {"id": name, "name": name, "port": assigned,
+    rec = {"id": wid, "name": name, "port": assigned,
            "created": datetime.now(timezone.utc).isoformat(), "bundle": bundle or ""}
     # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
     # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
@@ -222,15 +248,16 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         shutil.copyfile(src_sec, ws / "secrets.yaml")
 
 
-def _stamp_identity(cfg: Path, name: str, shared_skills: bool) -> None:
-    """Force identity.name + instance.id to *name* on a (possibly cloned) config, and
-    optionally set skills.shared — comment-preserving (ruamel)."""
+def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *,
+                    instance_id: str | None = None) -> None:
+    """Force identity.name (display) + instance.id (the opaque data-scope key) on a
+    (possibly cloned) config, and optionally set skills.shared — comment-preserving."""
     from graph.config_io import load_yaml_doc, save_yaml_doc
     doc = load_yaml_doc(cfg)
     if not isinstance(doc, dict):
         return
     doc.setdefault("identity", {})["name"] = name
-    doc.setdefault("instance", {})["id"] = name
+    doc.setdefault("instance", {})["id"] = instance_id or name
     if shared_skills:
         doc.setdefault("skills", {})["shared"] = True
     save_yaml_doc(doc, cfg)
@@ -255,28 +282,30 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
         return []
 
 
-def run_exec(name: str, passthrough: list[str]) -> tuple[dict, list[str]]:
+def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
     """Return ``(env_overrides, argv)`` to launch this workspace's server. The CLI
     applies the env and ``exec``s — so the workspace runs as a normal server with
-    its config dir + instance + port wired in."""
-    ws = _ws_dir(name)
+    its config dir + instance + port wired in. ``ident`` is an id or display name."""
+    found = _find(ident)
+    ws = Path(found["path"]) if found else _ws_dir(ident)
     rec = _read_record(ws)
     if rec is None:
-        raise WorkspaceError(f"no workspace {name!r} at {ws}")
-    env = {"PROTOAGENT_CONFIG_DIR": str(ws), "PROTOAGENT_INSTANCE": str(rec.get("id", name)),
+        raise WorkspaceError(f"no workspace {ident!r} at {ws}")
+    env = {"PROTOAGENT_CONFIG_DIR": str(ws), "PROTOAGENT_INSTANCE": str(rec.get("id", ident)),
            "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"), "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock")}
     argv = [sys.executable, "-m", "server", "--port", str(rec.get("port", PORT_BASE + 1)), *passthrough]
     return env, argv
 
 
-def remove(name: str, *, purge: bool = False) -> dict:
-    """Delete the workspace dir. With ``purge``, also remove its scoped private data
-    at ``~/.protoagent/<id>/``."""
-    ws = _ws_dir(name)
+def remove(ident: str, *, purge: bool = False) -> dict:
+    """Delete the workspace dir (by id or display name). With ``purge``, also remove
+    its scoped private data at ``~/.protoagent/<id>/``."""
+    found = _find(ident)
+    ws = Path(found["path"]) if found else _ws_dir(ident)
     rec = _read_record(ws)
     if not ws.exists():
-        raise WorkspaceError(f"no workspace {name!r}")
-    iid = (rec or {}).get("id", name)
+        raise WorkspaceError(f"no workspace {ident!r}")
+    iid = (rec or {}).get("id", ident)
     shutil.rmtree(ws)
     removed = ["workspace"]
     if purge:
@@ -284,4 +313,30 @@ def remove(name: str, *, purge: bool = False) -> dict:
         if data.exists():
             shutil.rmtree(data)
             removed.append("data")
-    return {"name": name, "removed": removed}
+    return {"name": (rec or {}).get("name", ident), "removed": removed}
+
+
+def rename(ident: str, new_name: str) -> dict:
+    """Change a workspace's DISPLAY name (by id or current name). The id — and with it
+    the dir, the URL slug and the ``~/.protoagent/<id>/*`` data scope — never changes,
+    so open windows and checkpoints survive the rename. Also restamps ``identity.name``
+    in the workspace config; a RUNNING agent picks that up on its next restart."""
+    new_name = _safe(new_name)
+    if new_name.lower() in _RESERVED_NAMES:
+        raise WorkspaceError(f"{new_name!r} is reserved — it's how the fleet addresses this instance")
+    found = _find(ident)
+    if found is None:
+        raise WorkspaceError(f"no workspace {ident!r}")
+    clash = _find(new_name)
+    if clash is not None and clash["id"] != found["id"]:
+        raise WorkspaceError(f"an agent named {new_name!r} already exists")
+
+    import yaml
+    ws = Path(found["path"])
+    rec = _read_record(ws) or {}
+    rec["name"] = new_name
+    (ws / "workspace.yaml").write_text(yaml.safe_dump(rec, sort_keys=False))
+    cfg = ws / "langgraph-config.yaml"
+    if cfg.exists():  # keep the agent's self-identity in step with the display name
+        _stamp_identity(cfg, new_name, False, instance_id=rec.get("id", found["id"]))
+    return {"id": found["id"], "name": new_name}

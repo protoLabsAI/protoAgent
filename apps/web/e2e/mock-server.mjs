@@ -292,9 +292,19 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/fleet" && req.method === "POST") {
       const name = String(body.name || "").trim();
       if (!/^[A-Za-z0-9-_]+$/.test(name)) return sendJson(res, { detail: "invalid name" }, 400);
-      const agent = { name, id: name, port: 7899, pid: 5000, running: true, bundle: body.bundle || "" };
+      // Ids are opaque + immutable (name-<4hex>); the name is the editable display label.
+      const agent = { name, id: `${name}-ab12`, port: 7899, pid: 5000, running: true, bundle: body.bundle || "" };
       FLEET.agents.push(agent);
       return sendJson(res, { ok: true, agent, installed: [] });
+    }
+    if (req.method === "PATCH" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
+      const ident = decodeURIComponent(pathname.split("/").pop());
+      const a = FLEET.agents.find((x) => x.id === ident || x.name === ident);
+      if (!a) return sendJson(res, { detail: "no such agent" }, 400);
+      if (FLEET.agents.some((x) => x.name === body.name && x.id !== a.id))
+        return sendJson(res, { detail: "an agent with that name already exists" }, 400);
+      a.name = String(body.name || "").trim();
+      return sendJson(res, { ok: true, id: a.id, name: a.name });
     }
     if (pathname === "/api/fleet/down" && req.method === "POST") {
       FLEET.agents.forEach((a) => { a.running = false; a.pid = null; });
@@ -303,7 +313,7 @@ const server = createServer(async (req, res) => {
     {
       const m = pathname.match(/^\/api\/fleet\/([^/]+)\/(start|stop|activate)$/);
       if (m && req.method === "POST") {
-        const a = FLEET.agents.find((x) => x.name === m[1]);
+        const a = FLEET.agents.find((x) => x.name === m[1] || x.id === m[1]);
         if (!a) return sendJson(res, { detail: "no such agent" }, 400);
         if (m[2] === "start") { a.running = true; a.pid = 5001; return sendJson(res, { ok: true, agent: a }); }
         if (m[2] === "stop") { a.running = false; a.pid = null; return sendJson(res, { ok: true, name: a.name, stopped: true }); }
@@ -314,7 +324,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "DELETE" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
       const name = decodeURIComponent(pathname.split("/").pop());
-      FLEET.agents = FLEET.agents.filter((a) => a.name !== name);
+      FLEET.agents = FLEET.agents.filter((a) => a.name !== name && a.id !== name);
       return sendJson(res, { ok: true, name, removed: [name] });
     }
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {

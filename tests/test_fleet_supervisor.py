@@ -74,12 +74,13 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
+    ids = {}
     for nm in ("a", "b", "c"):           # a started first → least-recently-active
-        manager.create(nm)
-        supervisor.start(nm)
+        ids[nm] = manager.create(nm)["id"]
+        supervisor.start(nm)             # display name resolves to the id
 
-    evicted = supervisor.enforce_warm_cap(keep=2, protect="c")
-    assert evicted == ["a"]              # LRU evicted, protected one kept
+    evicted = supervisor.enforce_warm_cap(keep=2, protect="c")  # protect by name too
+    assert evicted == [ids["a"]]         # LRU evicted (state keys = ids), protected one kept
     assert not supervisor.is_running("a")
     assert supervisor.is_running("b") and supervisor.is_running("c")
     assert supervisor.enforce_warm_cap(keep=0) == []   # 0 = unlimited, no-op

@@ -3388,6 +3388,17 @@ textarea {
   align-items: center;
   gap: 8px;
 }
+/* Inline display-rename (Enter saves, Esc cancels) — the id/URL never changes. */
+.fleet-rename-input {
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: var(--bg-secondary, transparent);
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 1px 6px;
+  width: 12ch;
+}
 .fleet-active-tag {
   font-size: 10px;
   text-transform: uppercase;

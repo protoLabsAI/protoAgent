@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
+import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@protolabsai/ui/primitives";
@@ -20,6 +20,19 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<FleetAgent | null>(null);
   const [purge, setPurge] = useState(false);
+
+  // Display rename (the id — and so the URL slug + data scope — never changes).
+  const [renaming, setRenaming] = useState<string | null>(null); // the id being renamed
+  const [renameValue, setRenameValue] = useState("");
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => api.renameAgent(id, name),
+    onMutate: () => setError(null),
+    onError: (e: Error) => setError(e.message),
+    onSettled: () => {
+      setRenaming(null);
+      qc.invalidateQueries({ queryKey: queryKeys.fleet });
+    },
+  });
 
   const agents = fleet.data?.agents ?? [];
   const slug = currentSlug(); // the agent this window is focused on (the URL slug)
@@ -140,7 +153,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             {agents.map((a) => {
               const isActive = (a.host ? "host" : a.id) === slug; // slug = stable id, not name
               return (
-                <li key={a.name} className={`fleet-row${isActive ? " active" : ""}`}>
+                <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
                   <span
                     className={`fleet-dot ${a.running ? "running" : "stopped"}`}
                     title={a.running ? "running" : "stopped"}
@@ -148,7 +161,25 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                   />
                   <div className="fleet-row-main">
                     <span className="fleet-name">
-                      {a.name}
+                      {renaming === a.id ? (
+                        <form
+                          className="fleet-rename"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            rename.mutate({ id: a.id, name: renameValue.trim() });
+                          }}>
+                          <input
+                            className="fleet-rename-input"
+                            value={renameValue}
+                            autoFocus
+                            aria-label="New agent name"
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                          />
+                        </form>
+                      ) : (
+                        a.name
+                      )}
                       {a.host ? <span className="fleet-host-tag">this instance</span> : null}
                       {isActive ? <span className="fleet-active-tag">active</span> : null}
                     </span>
@@ -172,9 +203,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         </Button>
                       )
                     ) : null}
-                    {/* The host serves this console — it can't stop or remove itself. */}
+                    {/* The host serves this console — it can't stop or remove itself; its
+                        display name is edited in Settings → Identity instead. */}
                     {a.host ? null : (
                       <>
+                        <Button icon variant="ghost" title="Rename (display name only — the id/URL stays)"
+                          disabled={rename.isPending}
+                          onClick={() => {
+                            setRenaming(a.id);
+                            setRenameValue(a.name);
+                          }}>
+                          <Pencil size={14} />
+                        </Button>
                         {a.running ? (
                           <Button icon variant="ghost" title="Stop" disabled={busy === a.name}
                             onClick={() => act(a.name, () => api.stopAgent(a.name))}>
