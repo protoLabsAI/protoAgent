@@ -37,6 +37,21 @@ def register_fleet_routes(app) -> None:
         """The agent the console proxy currently points at (None if unset/stopped)."""
         return {"active": proxy.get_active()}
 
+    @app.get("/api/fleet/discover")
+    async def _discover():
+        """Discover OTHER protoAgents on the box + LAN (local port-scan + mDNS, ADR 0042 §I) —
+        candidates to add as remote delegates. Excludes agents already in this fleet (+ self)."""
+        from graph.fleet import discovery
+        fleet = supervisor.status()
+        known = {("127.0.0.1", a["port"]) for a in fleet if a.get("port")}
+        try:  # also exclude our own mDNS self-advert (LAN ip + the host's port)
+            host_port = next((a["port"] for a in fleet if a.get("host")), None)
+            if host_port:
+                known.add((discovery._local_ip(), host_port))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"discovered": await discovery.discover(known=known)}
+
     @app.post("/api/fleet/{name}/activate")
     async def _activate(name: str):
         """Switch the console to an agent — the in-place switch.

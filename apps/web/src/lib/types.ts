@@ -495,6 +495,9 @@ export type FleetAgent = {
 // `active` is the focused peer, or null when the host itself is focused (talk /api direct).
 export type FleetStatus = { agents: FleetAgent[]; active: string | null };
 
+// Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
+export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
+
 export type Archetype = {
   id: string; // "basic", or a bundle id e.g. "pm-stack"
   label: string;
