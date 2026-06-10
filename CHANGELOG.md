@@ -35,8 +35,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`remotes.json.lock`) instead of sharing `fleet.json`'s, so remote add/remove
   and probe-version persists can't contend with — or be lost under — fleet-state
   writes. (#868)
+- **Design-system 0.25 adoption + `theme.css` decomposition (#832).** Bumped
+  `@protolabsai/ui` to 0.25 and replaced the console's hand-rolled chrome with DS
+  components — `Splash`/`BootGate` (boot/splash), `EditableText` (inline rename),
+  `Empty`/`Grid`/`Badge`, the `ToolCard` family (chat tool calls), and `TabBar`
+  (chat session tabs, using 0.25's responsive collapse). The 3,387-line monolithic
+  `apps/web/src/app/theme.css` was carved into co-located per-surface CSS modules
+  (Axis-A) and shrunk as each surface adopted the DS (Axis-B) down to ~1,900 lines
+  of genuinely-shared shell/base. (#854, #859, #860, #861, #862, #863, #864, #881)
+- **Layered settings cascade (ADR 0047) + settings IA (ADR 0048).** Per-field
+  App→Host→Agent override via `Field.scope` (git-style nearest-wins, `host-config.yaml`
+  holds box-shared defaults), surfaced as two scope-based settings homes — Host/App
+  (box-shared; the host is the first agent) and Workspace (the focused agent). (#844, #880)
+- **Plugin-view authoring hardening (#884).** The DS plugin-kit JS is now served
+  same-origin at `/_ds/plugin-kit.js` (`initPluginView`/`apiFetch`/`getToken`), so
+  views stop re-rolling the theme + hardcoding URLs. The loader warns when a declared
+  `views[].path` is served by no router, or when a plugin registers a second router
+  at a colliding `(plugin_id, prefix)` (silently dropped at mount); the manifest
+  warns on non-same-origin view paths. The contradictory pair of guides collapses
+  into one canonical guide with the four view rules (serve-what-you-declare · gate
+  the data not the page · same-origin slug-aware · link the kit), the postMessage
+  handshake + event-bus + sandbox contract, and the `chat_example` gold-standard.
 
 ### Fixed
+- **Light mode works on the hand-rolled chrome (#842).** The `:root` token bridge
+  defined `--bg`/`--fg`/`--error` but not the `--bg-elevated`/`--fg-tertiary`/
+  `--danger` synonyms the chrome used (8–14× each), so they fell back to a dark
+  literal and never flipped; aliased them to the matching `--pl-*` tokens, and
+  tokenized the remaining ~40 raw hardcoded colors across the carved modules so
+  they flip with the theme. (#854, #862)
+- **Enabling a plugin's console view works immediately — no restart, no blank
+  panel (#853).** A console view is just an iframe over a hot-mounted router route
+  (#822), so the "restart required" prompt on enable was stale (restart now flags
+  only on *disable*, which can't unmount a route). `PluginView` status-probes the
+  route before mounting the iframe — a same-origin 404 fires `onLoad`, not
+  `onError`, so the old code rendered the bare 404 body as the "view" — and surfaces
+  an actionable error instead of a blank panel.
+- **Plugin views resolve on fleet members, not the hub (#879).** `apiUrl()` routed
+  `/api/*` to the focused agent but not the default `/plugins/<id>/…` view prefix,
+  so a member's view iframe hit the hub (which lacks that plugin) → 404 / "refused
+  to connect". `isAgentPath()` now matches `/plugins/` too.
+- **Host defaults renders as one cohesive panel (#878)** — it rendered one full
+  panel per category (Agent + System), stacking duplicate Save bars + explainers;
+  now a single panel aggregating the host-scoped fields across categories.
+- **A single Ctrl-C shuts the server down cleanly (#882).** `uvicorn.run` had no
+  `timeout_graceful_shutdown`, so it waited indefinitely on long-lived SSE /
+  fleet-proxy connections and forced a second Ctrl-C whose `KeyboardInterrupt`
+  dumped `CancelledError` tracebacks; bounded to 5s.
 - **`config_to_dict` now emits the complete plugins section** — the serialized
   config dict (the `/api/config` payload and anything else treating it as the
   full config) carried only `plugins.{enabled, dir}`, silently dropping
