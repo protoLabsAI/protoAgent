@@ -1,0 +1,20 @@
+id: chat_example
+name: Chat panel (example)
+version: 0.1.0
+description: >-
+  Reference chat-slot plugin (ADR 0045): a minimal vanilla-JS chat panel that
+  REPLACES the built-in chat surface via `slot: "chat"`. Demonstrates the
+  protoagent:init bearer/theme handshake, slug-aware API routing, and the
+  documented non-streaming /api/chat path. Copy this as the starting point for
+  your own chat panel; production panels should speak the full streaming A2A
+  contract — see the ADR 0045 conformance checklist.
+enabled: false
+capabilities:
+  network: []
+  filesystem: none
+
+# Claim the chat SLOT (ADR 0045): this view renders under the core "chat" rail id
+# (no separate icon), stays mounted for the app's lifetime, and replaces the
+# built-in panel. Disable the plugin to get the built-in chat back.
+views:
+  - { id: panel, label: "Chat (example)", icon: "MessageSquare", path: "/plugins/chat_example/panel", slot: chat }

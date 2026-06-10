@@ -72,6 +72,18 @@ key local state per agent slug).
 Forks have an in-process alternative: register a `src/ext` surface with `id: "chat"`
 (ADR 0038 D3) — it overrides the slot ahead of plugin claims, with full React context.
 
+A complete reference implementation ships in **`plugins/chat_example`** — a
+single-page vanilla-JS panel covering the handshake, live re-theming, slug-aware
+routing, and a turn over the non-streaming path. Try it:
+
+```yaml
+plugins:
+  enabled: [chat_example]
+```
+
+Reload — Chat becomes the example panel. Disable the plugin and the built-in chat
+is back.
+
 ## Serve the page
 
 The page is yours — any framework, or plain HTML. Serve it from the plugin's
