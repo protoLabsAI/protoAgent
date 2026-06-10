@@ -290,3 +290,54 @@ async def test_send_time_guard_blocks_private_without_network(tmp_path):
         )
         assert ok is False
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_async_paths_resolve_dns_off_the_event_loop(tmp_path, monkeypatch):
+    """Both async guard call sites run ``is_safe_webhook_url`` via
+    ``asyncio.to_thread``, so a slow resolver can't stall the whole process:
+    ``getaddrinfo`` must execute on a worker thread, not the loop's thread."""
+    import threading
+
+    loop_thread = threading.get_ident()
+    resolver_threads: list[int] = []
+
+    def _recording_getaddrinfo(host, port, *args, **kwargs):
+        resolver_threads.append(threading.get_ident())
+        # (family, type, proto, canonname, sockaddr) for a public address.
+        return [(2, 1, 6, "", ("8.8.8.8", 0))]
+
+    monkeypatch.setattr(a2a_stores.socket, "getaddrinfo", _recording_getaddrinfo)
+
+    db = str(tmp_path / "a2a-push.db")
+    store, engine = await _fresh_push_store(db)
+    # Set-time path (hostname URL so the guard actually resolves).
+    await store.set_info(
+        "task-dns",
+        TaskPushNotificationConfig(task_id="task-dns", url="https://hooks.example.test/x"),
+        _ctx(),
+    )
+    assert resolver_threads, "set_info never hit the resolver"
+    assert all(t != loop_thread for t in resolver_threads)
+
+    # Send-time path: the guard re-resolves before the POST; refuse via a
+    # resolver that "now" returns a private address — still off the loop.
+    resolver_threads.clear()
+    monkeypatch.setattr(
+        a2a_stores.socket,
+        "getaddrinfo",
+        lambda host, port, *a, **kw: (
+            resolver_threads.append(threading.get_ident()),
+            [(2, 1, 6, "", ("10.0.0.1", 0))],
+        )[1],
+    )
+    async with httpx.AsyncClient() as client:
+        sender = a2a_stores.build_push_sender(store, client)
+        ok = await sender._dispatch_notification(
+            None,
+            TaskPushNotificationConfig(task_id="task-dns", url="https://hooks.example.test/x"),
+            "task-dns",
+        )
+    assert ok is False
+    assert resolver_threads and all(t != loop_thread for t in resolver_threads)
+    await engine.dispose()

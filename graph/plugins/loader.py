@@ -137,6 +137,64 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
     raise RuntimeError(f"plugin {plugin_id!r} not found for --mcp-plugin")
 
 
+def _host_version() -> str:
+    """The running protoAgent version, for the manifest compat gate.
+
+    Same resolution order as the A2A card (``server.a2a._package_version`` —
+    not imported here, ``graph`` must not depend on ``server``): installed
+    package metadata first, then the repo ``pyproject.toml`` ``[project].version``.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("protoagent")
+        except PackageNotFoundError:
+            pass
+    except ImportError:  # pragma: no cover - importlib.metadata always present on 3.11+
+        pass
+
+    from graph.config_io import _BUNDLE_CONFIG_DIR
+
+    pyproject = _BUNDLE_CONFIG_DIR.parent / "pyproject.toml"
+    try:
+        m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject.read_text(), re.MULTILINE)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+def _min_version_gate(manifest: PluginManifest) -> str | None:
+    """Enforce the manifest's ``min_protoagent_version`` compat guard.
+
+    Returns ``None`` when the plugin may load, or a refusal reason when the
+    plugin declares it needs a *newer* host than this one — a plugin written
+    against a newer plugin SDK can break the host, so refusing matches the
+    manifest's documented "warn/refuse on an older host" promise. A malformed
+    version string (either side) only warns and loads — a typo in a manifest
+    must not brick the plugin.
+    """
+    declared = (manifest.min_protoagent_version or "").strip()
+    if not declared:
+        return None
+    from packaging.version import InvalidVersion, Version
+
+    host_raw = _host_version()
+    try:
+        needed, host = Version(declared), Version(host_raw)
+    except InvalidVersion:
+        log.warning(
+            "[plugins] %s: unparseable min_protoagent_version %r (host %r) — loading anyway",
+            manifest.id, declared, host_raw,
+        )
+        return None
+    if needed > host:
+        return f"requires protoAgent >= {declared} but this host is {host_raw}"
+    return None
+
+
 def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLoadResult:
     """Load enabled plugins and collect their contributions.
 
@@ -178,6 +236,16 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         if missing:
             entry["error"] = f"missing env: {', '.join(missing)}"
             log.warning("[plugins] %s enabled but %s — skipping", manifest.id, entry["error"])
+            result.meta.append(entry)
+            continue
+
+        # min_protoagent_version compat gate (ADR 0027) — refuse before the
+        # plugin's code ever imports (a plugin built for a newer SDK can break
+        # the host); malformed versions warn inside the gate and load anyway.
+        incompat = _min_version_gate(manifest)
+        if incompat:
+            entry["error"] = incompat
+            log.error("[plugins] %s enabled but %s — refusing to load", manifest.id, incompat)
             result.meta.append(entry)
             continue
 

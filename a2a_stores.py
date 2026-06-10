@@ -25,6 +25,7 @@ restart. This module restores the two capabilities the bespoke
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -187,7 +188,9 @@ class ValidatingPushNotificationConfigStore(DatabasePushNotificationConfigStore)
         context: ServerCallContext,
     ) -> None:
         url = notification_config.url
-        if url and not is_safe_webhook_url(url):
+        # is_safe_webhook_url resolves hostnames synchronously (getaddrinfo);
+        # run it off the loop so a slow resolver can't stall the whole process.
+        if url and not await asyncio.to_thread(is_safe_webhook_url, url):
             log.warning("[a2a] rejected unsafe webhook url at set-time: %s", url)
             raise ValueError(
                 f"push-notification callback url is not allowed: {url!r} "
@@ -212,7 +215,10 @@ class ValidatingPushNotificationSender(BasePushNotificationSender):
         task_id: str,
     ) -> bool:
         url = push_info.url
-        if url and not is_safe_webhook_url(url):
+        # Re-validate at send-time (DNS may have changed since set-time) — but
+        # off the loop: this runs before EVERY push POST, and a synchronous
+        # getaddrinfo here would block the event loop for the OS timeout.
+        if url and not await asyncio.to_thread(is_safe_webhook_url, url):
             log.warning(
                 "[a2a] refusing push delivery to unsafe webhook url for "
                 "task_id=%s: %s",

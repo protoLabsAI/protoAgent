@@ -29,6 +29,10 @@ class AppState:
     workflow_registry: Any = None  # set by the workflows plugin (None = plugin disabled)
     workflow_run: Any = None  # async (name, inputs, on_step) -> result; set by the workflows plugin
     telemetry_store: Any = None
+    # Async engine behind the durable A2A task store — held so the periodic
+    # prune loop can re-run the 24h TTL sweep (it used to run only at boot, so
+    # an always-on agent accumulated task rows forever between restarts).
+    a2a_task_engine: Any = None
     inbox_store: Any = None
     beads_store: Any = None
     storm_guard: Any = None

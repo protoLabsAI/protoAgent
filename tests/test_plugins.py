@@ -395,3 +395,47 @@ def test_plugin_embedder_is_collected(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg(plugins_enabled=["embplugin"]))
     assert "local" in res.embedders  # ADR 0031 follow-up
+
+
+# ── min_protoagent_version compat gate (ADR 0027) ────────────────────────────────
+
+
+def test_min_version_newer_than_host_refuses_load(tmp_path, monkeypatch) -> None:
+    """A plugin declaring it needs a newer host is refused, with both versions
+    in the surfaced error (the manifest's documented "warn/refuse" promise)."""
+    root = tmp_path / "plugins"
+    _make_plugin(root, "toonew", enabled=True, tool="toonew_tool",
+                 manifest_extra="min_protoagent_version: 99.0.0\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
+    res = load_plugins(_cfg())
+    assert res.tools == []
+    meta = res.meta[0]
+    assert meta["loaded"] is False
+    assert "99.0.0" in meta["error"] and "0.32.0" in meta["error"]
+
+
+def test_min_version_equal_or_older_loads(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "plugins"
+    _make_plugin(root, "okequal", enabled=True, tool="okequal_tool",
+                 manifest_extra="min_protoagent_version: 0.32.0\n")
+    _make_plugin(root, "okolder", enabled=True, tool="okolder_tool",
+                 manifest_extra="min_protoagent_version: 0.1.0\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
+    res = load_plugins(_cfg())
+    assert sorted(t.name for t in res.tools) == ["okequal_tool", "okolder_tool"]
+
+
+def test_min_version_garbage_warns_and_loads(tmp_path, monkeypatch, caplog) -> None:
+    """A typo'd version string must not brick the plugin — warn and load."""
+    root = tmp_path / "plugins"
+    _make_plugin(root, "typoed", enabled=True, tool="typoed_tool",
+                 manifest_extra="min_protoagent_version: not-a-version\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
+    with caplog.at_level("WARNING", logger="protoagent.plugins"):
+        res = load_plugins(_cfg())
+    assert [t.name for t in res.tools] == ["typoed_tool"]
+    assert res.meta[0]["loaded"] is True
+    assert any("min_protoagent_version" in r.message for r in caplog.records)

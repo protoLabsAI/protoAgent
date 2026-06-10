@@ -716,6 +716,10 @@ def _main():
     # set-time; the matching push sender re-validates at send-time.
     task_store, push_config_store, task_db, push_db = build_a2a_stores()
     asyncio.run(initialize_a2a_stores(task_store, push_config_store))
+    # Hand the engine to the periodic prune loop so the 24h TTL sweep keeps
+    # running on an always-on agent (boot-only before — rows grew unbounded
+    # between restarts).
+    STATE.a2a_task_engine = task_store.engine
     log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
 
     async def _structured_finalizer(skill_id: str, final_text: str):
