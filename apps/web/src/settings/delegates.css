@@ -1,0 +1,45 @@
+/* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
+.delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.delegate-type-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--brand-violet-light);
+}
+.delegate-badge-warn { font-size: 10px; color: #e0a23a; }
+.delegate-badge-ok { font-size: 10px; color: var(--fg-muted); }
+.delegate-form {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  display: grid;
+  gap: 12px;
+}
+.delegate-form-head { display: flex; align-items: center; justify-content: space-between; }
+.delegate-type-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.delegate-type-tile {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.delegate-type-tile:hover { border-color: var(--brand-violet); }
+.delegate-type-tile.active { border-color: var(--brand-violet); background: color-mix(in srgb, var(--brand-violet) 12%, var(--bg)); }
+.delegate-type-tile-label { font-size: 13px; font-weight: 600; }
+.delegate-type-tile-blurb { font-size: 11px; color: var(--fg-muted); }
+.delegate-field-help { font-size: 11px; color: var(--fg-muted); }
+.delegate-health { font-size: 10px; line-height: 1; }
+.delegate-health.ok { color: #46c46a; }
+.delegate-health.down { color: #e0533a; }
+.delegate-health.unknown { color: var(--fg-muted); }

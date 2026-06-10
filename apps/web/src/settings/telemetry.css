@@ -1,0 +1,90 @@
+/* Telemetry dashboard (ADR 0006 Slice 3) */
+.telemetry-section {
+  margin-top: 22px;
+}
+.telemetry-section > .panel-kicker {
+  margin-bottom: 8px;
+}
+.telemetry-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.telemetry-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.telemetry-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.telemetry-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.telemetry-table tr.turn-failed td {
+  color: var(--error);
+}
+.turn-state {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.turn-state-completed {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.turn-state-failed {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+/* Telemetry insights (ADR 0006 Slice 4 — advise-only) */
+.telemetry-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.insight-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.insight-row.ok { color: var(--success); }
+.insight-row.warn { color: var(--warning); }
+.insight-flags {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.insight-flags li {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  color: var(--fg-secondary);
+  border-top: 1px solid var(--border);
+}
+.flag-when { color: var(--fg-muted); min-width: 96px; }
+.flag-model { min-width: 150px; }
+.flag-reason { color: var(--warning); }
+.insight-note {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  margin: 2px 0 0;
+}

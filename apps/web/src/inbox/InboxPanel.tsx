@@ -1,3 +1,5 @@
+import "./inbox.css";
+
 import { Button } from "@protolabsai/ui/primitives";
 import {
 

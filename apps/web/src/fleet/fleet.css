@@ -1,0 +1,105 @@
+/* Fleet manager + archetype picker (Settings → Agents, ADR 0042) */
+.fleet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-row.active {
+  background: var(--bg-hover);
+}
+/* NB: .fleet-dot* is NOT here — it's shared with the always-mounted topbar
+   FleetSwitcher, so it lives in the always-loaded layer (theme.css), not this
+   Settings-only module (which would only load once Settings → Agents opens). */
+.fleet-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fleet-name {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Inline display-rename sizing — the chrome is the DS EditableText (.pl-editable__input);
+   this only sets the field width and keeps the bold weight of the row name. */
+.fleet-rename-input {
+  font-weight: 600;
+  width: 12ch;
+}
+.fleet-active-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.fleet-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+.fleet-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+.fleet-empty,
+.fleet-section-label {
+  color: var(--fg-muted);
+}
+.fleet-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 4px 0 8px;
+}
+.fleet-error {
+  color: #f87171;
+  margin-bottom: 10px;
+}
+.fleet-purge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.fleet-purge input {
+  width: auto;
+}
+
+/* "delegate" marker on a fleet row — this agent is a delegate_to target of the focused agent. */
+.fleet-delegate-tag {
+  /* It lives in .fleet-row-actions (a flex row), so center it + don't stretch to the action
+     buttons' height (that left a tall box with the text top-aligned). */
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  line-height: 1.6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--brand-violet, #9b87f2);
+  border: 1px solid color-mix(in srgb, var(--brand-violet, #9b87f2) 40%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
+.fleet-discover {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}

@@ -1,3 +1,5 @@
+import "../goals/goals.css";
+
 import { Button } from "@protolabsai/ui/primitives";
 import {
 

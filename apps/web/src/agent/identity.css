@@ -1,0 +1,41 @@
+/* Identity panel — the SOUL.md field fills the panel; rendered Markdown by default (max space),
+   "Edit" flips to a raw textarea. */
+.identity-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden; /* the SOUL preview/textarea scrolls internally, not the whole body */
+}
+.soul-field {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.soul-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.soul-field .soul-textarea {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+}
+.soul-preview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 18px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  color: var(--fg);
+  font-family: var(--font-sans, inherit);
+  cursor: text;
+}
+.soul-preview > :first-child { margin-top: 0; }
+.soul-preview > :last-child { margin-bottom: 0; }

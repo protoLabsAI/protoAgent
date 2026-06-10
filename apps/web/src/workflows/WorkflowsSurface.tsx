@@ -1,3 +1,5 @@
+import "./workflows.css";
+
 import { Input, Select } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {

@@ -1,0 +1,53 @@
+/* Goals side-panel (the agent's autonomy layer, moved out of Studio). */
+.goals-list {
+  display: grid;
+  align-content: start;
+  height: 100%;
+}
+
+.goal-row {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 10px 34px 10px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.goal-row:last-child {
+  border-bottom: 0;
+}
+
+.goal-row.empty {
+  gap: 2px;
+}
+
+.goal-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.goal-row-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.goal-row-meta {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.goal-row-clear {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+}

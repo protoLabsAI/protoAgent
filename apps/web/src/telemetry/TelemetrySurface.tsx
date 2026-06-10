@@ -1,3 +1,5 @@
+import "../settings/telemetry.css";
+
 import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";

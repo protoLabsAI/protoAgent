@@ -1,3 +1,5 @@
+import "../fleet/fleet.css";
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";

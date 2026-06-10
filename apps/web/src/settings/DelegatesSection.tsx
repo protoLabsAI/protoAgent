@@ -1,3 +1,5 @@
+import "./delegates.css";
+
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

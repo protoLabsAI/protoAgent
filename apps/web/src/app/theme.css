@@ -1323,47 +1323,7 @@ textarea {
   padding: 0 12px;
 }
 
-/* Identity panel — the SOUL.md field fills the panel; rendered Markdown by default (max space),
-   "Edit" flips to a raw textarea. */
-.identity-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  overflow: hidden; /* the SOUL preview/textarea scrolls internally, not the whole body */
-}
-.soul-field {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.soul-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.soul-field .soul-textarea {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  resize: none;
-}
-.soul-preview {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 18px;
-  background: color-mix(in srgb, var(--fg) 3%, transparent);
-  color: var(--fg);
-  font-family: var(--font-sans, inherit);
-  cursor: text;
-}
-.soul-preview > :first-child { margin-top: 0; }
-.soul-preview > :last-child { margin-bottom: 0; }
+/* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
 
 .field-hint {
   color: var(--fg-subtle, var(--fg-muted));
@@ -1594,44 +1554,8 @@ textarea {
    unread count rides as the DS `badge` slot (.pl-tab__badge). Local .stage-subnav
    + .subnav-badge retired. */
 
-/* Inbox panel (ADR 0003) ---------------------------------------------------- */
-.inbox-list {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-}
-
-.inbox-empty {
-  color: var(--fg-secondary);
-  font-size: 12px;
-  padding: 8px;
-  line-height: 1.5;
-}
-
-.inbox-empty code {
-  font-size: 11px;
-  background: var(--bg-elevated, #111114);
-  padding: 1px 4px;
-  border-radius: 4px;
-}
-
-.inbox-item {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated, #111114);
-  padding: 8px 10px;
-}
-
-.inbox-item-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
+/* Inbox panel (ADR 0003) — moved to src/inbox/inbox.css (#832), except .inbox-pri*
+   which is shared with the Activity surface (ActivitySurface renders inbox-pri badges). */
 .inbox-pri {
   font-size: 10px;
   text-transform: uppercase;
@@ -1654,174 +1578,10 @@ textarea {
   background: var(--fg-tertiary, #555);
 }
 
-.inbox-source {
-  font-size: 11px;
-  color: var(--fg-secondary);
-  font-family: var(--font-mono);
-}
+/* Live event-stream indicator (ADR 0003) — moved to src/inbox/inbox.css (#832). */
 
-.inbox-dismiss {
-  margin-left: auto;
-}
-
-.inbox-text {
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Live event-stream indicator (ADR 0003) ------------------------------------ */
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--fg-tertiary, #555);
-  flex: none;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
-}
-
-.live-dot.is-live {
-  background: var(--success, #3fb950);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #3fb950) 25%, transparent);
-}
-
-/* Workflows surface --------------------------------------------------------- */
-.workflow-desc {
-  margin: 0 12px;
-  color: var(--fg-secondary);
-  font-size: 13px;
-}
-
-.workflow-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 4px 12px;
-}
-
-/* Workflow builder (Sprint C) — author a recipe in the console. */
-.workflow-builder {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 0 12px;
-}
-
-.builder-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-}
-
-.builder-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-}
-
-.builder-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.builder-row input,
-.builder-row select,
-.builder-prompt {
-  flex: 1;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 6px 8px;
-  font: inherit;
-}
-
-.builder-step {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-left: 2px solid var(--border);
-  padding-left: 8px;
-}
-
-.builder-prompt {
-  resize: vertical;
-}
-
-.builder-deps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-
-.workflow-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated, #111114);
-  font-size: 13px;
-}
-
-.workflow-step svg {
-  color: var(--accent, #7c8cff);
-  flex: none;
-}
-
-.workflow-step-sub {
-  color: var(--fg-secondary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.workflow-step-dep {
-  margin-left: auto;
-  color: var(--fg-tertiary, var(--fg-secondary));
-  font-size: 11px;
-}
-
-.workflow-result {
-  margin: 8px 0 0;
-}
-
-.workflow-result h2 {
-  margin: 8px 12px 4px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-secondary);
-}
-
-.workflow-result details {
-  margin: 0 12px 12px;
-}
-
-.workflow-result summary {
-  cursor: pointer;
-  color: var(--fg-secondary);
-  font-size: 12px;
-  padding: 4px 0;
-}
-
-.workflow-step-out strong {
-  display: block;
-  margin: 6px 12px 2px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
+/* Workflows surface — moved to src/workflows/workflows.css (#832), except
+   .workflow-failed below which is shared (BeadsPanel renders it too). */
 .workflow-failed {
   margin: 0 12px;
   color: var(--danger, #ff6b6b);
@@ -2053,59 +1813,9 @@ textarea {
   justify-self: start;
 }
 
-/* Goals side-panel (the agent's autonomy layer, moved out of Studio). */
-.goals-list {
-  display: grid;
-  align-content: start;
-  height: 100%;
-}
-
-.goal-row {
-  position: relative;
-  display: grid;
-  gap: 4px;
-  padding: 10px 34px 10px 12px;
-  border-bottom: 1px solid var(--border);
-  min-width: 0;
-}
-
-.goal-row:last-child {
-  border-bottom: 0;
-}
-
-.goal-row.empty {
-  gap: 2px;
-}
-
-.goal-row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.goal-row-head strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-}
-
-.goal-row-meta {
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.goal-row-clear {
-  position: absolute;
-  top: 8px;
-  right: 6px;
-}
+/* Goals side-panel — .goals-list + .goal-row* moved to src/goals/goals.css (#832).
+   The .issue-* / .empty-state / .setup-overlay rules below belong to other surfaces
+   (BeadsPanel, ChatSurface, SetupWizard) and stay shared here. */
 
 .issue-group {
   min-width: 0;
@@ -2799,100 +2509,13 @@ textarea {
   cursor: pointer;
 }
 
-/* Telemetry dashboard (ADR 0006 Slice 3) */
+/* Telemetry dashboard + insights (ADR 0006 Slices 3–4) — the .telemetry-* / .turn-state* /
+   .insight-* / .flag-* rules moved to src/settings/telemetry.css (#832). .empty-note stays:
+   it's shared (PlaybooksSurface + KnowledgeStore render it too). */
 .empty-note {
   color: var(--fg-muted);
   font-size: 13px;
   padding: 16px 2px;
-}
-.telemetry-section {
-  margin-top: 22px;
-}
-.telemetry-section > .panel-kicker {
-  margin-bottom: 8px;
-}
-.telemetry-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-.telemetry-table th {
-  text-align: left;
-  font-weight: 500;
-  color: var(--fg-muted);
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-.telemetry-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-secondary);
-  white-space: nowrap;
-}
-.telemetry-table tbody tr:hover {
-  background: var(--bg-hover);
-}
-.telemetry-table tr.turn-failed td {
-  color: var(--error);
-}
-.turn-state {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-}
-.turn-state-completed {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 40%, transparent);
-}
-.turn-state-failed {
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 40%, transparent);
-}
-
-/* Telemetry insights (ADR 0006 Slice 4 — advise-only) */
-.telemetry-insights {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  margin-bottom: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-raised);
-}
-.insight-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-}
-.insight-row.ok { color: var(--success); }
-.insight-row.warn { color: var(--warning); }
-.insight-flags {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.insight-flags li {
-  display: flex;
-  gap: 12px;
-  padding: 3px 0;
-  color: var(--fg-secondary);
-  border-top: 1px solid var(--border);
-}
-.flag-when { color: var(--fg-muted); min-width: 96px; }
-.flag-model { min-width: 150px; }
-.flag-reason { color: var(--warning); }
-.insight-note {
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  margin: 2px 0 0;
 }
 
 /* Playbooks surface (ADR 0009) */
@@ -2938,51 +2561,7 @@ textarea {
 }
 .playbook-foot { margin-top: 16px; font-size: 11.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }
 
-/* ── Delegates panel (ADR 0025) — Settings → Integrations ──────────────────── */
-.delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.delegate-type-badge {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  color: var(--brand-violet-light);
-}
-.delegate-badge-warn { font-size: 10px; color: #e0a23a; }
-.delegate-badge-ok { font-size: 10px; color: var(--fg-muted); }
-.delegate-form {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  display: grid;
-  gap: 12px;
-}
-.delegate-form-head { display: flex; align-items: center; justify-content: space-between; }
-.delegate-type-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
-.delegate-type-tile {
-  display: grid;
-  gap: 3px;
-  text-align: left;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-.delegate-type-tile:hover { border-color: var(--brand-violet); }
-.delegate-type-tile.active { border-color: var(--brand-violet); background: color-mix(in srgb, var(--brand-violet) 12%, var(--bg)); }
-.delegate-type-tile-label { font-size: 13px; font-weight: 600; }
-.delegate-type-tile-blurb { font-size: 11px; color: var(--fg-muted); }
-.delegate-field-help { font-size: 11px; color: var(--fg-muted); }
-.delegate-health { font-size: 10px; line-height: 1; }
-.delegate-health.ok { color: #46c46a; }
-.delegate-health.down { color: #e0533a; }
-.delegate-health.unknown { color: var(--fg-muted); }
+/* ── Delegates panel (ADR 0025) — moved to src/settings/delegates.css (#832). ── */
 
 /* Plugin-contributed console views (ADR 0026) — optional subnav above, iframe fills. */
 .plugin-view { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
@@ -3128,22 +2707,16 @@ textarea {
   background: var(--pl-color-bg-hover, rgba(255, 255, 255, 0.06));
 }
 
-/* Fleet manager + archetype picker (Settings → Agents, ADR 0042) */
-.fleet-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.fleet-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 4px;
-  border-bottom: 1px solid var(--border);
-}
-.fleet-row.active {
-  background: var(--bg-hover);
-}
+/* Fleet manager (Settings → Agents, ADR 0042) — the .fleet-list / .fleet-row* /
+   .fleet-rename-input / .fleet-active-tag / .fleet-meta / .fleet-error / .fleet-purge /
+   .fleet-delegate-tag / .fleet-discover rules moved to src/fleet/fleet.css (#832).
+   Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), .field-hint
+   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), and .fleet-host-tag
+   + .fleet-dot* — both rendered by the always-mounted topbar FleetSwitcher AND the FleetManager
+   panel, so they stay in this always-loaded layer (not a Settings-only module that loads lazily),
+   plus the global ::view-transition root crossfade. */
+
+/* Status dot — shared by the topbar FleetSwitcher and the FleetManager panel. */
 .fleet-dot {
   flex: 0 0 auto;
   width: 8px;
@@ -3157,68 +2730,6 @@ textarea {
 }
 .fleet-dot.stopped {
   opacity: 0.45;
-}
-.fleet-row-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.fleet-name {
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-/* Inline display-rename sizing — the chrome is the DS EditableText (.pl-editable__input);
-   this only sets the field width and keeps the bold weight of the row name. */
-.fleet-rename-input {
-  font-weight: 600;
-  width: 12ch;
-}
-.fleet-active-tag {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  padding: 0 5px;
-}
-.fleet-meta {
-  font-size: 12px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-}
-.fleet-row-actions {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 4px;
-}
-.fleet-empty,
-.fleet-section-label {
-  color: var(--fg-muted);
-}
-.fleet-section-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 4px 0 8px;
-}
-.fleet-error {
-  color: #f87171;
-  margin-bottom: 10px;
-}
-.fleet-purge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 13px;
-}
-.fleet-purge input {
-  width: auto;
 }
 
 .archetype-grid {
@@ -3350,30 +2861,6 @@ textarea {
   border-radius: 4px;
   padding: 0 5px;
   margin-left: 8px;
-}
-
-/* "delegate" marker on a fleet row — this agent is a delegate_to target of the focused agent. */
-.fleet-delegate-tag {
-  /* It lives in .fleet-row-actions (a flex row), so center it + don't stretch to the action
-     buttons' height (that left a tall box with the text top-aligned). */
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  line-height: 1.6;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--brand-violet, #9b87f2);
-  border: 1px solid color-mix(in srgb, var(--brand-violet, #9b87f2) 40%, transparent);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-
-/* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
-.fleet-discover {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 /* Theme crossfade (ADR 0042) — applyAgentTheme() applies the focused agent's look inside a
