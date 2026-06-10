@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-06-10
+
 ### Changed
 - **Intro splash shows once per session** — the launch bumper is gated by `sessionStorage`, so a
   refresh no longer replays the 2.5s splash; a fresh tab session sees it once. (Automation still skips it.)

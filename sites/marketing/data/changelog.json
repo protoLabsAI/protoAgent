@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.31.0",
+    "date": "2026-06-10",
+    "changes": [
+      "Intro splash shows once per session",
+      "Plugin devkit refreshed (v0.2.0)",
+      "Artifact plugin is now external",
+      "Design system → @protolabsai/ui 0.18, with console polish",
+      "The /active global-pointer proxy machinery",
+      "Retired Module Federation",
+      "Fleet console — run a fleet of agents from one console.",
+      "Chat panel is a slot",
+      "Plugin-driven console navigation",
+      "Goals come alive in the console",
+      "Goals broadcast on the event bus",
+      "Telemetry opt-out in Settings",
+      "Plugin notification dots + event relay",
+      "Plugin event bus",
+      "Fork extension seam",
+      "Generative-UI artifacts",
+      "Generative-UI artifacts",
+      "Secret-scan CI gate"
+    ]
+  },
+  {
     "version": "v0.30.0",
     "date": "2026-06-09",
     "changes": [
