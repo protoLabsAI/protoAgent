@@ -88,3 +88,56 @@ def test_disabling_a_plain_plugin_does_not_recommend_restart(monkeypatch):
           meta=[{"id": "github", "views": []}])
     body = _client().post("/api/plugins/github/enabled", json={"enabled": False}).json()
     assert body["restart_recommended"] is False
+
+
+# ── auto-enable on install (trust-by-default; install = enabled + running) ────────
+def test_install_auto_enables_and_runs(monkeypatch):
+    from graph.plugins import installer
+    captured = _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "install",
+                        lambda url, ref=None, **k: {"id": "spacetraders", "name": "SpaceTraders", "version": "1.0.0"})
+    body = _client().post("/api/plugins/install",
+                          json={"url": "https://github.com/protoLabsAI/spacetraders-plugin"}).json()
+    assert body["enabled"] == ["spacetraders"] and body["reloaded"] is True and body["enable_error"] is None
+    # added to plugins.enabled + persisted via the same _apply_settings_changes path the enable toggle uses
+    assert set(captured["config"]["plugins"]["enabled"]) == {"delegates", "spacetraders"}
+
+
+def test_install_bundle_enables_declared_members(monkeypatch):
+    from graph.plugins import installer
+    captured = _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
+        "bundle": "pm-stack", "installed": [{"id": "board"}, {"id": "browser"}], "enabled": ["board"]})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack"}).json()
+    assert body["enabled"] == ["board"]                       # the bundle's declared enable set
+    assert captured["config"]["plugins"]["enabled"] == ["board"]
+
+
+def test_install_bundle_without_declared_enable_enables_every_member(monkeypatch):
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
+        "bundle": "x", "installed": [{"id": "a"}, {"id": "b"}], "enabled": []})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/y"}).json()
+    assert body["enabled"] == ["a", "b"]
+
+
+def test_install_opt_out_stays_install_not_enable(monkeypatch):
+    from graph.plugins import installer
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "1")
+    captured = _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x"}).json()
+    assert body["enabled"] == [] and body["reloaded"] is False
+    assert "config" not in captured                          # _apply_settings_changes never called
+
+
+def test_install_succeeds_even_if_enable_reload_fails(monkeypatch):
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (False, ["graph compile failed"])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
+    resp = _client().post("/api/plugins/install", json={"url": "https://x"})
+    assert resp.status_code == 200                            # the install itself didn't 500
+    body = resp.json()
+    assert body["installed"]["id"] == "demo" and body["enabled"] == [] and "graph compile failed" in body["enable_error"]

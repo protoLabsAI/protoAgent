@@ -13,8 +13,9 @@ import type { InstalledPlugin, PluginUpdate } from "../lib/types";
 
 // Plugins panel (ADR 0027) — install plugins from a git URL, under Settings →
 // Integrations. Mirrors the delegates panel. Read non-suspense so a 404 shows a
-// hint rather than blanking Settings. Install fetches code only (install ≠
-// enable): enabling stays a config + restart decision, surfaced here.
+// hint rather than blanking Settings. Installing AUTO-ENABLES + runs the plugin
+// (trust-by-default) — the console flashes a one-time "runs code" confirm for
+// unofficial sources first.
 const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plugin-registry";
 
 export function PluginsSection() {
@@ -53,8 +54,15 @@ export function PluginsSection() {
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
     onSuccess: (res) => {
       const s = res.installed;
-      const deps = s.requires_pip.length ? ` — declares deps (install manually): ${s.requires_pip.join(", ")}` : "";
-      setStatus(`✓ installed ${s.id} v${s.version} @ ${s.resolved_sha.slice(0, 10)} — NOT enabled yet${deps}`);
+      const who = res.enabled.length ? res.enabled.join(", ") : (s.id ?? "plugin");
+      const deps = s.requires_pip?.length ? ` — declares deps (install manually): ${s.requires_pip.join(", ")}` : "";
+      setStatus(
+        res.enable_error
+          ? `✓ installed ${who} — auto-enable failed (${res.enable_error}); enable it on the Local tab${deps}`
+          : res.reloaded
+            ? `✓ installed + enabled ${who} — it's live${deps}`
+            : `✓ installed ${who}${deps}`,
+      );
       setUrl("");
       setRef("");
       invalidate();
@@ -75,10 +83,10 @@ export function PluginsSection() {
       <header className="settings-section-head">
         <h3><Package size={16} /> Install from a git URL</h3>
         <p className="settings-section-sub">
-          Install a plugin from a git URL. Fetching code never runs it — review, then{" "}
-          <strong>enable</strong> it from the <strong>Local</strong> tab (tools, console
-          views and background surfaces all come up live — no restart). Untrusted code?
-          Use an <a href="https://protolabsai.github.io/protoAgent/guides/mcp" target="_blank" rel="noreferrer">MCP server</a> instead.{" "}
+          Install a plugin from a git URL. Installing <strong>enables and runs it</strong>{" "}
+          immediately — its tools, console views and background surfaces come up live, no
+          separate enable step and no restart. Only install code you trust; for untrusted
+          code use an <a href="https://protolabsai.github.io/protoAgent/guides/mcp" target="_blank" rel="noreferrer">MCP server</a> instead.{" "}
           <a href={REGISTRY_GUIDE_URL} target="_blank" rel="noreferrer">Guide</a>.
         </p>
       </header>

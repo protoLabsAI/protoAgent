@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Installing a plugin from the console now auto-enables + runs it** (ADR 0027,
+  trust-by-default). Previously install ≠ enable: you installed, then had to find the
+  Enable toggle (a buried, easy-to-miss step — and a bundle had no single toggle at
+  all). Now `POST /api/plugins/install` adds the plugin (or every bundle member) to
+  `plugins.enabled` and hot-reloads, so its tools, console views and background
+  surfaces come up live with no separate step and no restart (the router hot-mounts,
+  #822). A failed enable-reload is surfaced (`enable_error`) without failing the
+  install. The CLI `plugin install` stays fetch-only (reproducible/scripted setups);
+  set `PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1` to make the console match it. (A
+  one-time "this runs code" confirm for unofficial sources, with "don't show again,"
+  lands next.)
 - **Grouped the loose root-level modules into packages** (pure restructure — no
   behavior change). The 13 modules that sat at the repo root are now cohesive
   packages: **`a2a_impl/`** (`auth`/`executor`/`stores` — named to avoid shadowing

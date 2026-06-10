@@ -2,8 +2,10 @@
 
 Backs the console Plugins panel: list installed plugins (with their manifest +
 declared capabilities for review), install from a git URL, uninstall, and
-enable/disable. Install fetches code only (install ≠ enable). Enable/disable edits
-``plugins.enabled`` and hot-reloads.
+enable/disable. **Installing AUTO-ENABLES + runs the plugin** (trust-by-default — the
+console flashes a one-time "this runs code" confirm for unofficial sources first; opt
+out with ``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable).
+Enable/disable edits ``plugins.enabled`` and hot-reloads.
 
 ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
 router — which is what serves a console view (the view iframe just points at a
@@ -36,6 +38,26 @@ def _sources_allowlist() -> list[str] | None:
     cfg = STATE.graph_config
     allow = getattr(cfg, "plugins_sources_allow", None) if cfg else None
     return list(allow) if allow else None
+
+
+def _install_no_enable() -> bool:
+    """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
+    Default off: installing a plugin enables + runs it (trust-by-default; the console
+    flashes a one-time "this runs code" confirm for unofficial sources first)."""
+    import os
+
+    return os.environ.get("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _enabled_ids_from_summary(summary: dict) -> list[str]:
+    """The plugin id(s) to enable for an install summary: a single plugin → its id; a
+    bundle → its declared ``enabled`` set (else every installed member)."""
+    if "bundle" in summary:
+        suggested = [str(x) for x in (summary.get("enabled") or [])]
+        members = [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
+        return suggested or members
+    pid = summary.get("id")
+    return [str(pid)] if pid else []
 
 
 def register_plugin_routes(app) -> None:
@@ -77,9 +99,44 @@ def register_plugin_routes(app) -> None:
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        # install ≠ enable: the new plugin's routes/surfaces mount at init, so it
-        # needs a restart + plugins.enabled to take effect.
-        return {"installed": summary, "restart_required": True}
+
+        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default posture):
+        # installing IS the consent — the console flashes a one-time "this runs code"
+        # confirm for unofficial sources first. Add the plugin (or every bundle member)
+        # to plugins.enabled and hot-reload, so its tools / views / surfaces go live with
+        # NO separate enable step and NO restart (the router hot-mounts, #822). Opt out
+        # with PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (back to strict install ≠ enable).
+        ids = _enabled_ids_from_summary(summary)
+        enabled_now: list[str] = []
+        reloaded = False
+        enable_error: str | None = None
+        if ids and not _install_no_enable():
+            cfg = STATE.graph_config
+            enabled = list(getattr(cfg, "plugins_enabled", []) or [])
+            disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p not in ids]
+            for pid in ids:
+                if pid not in enabled:
+                    enabled.append(pid)
+            from server.agent_init import _apply_settings_changes
+
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": enabled, "disabled": disabled}},
+            )
+            if ok:
+                reloaded, enabled_now = True, ids
+            else:
+                # The install itself succeeded (code is on disk + locked); surface the
+                # enable-reload failure without 500ing — it can be enabled manually.
+                enable_error = "; ".join(messages) or "reload failed"
+                log.warning("[plugins] installed %s but auto-enable reload failed: %s", ids, enable_error)
+
+        return {
+            "installed": summary,
+            "enabled": enabled_now,        # the ids now live
+            "reloaded": reloaded,
+            "restart_recommended": False,  # enable hot-mounts the router/view (#822)
+            "enable_error": enable_error,
+        }
 
     @app.post("/api/plugins/{plugin_id}/enabled")
     async def _set_enabled(plugin_id: str, body: dict | None = None):

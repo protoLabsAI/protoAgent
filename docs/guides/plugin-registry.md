@@ -27,12 +27,20 @@ they're reported so you can `pip uninstall` them if unused.
 **Console:** the **Plugins** section → **Download** — paste the URL, review the
 manifest + capabilities, install, uninstall.
 
-Either way, **install fetches code only — it does not enable or run it.** To
-enable: add the plugin's id to `plugins.enabled` in your config and restart.
+**Installing from the console AUTO-ENABLES + runs the plugin** (trust-by-default):
+it's added to `plugins.enabled` and hot-reloaded, so its tools, console views and
+background surfaces come up live — no separate enable step and no restart. The
+console flashes a one-time "this runs code on your machine" confirm for unofficial
+sources first (official `protoLabsAI/*` installs skip it; "don't show again" flips to
+full trust). Only install code you trust — for untrusted code, use an MCP server.
+
+> The **CLI** `plugin install` stays fetch-only by design (install ≠ enable) for
+> reproducible/scripted setups — enable explicitly via `plugins.enabled`. Set
+> `PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1` to make the console behave the same way.
 
 ```yaml
 plugins:
-  enabled: [protoagent-plugin-x]
+  enabled: [protoagent-plugin-x]   # the console auto-adds this for you on install
 ```
 
 Install pins the **resolved commit SHA** and records it in a committed
