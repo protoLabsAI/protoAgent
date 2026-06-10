@@ -134,12 +134,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
+        # NOTES must come through `env`, NOT be interpolated into the run-script via
+        # ${{ }} — GitHub substitutes ${{ }} into the script SOURCE, so a backtick or
+        # $() in the changelog/commit notes is command-substituted by bash (v0.32.0
+        # failed exactly this way: a reverted `data-theme=dark` line ran `stat …`).
+        # As an env value, "$NOTES" expands without re-parsing for substitutions, and
+        # --notes-file avoids even argv quoting issues.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ steps.notes.outputs.notes }}
         run: |
+          printf '%s' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
-            --notes "${{ steps.notes.outputs.notes }}"
+            --notes-file "$RUNNER_TEMP/release-notes.md"
 
       # ── Discord ───────────────────────────────────────────────────────────────
       # Shared fleet tooling: rewrites the commit range into themed notes via
