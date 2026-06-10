@@ -75,6 +75,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_verify_timeout": 120.0,
     "identity_name": "protoagent",
     "identity_operator": "",
+    "identity_org": "",
     "ingest_enabled": False,
     "ingest_tools": [],
     "instance_id": "",

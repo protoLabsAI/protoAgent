@@ -20,12 +20,10 @@ NOTE on the import path: ``config_to_dict`` lives in ``graph.config_io`` (not
 KNOWN GAPS (documented as ``strict=True`` xfails so they auto-flip to a LOUD
 failure the moment the refactor closes them):
 
-* ``identity.org`` (attr ``identity_org``) — the Field, the ``config_to_dict``
-  emit, the runtime status API, and the frontend Header all reference it, but the
-  dataclass has NO ``identity_org`` field and ``from_yaml`` never parses ``org``.
-  So today the white-label org label can never persist. Fix = add the dataclass
-  field + a ``from_yaml`` parse line; then test #1's ``identity.org`` param flips
-  to passing (xfail strict fails loudly to tell us to drop the marker).
+* ``identity.org`` (attr ``identity_org``) — RESOLVED in PR-2: the dataclass field
+  + the ``from_yaml`` parse line were added, so the white-label org label persists
+  now. ``ATTR_MISSING_KEYS`` is empty and test #1's ``identity.org`` param passes
+  normally (the strict xfail is gone).
 * ``config_to_dict`` is PARTIAL — it serializes only a legacy subset of sections
   (model/subagents/middleware-core/knowledge/skills/mcp/plugins/identity/auth/
   runtime/operator). 27 otherwise-valid FIELDS keys (routing, compaction, goal,
@@ -50,8 +48,12 @@ from graph.settings_schema import FIELDS
 # real, future drift.
 # --------------------------------------------------------------------------- #
 
-# B1: FIELDS entry whose .attr is absent on LangGraphConfig.
-ATTR_MISSING_KEYS = {"identity.org"}
+# B1: FIELDS entries whose .attr is absent on LangGraphConfig. Now EMPTY —
+# identity.org was the only one, and PR-2 added the `identity_org` dataclass
+# field + from_yaml parse line, so every FIELDS attr now exists. The per-field
+# strict xfail is therefore gone (identity.org passes normally), and
+# test_no_unexpected_attr_drift asserts this stays empty.
+ATTR_MISSING_KEYS: set[str] = set()
 
 # B1: non-secret FIELDS keys that config_to_dict does NOT serialize (partial
 # serializer — 27 keys). identity.org is intentionally NOT here: config_to_dict
