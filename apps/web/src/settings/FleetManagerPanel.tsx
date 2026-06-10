@@ -43,22 +43,47 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // delegate work to it. The delegates query/POST is slug-scoped, so it lands on the focused agent.
   const delegatesQ = useQuery({ queryKey: ["delegates"], queryFn: () => api.delegates(), retry: false });
   const delegateNames = new Set((delegatesQ.data?.delegates ?? []).map((d) => d.name));
+  // When an add 404s (the focused agent doesn't serve /api/delegates), we keep the attempted
+  // entry so "Enable delegates" can retry it after enabling the plugin. Fleet agents ship with
+  // delegates enabled at create (ADR 0042); the HOST carries no plugins by default — enabling
+  // appends to plugins.enabled via applyConfig, and the reload hot-mounts the routes (#797),
+  // so the retry succeeds without a restart.
+  const [needsEnable, setNeedsEnable] = useState<{ name: string; url: string } | null>(null);
   const addDelegate = useMutation({
-    // Fleet agents ship with the `delegates` plugin enabled (ADR 0042), so this is a straight add
-    // — no enable step, no restart. The host carries no plugins by default, so adding delegates
-    // FROM the host's window needs delegates enabled there first; surface that clearly on 404.
-    mutationFn: (a: FleetAgent) => api.createDelegate({ name: a.name, type: "a2a", url: a.a2a }),
-    onMutate: () => setError(null),
-    onError: (e: Error) =>
-      setError(
-        /404|not found/i.test(e.message)
-          ? "This agent can't hold delegates yet — enable the delegates plugin on it (new fleet agents get it automatically; the host needs it enabled + a restart)."
-          : e.message,
-      ),
+    mutationFn: (entry: { name: string; url: string }) =>
+      api.createDelegate({ name: entry.name, type: "a2a", url: entry.url }),
+    onMutate: () => {
+      setError(null);
+      setNeedsEnable(null);
+    },
+    onError: (e: Error, entry) => {
+      if (/404|not found/i.test(e.message)) {
+        setNeedsEnable(entry);
+        setError("This agent can't hold delegates yet — the delegates plugin isn't enabled on it.");
+      } else {
+        setError(e.message);
+      }
+    },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["delegates"] });
       void delegatesQ.refetch();
     },
+  });
+  const enableDelegates = useMutation({
+    mutationFn: async (entry: { name: string; url: string }) => {
+      const { config } = await api.config(); // the FOCUSED agent's live config (slug-scoped)
+      const enabled = config.plugins?.enabled ?? [];
+      if (!enabled.includes("delegates")) {
+        await api.applyConfig({ plugins: { enabled: [...enabled, "delegates"] } }, null);
+      }
+      return entry;
+    },
+    onMutate: () => setError(null),
+    onSuccess: (entry) => {
+      setNeedsEnable(null);
+      addDelegate.mutate(entry); // routes are hot-mounted on the reload — retry the add now
+    },
+    onError: (e: Error) => setError(e.message),
   });
 
   // Network discovery (ADR 0042 §I) — scan the box + LAN for OTHER protoAgents (not in this
@@ -76,15 +101,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       setScanning(false);
     }
   };
-  const addRemote = useMutation({
-    mutationFn: (d: DiscoveredAgent) => api.createDelegate({ name: d.name, type: "a2a", url: `${d.url}/a2a` }),
-    onMutate: () => setError(null),
-    onError: (e: Error) => setError(e.message),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["delegates"] });
-      void delegatesQ.refetch();
-    },
-  });
+  // Remote adds funnel through the same mutation, so a host-window 404 gets the
+  // same enable-and-retry path as fleet-row adds.
+  const addRemote = (d: DiscoveredAgent) => addDelegate.mutate({ name: d.name, url: `${d.url}/a2a` });
 
   return (
     <section className="panel stage-panel">
@@ -101,6 +120,15 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         {error ? (
           <p className="fleet-error" role="alert">
             {error}
+            {needsEnable ? (
+              <Button
+                variant="default"
+                disabled={enableDelegates.isPending || addDelegate.isPending}
+                onClick={() => enableDelegates.mutate(needsEnable)}
+                data-testid="enable-delegates">
+                {enableDelegates.isPending ? "Enabling…" : "Enable delegates on this agent"}
+              </Button>
+            ) : null}
           </p>
         ) : null}
         {fleet.isLoading ? (
@@ -139,7 +167,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       ) : (
                         <Button icon variant="ghost" title="Add as a delegate of this agent (delegate_to)"
                           disabled={addDelegate.isPending || !a.a2a}
-                          onClick={() => addDelegate.mutate(a)}>
+                          onClick={() => addDelegate.mutate({ name: a.name, url: a.a2a! })}>
                           <Link2 size={14} />
                         </Button>
                       )
@@ -194,8 +222,8 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         <span className="fleet-delegate-tag" title="A delegate of this agent">delegate</span>
                       ) : (
                         <Button icon variant="ghost" title="Add as a remote delegate (delegate_to)"
-                          disabled={addRemote.isPending}
-                          onClick={() => addRemote.mutate(d)}>
+                          disabled={addDelegate.isPending}
+                          onClick={() => addRemote(d)}>
                           <Link2 size={14} />
                         </Button>
                       )}

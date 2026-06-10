@@ -60,3 +60,44 @@ test("topbar switcher navigates to an agent by slug", async ({ page }) => {
   await expect(page).toHaveURL(/\/app\/agent\/roxy\//);
   await expect(page.getByTestId("fleet-switcher")).toContainText("roxy");
 });
+
+test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }) => {
+  // The focused agent (host) doesn't serve /api/delegates until the plugin is enabled;
+  // enabling appends plugins.enabled via /api/config and the reload hot-mounts the routes,
+  // so the retry lands without a restart.
+  let enabled = false;
+  let delegatePosts = 0;
+  let configPosts = 0;
+  await page.route("**/api/fleet", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    for (const a of json.agents) if (!a.host) a.a2a = `http://127.0.0.1:${a.port}/a2a`;
+    await route.fulfill({ json });
+  });
+  await page.route("**/api/delegates", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    delegatePosts += 1;
+    if (!enabled) return route.fulfill({ status: 404, json: { detail: "Not Found" } });
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route("**/api/config", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    configPosts += 1;
+    enabled = true;
+    return route.fulfill({ json: { ok: true, messages: ["config saved", "reloaded"] } });
+  });
+
+  await openAgents(page);
+  await page
+    .locator(".fleet-row", { hasText: "ava" })
+    .getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })
+    .click();
+
+  const error = page.locator(".fleet-error");
+  await expect(error).toContainText("can't hold delegates");
+  await page.getByTestId("enable-delegates").click();
+
+  await expect.poll(() => configPosts).toBe(1); // plugins.enabled += delegates applied
+  await expect.poll(() => delegatePosts).toBe(2); // the 404'd attempt + the post-enable retry
+  await expect(error).toHaveCount(0); // retry succeeded -> error cleared
+});

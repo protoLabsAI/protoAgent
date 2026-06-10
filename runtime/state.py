@@ -44,6 +44,10 @@ class AppState:
     plugin_a2a_skills: list = field(default_factory=list)  # A2A card skills from plugins (#570)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571)
     plugin_routers: list = field(default_factory=list)
+    # The live FastAPI app + the (plugin_id, prefix) keys already mounted on it —
+    # lets a config reload hot-mount a newly-enabled plugin's routes (no restart).
+    fastapi_app: object = None
+    plugin_router_keys: set = field(default_factory=set)
     plugin_surfaces: list = field(default_factory=list)
     plugin_surface_handles: list = field(default_factory=list)
     plugin_meta: list = field(default_factory=list)

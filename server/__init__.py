@@ -249,6 +249,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _checkpoint_prune_loop,
     _init_langgraph_agent,
     _monitor_goals_loop,
+    _mount_plugin_routers,
     _plugin_agent_invoke,
     _populate_plugin_host,
     _register_plugin_subagents,
@@ -422,6 +423,7 @@ def _main():
     from pydantic import BaseModel as PydanticBaseModel
 
     fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
+    STATE.fastapi_app = fastapi_app  # reload hot-mounts newly-enabled plugin routes onto it
     fastapi_app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=(
@@ -487,14 +489,10 @@ def _main():
     _populate_plugin_host()
 
     # Plugin-contributed routes (ADR 0018) — mounted after the core routes,
-    # under each plugin's namespaced prefix (default /plugins/<id>). Once, here;
-    # routes don't hot-reload. Best-effort so one bad router can't break boot.
-    for r in STATE.plugin_routers:
-        try:
-            fastapi_app.include_router(r["router"], prefix=r["prefix"])
-            log.info("[plugins] mounted router from %s at %s", r["plugin_id"], r["prefix"] or "/")
-        except Exception:
-            log.exception("[plugins] failed to mount router from %s", r.get("plugin_id"))
+    # under each plugin's namespaced prefix (default /plugins/<id>). The same
+    # helper runs on every config reload, so enabling a route-bearing plugin
+    # (e.g. delegates) takes effect WITHOUT a restart (#797 fleet blocker).
+    _mount_plugin_routers(STATE.plugin_routers)
 
     # --- Scheduler lifecycle ------------------------------------------------
     # The local scheduler needs an asyncio polling task; the Workstacean

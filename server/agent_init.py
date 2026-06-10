@@ -904,6 +904,32 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         return None
 
 
+def _mount_plugin_routers(routers: list[dict]) -> None:
+    """Mount plugin routers (ADR 0018) onto the live app, skipping any already
+    mounted (keyed ``(plugin_id, prefix)``). Called at boot AND on every config
+    reload, so enabling a route-bearing plugin (e.g. ``delegates``) takes effect
+    without a restart — the #797 fleet blocker ("hot-reload rebuilds the graph
+    but routes bind at startup"). FastAPI accepts ``include_router`` after
+    startup; new routes are appended (no existing /api catch-all shadows them).
+
+    Disabling can't UNmount (FastAPI has no route-removal API) — a disabled
+    plugin's routes stay until restart, same as before this helper existed.
+    Best-effort per router so one bad plugin can't break boot or a reload."""
+    app = STATE.fastapi_app
+    if app is None:
+        return
+    for r in routers:
+        key = (r.get("plugin_id"), r.get("prefix"))
+        if key in STATE.plugin_router_keys:
+            continue
+        try:
+            app.include_router(r["router"], prefix=r.get("prefix") or "")
+            STATE.plugin_router_keys.add(key)
+            log.info("[plugins] mounted router from %s at %s", r["plugin_id"], r.get("prefix") or "/")
+        except Exception:  # noqa: BLE001
+            log.exception("[plugins] failed to mount router from %s", r.get("plugin_id"))
+
+
 def _reload_langgraph_agent() -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
 
@@ -1059,6 +1085,13 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # change without a restart — this is how the Discord plugin live-reconnects
     # when its token/admin/enabled changes (was a bespoke discord_changed block).
     _reload_plugin_surfaces(new_config)
+
+    # Hot-mount routes from newly-enabled plugins (e.g. delegates) — already-mounted
+    # routers are skipped, so repeat reloads are no-ops. Keep STATE.plugin_routers
+    # current for anything introspecting the live route set.
+    if is_setup_complete():
+        _mount_plugin_routers(new_plugins.routers)
+        STATE.plugin_routers = new_plugins.routers
 
     if new_graph is None:
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
