@@ -390,6 +390,7 @@ class LangGraphConfig:
     # it's talking to — injected into the system prompt when non-empty.
     identity_name: str = "protoagent"
     identity_operator: str = ""
+    identity_org: str = ""  # white-label org label (settings_schema FIELDS + runtime status + Header)
 
     # A2A card identity (#570). Forks declare their advertised skills + card
     # description here (or a plugin contributes skills via register_a2a_skill)
@@ -488,7 +489,12 @@ class LangGraphConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
-        """Load config from YAML file. Falls back to defaults if absent."""
+        """Load config from YAML file. Falls back to defaults if absent.
+
+        Thin wrapper: read the file (+ sibling secrets.yaml), then parse via
+        :meth:`from_dict` — the dict-level seam tests and the layered-settings
+        loader build on.
+        """
         p = Path(path)
         if not p.exists():
             return cls()
@@ -497,6 +503,25 @@ class LangGraphConfig:
             data = yaml.safe_load(f) or {}
 
         secrets = _load_secrets_doc(p.parent)
+        return cls.from_dict(data, secrets=secrets, config_dir=p.parent)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict | None,
+        *,
+        secrets: dict | None = None,
+        config_dir: Path | str | None = None,
+    ) -> "LangGraphConfig":
+        """Build a config from an already-loaded YAML dict — the parse seam.
+
+        ``secrets`` overlays secret keys (model api_key, auth token); ``config_dir``
+        locates plugin config (ADR 0019). Both optional so callers/tests can parse a
+        bare dict. Behavior is identical to the old inline ``from_yaml`` parse.
+        """
+        data = data or {}
+        secrets = secrets or {}
+        config_dir = Path(config_dir) if config_dir is not None else Path(".")
 
         model = data.get("model", {})
         subagents = data.get("subagents", {})
@@ -611,6 +636,7 @@ class LangGraphConfig:
             plugins_sources_allow=list((plugins.get("sources", {}) or {}).get("allow", []) or []),
             identity_name=identity.get("name", cls.identity_name),
             identity_operator=identity.get("operator", cls.identity_operator),
+            identity_org=identity.get("org", cls.identity_org),
             a2a_skills=list(a2a.get("skills", []) or []),
             a2a_description=a2a.get("description", "") or "",
             a2a_require_routable_url=bool(a2a.get("require_routable_url", False)),
@@ -626,7 +652,7 @@ class LangGraphConfig:
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
             security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
-            plugin_config=_resolve_plugin_config(data, secrets, p.parent),
+            plugin_config=_resolve_plugin_config(data, secrets, config_dir),
         )
 
         for name in ("researcher",):
