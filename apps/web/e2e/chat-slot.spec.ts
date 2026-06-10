@@ -37,7 +37,7 @@ test("a slot:chat plugin view replaces the built-in chat panel", async ({ page }
   const frame = page.locator(".chat-slot .plugin-view-frame");
   await expect(frame).toBeVisible();
   await expect(frame).toHaveAttribute("src", /\/plugins\/chatty\/panel/);
-  await expect(page.locator(".chat-tabbar")).toHaveCount(0); // built-in surface not mounted
+  await expect(page.locator(".pl-tabbar")).toHaveCount(0); // built-in surface not mounted
 
   // No SECOND rail icon for the claimant — it lives under "chat", not plugin:chatty:panel.
   await expect(
@@ -65,6 +65,6 @@ test("a slot claimant stays mounted across surface switches (#613 contract)", as
 
 test("without a claimant the built-in chat renders (default unchanged)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await expect(page.locator(".chat-tabbar")).toBeVisible();
+  await expect(page.locator(".pl-tabbar")).toBeVisible();
   await expect(page.locator(".chat-slot")).toHaveCount(0);
 });
