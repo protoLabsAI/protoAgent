@@ -1,3 +1,4 @@
+import "./tool-calls.css";
 import {
   Calculator,
   Check,

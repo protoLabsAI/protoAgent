@@ -1,0 +1,252 @@
+/* chat.css — the chat surface chrome (tab bar, session strip, composer status,
+   slash-command autocomplete, chat input sizing). Carved out of app/theme.css
+   (#832, Axis-A step 2). Imported by ChatSurface.tsx. Move verbatim — no restyle. */
+
+/* One consolidated tab bar: a tab per session (dot · title · close) + "new".
+   Double-click a title to rename. Replaces the old header + tab strip + the
+   per-session title row. */
+.chat-tabbar-wrap {
+  container-type: inline-size;
+}
+
+.chat-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Narrow: the per-session strip collapses to a session dropdown + add (container query). */
+.chat-tabbar-compact {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-session-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-compact-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.chat-compact-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+@container (max-width: 26rem) {
+  .chat-tabbar-wrap > .chat-tabbar {
+    display: none;
+  }
+  .chat-tabbar-wrap > .chat-tabbar-compact {
+    display: flex;
+  }
+}
+
+.chat-tab {
+  max-width: 220px;
+  min-width: 120px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.chat-tab.active,
+.chat-tab:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.chat-tab-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Inline session-rename sizing — the chrome is the DS EditableText
+   (.pl-editable__input); this only makes it fill the tab row. */
+.chat-tab-edit {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+}
+
+.chat-tab-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-tertiary, #777);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.chat-tab:hover .chat-tab-close,
+.chat-tab.active .chat-tab-close {
+  opacity: 1;
+}
+
+.chat-tab-close:hover {
+  background: var(--bg-elevated, #1a1a1f);
+  color: var(--fg);
+}
+
+.chat-tab-new {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.chat-tab-new:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.session-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--fg-muted);
+}
+
+.session-dot.streaming {
+  background: var(--warning);
+}
+
+.session-dot.error {
+  background: var(--error);
+}
+
+.chat-session-pool,
+.chat-session-slot {
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-session-slot {
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto; /* messages, composer (no header row) */
+}
+
+.chat-session-slot[hidden] {
+  display: none;
+}
+
+/* Subtle live status above the composer while streaming (was a header pill). */
+.composer-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 0;
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  align-items: start; /* don't let the textarea + Send button stretch each other tall */
+}
+
+/* Slash-command autocomplete (floats above the composer). */
+.composer-wrap {
+  position: relative;
+}
+.slash-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.slash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.slash-item:last-child {
+  border-bottom: 0;
+}
+.slash-item.active {
+  background: var(--bg-hover);
+}
+.slash-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--brand-violet-light);
+}
+.slash-desc {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* The chat input is a compact fixed height (it doesn't auto-grow) — without this it has no cap
+   and rendered far too tall. .notes-editor keeps its own sizing above. */
+.composer textarea {
+  height: 60px;
+  min-height: 44px;
+  max-height: 200px;
+  line-height: 1.45;
+}
