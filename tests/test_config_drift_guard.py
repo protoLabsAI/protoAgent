@@ -1,0 +1,254 @@
+"""Drift guard for the config triplet (refactor: config single source of truth).
+
+Three structures must stay in lock-step:
+
+* ``graph.settings_schema.FIELDS`` — the operator console's settings registry,
+  mapping each dotted YAML ``key`` to the ``LangGraphConfig`` ``attr`` that holds
+  its live value plus its UI ``type``.
+* ``graph.config.LangGraphConfig`` — the live dataclass the runtime reads.
+* ``graph.config_io.config_to_dict`` — the nested-dict serializer the UI round-
+  trips through.
+
+When these drift apart the failure is silent in production: the Settings UI
+shows a field that never persists (missing dataclass attr), or a save round-trips
+through a serializer that drops the section on the floor. These tests turn any
+such drift into a CI failure.
+
+NOTE on the import path: ``config_to_dict`` lives in ``graph.config_io`` (not
+``graph.config``) — it is imported from there below.
+
+KNOWN GAPS (documented as ``strict=True`` xfails so they auto-flip to a LOUD
+failure the moment the refactor closes them):
+
+* ``identity.org`` (attr ``identity_org``) — the Field, the ``config_to_dict``
+  emit, the runtime status API, and the frontend Header all reference it, but the
+  dataclass has NO ``identity_org`` field and ``from_yaml`` never parses ``org``.
+  So today the white-label org label can never persist. Fix = add the dataclass
+  field + a ``from_yaml`` parse line; then test #1's ``identity.org`` param flips
+  to passing (xfail strict fails loudly to tell us to drop the marker).
+* ``config_to_dict`` is PARTIAL — it serializes only a legacy subset of sections
+  (model/subagents/middleware-core/knowledge/skills/mcp/plugins/identity/auth/
+  runtime/operator). 27 otherwise-valid FIELDS keys (routing, compaction, goal,
+  execute_code, prompt_cache, several checkpoint/knowledge/telemetry keys,
+  agent_runtime, operator_mcp.tools, middleware.enforcement) are NOT emitted,
+  despite its docstring claiming it "mirrors the YAML schema". Each missing key
+  is a ``strict=True`` xfail in test #2; making ``config_to_dict`` FIELDS-complete
+  flips them to passing.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from graph.config import LangGraphConfig
+from graph.config_io import config_to_dict
+from graph.settings_schema import FIELDS
+
+# --------------------------------------------------------------------------- #
+# Known-broken sets (the ONLY currently-failing parts — everything else passes
+# normally). Keep these tight: a marker on a part that actually holds would mask
+# real, future drift.
+# --------------------------------------------------------------------------- #
+
+# B1: FIELDS entry whose .attr is absent on LangGraphConfig.
+ATTR_MISSING_KEYS = {"identity.org"}
+
+# B1: non-secret FIELDS keys that config_to_dict does NOT serialize (partial
+# serializer — 27 keys). identity.org is intentionally NOT here: config_to_dict
+# DOES emit it (via a defensive getattr default of ""), so its resolution passes
+# even though its dataclass attr is missing (that drift is covered by test #1).
+CONFIG_TO_DICT_MISSING_KEYS = {
+    "agent_runtime",
+    "operator_mcp.tools",
+    "routing.aux_model",
+    "routing.fallback_models",
+    "compaction.enabled",
+    "compaction.trigger",
+    "compaction.keep_messages",
+    "compaction.model",
+    "goal.enabled",
+    "goal.max_iterations",
+    "goal.eval_model",
+    "execute_code.enabled",
+    "execute_code.timeout",
+    "prompt_cache.enabled",
+    "prompt_cache.ttl",
+    "prompt_cache.warm.enabled",
+    "prompt_cache.warm.interval_seconds",
+    "knowledge.embeddings",
+    "checkpoint.db_path",
+    "checkpoint.keep_per_thread",
+    "checkpoint.max_age_days",
+    "checkpoint.prune_interval_hours",
+    "checkpoint.harvest_enabled",
+    "knowledge.facts",
+    "middleware.enforcement",
+    "telemetry.enabled",
+    "telemetry.retention_days",
+}
+
+_SECRET_KEYS = {f.key for f in FIELDS if f.type == "secret"}
+
+
+def _resolve(d: dict, dotted: str):
+    """Walk ``dotted`` (e.g. ``"prompt_cache.warm.enabled"``) through nested ``d``.
+
+    Returns ``(found, value)`` — ``found`` is False the moment any segment is
+    absent or a non-dict is hit mid-walk.
+    """
+    cur = d
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False, None
+        cur = cur[part]
+    return True, cur
+
+
+def _id(f) -> str:
+    return f.key
+
+
+def _param(field, known_broken: set, reason: str):
+    """Wrap a Field in a pytest param, attaching a STRICT xfail marker iff the
+    field is in the documented known-broken set.
+
+    ``strict=True`` is the whole point: while the gap is open the test xfails
+    (suite stays green); the instant the refactor closes the gap the assertion
+    passes, the strict xfail turns that XPASS into a FAILURE, forcing whoever
+    fixed it to delete the now-stale marker. Parts that already hold get NO
+    marker, so real future drift fails normally.
+    """
+    marks = [pytest.mark.xfail(reason=reason, strict=True)] if field.key in known_broken else []
+    return pytest.param(field, id=field.key, marks=marks)
+
+
+_ATTR_REASON = (
+    "B1: FIELDS key maps to a LangGraphConfig attribute that does not exist "
+    "(no identity_org field / from_yaml parse). Fixed when identity_org is added "
+    "to the dataclass."
+)
+_SERIALIZE_REASON = (
+    "B1: config_to_dict does not serialize this key (partial serializer — omits "
+    "routing/compaction/goal/execute_code/prompt_cache/checkpoint/telemetry/"
+    "agent_runtime/operator_mcp/middleware.enforcement/knowledge.embeddings+facts). "
+    "Fixed when config_to_dict becomes FIELDS-complete."
+)
+
+
+# --------------------------------------------------------------------------- #
+# 1) Every FIELDS.attr exists on the dataclass.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "field", [_param(f, ATTR_MISSING_KEYS, _ATTR_REASON) for f in FIELDS]
+)
+def test_every_fields_attr_exists_on_dataclass(field):
+    """Each settings Field must point at a real ``LangGraphConfig`` attribute.
+
+    A missing attr means the Settings UI renders a control that reads
+    ``None``/default and whose save never round-trips into the live config.
+    """
+    cfg = LangGraphConfig()
+    assert hasattr(cfg, field.attr), (
+        f"FIELDS key {field.key!r} maps to LangGraphConfig.{field.attr}, "
+        f"but that attribute does not exist on the dataclass — settings drift."
+    )
+
+
+def test_attr_missing_set_is_exactly_as_expected():
+    """Belt-and-suspenders: the live missing-attr set equals the documented one.
+
+    If a NEW attr goes missing it lands here (not in the silently-xfailed
+    per-field param), so unexpected drift fails loudly instead of being absorbed
+    by the known-gap marker.
+    """
+    cfg = LangGraphConfig()
+    live_missing = {f.key for f in FIELDS if not hasattr(cfg, f.attr)}
+    assert live_missing == ATTR_MISSING_KEYS, (
+        f"missing-attr drift changed: {live_missing} (expected {ATTR_MISSING_KEYS}). "
+        "Add/remove the offending FIELDS key from ATTR_MISSING_KEYS, or fix the dataclass."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2) Every non-secret FIELDS key resolves in config_to_dict's output.
+# --------------------------------------------------------------------------- #
+
+_NON_SECRET_FIELDS = [f for f in FIELDS if f.key not in _SECRET_KEYS]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [_param(f, CONFIG_TO_DICT_MISSING_KEYS, _SERIALIZE_REASON) for f in _NON_SECRET_FIELDS],
+)
+def test_fields_keys_present_in_config_to_dict(field):
+    """Each non-secret settings key must round-trip through ``config_to_dict``.
+
+    Secrets are excluded (config_to_dict deliberately redacts them, and may
+    omit a never-set section). A key that the serializer drops means a Settings
+    save can be silently lost on the next load.
+    """
+    d = config_to_dict(LangGraphConfig())
+    found, _ = _resolve(d, field.key)
+    assert found, (
+        f"FIELDS key {field.key!r} does not resolve in config_to_dict() output "
+        f"(top-level keys: {sorted(d.keys())}) — serializer drift."
+    )
+
+
+def test_config_to_dict_missing_set_is_exactly_as_expected():
+    """The live set of non-secret keys config_to_dict omits == the documented set.
+
+    A newly-dropped key surfaces here (loud) rather than being silently absorbed
+    by a stale xfail marker; a newly-covered key also flips the per-field strict
+    xfail, so this stays in agreement with reality both ways.
+    """
+    d = config_to_dict(LangGraphConfig())
+    live_missing = {f.key for f in _NON_SECRET_FIELDS if not _resolve(d, f.key)[0]}
+    assert live_missing == CONFIG_TO_DICT_MISSING_KEYS, (
+        f"config_to_dict coverage drift: {live_missing} "
+        f"(expected {CONFIG_TO_DICT_MISSING_KEYS}). Update CONFIG_TO_DICT_MISSING_KEYS "
+        "or expand config_to_dict."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 3) Field.type agrees with the dataclass default's Python type (best-effort).
+# --------------------------------------------------------------------------- #
+
+# Fields without a backing attr can't have their value's type checked here —
+# that drift is owned by test #1.
+_TYPED_FIELDS = [f for f in FIELDS if f.key not in ATTR_MISSING_KEYS]
+
+
+@pytest.mark.parametrize("field", _TYPED_FIELDS, ids=_id)
+def test_fields_types_match_dataclass(field):
+    """Best-effort: the declared UI ``type`` matches the dataclass default's type.
+
+    * ``bool``        → default is a ``bool``.
+    * ``number``      → default is ``int``/``float`` (and NOT ``bool``, which is
+      an ``int`` subclass).
+    * ``string_list`` → default is a ``list``.
+
+    ``string``/``select``/``secret`` are intentionally not type-asserted: a blank
+    default is often ``""`` and ``select`` values are plain strings, so there is
+    nothing load-bearing to check beyond what the above three cover.
+    """
+    cfg = LangGraphConfig()
+    val = getattr(cfg, field.attr)
+    if field.type == "bool":
+        assert isinstance(val, bool), (
+            f"{field.key!r} is type 'bool' but {field.attr} defaults to "
+            f"{type(val).__name__} ({val!r})."
+        )
+    elif field.type == "number":
+        assert isinstance(val, (int, float)) and not isinstance(val, bool), (
+            f"{field.key!r} is type 'number' but {field.attr} defaults to "
+            f"{type(val).__name__} ({val!r})."
+        )
+    elif field.type == "string_list":
+        assert isinstance(val, list), (
+            f"{field.key!r} is type 'string_list' but {field.attr} defaults to "
+            f"{type(val).__name__} ({val!r})."
+        )
