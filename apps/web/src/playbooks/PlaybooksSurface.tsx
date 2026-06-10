@@ -169,7 +169,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
 
       <p className="playbook-foot">
         <BookMarked size={13} /> Skills (`SKILL.md`) are methodology the agent <strong>retrieves</strong> into
-        context (ADR 0009) — they advise, they don't run. For deterministic step-by-step runs
+        context — they advise, they don't run. For deterministic step-by-step runs
         across subagents, see <strong>Studio → Workflows</strong>.
       </p>
     </section>

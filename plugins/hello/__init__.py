@@ -62,8 +62,8 @@ def _build_router(greeting: str):
 </style></head><body><div class="card">
   <h1>{greeting} from a plugin view</h1>
   <p>Served by <code>plugins/hello</code> at <code>/plugins/hello/view</code> and
-  embedded in the console rail via the <code>views:</code> manifest block
-  (ADR 0026). A fork drops a directory like this and gets its own rail icon +
+  embedded in the console rail via the <code>views:</code> manifest block.
+  A fork drops a directory like this and gets its own rail icon +
   dashboard — no console rebuild.</p>
   <p id="bridge">awaiting console handshake…</p>
 </div>
