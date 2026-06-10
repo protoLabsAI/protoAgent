@@ -9,6 +9,7 @@ import { App } from "./app/App";
 import "@protolabsai/design/css/tokens";
 import "./app/tailwind.css";
 import "@protolabsai/ui/styles.css";
+import "./app/theme-base.css"; // shared token bridge + resets — must load before the rest
 import "./app/theme.css";
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
