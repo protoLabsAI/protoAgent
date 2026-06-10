@@ -54,9 +54,9 @@
 .setting-restart {
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(212, 189, 79, 0.16);
-  border: 1px solid rgba(212, 189, 79, 0.3);
-  color: #eadf9a;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  color: var(--warning);
   font-size: 0.62rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
