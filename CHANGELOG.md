@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CSS comment corruption that silently shrank plugin iframes (build guard).**
+  A `*/` written inside a CSS comment — e.g. a class glob like
+  `.plugin-install-*/.plugin-list` in prose — closes the comment early, so
+  esbuild parses the rest as CSS, emits a recoverable `css-syntax-error` *warning*,
+  and drops tokens. A real rule downstream can vanish from the bundle while the
+  build still "succeeds" (this is the root cause behind the tiny-plugin-iframe
+  reports: a dropped `.plugin-view` rule fell back to the stage-panel grid). Fixed
+  the two latent instances in `chat.css` and `theme.css`, and added a
+  `prebuild` guard (`scripts/check-css-comments.mjs`) that **fails the build** on
+  any `*/` glued to identifier characters inside a `src` CSS file — so this class
+  of corruption can never reach `dist` silently again.
 ### Added
 - **Plugin update / version-awareness (ADR 0027 follow-on).** Git-installed
   plugins now show whether they're current and can be updated in place. A new
