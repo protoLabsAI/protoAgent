@@ -1,7 +1,8 @@
+import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { AlertTriangle, Bot, ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -172,20 +173,16 @@ export function SettingsCategory({
       />
       <div className="stage-body">
         {acpAgent ? (
-          <div className="settings-banner runtime-banner">
-            <Bot size={14} />
-            <span>
-              Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
-              The model settings below power protoAgent's own calls (compaction, goal checks); with no
-              gateway key configured, those run on {acpAgent} too.
-            </span>
-          </div>
+          <Alert status="info" className="settings-banner">
+            Running on <strong>{acpAgent}</strong> (ACP) — it drives each turn with its own tools.
+            The model settings below power protoAgent's own calls (compaction, goal checks); with no
+            gateway key configured, those run on {acpAgent} too.
+          </Alert>
         ) : null}
         {pendingRestart.length ? (
-          <div className="settings-banner" role="alert">
-            <AlertTriangle size={14} />
-            <span>Needs a restart to take effect: {pendingRestart.join(", ")}</span>
-          </div>
+          <Alert status="warning" className="settings-banner">
+            Needs a restart to take effect: {pendingRestart.join(", ")}
+          </Alert>
         ) : null}
         {status ? <p className="settings-status">{status}</p> : null}
         {!groups.length && !footer ? <p className="muted">{emptyHint || "Nothing to configure here."}</p> : null}
