@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Adopt `@protolabsai/ui@0.26.1`** — picks up the AppShell drag fix (protoContent#212:
+  a transparent drag overlay during a divider/reopen gesture so the resize tracks smoothly
+  over plugin iframes and the `col-resize` cursor stays correct, plus the `WithIframePanels`
+  story). Removes the app-side interim guard from #903 (`.pl-appshell-frame--dragging iframe
+  { pointer-events: none }`) — the design system now owns that behavior.
+
 ### Fixed
 - **A declined or failed tool now shows the red X on its card, not a green "done".**
   A denied `run_command` returned a normal string, so the card closed *green* with the
