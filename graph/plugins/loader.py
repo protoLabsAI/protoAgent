@@ -83,6 +83,14 @@ def _load_plugin_module(manifest: PluginManifest, entry: Path):
     module is registered in ``sys.modules`` BEFORE exec — relative imports resolve
     the parent package there — and the name is sanitized to a valid identifier."""
     mod_name = _plugin_module_name(manifest.id)
+    # Reload-safety: drop any cached modules for this plugin — the entry AND its sibling
+    # submodules (``mod_name.*``) — so a hot-reload re-execs EVERY file, not just
+    # __init__.py. Without this, ``from .tools import x`` resolves a stale cached
+    # ``mod_name.tools`` and an edit to a sibling module silently has no effect until a
+    # process restart (breaking the devkit's "edit then reload_plugins" loop). On a first
+    # load this is a no-op (nothing cached). Previously only the update route purged.
+    for _name in [n for n in list(sys.modules) if n == mod_name or n.startswith(mod_name + ".")]:
+        sys.modules.pop(_name, None)
     spec = importlib.util.spec_from_file_location(
         mod_name, str(entry), submodule_search_locations=[str(manifest.path)]
     )

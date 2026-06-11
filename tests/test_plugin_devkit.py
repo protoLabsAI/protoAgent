@@ -113,6 +113,9 @@ def test_scaffold_enable_hot_reloads_when_live(monkeypatch, tmp_path):
     monkeypatch.setattr(STATE, "graph", object(), raising=False)
     monkeypatch.setattr(STATE, "graph_config", _Cfg(), raising=False)
     monkeypatch.setattr(agent_init, "_apply_settings_changes", _fake_apply)
+    # _live_enable now confirms the plugin actually LOADED (not just that the config
+    # reload ran) — the loader publishes that on STATE.plugin_meta.
+    monkeypatch.setattr(STATE, "plugin_meta", [{"id": "live-one", "loaded": True}], raising=False)
 
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     msg = scaffold.invoke({"name": "Live One"})  # enable defaults True
@@ -128,3 +131,30 @@ def test_enable_plugin_tool_noop_without_graph(monkeypatch):
     monkeypatch.setattr(STATE, "graph", None, raising=False)
     assert "not running" in mod.enable_plugin.invoke({"plugin_id": "whatever"})
     assert "no live agent" in mod.reload_plugins.invoke({})
+
+
+def test_live_enable_reports_a_plugin_that_failed_to_load(monkeypatch):
+    """The make-test-live reliability fix: a plugin whose register() raises is *skipped*
+    (best-effort load), so the config reload 'succeeds' — but the agent must be told it
+    FAILED to load (with the error) rather than 'live', so it fixes-and-reloads instead
+    of testing a no-op. Previously _live_enable reported the reload result and called it
+    'loaded live' regardless."""
+    mod = _load_devkit_module(None)
+    import server.agent_init as agent_init
+    from runtime.state import STATE
+
+    class _Cfg:
+        plugins_enabled: list = []
+        plugins_disabled: list = []
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", _Cfg(), raising=False)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **k: (True, []))
+    monkeypatch.setattr(
+        STATE, "plugin_meta",
+        [{"id": "broken", "loaded": False, "error": "boom: bad import"}], raising=False,
+    )
+    out = mod.enable_plugin.invoke({"plugin_id": "broken"})
+    assert "FAILED to load" in out and "boom" in out
+    # reload_plugins surfaces the same failure (so the iterate loop is honest)
+    assert "FAILED to load" in mod.reload_plugins.invoke({})

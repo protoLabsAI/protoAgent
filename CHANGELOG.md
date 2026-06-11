@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The devkit's "edit then `reload_plugins`" loop now picks up edits to EVERY file, and
+  reports when a plugin failed to load.** Two reliability gaps in the agent's make-it-live-
+  and-test loop (found by a lifecycle audit): (1) the hot-reload re-exec'd only a plugin's
+  `__init__.py`, so an edit to a sibling module (`from .impl import …`) silently served STALE
+  code until a process restart — the loader now purges the plugin's whole `sys.modules`
+  subtree before re-exec, on **every** reload path (not just `update`). (2) `enable_plugin` /
+  `reload_plugins` / scaffold's live-enable reported "loaded live" whenever the config reload
+  succeeded — but a plugin whose `register()` raises is *skipped* (best-effort load), so the
+  agent was told a no-op worked; they now read the real per-plugin load status and surface
+  "FAILED to load: <error>" so you fix-and-reload instead of testing nothing.
+
 ### Changed
 - **A configured plugin/model secret now shows a clear "set" badge in Settings.** Secrets
   never echo their value, so a saved key looked identical to an empty one ("did it save?").
