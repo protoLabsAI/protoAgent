@@ -374,6 +374,10 @@ function SettingRow({
       <div className="setting-meta">
         <label className="setting-label" htmlFor={`set-${field.key}`}>
           {field.label}
+          {/* A configured secret never echoes its value, so without a glanceable
+              indicator a saved key looks identical to an empty one ("did it save?").
+              Mirror the Delegates panel's "secret set" pill. */}
+          {field.type === "secret" && field.is_set ? <Badge status="success">set</Badge> : null}
           {field.restart ? <span className="setting-restart">restart</span> : null}
         </label>
         {field.description ? <p className="setting-desc">{field.description}</p> : null}
