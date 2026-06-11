@@ -119,14 +119,18 @@ SECRET_PATHS: tuple[tuple[str, str], ...] = (
 
 
 def secret_paths() -> tuple[tuple[str, str], ...]:
-    """Base ``SECRET_PATHS`` plus the (section, key) pairs each enabled plugin
+    """Base ``SECRET_PATHS`` plus the (section, key) pairs each INSTALLED plugin
     declares as secrets (ADR 0019). Used by the split/strip logic so a plugin
-    secret is routed to ``secrets.yaml`` exactly like the model API key."""
+    secret is routed to ``secrets.yaml`` exactly like the model API key.
+
+    Covers installed-but-DISABLED plugins too: otherwise a secret saved for a plugin
+    that's off wouldn't be recognized as a secret and would be written to the live
+    config YAML in plaintext (the wrong file — configs get exported/backed-up/forked)."""
     try:
-        from graph.plugins.pconfig import live_plugin_config_schemas
+        from graph.plugins.pconfig import installed_plugin_config_schemas
 
         extra = tuple(
-            (sch.section, key) for sch in live_plugin_config_schemas() for key in sch.secrets
+            (sch.section, key) for sch in installed_plugin_config_schemas() for key in sch.secrets
         )
     except Exception:  # noqa: BLE001 — plugin discovery is best-effort
         extra = ()
@@ -352,9 +356,11 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     plugin_cfg = getattr(config, "plugin_config", {}) or {}
     if plugin_cfg:
         try:
-            from graph.plugins.pconfig import live_plugin_config_schemas
+            # ALL installed plugins (not just enabled) — so a disabled plugin's stored
+            # secret is redacted from the API response too, never echoed back in the clear.
+            from graph.plugins.pconfig import installed_plugin_config_schemas
 
-            secrets_by_section = {s.section: set(s.secrets) for s in live_plugin_config_schemas()}
+            secrets_by_section = {s.section: set(s.secrets) for s in installed_plugin_config_schemas()}
         except Exception:  # noqa: BLE001
             secrets_by_section = {}
         for section, vals in plugin_cfg.items():

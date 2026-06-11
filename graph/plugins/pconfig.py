@@ -106,3 +106,22 @@ def live_plugin_config_schemas() -> list[PluginConfigSchema]:
     except Exception:  # noqa: BLE001
         log.exception("[plugins] live config-schema discovery failed")
         return []
+
+
+def installed_plugin_config_schemas() -> list[PluginConfigSchema]:
+    """Like ``live_plugin_config_schemas`` but for EVERY installed plugin — enabled or
+    not. The SECRET-ROUTING + config-redaction paths use this so a secret saved for a
+    currently-DISABLED plugin is still pulled into ``secrets.yaml`` (never left in
+    plaintext in the live config) and never echoed back to the API. The settings UI
+    keeps the enabled-only view (you don't configure a plugin that's off)."""
+    try:
+        from graph.config_io import _live_config_dir, load_yaml_doc
+        from graph.plugins.loader import discover_plugins
+
+        data = load_yaml_doc() or {}
+        roots = plugin_roots_from(_live_config_dir(), str((data.get("plugins") or {}).get("dir") or ""))
+        all_ids = {m.id for m in discover_plugins(roots)}
+        return discover_plugin_config(roots, all_ids, set())  # every installed plugin, on or off
+    except Exception:  # noqa: BLE001
+        log.exception("[plugins] installed config-schema discovery failed")
+        return []

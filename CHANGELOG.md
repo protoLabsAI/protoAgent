@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A secret saved for an installed-but-DISABLED plugin now routes to `secrets.yaml`,
+  not the plaintext config.** Secret routing (`secret_paths`) and the config-redaction
+  path keyed off *enabled* plugins only — so a secret for a plugin that's currently off
+  (or being configured before enable) wasn't recognized as a secret: it would be written
+  to the live `langgraph-config.yaml` in plaintext (gitignored, so never committed — but
+  the wrong file: configs get exported / backed up / tracked in a fork) and echoed back
+  unredacted to the Settings API. Both paths now cover ALL INSTALLED plugins
+  (`installed_plugin_config_schemas`); the settings UI stays enabled-only. Found by a
+  plugin-lifecycle audit.
+
+### Fixed
 - **The devkit's "edit then `reload_plugins`" loop now picks up edits to EVERY file, and
   reports when a plugin failed to load.** Two reliability gaps in the agent's make-it-live-
   and-test loop (found by a lifecycle audit): (1) the hot-reload re-exec'd only a plugin's

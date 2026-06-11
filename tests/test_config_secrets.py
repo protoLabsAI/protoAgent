@@ -113,3 +113,25 @@ def test_from_yaml_without_secrets_leaves_blank_for_env_fallback(tmp_path: Path)
     (tmp_path / "langgraph-config.yaml").write_text("model:\n  name: m\n  api_key: \"\"\n")
     cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
     assert cfg.api_key == ""
+
+
+def test_disabled_plugin_secret_routes_to_secrets_not_plaintext(tmp_path, monkeypatch) -> None:
+    """A secret saved for an installed-but-DISABLED plugin must still be pulled into the
+    secret half (→ secrets.yaml), never left in the plaintext live config. The routing
+    (`secret_paths`) covers ALL installed plugins, not just enabled ones — otherwise a
+    plugin that's off (or being configured before enable) leaks its key to the config."""
+    from graph.config_io import split_secret_updates
+
+    cfg = tmp_path / "cfg"
+    pdir = cfg / "plugins" / "offp"
+    pdir.mkdir(parents=True)
+    (pdir / "protoagent.plugin.yaml").write_text(
+        "id: offp\nname: Off Plugin\nversion: 0.1.0\nconfig_section: offp\nsecrets: [api_key]\n"
+    )
+    (pdir / "__init__.py").write_text("def register(registry):\n    pass\n")
+    (cfg / "langgraph-config.yaml").write_text("plugins:\n  enabled: []\n")  # offp NOT enabled
+    monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg))
+
+    main, secrets = split_secret_updates({"offp": {"api_key": "sek-ret"}})
+    assert secrets == {"offp": {"api_key": "sek-ret"}}  # routed to the secret half
+    assert "offp" not in main  # NOT left in the plaintext config YAML

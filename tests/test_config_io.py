@@ -225,6 +225,9 @@ def test_ensure_live_config_seeds_from_example(monkeypatch, tmp_path: Path) -> N
     example.write_text("model:\n  name: from-template\n")
     monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
     monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+    # Unscoped path (live == base): seeds from the EXAMPLE template, not a scoped-from-base
+    # copy. Pin _BASE too so `scoped` is False regardless of a local config/langgraph-config.yaml.
+    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
 
     assert config_io.ensure_live_config() is True
     assert live.exists()
@@ -250,6 +253,9 @@ def test_ensure_live_config_noop_without_example(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", tmp_path / "absent.example.yaml")
     monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", tmp_path / "langgraph-config.yaml")
+    # Unscoped (live == base) so `scoped` is False and the seed source is the (absent)
+    # example — not a local config/langgraph-config.yaml that would otherwise be the base.
+    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", tmp_path / "langgraph-config.yaml")
 
     assert config_io.ensure_live_config() is False
     assert not (tmp_path / "langgraph-config.yaml").exists()
