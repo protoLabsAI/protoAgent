@@ -47,7 +47,8 @@ file "$SIDECAR" | grep -q "arm64" || { echo "FAIL: sidecar is not arm64"; exit 1
 echo "ok: sidecar bundled (arm64, $((SIZE / 1024 / 1024)) MB)"
 
 # ── Signing mode ─────────────────────────────────────────────────────────────
-if ! codesign -dv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
+# (-dvv, not -dv: the Authority= certificate chain only prints at verbosity 2+.)
+if ! codesign -dvv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
   if [ "$REQUIRE_SIGNED" = "1" ]; then
     echo "FAIL: app is not Developer ID-signed and --require-signed was set"
     exit 1
@@ -59,7 +60,7 @@ fi
 # ── Signing + notarization battery (release builds) ─────────────────────────
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "ok: codesign verify (deep, strict)"
-codesign -dv "$APP" 2>&1 | grep -q "TeamIdentifier=" || { echo "FAIL: no TeamIdentifier"; exit 1; }
+codesign -dvv "$APP" 2>&1 | grep -q "TeamIdentifier=" || { echo "FAIL: no TeamIdentifier"; exit 1; }
 echo "ok: Developer ID authority + team identifier"
 
 ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null)"
