@@ -48,10 +48,6 @@ export type ActivityTab = "thread" | "inbox";
 // section within it (a free string so each home owns its own section ids).
 export type SettingsScope = "host" | "workspace";
 
-const RIGHT_MIN = 280;
-const RIGHT_MAX = 720;
-const clampWidth = (w: number) => Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, Math.round(w)));
-
 type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
@@ -185,7 +181,14 @@ export const useUI = create<UIState>()(
       setActivityTab: (activityTab) => set({ activityTab }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
-      setRightWidth: (w) => set({ rightWidth: clampWidth(w) }),
+      // The DS AppShell is a CONTROLLED width: during a divider drag it streams transient
+      // widths from 0 up to the full left+right span (that's how a drag collapses a side —
+      // the column has to track the pointer past its min/max), and it commits its OWN
+      // clamped value (`clampOpen`) on pointer-up. So store the value verbatim. The old
+      // [280,720] clamp here re-clamped those transients and broke the gesture: the right
+      // column could never grow past 720, so the LEFT column never reached its collapse
+      // threshold (left wouldn't close), and the column stopped tracking the pointer mid-drag.
+      setRightWidth: (w) => set({ rightWidth: Math.max(0, Math.round(w)) }),
       pluginDots: {},
       setPluginDot: (key, on) =>
         set((s) => {
