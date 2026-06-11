@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { apiUrl, drainSseBuffer, textFromParts, hitlFromParts } from "./api";
+import { ApiError, apiUrl, drainSseBuffer, isColdStart, textFromParts, hitlFromParts } from "./api";
+
+describe("cold-start detection (ApiError / isColdStart)", () => {
+  it("ApiError carries the HTTP status", () => {
+    const e = new ApiError(409, "agent 'x' is not running");
+    expect(e.status).toBe(409);
+    expect(e).toBeInstanceOf(Error);
+  });
+
+  it("treats 409 (member spawning) and 502 (booting) as cold-start", () => {
+    expect(isColdStart(new ApiError(409, "not running"))).toBe(true);
+    expect(isColdStart(new ApiError(502, "not reachable"))).toBe(true);
+  });
+
+  it("does NOT treat other failures (404/500) or plain errors as cold-start", () => {
+    expect(isColdStart(new ApiError(404, "nope"))).toBe(false);
+    expect(isColdStart(new ApiError(500, "boom"))).toBe(false);
+    expect(isColdStart(new Error("network"))).toBe(false);
+    expect(isColdStart(undefined)).toBe(false);
+  });
+});
 
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 
