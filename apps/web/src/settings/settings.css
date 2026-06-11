@@ -7,6 +7,18 @@
 .settings-banner {
   margin-bottom: 10px;
 }
+/* QuickSetting dialog (ADR 0048) — contextual settings shortcut. Reuses the
+   .setting-row chrome; the dialog just stacks the rows with breathing room. */
+.quick-setting-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.quick-setting-body .setting-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
 .settings-group {
   margin-bottom: 40px;
 }

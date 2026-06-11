@@ -1,32 +1,44 @@
 import { expect, test } from "@playwright/test";
 
-// Settings are decentralized: Agent settings live in the Agent view, Memory in the
-// Knowledge view, and the central Settings surface keeps only the cross-cutting tabs
-// (Overview · Telemetry · Plugins · System). Each renders GET /api/settings/schema
-// groups for its category and saves via POST /api/settings (auto-reload).
+// Settings IA (ADR 0048): scope is the primary axis — TWO homes, each with its own
+// section sub-nav. 🖥 Host / App (box-shared) and 🧩 Workspace (the focused agent).
+// Each section renders GET /api/settings/schema groups for its category and saves via
+// POST /api/settings (auto-reload). The Agent rail surface still hosts the agent
+// makeup until the S-C collapse.
 
 async function openSettings(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
 }
 
+// Click a home (row 1) or a section (row 2) — names are unique across both strips.
 async function tab(page, name) {
   await page.locator(".pl-tabs").getByRole("tab", { name, exact: true }).click();
 }
 
-test("central Settings is just the cross-cutting tabs", async ({ page }) => {
+test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) => {
   await openSettings(page);
-  expect(await page.locator(".pl-tabs button").allTextContents()).toEqual([
+  // Row 1 — the two scope homes (ADR 0048).
+  expect(await page.locator(".pl-tabs").first().locator("button").allTextContents()).toEqual([
+    "Host / App",
+    "Workspace",
+  ]);
+  // Row 2 — the Host / App home's sections (the default home).
+  expect(await page.locator(".pl-tabs").nth(1).locator("button").allTextContents()).toEqual([
     "Overview",
-    "Agents",
-    "Theme",
+    "Host config",
+    "Fleet",
     "Telemetry",
+    "Commons",
+  ]);
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
+  // The Workspace home → its sections; System holds the runtime/perf knobs.
+  await tab(page, "Workspace");
+  expect(await page.locator(".pl-tabs").nth(1).locator("button").allTextContents()).toEqual([
+    "Theme",
     "Plugins",
     "System",
-    "Host defaults", // ADR 0047 — the host-scoped subset, edited at the host layer
   ]);
-  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default
-  // System holds the runtime/perf knobs (Compaction + Runtime here).
   await tab(page, "System");
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Compaction", "Runtime"]);
@@ -59,6 +71,7 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
 
 test("a restart-flagged System field shows the restart banner", async ({ page }) => {
   await openSettings(page);
+  await tab(page, "Workspace");
   await tab(page, "System");
   await expect(page.locator(".settings-banner")).toHaveCount(0);
   await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] input[type="checkbox"]').check();
@@ -91,9 +104,9 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   ).toHaveCount(0);
 });
 
-test("Host defaults view edits the host-scoped subset and saves to the host layer", async ({ page }) => {
+test("Host config edits the host-scoped subset and saves to the host layer", async ({ page }) => {
   await openSettings(page);
-  await tab(page, "Host defaults");
+  await tab(page, "Host config"); // Host / App is the default home
   await expect(page.locator(".settings-banner").first()).toContainText("box-shared");
   // Only host-scoped fields appear — model.name (host) is here; the agent-scoped
   // model.api_key + routing.fallback_models are NOT.

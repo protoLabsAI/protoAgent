@@ -16,6 +16,14 @@ describe("migrateUiState", () => {
     expect(migrateUiState({ leftActive: "chat" })).toEqual({ leftActive: "chat" });
   });
 
+  // v2→v3 (ADR 0048): the flat `settingsTab` is replaced by `settingsScope` +
+  // `settingsSection`; a stale `settingsTab` must be dropped so the new defaults apply.
+  it("drops the obsolete settingsTab", () => {
+    const out = migrateUiState({ settingsTab: "host", rightWidth: 320 }) as Record<string, unknown>;
+    expect(out).not.toHaveProperty("settingsTab");
+    expect(out).toEqual({ rightWidth: 320 });
+  });
+
   it("does not mutate the input object", () => {
     const input = { railOf: { chat: "left" }, leftActive: "chat" };
     migrateUiState(input);

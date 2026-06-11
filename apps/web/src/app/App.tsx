@@ -75,7 +75,7 @@ import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
-import { SettingsSurface, SETTINGS_TABS, type SettingsTab } from "../settings/SettingsSurface";
+import { SettingsSurface } from "../settings/SettingsSurface";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
@@ -232,8 +232,9 @@ export function App() {
   const setPluginsTab = useUI((s) => s.setPluginsTab);
   const knowledgeTab = useUI((s) => s.knowledgeTab);
   const setKnowledgeTab = useUI((s) => s.setKnowledgeTab);
-  const settingsTab = useUI((s) => s.settingsTab);
-  const setSettingsTab = useUI((s) => s.setSettingsTab);
+  const setSettingsScope = useUI((s) => s.setSettingsScope);
+  const setSettingsSection = useUI((s) => s.setSettingsSection);
+  const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const activityTab = useUI((s) => s.activityTab);
   const setActivityTab = useUI((s) => s.setActivityTab);
   const rightPanel = useUI((s) => s.rightPanel);
@@ -569,12 +570,8 @@ export function App() {
           </>
         );
       case "settings":
-        return (
-          <>
-            <Tabs responsive active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
-            <SettingsSurface tab={settingsTab} />
-          </>
-        );
+        // SettingsSurface owns its own two-level nav (home + section, ADR 0048).
+        return <SettingsSurface />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       case "beads":
@@ -731,8 +728,12 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
+              // Fleet now lives under Host / App ▸ Fleet (ADR 0048); ask the panel to
+              // open the new-agent picker on mount.
               setSurface("settings");
-              setSettingsTab("agents");
+              setSettingsScope("host");
+              setSettingsSection("fleet");
+              setFleetStartNew(true);
             }}
           />
         }

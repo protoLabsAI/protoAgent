@@ -1,12 +1,13 @@
 import { Input } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { ArrowUpToLine, BookMarked, Library, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { ArrowUpToLine, BookMarked, Library, Pin, RefreshCw, Share2, Sparkles, Trash2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
+import { QuickSetting } from "../settings/QuickSetting";
 import type { Playbook } from "../lib/types";
 
 // Playbooks surface (ADR 0009) — browse + manage the procedural-memory skill
@@ -108,9 +109,14 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
         title="Skills"
         kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} from commons` : ""}`}
         actions={
-          <Button icon variant="ghost" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
-            <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </Button>
+          <>
+            {/* Quick-set the skill-sharing mode (scoped/shared/layered) right where you
+                manage skills — same field as Workspace ▸ Skills, ADR 0048. */}
+            <QuickSetting keys={["skills.scope"]} title="Skill sharing" label="Skill sharing mode" icon={<Share2 size={16} />} />
+            <Button icon variant="ghost" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
+              <RefreshCw size={16} className={loading ? "spin" : ""} />
+            </Button>
+          </>
         }
       />
 
