@@ -82,6 +82,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent of the console SPA.
 
 ### Added
+- **The plugin devkit can now build a plugin AND run it live — no restart** (ADR
+  0027/0040). `scaffold_plugin` used to write a skeleton and tell you to "add it to
+  `plugins.enabled` and restart"; it now **enables + hot-reloads** what it scaffolded
+  (the same path the console enable toggle uses, #822), so the new plugin's tools/view
+  are live on the agent's next turn. The edit→test loop is closed with two new devkit
+  tools: `reload_plugins` (re-execs enabled plugins so an edit to a plugin's
+  `__init__.py` goes live) and `enable_plugin(id)` (turn on any on-disk plugin live).
+  Communication plugins (ADR 0029) still enable from Settings (they need a token).
+- **`plugin new` / `plugin new-bundle` CLI** — scaffold a plugin or an ADR-0040
+  bundle from the shell: `python -m server plugin new "My Plugin" --view --skill`,
+  `… plugin new-bundle "My Stack" --member board=url@ref --builtin delegates`. The
+  writers moved to core (`graph.plugins.scaffold`) so the CLI works without the devkit
+  plugin enabled; the devkit tool is now a thin wrapper that adds the live-enable.
 - **Spin local fleet members down when the host exits (version-coherence Axis 1).**
   Members are spawned detached (so they survive the launching CLI) — but that also
   let a member outlive a hub rebuild+restart and keep running *old* code. The hub now

@@ -1,7 +1,10 @@
-"""`python -m server plugin …` — manage git-installed plugins (ADR 0027).
+"""`python -m server plugin …` — scaffold + manage plugins (ADR 0027).
 
-A thin CLI over ``graph.plugins.installer``. Install fetches code only (it never
-enables the plugin or installs its deps — both are explicit, by design).
+A thin CLI over ``graph.plugins.installer`` (install/list/…) and
+``graph.plugins.scaffold`` (``new`` / ``new-bundle``). Install fetches code only
+(it never enables the plugin or installs its deps — both are explicit, by design);
+``new`` writes a skeleton on disk (enable it from the console or, in a running
+agent, the devkit's ``enable_plugin`` tool — live, no restart).
 """
 
 from __future__ import annotations
@@ -9,15 +12,33 @@ from __future__ import annotations
 import argparse
 import sys
 
-from graph.plugins import installer
+from graph.plugins import installer, scaffold
 
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m server plugin",
-        description="Install/manage plugins from git URLs (ADR 0027).",
+        description="Scaffold + install/manage plugins (ADR 0027).",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pn = sub.add_parser("new", help="scaffold a new plugin skeleton on disk (ready to fill in + enable)")
+    pn.add_argument("name", help="human name (the id is slugified from it, e.g. \"My Plugin\" → my-plugin)")
+    pn.add_argument("--summary", default="A protoAgent plugin.", help="one-line description for the manifest")
+    pn.add_argument("--view", action="store_true", help="include a console view (sandboxed iframe + router)")
+    pn.add_argument("--skill", action="store_true", help="include a SKILL.md skill stub")
+    pn.add_argument("--workflow", action="store_true", help="include a workflow YAML stub")
+    pn.add_argument("--comms", action="store_true", help="a communication plugin (ChatAdapter, ADR 0029) instead of a tool plugin")
+    pn.add_argument("--dir", default=None, help="target dir (default: the live plugins dir the loader discovers)")
+
+    pnb = sub.add_parser("new-bundle", help="scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040)")
+    pnb.add_argument("name", help="human name for the bundle (slugified to its id)")
+    pnb.add_argument("--summary", default="A protoAgent plugin bundle.", help="one-line description")
+    pnb.add_argument("--member", action="append", metavar="id=url[@ref]", default=[],
+                     help="a git plugin member; repeatable (e.g. --member board=https://github.com/you/board@v0.1.0)")
+    pnb.add_argument("--builtin", action="append", metavar="id", default=[],
+                     help="a built-in member that ships with protoAgent; repeatable (e.g. --builtin delegates)")
+    pnb.add_argument("--dir", default=None, help="target dir (default: the live plugins dir)")
 
     pi = sub.add_parser("install", help="install a plugin — or a bundle of plugins — from a git URL (does NOT enable it)")
     pi.add_argument("url", help="git URL (https://, ssh://, git@, or a local path) of a plugin or a bundle repo")
@@ -37,6 +58,47 @@ def _build_parser() -> argparse.ArgumentParser:
 def run_plugin_cli(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        if args.cmd == "new":
+            try:
+                res = scaffold.scaffold_plugin(
+                    args.name, summary=args.summary, with_view=args.view, with_skill=args.skill,
+                    with_workflow=args.workflow, with_comms=args.comms, target_dir=args.dir,
+                )
+            except FileExistsError as e:
+                print(f"✗ {scaffold.slug(args.name)!r} already exists at {e}", file=sys.stderr)
+                return 1
+            print(f"✓ scaffolded {res.kind} {res.id!r} at {res.path}")
+            print(f"  wrote: {', '.join(res.made)}")
+            if res.kind == "comms":
+                print("  next: implement the ChatAdapter (see plugins/telegram), then enable it from Settings.")
+            else:
+                print("  next: fill in __init__.py, then enable it — toggle it on in the console, or in a running")
+                print(f"        agent (with plugin-devkit enabled) ask it to enable_plugin('{res.id}') — live, no restart.")
+            return 0
+        if args.cmd == "new-bundle":
+            members: list[dict] = []
+            for spec in args.member:
+                if "=" not in spec:
+                    print(f"✗ bad --member {spec!r} (expected id=url[@ref])", file=sys.stderr)
+                    return 1
+                mid, rest = spec.split("=", 1)
+                url, _, ref = rest.partition("@")
+                members.append({"id": mid, "url": url, "ref": ref or None})
+            for bid in args.builtin:
+                members.append({"id": bid, "builtin": True})
+            try:
+                res = scaffold.scaffold_bundle(
+                    args.name, summary=args.summary, members=members or None, target_dir=args.dir,
+                )
+            except FileExistsError as e:
+                print(f"✗ {scaffold.slug(args.name)!r} already exists at {e}", file=sys.stderr)
+                return 1
+            print(f"✓ scaffolded bundle {res.id!r} at {res.path}")
+            print(f"  wrote: {', '.join(res.made)}")
+            if not members:
+                print("  fill in the REPLACE_ME member(s), then:")
+            print("  commit/push it, then `plugin install <repo-url>` to install + enable the stack (ADR 0040).")
+            return 0
         if args.cmd == "install":
             s = installer.install(args.url, args.ref, force=args.force,
                                   allow=installer.configured_allowlist())
