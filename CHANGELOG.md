@@ -43,8 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface is gone (folded into Workspace) and Knowledge is now store-only (its Memory settings moved to
   Workspace ▸ Memory). Alongside this one-stop-shop, a reusable **`QuickSetting`** primitive puts a
   gear-icon → dialog *contextual* shortcut wherever a setting is relevant — editing the same fields via
-  the same cascade-aware `/api/settings` write path (host-scoped fields route to the host layer); first
-  one lands on the Skills surface (skill-sharing mode). Part of #916.
+  the same cascade-aware `/api/settings` write path (host-scoped fields route to the host layer). The
+  **topbar gear** opens the whole one-stop-shop as an overlay from anywhere, and contextual quick-set
+  gears sit where they're relevant: **model tuning** by the agent name, **appearance**, **telemetry**
+  policy (on the Telemetry view), **recall** (on Knowledge), and **skill-sharing mode** (on Skills).
+  Part of #916.
 - **The shared-skill commons is now legible in the console (ADR 0041 / 0048).** The
   layered skill tier ("shared brain, private hands" — read commons ∪ private, write
   private) shipped at the data layer but was invisible: the Skills surface couldn't tell

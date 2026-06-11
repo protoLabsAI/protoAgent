@@ -19,6 +19,23 @@
   align-items: stretch;
   gap: 6px;
 }
+
+/* The one-stop-shop Settings overlay + the theme quick dialog (ADR 0048) embed a
+   full surface inside a dialog — give the panels a tall, scrollable viewport and
+   drop the dialog's own body padding (the panels carry their own chrome). */
+.settings-overlay .pl-dialog__body,
+.theme-quick-dialog .pl-dialog__body {
+  padding: 0;
+  max-height: 80vh;
+  min-height: 50vh;
+  overflow-y: auto;
+}
+.settings-overlay .stage-panel,
+.theme-quick-dialog .stage-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 .settings-group {
   margin-bottom: 40px;
 }

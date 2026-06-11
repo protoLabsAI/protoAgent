@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
 // Knowledge → Store (ADR 0020) — a searchable window onto the agent's knowledge
@@ -61,9 +62,13 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
         title="Knowledge"
         kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}`}
         actions={
-          <Button icon variant="ghost" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
-            <RefreshCw size={16} className={loading ? "spin" : ""} />
-          </Button>
+          <>
+            {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
+            <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
+            <Button icon variant="ghost" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
+              <RefreshCw size={16} className={loading ? "spin" : ""} />
+            </Button>
+          </>
         }
       />
 

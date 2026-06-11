@@ -22,6 +22,7 @@ import {
   Store,
   Save,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Target,
   Undo2,
@@ -75,6 +76,9 @@ import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsSurface } from "../settings/SettingsSurface";
+import { SettingsOverlay } from "../settings/SettingsOverlay";
+import { QuickSetting } from "../settings/QuickSetting";
+import { ThemeQuickButton } from "../settings/ThemeQuickButton";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
@@ -247,6 +251,8 @@ export function App() {
   >(null);
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
+  // The one-stop-shop Settings overlay (ADR 0048) — opened by the topbar gear.
+  const [settingsOverlayOpen, setSettingsOverlayOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
   // always renders; the retry doubles as the desktop sidecar boot-probe. The
@@ -701,6 +707,36 @@ export function App() {
           />
         }
         org={runtime?.identity?.org || "protoLabs.studio"}
+        actions={
+          <>
+            {/* Contextual quick-settings (ADR 0048) — gear-icon → dialog, by the agent
+                name. Model tuning here; the topbar gear opens the full one-stop-shop. */}
+            <QuickSetting
+              keys={["model.name", "model.temperature", "model.max_tokens"]}
+              title="Model"
+              label="Model settings"
+              icon={<SlidersHorizontal size={16} />}
+              deepLink={() => {
+                setSurface("settings");
+                setSettingsScope("workspace");
+                setSettingsSection("settings");
+                setSettingsOverlayOpen(true);
+              }}
+            />
+            <ThemeQuickButton />
+            <Button
+              icon
+              variant="ghost"
+              type="button"
+              title="Open settings"
+              aria-label="Open settings"
+              data-testid="topbar-settings"
+              onClick={() => setSettingsOverlayOpen(true)}
+            >
+              <Settings2 size={16} />
+            </Button>
+          </>
+        }
         status={
           <button
             type="button"
@@ -875,6 +911,8 @@ export function App() {
         Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
         its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
     <ContextMenuRenderer />
+    {/* The one-stop-shop Settings overlay (ADR 0048) — the topbar gear opens it. */}
+    <SettingsOverlay open={settingsOverlayOpen} onClose={() => setSettingsOverlayOpen(false)} />
     </>
   );
 }
