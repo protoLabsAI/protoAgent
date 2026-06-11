@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The desktop app updates itself in place.** tauri-plugin-updater wired into the shell:
+  a silent check at launch (release builds) plus a tray "Check for Updates…" item; it polls
+  `latest.json` on the GitHub Release, verifies the bundle's minisign signature against the
+  org public key baked into `tauri.conf.json`, installs, and relaunches — agent data is
+  untouched. CI: when the org `TAURI_SIGNING_PRIVATE_KEY` is present, every desktop leg
+  emits signed updater bundles (`.app.tar.gz` / `-setup.nsis.zip` / `.AppImage.tar.gz`,
+  v1-compatible shapes) and a fan-in job composes `latest.json` from all three platforms
+  and uploads it *last*, so the manifest never points at missing assets. A release built
+  without the key just ships without in-app update for that cycle. (`.deb` installs stay
+  apt-managed — the updater handles AppImage only on Linux.)
+
 ### Fixed
 - **A secret saved for an installed-but-DISABLED plugin now routes to `secrets.yaml`,
   not the plaintext config.** Secret routing (`secret_paths`) and the config-redaction

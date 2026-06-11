@@ -27,6 +27,9 @@ a three-platform matrix and attaches the artifacts to the same GitHub Release:
 the macOS `.dmg` (signed + notarized — requires the full Apple secret set, the
 leg fails otherwise), the Linux `.AppImage` + `.deb`, and the Windows NSIS
 `-setup.exe` (both unsigned). See `apps/desktop/README.md` § Platforms & CI.
+When the org updater signing key is present, the legs also attach signed updater
+bundles and a fan-in job uploads `latest.json` — the manifest the desktop app's
+in-app updater polls. See `apps/desktop/README.md` § Updates.
 
 ## Cutting a release
 

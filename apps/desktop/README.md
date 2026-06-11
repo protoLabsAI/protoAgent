@@ -33,9 +33,24 @@ To point the desktop UI at a *different* server instead of the bundled one, set 
 
 ## Desktop Behavior
 
-- Tray menu: show, hide, quit.
+- Tray menu: show, hide, check for updates, quit.
 - Close button hides the window instead of quitting.
 - `Cmd+Shift+P` on macOS or `Super+Shift+P` on Linux/Windows toggles the window.
+
+## Updates
+
+The app updates itself in place (tauri-plugin-updater): a silent check at launch
+(release builds only) plus a tray "Check for Updates…" item. It polls
+`latest.json` on the GitHub Release, verifies the bundle's minisign signature
+against the org public key baked into `tauri.conf.json`, installs, and
+relaunches — agent data (`PROTOAGENT_CONFIG_DIR`, workspaces) is untouched.
+
+- Updater bundles are only produced in CI when the org `TAURI_SIGNING_PRIVATE_KEY`
+  is present; a release without them simply has no in-app update (the `latest.json`
+  fan-in job skips with a notice).
+- macOS updates via `.app.tar.gz`, Windows re-runs the NSIS installer, Linux
+  updates the `.AppImage` in place. A `.deb` install is apt's job — the updater
+  reports it can't manage that install, which the tray flow surfaces politely.
 
 ## Platforms & CI
 

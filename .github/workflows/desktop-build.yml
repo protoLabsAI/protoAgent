@@ -15,6 +15,10 @@ name: Desktop Build
 # boots it and drives a real A2A turn) BEFORE the slow Tauri bundle step, so
 # per-platform PyInstaller under-collection fails the build, not the first user.
 #
+# When the org updater signing key is present, every leg also emits signed
+# updater bundles, and the updater-manifest fan-in job composes latest.json
+# (the manifest the in-app updater polls) onto the release — uploaded last.
+#
 # Fires on semver tags (alongside release.yml's Docker build) and on manual
 # dispatch (dispatch macOS builds are unsigned unless the full signing secret
 # set is present; Linux/Windows are always unsigned). See ADR 0010 (UI tiers /
@@ -195,7 +199,20 @@ jobs:
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
-          npm run build -- --bundles ${{ matrix.bundles }}
+          BUNDLES="${{ matrix.bundles }}"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            # Signed updater artifacts (.app.tar.gz / -setup.nsis.zip /
+            # .AppImage.tar.gz + .sig). v1Compatible = the shapes release-tools'
+            # build-updater-manifest detects. Injected here, not in-tree, so
+            # keyless local builds don't fail on a missing signing key. The
+            # macOS updater bundle derives from the .app — add that target.
+            if [ "${RUNNER_OS}" = "macOS" ]; then BUNDLES="app,dmg"; fi
+            npm run build -- --bundles "$BUNDLES" \
+              --config '{"bundle":{"createUpdaterArtifacts":"v1Compatible"}}'
+          else
+            echo "No updater signing key — building without updater artifacts."
+            npm run build -- --bundles "$BUNDLES"
+          fi
 
       - name: Collect artifacts
         shell: bash
@@ -208,14 +225,32 @@ jobs:
           T="${{ matrix.target }}"
           B="apps/desktop/src-tauri/target/release/bundle"
           mkdir -p dist-desktop
+          # Updater bundles (+ .sig) exist only when the signing key was present.
+          # The renamed files keep the target triple + the exact suffixes that
+          # release-tools' build-updater-manifest classifies by.
           case "${RUNNER_OS}" in
             macOS)
-              cp "$(ls "${B}"/dmg/*.dmg | head -1)" "dist-desktop/protoAgent-${V}-${T}.dmg" ;;
+              cp "$(ls "${B}"/dmg/*.dmg | head -1)" "dist-desktop/protoAgent-${V}-${T}.dmg"
+              UP="$(ls "${B}"/macos/*.app.tar.gz 2>/dev/null | head -1 || true)"
+              if [ -n "${UP}" ]; then
+                cp "${UP}" "dist-desktop/protoAgent-${V}-${T}.app.tar.gz"
+                cp "${UP}.sig" "dist-desktop/protoAgent-${V}-${T}.app.tar.gz.sig"
+              fi ;;
             Linux)
               cp "$(ls "${B}"/appimage/*.AppImage | head -1)" "dist-desktop/protoAgent-${V}-${T}.AppImage"
-              cp "$(ls "${B}"/deb/*.deb | head -1)" "dist-desktop/protoAgent-${V}-${T}.deb" ;;
+              cp "$(ls "${B}"/deb/*.deb | head -1)" "dist-desktop/protoAgent-${V}-${T}.deb"
+              UP="$(ls "${B}"/appimage/*.AppImage.tar.gz 2>/dev/null | head -1 || true)"
+              if [ -n "${UP}" ]; then
+                cp "${UP}" "dist-desktop/protoAgent-${V}-${T}.AppImage.tar.gz"
+                cp "${UP}.sig" "dist-desktop/protoAgent-${V}-${T}.AppImage.tar.gz.sig"
+              fi ;;
             Windows)
-              cp "$(ls "${B}"/nsis/*-setup.exe | head -1)" "dist-desktop/protoAgent-${V}-${T}-setup.exe" ;;
+              cp "$(ls "${B}"/nsis/*-setup.exe | head -1)" "dist-desktop/protoAgent-${V}-${T}-setup.exe"
+              UP="$(ls "${B}"/nsis/*.nsis.zip 2>/dev/null | head -1 || true)"
+              if [ -n "${UP}" ]; then
+                cp "${UP}" "dist-desktop/protoAgent-${V}-${T}-setup.nsis.zip"
+                cp "${UP}.sig" "dist-desktop/protoAgent-${V}-${T}-setup.nsis.zip.sig"
+              fi ;;
           esac
           ls -la dist-desktop/
 
@@ -263,3 +298,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ steps.version.outputs.tag }}" dist-desktop/* --clobber
+
+  # Fan-in: compose latest.json from every leg's signed updater bundle and
+  # upload it LAST, so the manifest never points at assets that don't exist
+  # yet. Runs only on semver tags, and only once ALL legs succeeded (a partial
+  # manifest would skew versions across platforms). If the release carries no
+  # updater bundles (key wasn't present), it skips — in-app updates are simply
+  # disabled for that release.
+  updater-manifest:
+    name: updater manifest (latest.json)
+    needs: build
+    if: github.event_name == 'push' && github.repository == 'protoLabsAI/protoAgent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compose + upload latest.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          mkdir -p updater-dist
+          gh release download "$TAG" --repo "${{ github.repository }}" --dir updater-dist \
+            --pattern '*.app.tar.gz*' --pattern '*-setup.nsis.zip*' --pattern '*.AppImage.tar.gz*' \
+            2>/dev/null || true
+          if ! ls updater-dist/* >/dev/null 2>&1; then
+            echo "::notice::No signed updater bundles on the release — skipping latest.json (in-app updates disabled for ${TAG})."
+            exit 0
+          fi
+          npx --yes -p '@protolabsai/release-tools@latest' build-updater-manifest \
+            --version "$VERSION" \
+            --dist updater-dist \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/${TAG}" \
+            --notes "protoAgent ${TAG} — see the GitHub Release for details." \
+            --out latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber

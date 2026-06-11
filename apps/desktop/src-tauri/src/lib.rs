@@ -6,11 +6,13 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 /// Fallback port if probing for a free one fails (matches the historical
 /// hardcoded default + the web client's last-resort base).
@@ -132,12 +134,97 @@ fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Check the GitHub Release updater manifest (latest.json) for a newer build;
+/// prompt, download + install, then relaunch. Signatures are verified against
+/// the org minisign pubkey baked into tauri.conf.json.
+///
+/// `interactive` = invoked from the tray item: "up to date" and errors surface
+/// as dialogs. The silent launch check only logs. On Linux the updater manages
+/// AppImage installs only (a .deb belongs to apt) — that limitation comes back
+/// as an error from the plugin and is handled like any other.
+fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
+    tauri::async_runtime::spawn(async move {
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                log::info!("updater: unavailable for this install: {e}");
+                if interactive {
+                    app.dialog()
+                        .message(format!("Updates aren't managed in-app for this install.\n\n{e}"))
+                        .title("protoAgent updates")
+                        .show(|_| {});
+                }
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                let current = app.package_info().version.to_string();
+                let version = update.version.clone();
+                log::info!("updater: {version} available (running {current})");
+                let app_for_install = app.clone();
+                app.dialog()
+                    .message(format!(
+                        "protoAgent {version} is available (you have {current}).\n\n\
+                         Download and install now? The app relaunches when it finishes \
+                         and your agent data is untouched."
+                    ))
+                    .title("Update available")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Install and Relaunch".to_string(),
+                        "Later".to_string(),
+                    ))
+                    .show(move |confirmed| {
+                        if !confirmed {
+                            return;
+                        }
+                        tauri::async_runtime::spawn(async move {
+                            match update.download_and_install(|_, _| {}, || {}).await {
+                                Ok(()) => {
+                                    log::info!("updater: installed, relaunching");
+                                    app_for_install.restart();
+                                }
+                                Err(e) => {
+                                    log::error!("updater: install failed: {e}");
+                                    app_for_install
+                                        .dialog()
+                                        .message(format!("The update failed to install.\n\n{e}"))
+                                        .title("protoAgent updates")
+                                        .show(|_| {});
+                                }
+                            }
+                        });
+                    });
+            }
+            Ok(None) => {
+                log::info!("updater: up to date");
+                if interactive {
+                    app.dialog()
+                        .message("You're on the latest version.")
+                        .title("protoAgent updates")
+                        .show(|_| {});
+                }
+            }
+            Err(e) => {
+                log::warn!("updater: check failed: {e}");
+                if interactive {
+                    app.dialog()
+                        .message(format!("Couldn't check for updates.\n\n{e}"))
+                        .title("protoAgent updates")
+                        .show(|_| {});
+                }
+            }
+        }
+    });
+}
+
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show protoAgent", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+    let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &hide, &separator, &updates, &quit])?;
 
     // The protoLabs robot mark, at the menu-bar size + template treatment Orbis
     // used for fleet agents (icons/tray-robot.png, 44×44; system-tinted). Each
@@ -152,6 +239,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
             "hide" => hide_main_window(app),
+            "updates" => check_for_updates(app.clone(), true),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -176,6 +264,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        // In-app updates: checks the latest.json manifest on GitHub Releases,
+        // verifies the minisign signature, installs, relaunches.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Notifications — bridges the web Notification API in the webview so the
         // console can alert (e.g. a HITL form awaiting input) even when the
         // menu-bar window is hidden.
@@ -247,6 +339,12 @@ pub fn run() {
                     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 }
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
+            }
+
+            // Silent launch check (release builds only — `tauri dev` runs at the
+            // in-tree placeholder version and would always see an "update").
+            if !cfg!(debug_assertions) {
+                check_for_updates(app.handle().clone(), false);
             }
             Ok(())
         })
