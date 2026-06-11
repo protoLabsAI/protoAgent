@@ -190,6 +190,11 @@ jobs:
           fi
           [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           echo "Signing mode: ${SIGNED}"
+          if [ "${SIGNED}" = "Developer ID (signed + notarized)" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
           npm run build -- --bundles ${{ matrix.bundles }}
 
       - name: Collect artifacts
@@ -213,6 +218,37 @@ jobs:
               cp "$(ls "${B}"/nsis/*-setup.exe | head -1)" "dist-desktop/protoAgent-${V}-${T}-setup.exe" ;;
           esac
           ls -la dist-desktop/
+
+      - name: Notarize + staple the DMG container
+        if: runner.os == 'macOS' && steps.build.outputs.signed == 'true'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        # Tauri notarizes the .app *inside* the bundle; without its own ticket
+        # the DMG container still reads as un-notarized on a fresh download.
+        # Submit + staple the DMG itself so Gatekeeper verifies it offline.
+        run: |
+          set -euo pipefail
+          DMG="$(ls dist-desktop/*.dmg | head -1)"
+          KEYFILE="$(mktemp -t protoagent-apple-api-XXXXXX).p8"
+          python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_BASE64"]))' "$KEYFILE"
+          xcrun notarytool submit "$DMG" \
+            --key "$KEYFILE" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$DMG"
+
+      - name: Verify macOS artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        # Pristine-artifact battery (scripts/verify-macos-desktop.sh): structure
+        # always; codesign/entitlements/Gatekeeper/stapler asserts when signed.
+        run: |
+          set -euo pipefail
+          FLAG=""
+          if [ "${{ steps.build.outputs.signed }}" = "true" ]; then FLAG="--require-signed"; fi
+          scripts/verify-macos-desktop.sh $FLAG dist-desktop/*.dmg
 
       - name: Upload dispatch artifact
         if: github.event_name == 'workflow_dispatch'
