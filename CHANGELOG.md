@@ -34,15 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent was told a no-op worked; they now read the real per-plugin load status and surface
   "FAILED to load: <error>" so you fix-and-reload instead of testing nothing.
 ### Added
-- **Settings are reorganizing around *scope* — a two-home shell + contextual quick-settings (ADR 0048, in progress).**
-  The central Settings surface now leads with the two scope homes from ADR 0048 — **🖥 Host / App**
-  (box-shared: Overview · Host config · Fleet · Telemetry · Commons) and **🧩 Workspace** (the focused
-  agent: Theme · Plugins · System for now; the agent makeup folds in next). Scope is the primary axis,
-  replacing the flat category tabs (`settingsTab` → `settingsScope` + `settingsSection`, persist v3).
-  Alongside the one-stop-shop, a reusable **`QuickSetting`** primitive puts a gear-icon → dialog
-  *contextual* shortcut wherever a setting is relevant (it edits the same fields via the same
-  cascade-aware `/api/settings` write path) — first one lands on the Skills surface (skill-sharing mode).
-  Part of #916; the Agent rail surface stays until the collapse slice.
+- **Settings are reorganized around *scope* — a two-home shell + contextual quick-settings (ADR 0048).**
+  The Settings surface is now **two scope homes**, replacing the flat category tabs and the separate
+  Agent rail surface: **🖥 Host / App** (box-shared: Overview · Host config · Fleet · Telemetry ·
+  Commons) and **🧩 Workspace** (the focused agent's full makeup — Identity · Settings · Tools · MCP ·
+  Subagents · Skills · Middleware · Memory · System · Theme · Plugins). Scope is the primary axis
+  (`settingsTab` → `settingsScope` + `settingsSection`, persist v3). The standalone **Agent** rail
+  surface is gone (folded into Workspace) and Knowledge is now store-only (its Memory settings moved to
+  Workspace ▸ Memory). Alongside this one-stop-shop, a reusable **`QuickSetting`** primitive puts a
+  gear-icon → dialog *contextual* shortcut wherever a setting is relevant — editing the same fields via
+  the same cascade-aware `/api/settings` write path (host-scoped fields route to the host layer); first
+  one lands on the Skills surface (skill-sharing mode). Part of #916.
 - **The shared-skill commons is now legible in the console (ADR 0041 / 0048).** The
   layered skill tier ("shared brain, private hands" — read commons ∪ private, write
   private) shipped at the data layer but was invisible: the Skills surface couldn't tell
