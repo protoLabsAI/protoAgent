@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is explicit (the dir is already the isolated leaf), and a one-time self-heal drops the
   orphaned `<ws>/<id>/` dir on the next member restart (re-enter the token once). Regression
   tests cover the scope helper, the plugin-secret round-trip, and the self-heal.
+- **Switching to a not-yet-running fleet agent no longer flashes errors in its panels.**
+  A cold agent answers 409 (the member is still spawning) then 502 (booting, not bound yet)
+  for a few seconds until it's up — but only the boot probe retried through that window, so
+  the other panels (beads/theme/…) gave up after one retry and surfaced a "failed" flash
+  mid-boot. `request()` now throws a typed `ApiError` (carrying the status), and the
+  QueryClient default rides out cold-start codes (409/502) — panels stay in their loading
+  state until the agent answers, then fill in. A genuinely-down agent still surfaces via the
+  shell's boot-gate "isn't responding". (ADR 0042 cold-start polish.)
 - **A declined or failed tool now shows the red X on its card, not a green "done".**
   A denied `run_command` returned a normal string, so the card closed *green* with the
   decline text — the opposite of how a denial should read. `run_command` now raises on
