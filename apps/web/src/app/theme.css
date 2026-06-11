@@ -1592,6 +1592,14 @@ textarea {
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--bg); display: block; }
 .plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--fg-muted); font-size: 13px; }
 
+/* INTERIM (until we bump @protolabsai/ui past protoContent#212): the DS AppShell's
+   divider drag tracks the pointer on window listeners, so a plugin-view iframe captures
+   the pointer mid-drag — the resize stutters and the pointer-up that commits a collapse
+   is swallowed (the panel "doesn't close right"). Make iframes pointer-transparent while
+   dragging so the window keeps the gesture. The DS fix adds a drag overlay (also fixes
+   the cursor over iframes); drop this rule once we're on the release that carries it. */
+.pl-appshell-frame--dragging iframe { pointer-events: none; }
+
 /* Plugins panel (ADR 0027, .plugin-install-* / .plugin-list / .plugin-row-main / -title /
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
    + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare

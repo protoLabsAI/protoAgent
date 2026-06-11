@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Resizing panels felt sloppy and "wouldn't close right" over plugin views.** The DS
+  AppShell's divider drag tracks the pointer on `window` listeners, so a plugin-view
+  **iframe** captured `pointermove`/`pointerup` the instant the pointer crossed it — the
+  resize stuttered and the pointer-up that commits a collapse was lost. Interim app-CSS
+  guard (`.pl-appshell-frame--dragging iframe { pointer-events: none }`) restores smooth
+  tracking + collapse now; the proper DS fix (a drag overlay that also carries the resize
+  cursor over iframes) is protoContent#212 and lands when we bump `@protolabsai/ui`. The
+  DS stories felt smooth only because they used plain `<div>`s, never iframes.
 - **Swapping between fleet agents wiped the chat view.** The tenant guard (which
   clears persisted chat when the backend behind an origin re-keys) was reading the
   *focused agent's* `instance_uid` (slug-routed runtime status). Every fleet swap
