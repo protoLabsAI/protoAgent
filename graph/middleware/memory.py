@@ -25,11 +25,18 @@ log = logging.getLogger(__name__)
 # Configuration — read once at module init
 # ---------------------------------------------------------------------------
 
-from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+from infra.paths import data_home, scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
 
 # ``PROTOAGENT_INSTANCE`` is seeded by server init before the graph (and this
 # middleware) is built, so the instance segment applies here too.
-MEMORY_PATH = str(scope_leaf(os.environ.get("MEMORY_PATH", "/sandbox/memory/")))
+#
+# Default via data_home(): ``/sandbox/memory`` in a container, else
+# ``~/.protoagent/memory`` — the writable fallback every other store already
+# uses. The old literal ``/sandbox/memory/`` silently skipped persistence on
+# any non-container host (read-only ``/``), and on Windows resolved
+# drive-relative and wrote to ``\sandbox`` at the drive root (caught by the
+# desktop sidecar smoke).
+MEMORY_PATH = str(scope_leaf(os.environ.get("MEMORY_PATH") or data_home() / "memory"))
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 

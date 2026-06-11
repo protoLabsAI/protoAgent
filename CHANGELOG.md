@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Session memory now persists on non-container hosts (and stops writing to the drive
+  root on Windows).** `MemoryMiddleware`'s default path was a literal `/sandbox/memory/` —
+  on any machine without a `/sandbox` mount (local dev, the desktop sidecar) the create
+  failed on read-only `/` and persistence was *silently skipped*, so agents had no
+  cross-session continuity by default; on Windows the path resolved drive-relative and
+  happily wrote to `\sandbox` at the drive root (caught by the desktop sidecar smoke).
+  The default now routes through `data_home()` — `/sandbox/memory` in a container, else
+  `~/.protoagent/memory`, instance-scoped as before — the same writable fallback every
+  other store already used. `KnowledgeMiddleware.load_memory` drops its duplicate path
+  literal and defers to the writer's resolved `MEMORY_PATH`, so reader and writer can't
+  drift. `MEMORY_PATH` env override unchanged.
+
+### Fixed
 - **A secret saved for an installed-but-DISABLED plugin now routes to `secrets.yaml`,
   not the plaintext config.** Secret routing (`secret_paths`) and the config-redaction
   path keyed off *enabled* plugins only — so a secret for a plugin that's currently off

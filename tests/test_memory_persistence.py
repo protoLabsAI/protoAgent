@@ -528,3 +528,26 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Default path resolution (no MEMORY_PATH override)
+# ---------------------------------------------------------------------------
+
+def test_default_memory_path_uses_data_home(monkeypatch):
+    """Without MEMORY_PATH, the default resolves under data_home() — the
+    /sandbox-in-a-container, else ~/.protoagent writable fallback every other
+    store uses. The old literal /sandbox/memory/ silently skipped persistence
+    on non-container hosts and, on Windows, wrote to \\sandbox at the drive
+    root (caught by the desktop sidecar smoke)."""
+    from pathlib import Path
+
+    from infra.paths import data_home
+
+    monkeypatch.delenv("MEMORY_PATH", raising=False)
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    monkeypatch.delenv("PROTOAGENT_AUTO_SCOPE", raising=False)
+    sys.modules.pop("graph.middleware.memory", None)
+    import graph.middleware.memory as mod
+
+    assert Path(mod.MEMORY_PATH) == data_home() / "memory"

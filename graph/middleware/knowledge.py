@@ -51,9 +51,10 @@ def _in_goal_turn() -> bool:
 class KnowledgeMiddleware(AgentMiddleware):
     """Inject knowledge store context before each LLM call.
 
-    Also loads prior session summaries from /sandbox/memory/ and injects
-    them as a <prior_sessions> block so the agent has continuity across
-    sessions without requiring an active knowledge store.
+    Also loads prior session summaries from the session-memory dir (see
+    ``graph.middleware.memory.MEMORY_PATH``) and injects them as a
+    <prior_sessions> block so the agent has continuity across sessions
+    without requiring an active knowledge store.
     """
 
     def __init__(
@@ -80,7 +81,7 @@ class KnowledgeMiddleware(AgentMiddleware):
 
     def load_memory(
         self,
-        memory_path: str = "/sandbox/memory/",
+        memory_path: str | None = None,
         max_sessions: int = 10,
         max_tokens: int = 2000,
     ) -> str:
@@ -89,11 +90,13 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         Delegates to the shared :func:`graph.middleware.memory.load_prior_sessions`
         (ADR 0021) — one source of truth, with read-time reasoning stripping —
-        so this and ``MemoryMiddleware`` can't drift. Never raises.
+        so this and ``MemoryMiddleware`` can't drift. ``memory_path`` defaults
+        to the writer's resolved ``MEMORY_PATH`` (no duplicate path literal,
+        same can't-drift reasoning). Never raises.
         """
-        from graph.middleware.memory import load_prior_sessions
+        from graph.middleware.memory import MEMORY_PATH, load_prior_sessions
 
-        return load_prior_sessions(memory_path, max_sessions, max_tokens)
+        return load_prior_sessions(memory_path or MEMORY_PATH, max_sessions, max_tokens)
 
     # ---------------------------------------------------------------------------
     # Skill retrieval
