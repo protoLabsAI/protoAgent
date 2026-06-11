@@ -14,8 +14,9 @@ test("the topbar gear opens the Settings overlay (the two-home one-stop-shop)", 
   await expect(dialog.getByRole("tab", { name: "Workspace", exact: true })).toBeVisible();
 });
 
-test("the topbar model quick-set edits a field in a dialog and saves", async ({ page }) => {
+test("the chat composer model chip edits a field in a dialog and saves", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  // The model control lives on the chat composer (the default surface), by the input.
   await page.getByRole("button", { name: "Model settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Model" });
   await expect(dialog).toBeVisible();

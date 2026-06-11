@@ -48,6 +48,16 @@
   color: var(--fg-secondary);
 }
 
+/* A thin control row above the input (ADR 0048) — holds the model chip (and is the
+   home for future per-turn controls). Sits on the composer's top border. */
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 0;
+  border-top: 1px solid var(--border);
+}
+
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -55,6 +65,11 @@
   padding: 12px;
   border-top: 1px solid var(--border);
   align-items: start; /* don't let the textarea + Send button stretch each other tall */
+}
+/* With the toolbar above, the composer's own top border would double up — drop it. */
+.composer-toolbar + .composer,
+.composer-status + .composer {
+  border-top: 0;
 }
 
 /* Slash-command autocomplete (floats above the composer). */

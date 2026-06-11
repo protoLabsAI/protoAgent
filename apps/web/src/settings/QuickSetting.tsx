@@ -29,6 +29,7 @@ export function QuickSetting({
   label,
   icon,
   deepLink,
+  summaryKey,
 }: {
   keys: string[];
   title?: string;
@@ -38,13 +39,30 @@ export function QuickSetting({
   icon?: ReactNode;
   /** Optional "Open full settings →" callback (e.g. route to the central home). */
   deepLink?: () => void;
+  /** When set, the trigger renders as a CHIP showing this field's current value
+   * (e.g. the model alias on the chat composer) instead of an icon-only button. */
+  summaryKey?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Only fetch the (cached) schema when a chip summary is requested.
+  const schema = useQuery({ ...settingsSchemaQuery(), enabled: Boolean(summaryKey) });
+  const summary = summaryKey
+    ? schema.data?.groups.flatMap((g) => g.fields).find((f) => f.key === summaryKey)?.value
+    : undefined;
+  const tip = label ?? title;
+
   return (
     <>
-      <Button icon variant="ghost" type="button" title={label ?? title} aria-label={label ?? title} onClick={() => setOpen(true)}>
-        {icon ?? <Settings2 size={15} />}
-      </Button>
+      {summaryKey ? (
+        <Button variant="ghost" size="sm" type="button" title={tip} aria-label={tip} onClick={() => setOpen(true)}>
+          {icon ?? <Settings2 size={14} />}
+          <span className="quick-setting-summary">{summary != null && summary !== "" ? String(summary) : title}</span>
+        </Button>
+      ) : (
+        <Button icon variant="ghost" type="button" title={tip} aria-label={tip} onClick={() => setOpen(true)}>
+          {icon ?? <Settings2 size={15} />}
+        </Button>
+      )}
       {open ? (
         <QuickSettingDialog keys={keys} title={title} deepLink={deepLink} onClose={() => setOpen(false)} />
       ) : null}

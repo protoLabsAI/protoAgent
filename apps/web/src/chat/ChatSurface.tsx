@@ -4,12 +4,14 @@ import { TabBar } from "@protolabsai/ui/navigation";
 import {
   Loader2,
   Send,
+  SlidersHorizontal,
   Square,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
+import { QuickSetting } from "../settings/QuickSetting";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
@@ -518,6 +520,18 @@ function ChatSessionSlot({
       )}
 
       <div className="composer-wrap">
+        {/* Model control, where you actually chat (ADR 0048) — a chip showing the active
+            model alias; click to tune model / temperature / max tokens. Same field +
+            cascade as Settings ▸ Workspace ▸ Settings. */}
+        <div className="composer-toolbar">
+          <QuickSetting
+            keys={["model.name", "model.temperature", "model.max_tokens"]}
+            summaryKey="model.name"
+            title="Model"
+            label="Model settings"
+            icon={<SlidersHorizontal size={14} />}
+          />
+        </div>
         {status === "streaming" && statusMessage ? (
           <div className="composer-status">
             <Loader2 className="spin" size={12} />

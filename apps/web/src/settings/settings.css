@@ -14,6 +14,14 @@
   flex-direction: column;
   gap: 14px;
 }
+/* Chip trigger (summaryKey) — e.g. the model alias on the chat composer. Truncate
+   so a long alias can't blow out its host row. */
+.quick-setting-summary {
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .quick-setting-body .setting-row {
   flex-direction: column;
   align-items: stretch;

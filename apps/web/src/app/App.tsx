@@ -22,7 +22,6 @@ import {
   Store,
   Save,
   Settings2,
-  SlidersHorizontal,
   Sparkles,
   Target,
   Undo2,
@@ -77,7 +76,6 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
-import { QuickSetting } from "../settings/QuickSetting";
 import { ThemeQuickButton } from "../settings/ThemeQuickButton";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
@@ -709,20 +707,8 @@ export function App() {
         org={runtime?.identity?.org || "protoLabs.studio"}
         actions={
           <>
-            {/* Contextual quick-settings (ADR 0048) — gear-icon → dialog, by the agent
-                name. Model tuning here; the topbar gear opens the full one-stop-shop. */}
-            <QuickSetting
-              keys={["model.name", "model.temperature", "model.max_tokens"]}
-              title="Model"
-              label="Model settings"
-              icon={<SlidersHorizontal size={16} />}
-              deepLink={() => {
-                setSurface("settings");
-                setSettingsScope("workspace");
-                setSettingsSection("settings");
-                setSettingsOverlayOpen(true);
-              }}
-            />
+            {/* Quick-settings (ADR 0048). Model tuning lives on the chat composer (by the
+                input); the topbar keeps appearance + the gear to the full one-stop-shop. */}
             <ThemeQuickButton />
             <Button
               icon
