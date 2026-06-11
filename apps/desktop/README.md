@@ -61,3 +61,8 @@ Notes per platform:
   PyInstaller issue; code-signing the sidecar/installer is the durable fix.
 - The real release version is stamped into `tauri.conf.json` at build time (in-tree it stays
   a placeholder), so the installer/app metadata reports the actual `pyproject.toml` version.
+- **macOS artifacts are verified pristine** before upload: the DMG *container* gets its own
+  notarization ticket (`notarytool submit` + `stapler staple` — Tauri only notarizes the app
+  inside), then `scripts/verify-macos-desktop.sh` mounts the DMG and asserts structure
+  (main binary + sidecar, arm64), the codesign/Gatekeeper/stapler battery, and that the
+  entitlements are exactly the declared set — nothing broader.

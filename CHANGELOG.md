@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent was told a no-op worked; they now read the real per-plugin load status and surface
   "FAILED to load: <error>" so you fix-and-reload instead of testing nothing.
 ### Added
+- **macOS desktop releases are now verified pristine — and the DMG itself is notarized.**
+  Tauri notarizes the `.app` inside the bundle, but the DMG *container* shipped without its
+  own ticket; the workflow now runs `notarytool submit` + `stapler staple` on the DMG, then
+  `scripts/verify-macos-desktop.sh` mounts the artifact that actually ships and asserts:
+  structure (main binary + bundled sidecar, both arm64), `codesign --verify --deep --strict`,
+  Developer ID authority, the entitlement set is *exactly* what `entitlements.plist` declares
+  (and nothing broader), Gatekeeper assessment, and stapled tickets on both the app and the
+  DMG. Unsigned dispatch builds run the structure checks and skip the signing battery.
+  (Ported from the ORBIS release pipeline.)
 - **Desktop builds for Linux and Windows.** `desktop-build.yml` now fans out a
   three-leg matrix: the macOS `.dmg` (signed + notarized, as before), Linux
   `.AppImage` + `.deb` (x86_64, built on ubuntu-22.04 for the broadest glibc reach a
