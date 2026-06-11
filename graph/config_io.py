@@ -77,8 +77,27 @@ PRESETS_DIR = _BUNDLE_CONFIG_DIR / "soul-presets"
 # (the base path) for the unscoped default. The unscoped base is kept for graceful seeding.
 from infra.paths import scope_leaf as _scope_leaf
 
+
+def _config_scope(path: Path) -> Path:
+    """Instance-scoping for the config-dir-relative files (config / secrets /
+    setup-marker).
+
+    ``scope_leaf`` isolates co-located instances that SHARE a config dir (the
+    bundle dir, or the data home) by ``PROTOAGENT_INSTANCE``. But when
+    ``PROTOAGENT_CONFIG_DIR`` is set explicitly — the desktop app's per-user dir,
+    or a FLEET MEMBER's per-workspace dir — that dir is ALREADY the isolated leaf.
+    Scoping it again double-nests (``<ws>/<id>/secrets.yaml``), so the member
+    writes a path its own plugin-config resolver (rooted at ``<ws>/plugins``)
+    never reads — a saved plugin secret then reads back ``unset``. So scope the
+    leaf only when the config dir is the implicit default.
+    """
+    if os.environ.get("PROTOAGENT_CONFIG_DIR", "").strip():
+        return path
+    return _scope_leaf(path)
+
+
 _BASE_CONFIG_YAML = _LIVE_CONFIG_DIR / "langgraph-config.yaml"
-CONFIG_YAML_PATH = _scope_leaf(_BASE_CONFIG_YAML)
+CONFIG_YAML_PATH = _config_scope(_BASE_CONFIG_YAML)
 SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 
 # Secrets overlay. The setup wizard / drawer collect a model API key and an
@@ -87,7 +106,7 @@ SOUL_RUNTIME_PATH = Path("/sandbox/SOUL.md")
 # untracked sibling file (gitignored + dockerignored), read back by
 # ``LangGraphConfig.from_yaml`` and stripped from the main YAML on every save.
 _BASE_SECRETS_YAML = _LIVE_CONFIG_DIR / "secrets.yaml"
-SECRETS_YAML_PATH = _scope_leaf(_BASE_SECRETS_YAML)
+SECRETS_YAML_PATH = _config_scope(_BASE_SECRETS_YAML)
 
 # (section, key) pairs that must never be written to the tracked YAML.
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
@@ -119,7 +138,7 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
 # wizard on first page load. Lives in the live config dir so a Docker volume
 # mount (or the desktop app-data dir) persists setup across runs.
 _BASE_SETUP_MARKER = _LIVE_CONFIG_DIR / ".setup-complete"
-SETUP_MARKER_PATH = _scope_leaf(_BASE_SETUP_MARKER)
+SETUP_MARKER_PATH = _config_scope(_BASE_SETUP_MARKER)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +156,31 @@ except ImportError:
     _HAS_RUAMEL = False
 
 
+def _reset_double_scoped_config() -> None:
+    """Self-heal the double-scope bug (ADR 0042): earlier builds nested a fleet
+    member's config under ``<config-dir>/<instance>/`` — ``scope_leaf`` ran on top of
+    an already-per-member ``PROTOAGENT_CONFIG_DIR`` — so a saved plugin secret landed
+    in a dir the member's own plugin-config resolver (rooted at ``<dir>/plugins``)
+    never reads. Config now lives directly under the explicit dir; remove the orphaned
+    nested copy (its secrets are re-entered — by design we don't migrate it). No-op
+    unless an explicit config dir is set AND the old nested config exists."""
+    if not os.environ.get("PROTOAGENT_CONFIG_DIR", "").strip():
+        return
+    old = _scope_leaf(_BASE_CONFIG_YAML)  # the OLD <dir>/<id>/langgraph-config.yaml
+    if old == CONFIG_YAML_PATH or not old.exists():
+        return  # not double-scoped on disk (already healed, or never happened)
+    for name in ("langgraph-config.yaml", "secrets.yaml", ".setup-complete"):
+        try:
+            (old.parent / name).unlink()
+        except OSError:
+            pass
+    try:
+        old.parent.rmdir()  # only succeeds if now empty — never blow away other state
+        log.info("[config] removed orphaned double-scoped config dir %s", old.parent)
+    except OSError:
+        pass
+
+
 def ensure_live_config() -> bool:
     """Seed the live config on first run. Returns True only when it created the file.
 
@@ -150,13 +194,16 @@ def ensure_live_config() -> bool:
 
     Idempotent — does nothing once the live file exists, so edits are never clobbered.
     """
+    _reset_double_scoped_config()  # self-heal: drop the old <dir>/<id>/ nesting
     if CONFIG_YAML_PATH.exists():
         return False
     import shutil
 
-    from infra.paths import instance_id
-
-    scoped = bool(instance_id())  # PROTOAGENT_INSTANCE set ⇒ this path is instance-scoped
+    # Scoped iff the live path actually sits in an instance subdir of the base
+    # (PROTOAGENT_INSTANCE set AND no explicit config dir — see `_config_scope`); a
+    # fleet member's explicit dir is its own base, so it seeds from the template, not
+    # a self-copy.
+    scoped = CONFIG_YAML_PATH != _BASE_CONFIG_YAML
     source = _BASE_CONFIG_YAML if (scoped and _BASE_CONFIG_YAML.exists()) else CONFIG_EXAMPLE_PATH
     if not source.exists():
         return False

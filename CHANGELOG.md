@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped it. Removes the app-side interim guard from #903; the design system now owns it.
 
 ### Fixed
+- **A fleet member's plugin secret (e.g. a SpaceTraders token) now actually saves +
+  reads back, instead of showing "unset" after you enter it.** A member is launched with
+  both `PROTOAGENT_CONFIG_DIR=<workspace>` and `PROTOAGENT_INSTANCE=<id>`, and config_io
+  applied `scope_leaf()` on top of the already-per-member config dir — double-nesting the
+  config/secrets to `<ws>/<id>/secrets.yaml`. The secret persisted there (securely — in
+  `secrets.yaml`, mode 0600, never the tracked config), but the member's plugin-config
+  resolver looks for the plugin at `<ws>/plugins`, so it never found the section to merge
+  the secret into → the Settings field reported `is_set: false`. The config-dir-relative
+  paths (config / secrets / setup-marker) now skip `scope_leaf` when `PROTOAGENT_CONFIG_DIR`
+  is explicit (the dir is already the isolated leaf), and a one-time self-heal drops the
+  orphaned `<ws>/<id>/` dir on the next member restart (re-enter the token once). Regression
+  tests cover the scope helper, the plugin-secret round-trip, and the self-heal.
 - **Switching to a not-yet-running fleet agent no longer flashes errors in its panels.**
   A cold agent answers 409 (the member is still spawning) then 502 (booting, not bound yet)
   for a few seconds until it's up — but only the boot probe retried through that window, so
