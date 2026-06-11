@@ -27,7 +27,7 @@ function ago(iso: string | null): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-export function PlaybooksSurface({ onError }: { onError: (message: string) => void }) {
+export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: string) => void }) {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);

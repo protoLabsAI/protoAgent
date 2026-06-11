@@ -1,9 +1,15 @@
-import { BarChart3, Boxes, Gauge, HardDrive, Library, Palette, Puzzle, Server, Settings2 } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Tabs } from "@protolabsai/ui/navigation";
 
+import { IdentityPanel } from "../agent/IdentityPanel";
+import { McpPanel } from "../app/McpPanel";
+import { MiddlewarePanel } from "../app/MiddlewarePanel";
+import { SubagentsPanel } from "../app/SubagentsPanel";
+import { ToolsPanel } from "../app/ToolsPanel";
+import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { useUI, type SettingsScope } from "../state/uiStore";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { CommonsPanel } from "./CommonsPanel";
@@ -39,7 +45,22 @@ const HOST_SECTIONS: Section[] = [
   { id: "commons", label: "Commons", icon: Library, render: () => <CommonsPanel /> },
 ];
 
+// The Workspace home (ADR 0048 §3.2) — the focused agent, everything that defines it:
+// the makeup panels (Identity/Tools/MCP/Subagents/Skills/Middleware) folded in from the
+// old Agent rail surface + Theme, plus the agent-scoped field settings (Agent/Memory/
+// System/Plugins categories). Host-scoped fields that appear here (e.g. model.name)
+// keep their ADR 0047 "inherited from Host" badge + override. (A later refinement can
+// regroup the field sections into the ADR's idealized Model/Behavior cut.)
 const WORKSPACE_SECTIONS: Section[] = [
+  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
+  { id: "settings", label: "Settings", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Agent settings" /> },
+  { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
+  { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
+  { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
+  { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
+  { id: "middleware", label: "Middleware", icon: Layers, render: () => <MiddlewarePanel /> },
+  { id: "memory", label: "Memory", icon: Database, render: () => <SettingsCategoryPanel category="Memory" title="Memory" /> },
+  { id: "system", label: "System", icon: Settings2, render: () => <SettingsCategoryPanel category="System" title="System" /> },
   { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
   {
     id: "plugins",
@@ -54,7 +75,6 @@ const WORKSPACE_SECTIONS: Section[] = [
       />
     ),
   },
-  { id: "system", label: "System", icon: Settings2, render: () => <SettingsCategoryPanel category="System" title="System" /> },
 ];
 
 export const SETTINGS_HOMES: Home[] = [
