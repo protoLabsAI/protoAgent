@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **An app update can no longer silently strand fleet members on the old binary**
+  (version-coherence P2). Members are detached processes — one that survives a hub
+  update (crashed hub, or the `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` opt-out) keeps
+  running OLD code indefinitely, invisibly. Now: `start()` stamps the spawner's app
+  version on the member record, the hub stamps each boot's version beside `fleet.json`
+  and logs the transition (`reconcile_on_boot` — an in-app update, DMG swap, or
+  `git pull` all land here), and a **live, self-clearing warning** rides the runtime
+  status whenever a running local member's spawn version differs from the hub's —
+  same posture as the co-location banner, clearing the moment the member is
+  restarted. The Fleet panel's version-skew badge now covers local members too
+  (it was remote-only), with a restart hint.
+
+### Added
 - **The desktop app updates itself in place.** tauri-plugin-updater wired into the shell:
   a silent check at launch (release builds) plus a tray "Check for Updates…" item; it polls
   `latest.json` on the GitHub Release, verifies the bundle's minisign signature against the

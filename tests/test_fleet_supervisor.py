@@ -321,3 +321,64 @@ def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
     assert supervisor.shutdown_all(timeout=0.2)  # returns the stopped member
     assert not alive  # SIGKILL'd after the bounded wait
     assert int(supervisor.signal.SIGTERM) in sigs and int(supervisor.signal.SIGKILL) in sigs
+
+
+# ── first-boot-after-update reconcile (version-coherence P2) ──────────────────
+def test_start_stamps_spawner_version(fleet):
+    from infra.paths import package_version
+
+    manager.create("alpha", port=7890)
+    supervisor.start("alpha")
+    rec = next(iter(supervisor._load_state().values()))
+    assert rec["version"] == package_version()
+    entry = next(a for a in supervisor.status() if a["name"] == "alpha")
+    assert entry["version"] == package_version()
+
+
+def test_version_skew_warning_flags_and_clears(tmp_path, monkeypatch):
+    """A live member spawned by an older binary is flagged; restarting it (so the
+    current binary respawns it) clears the warning — no hub restart needed."""
+    import infra.paths as paths_mod
+
+    _multi_fleet(tmp_path, monkeypatch)
+    monkeypatch.setattr(paths_mod, "package_version", lambda: "0.1.0")
+    manager.create("a")
+    supervisor.start("a")  # spawned at 0.1.0
+    assert supervisor.version_skew_warning() is None  # versions match
+
+    # "App update": this process now runs 0.2.0; the member still runs 0.1.0.
+    monkeypatch.setattr(paths_mod, "package_version", lambda: "0.2.0")
+    warn = supervisor.version_skew_warning()
+    assert warn and "a (v0.1.0)" in warn and "0.2.0" in warn
+
+    supervisor.stop("a")
+    supervisor.start("a")  # respawned by the "new" binary
+    assert supervisor.version_skew_warning() is None
+
+
+def test_version_skew_flags_prestamp_records_as_unknown(tmp_path, monkeypatch):
+    """A record written before version stamping existed can't be told apart from a
+    stale one — flag it as unknown rather than assuming it's current."""
+    _multi_fleet(tmp_path, monkeypatch)
+    manager.create("a")
+    supervisor.start("a")
+    with supervisor._state_lock():
+        state = supervisor._load_state()
+        next(iter(state.values())).pop("version", None)
+        supervisor._save_state(state)
+    warn = supervisor.version_skew_warning()
+    assert warn and "version unknown" in warn
+
+
+def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
+    import infra.paths as paths_mod
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(paths_mod, "package_version", lambda: "0.1.0")
+    assert supervisor.reconcile_on_boot() == ""  # first boot — no stamp yet
+    assert supervisor._version_stamp_path().read_text().strip() == "0.1.0"
+    assert supervisor.reconcile_on_boot() == "0.1.0"  # same version, stamp stable
+
+    monkeypatch.setattr(paths_mod, "package_version", lambda: "0.2.0")
+    assert supervisor.reconcile_on_boot() == "0.1.0"  # the update is visible once…
+    assert supervisor._version_stamp_path().read_text().strip() == "0.2.0"  # …then re-stamped

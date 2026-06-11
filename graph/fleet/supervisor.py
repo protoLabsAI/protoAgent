@@ -128,9 +128,15 @@ def start(ident: str) -> dict:
         logf = open(log_path, "a")  # noqa: SIM115 — handed to the child; closed on its exit
         # start_new_session detaches it from this CLI's process group so it survives exit.
         proc = subprocess.Popen(argv, env=full_env, stdout=logf, stderr=logf, start_new_session=True)
+        from infra.paths import package_version
+
         now = datetime.now(timezone.utc).isoformat()
         rec = {"pid": proc.pid, "port": ws.get("port"), "id": wid,
-               "started_at": now, "last_active": now, "log": str(log_path)}
+               "started_at": now, "last_active": now, "log": str(log_path),
+               # The spawner's app version (version-coherence P1/P2): a member is
+               # this binary until restarted, so status()/version_skew_warning()
+               # can surface a live member left behind by an app update.
+               "version": package_version()}
         state[wid] = rec
         _save_state(state)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
@@ -363,6 +369,12 @@ def status() -> list[dict]:
         out.append({"name": ws["name"], "id": ws.get("id", ws["name"]),
                     "port": port, "pid": rec.get("pid") if running else None,
                     "running": running, "bundle": ws.get("bundle", ""),
+                    # The version the member was SPAWNED at (stamped in start()) —
+                    # the console compares it against the host entry's version so a
+                    # local member left behind by an app update shows the same skew
+                    # badge a drifted remote does. Empty while stopped (a stopped
+                    # member runs whatever binary the next start() spawns).
+                    "version": rec.get("version", "") if running else "",
                     # Direct A2A endpoint — every agent is an independent endpoint on its
                     # own port (ADR 0042), reachable regardless of console focus, so a
                     # focused agent can `delegate_to` an unfocused sibling here. Live only
@@ -456,6 +468,89 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
     names = [k for k, _ in live]
     log.info("[fleet] host exiting — spun down %d member(s): %s", len(names), ", ".join(names))
     return names
+
+
+# ── First-boot-after-update reconcile (version-coherence P2) ──────────────────
+# Members are detached processes: a hub update + restart leaves any survivor (a
+# crashed hub, or the KEEP_MEMBERS_ON_EXIT opt-out) running the OLD binary
+# indefinitely. The boot hook stamps each boot's version beside fleet.json and logs
+# the transition; the live warning is recomputed per runtime-status poll (like
+# colocation_warning) so it shows while skewed members run and clears the moment
+# they're restarted.
+
+
+def _version_stamp_path() -> Path:
+    return manager.workspaces_root() / ".last-version"
+
+
+def reconcile_on_boot() -> str:
+    """Stamp this boot's app version and log the transition when it changed since
+    the previous boot (the first-boot-after-update signal — an in-app update, a
+    DMG swap, or a `git pull` all land here).
+
+    Returns the previously-stamped version ("" on first boot). Hub-scoped like
+    fleet.json (#813); inside a member the scoped root is its own, so stamps don't
+    cross. Best-effort — never raises.
+    """
+    from infra.paths import atomic_write, package_version
+
+    previous = ""
+    try:
+        current = package_version()
+        stamp = _version_stamp_path()
+        try:
+            previous = stamp.read_text().strip()
+        except OSError:
+            previous = ""
+        if previous != current:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(stamp, current + "\n")
+        if previous and previous != current:
+            log.info("[fleet] app version changed since last boot: %s -> %s", previous, current)
+            skew = version_skew_warning()
+            if skew:
+                log.warning("[fleet] %s", skew)
+    except Exception:  # noqa: BLE001 — boot reconcile must never block startup
+        log.exception("[fleet] boot version reconcile failed")
+    return previous
+
+
+def version_skew_warning() -> str | None:
+    """A live warning when running LOCAL members were spawned by a different app
+    version than this process runs.
+
+    Recomputed on every runtime-status poll (same posture as
+    ``infra.paths.colocation_warning``) so it appears while skewed members run and
+    self-clears once they're restarted — no hub restart needed. A member spawned
+    before version stamping existed reads as "unknown" and is flagged too: it
+    cannot be told apart from a stale one. Best-effort: None on any failure.
+    """
+    try:
+        from infra.paths import package_version
+
+        current = package_version()
+        state = _load_state()
+        if not state:
+            return None
+        names = {ws["id"]: ws["name"] for ws in manager.list_workspaces()}
+        stale: list[str] = []
+        for wid, rec in state.items():
+            if not _alive(rec.get("pid")):
+                continue
+            v = str(rec.get("version", "") or "")
+            if v != current:
+                label = names.get(wid, wid)
+                stale.append(f"{label} (v{v})" if v else f"{label} (version unknown)")
+        if not stale:
+            return None
+        return (
+            f"{len(stale)} fleet member(s) run a different protoAgent version than this hub "
+            f"(v{current}): {', '.join(sorted(stale))}. They keep the OLD code until restarted "
+            "— restart them from the Fleet panel to close the gap "
+            "(docs/dev/version-coherence.md, Axis 1)."
+        )
+    except Exception:  # noqa: BLE001 — a status-poll warning must never raise
+        return None
 
 
 # ── Keep-N-warm policy (ADR 0042 §G) ──────────────────────────────────────────

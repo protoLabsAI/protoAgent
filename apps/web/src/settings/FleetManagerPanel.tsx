@@ -213,12 +213,14 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           <Badge status="neutral">remote</Badge>
                         </span>
                       ) : null}
-                      {/* Version skew (hub↔remote handshake): the hub console drives this
-                          remote's /api/* by proxy, so a different release can misbehave. */}
-                      {a.remote && a.version && hubVersion && a.version !== hubVersion ? (
+                      {/* Version skew — remotes (hub↔remote handshake) AND local members:
+                          a local member spawned before an app update keeps running the OLD
+                          binary until restarted (version-coherence P2), so it gets the same
+                          warning badge a drifted remote does. */}
+                      {a.version && hubVersion && a.version !== hubVersion ? (
                         <span
                           data-testid="fleet-version-skew"
-                          title={`This remote runs v${a.version}, the hub runs v${hubVersion} — features may misbehave across the version gap.`}
+                          title={`This ${a.remote ? "remote" : "member"} runs v${a.version}, the hub runs v${hubVersion} — ${a.remote ? "features may misbehave across the version gap." : "restart it (Stop → Start) to pick up the hub's binary."}`}
                         >
                           <Badge status="warning">v{a.version}</Badge>
                         </span>

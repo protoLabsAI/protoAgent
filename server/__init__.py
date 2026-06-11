@@ -559,6 +559,17 @@ def _main():
         except Exception:
             log.exception("[instance] co-location check failed")
 
+        # First-boot-after-update reconcile (version-coherence P2): stamp this
+        # boot's app version beside fleet.json and log the transition when it
+        # changed (in-app update, DMG swap, git pull — all land here). The live
+        # member-skew warning rides runtime status per poll; this records the
+        # moment. Hub-scoped, off the loop (file IO + liveness probes), best-effort.
+        try:
+            from graph.fleet import supervisor as _sup
+            await asyncio.to_thread(_sup.reconcile_on_boot)
+        except Exception:
+            log.exception("[fleet] boot version reconcile failed")
+
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
         # Drop the co-location heartbeat (#706). Best-effort.

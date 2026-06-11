@@ -221,8 +221,12 @@ and the `min_protoagent_version` gate wrongly refuses every plugin that sets one
    path) so local fleet works on desktop and members run the current binary.
 10. **Bundle `git`** into the sidecar (as Docker bundles `br`/`gh`) **or** gate plugin
     install behind a PATH-`git` probe with a clear error.
-11. **On app update, reconcile detached members** from `fleet.json` — offer to restart
-    the ones still running the old binary.
+11. ~~**On app update, reconcile detached members** from `fleet.json` — offer to restart
+    the ones still running the old binary.~~ **SHIPPED**: `start()` stamps the spawner's
+    version on the member record; `reconcile_on_boot()` stamps each boot's version beside
+    `fleet.json` and logs the update transition; `version_skew_warning()` rides the runtime
+    status per poll (self-clearing) and the Fleet panel's skew badge now covers LOCAL
+    members, not just remotes.
 
 ## The framing to keep
 

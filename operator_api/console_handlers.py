@@ -53,6 +53,17 @@ def _operator_runtime_status():
         warnings = [w for w in (colocation_warning(),) if w]
     except Exception:  # noqa: BLE001 — status must never raise
         warnings = []
+    # Fleet version skew (version-coherence P2) — also live + self-clearing: a
+    # member that survived an app update keeps running the OLD binary until
+    # restarted; banner it the same way as a co-located sibling. Inside a member
+    # the scoped fleet.json is empty, so this no-ops.
+    try:
+        from graph.fleet import supervisor as _sup
+        skew = _sup.version_skew_warning()
+        if skew:
+            warnings.append(skew)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     return _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),
