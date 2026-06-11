@@ -22,6 +22,12 @@ you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──▶  Release 
 `latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
 independent of releases.
 
+The tag push also triggers `desktop-build.yml`, which builds the desktop app on
+a three-platform matrix and attaches the artifacts to the same GitHub Release:
+the macOS `.dmg` (signed + notarized — requires the full Apple secret set, the
+leg fails otherwise), the Linux `.AppImage` + `.deb`, and the Windows NSIS
+`-setup.exe` (both unsigned). See `apps/desktop/README.md` § Platforms & CI.
+
 ## Cutting a release
 
 1. **Actions → Prepare Release → Run workflow.** Choose the **bump**: `patch`

@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   succeeded — but a plugin whose `register()` raises is *skipped* (best-effort load), so the
   agent was told a no-op worked; they now read the real per-plugin load status and surface
   "FAILED to load: <error>" so you fix-and-reload instead of testing nothing.
+### Added
+- **Desktop builds for Linux and Windows.** `desktop-build.yml` now fans out a
+  three-leg matrix: the macOS `.dmg` (signed + notarized, as before), Linux
+  `.AppImage` + `.deb` (x86_64, built on ubuntu-22.04 for the broadest glibc reach a
+  hosted runner offers), and a Windows NSIS `-setup.exe` (x86_64, unsigned for now —
+  SmartScreen will prompt until a Windows signing identity is added). Every leg also
+  **smoke-tests the actual frozen sidecar before bundling** (`scripts/live_smoke.py
+  --bin` boots the PyInstaller binary with no repo on `PYTHONPATH` and drives a real
+  A2A turn — per-platform under-collection now fails CI, not the first user), and the
+  real release version is **stamped into `tauri.conf.json` at build time** so the
+  installer/app metadata stops claiming the in-tree placeholder.
 
 ### Changed
 - **A configured plugin/model secret now shows a clear "set" badge in Settings.** Secrets

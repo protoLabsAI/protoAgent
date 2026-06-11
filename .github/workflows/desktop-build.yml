@@ -1,11 +1,24 @@
 name: Desktop Build
 
-# Builds the macOS protoAgent desktop app (.dmg) — the Tauri shell + its
-# PyInstaller server sidecar (apps/desktop/sidecar/build_sidecar.py) — signed +
-# notarized with the org Apple Developer ID, and attaches it to the GitHub
-# release. Fires on semver tags (alongside release.yml's Docker build) and on
-# manual dispatch (dispatch builds an unsigned dev artifact unless the full
-# signing secret set is present). See ADR 0010 (UI tiers / desktop).
+# Builds the protoAgent desktop app — the Tauri shell + its PyInstaller server
+# sidecar (apps/desktop/sidecar/build_sidecar.py) — for all three desktop
+# platforms and attaches the artifacts to the GitHub release:
+#
+#   - macOS   .dmg (aarch64)            signed + notarized (org Apple Developer ID)
+#   - Linux   .AppImage + .deb (x86_64) unsigned; built on ubuntu-22.04 so the
+#                                       PyInstaller sidecar reaches the oldest glibc
+#                                       a hosted runner can target (2.35)
+#   - Windows NSIS -setup.exe (x86_64)  unsigned (no Windows signing identity yet —
+#                                       expect a SmartScreen prompt)
+#
+# Every leg smoke-tests the actual frozen sidecar (scripts/live_smoke.py --bin
+# boots it and drives a real A2A turn) BEFORE the slow Tauri bundle step, so
+# per-platform PyInstaller under-collection fails the build, not the first user.
+#
+# Fires on semver tags (alongside release.yml's Docker build) and on manual
+# dispatch (dispatch macOS builds are unsigned unless the full signing secret
+# set is present; Linux/Windows are always unsigned). See ADR 0010 (UI tiers /
+# desktop).
 
 on:
   push:
@@ -29,13 +42,20 @@ jobs:
     name: ${{ matrix.target }}
     if: github.repository == 'protoLabsAI/protoAgent'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-14          # Apple Silicon runner
             target: aarch64-apple-darwin
+            bundles: dmg
+          - os: ubuntu-22.04      # oldest hosted runner = broadest glibc reach
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +74,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        # Tauri v2's webkit/gtk toolchain + ayatana-appindicator for the tray
+        # (the runtime side of this dep is declared in tauri.conf.json's
+        # bundle.linux.deb.depends; AppImage bundles it).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
       - name: Read version
         id: version
         shell: bash
@@ -66,6 +96,19 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      - name: Stamp app version
+        shell: bash
+        # tauri.conf.json stays a placeholder in-tree; stamp the real version at
+        # build time so bundle metadata (DMG/installer/add-remove-programs)
+        # reports it instead of the placeholder (version-coherence: the desktop
+        # must not claim a version pyproject doesn't).
+        run: |
+          V="${{ steps.version.outputs.version }}"
+          CONF=apps/desktop/src-tauri/tauri.conf.json
+          jq --arg v "$V" '.version = $v' "$CONF" > "$CONF.tmp"
+          mv "$CONF.tmp" "$CONF"
+          echo "tauri.conf.json version -> $V"
+
       - name: Build server sidecar (PyInstaller)
         shell: bash
         # Freezes `server` into binaries/protoagent-server-<triple> — the
@@ -76,6 +119,18 @@ jobs:
           pip install -r requirements.txt pyinstaller
           python apps/desktop/sidecar/build_sidecar.py
           ls -la apps/desktop/src-tauri/binaries/
+
+      - name: Smoke-test the frozen sidecar
+        shell: bash
+        # Boot the actual frozen binary (not the venv server) against the fake
+        # OpenAI endpoint and drive a real A2A turn — catches per-platform
+        # PyInstaller under-collection before the slow Tauri bundle step.
+        # 180s healthz budget: onefile binaries self-extract on first boot (and
+        # Windows Defender scans them).
+        run: |
+          BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
+          python scripts/live_smoke.py --bin "${BIN}" --timeout 180
 
       - name: Install web + desktop deps
         shell: bash
@@ -103,43 +158,69 @@ jobs:
           set -euo pipefail
           cd apps/desktop
           SIGNED="unsigned (dev)"
-          # tauri-bundler signs as soon as *any* Apple secret is set, then fails
-          # if the set is incomplete. Require the full set; otherwise unset all so
-          # a dispatch build falls back cleanly to unsigned.
-          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
-             && [ -n "${APPLE_SIGNING_IDENTITY}" ] && [ -n "${APPLE_API_ISSUER}" ] \
-             && [ -n "${APPLE_API_KEY}" ] && [ -n "${APPLE_API_KEY_BASE64}" ] \
-             && [ -n "${APPLE_TEAM_ID}" ]; then
-            # tauri expects APPLE_API_KEY_PATH = a .p8 file; the secret is its base64.
-            KEYFILE="$(mktemp -t protoagent-apple-api-XXXXXX).p8"
-            python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_BASE64"]))' "$KEYFILE"
-            export APPLE_API_KEY_PATH="${KEYFILE}"
-            SIGNED="Developer ID (signed + notarized)"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "::error::Semver-tag desktop releases require the full Apple signing secret set."
-            exit 2
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            # tauri-bundler signs as soon as *any* Apple secret is set, then fails
+            # if the set is incomplete. Require the full set; otherwise unset all so
+            # a dispatch build falls back cleanly to unsigned.
+            if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
+               && [ -n "${APPLE_SIGNING_IDENTITY}" ] && [ -n "${APPLE_API_ISSUER}" ] \
+               && [ -n "${APPLE_API_KEY}" ] && [ -n "${APPLE_API_KEY_BASE64}" ] \
+               && [ -n "${APPLE_TEAM_ID}" ]; then
+              # tauri expects APPLE_API_KEY_PATH = a .p8 file; the secret is its base64.
+              KEYFILE="$(mktemp -t protoagent-apple-api-XXXXXX).p8"
+              python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_BASE64"]))' "$KEYFILE"
+              export APPLE_API_KEY_PATH="${KEYFILE}"
+              SIGNED="Developer ID (signed + notarized)"
+            elif [ "${{ github.event_name }}" = "push" ]; then
+              echo "::error::Semver-tag desktop releases require the full Apple signing secret set."
+              exit 2
+            else
+              unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                    APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_BASE64 APPLE_TEAM_ID
+            fi
           else
+            # No Linux/Windows signing identity yet — ship unsigned and make sure
+            # the bundler never sees the Apple env.
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
                   APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_BASE64 APPLE_TEAM_ID
+            SIGNED="unsigned (${RUNNER_OS})"
           fi
           [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           echo "Signing mode: ${SIGNED}"
-          npm run build -- --bundles dmg
-          DMG="$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)"
-          OUT="protoAgent-${{ steps.version.outputs.version }}-${{ matrix.target }}.dmg"
-          cp "${DMG}" "${GITHUB_WORKSPACE}/${OUT}"
-          echo "dmg=${OUT}" >> "$GITHUB_OUTPUT"
-          echo "Built ${OUT} (${SIGNED})"
+          npm run build -- --bundles ${{ matrix.bundles }}
+
+      - name: Collect artifacts
+        shell: bash
+        # Normalize every bundle into dist-desktop/ as
+        # protoAgent-<version>-<target>.<ext> so upload/release steps are
+        # platform-agnostic.
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          T="${{ matrix.target }}"
+          B="apps/desktop/src-tauri/target/release/bundle"
+          mkdir -p dist-desktop
+          case "${RUNNER_OS}" in
+            macOS)
+              cp "$(ls "${B}"/dmg/*.dmg | head -1)" "dist-desktop/protoAgent-${V}-${T}.dmg" ;;
+            Linux)
+              cp "$(ls "${B}"/appimage/*.AppImage | head -1)" "dist-desktop/protoAgent-${V}-${T}.AppImage"
+              cp "$(ls "${B}"/deb/*.deb | head -1)" "dist-desktop/protoAgent-${V}-${T}.deb" ;;
+            Windows)
+              cp "$(ls "${B}"/nsis/*-setup.exe | head -1)" "dist-desktop/protoAgent-${V}-${T}-setup.exe" ;;
+          esac
+          ls -la dist-desktop/
 
       - name: Upload dispatch artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build.outputs.dmg }}
-          path: ${{ steps.build.outputs.dmg }}
+          name: protoAgent-${{ steps.version.outputs.version }}-${{ matrix.target }}
+          path: dist-desktop/*
 
       - name: Attach to release
         if: github.event_name == 'push'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.build.outputs.dmg }}" --clobber
+        run: gh release upload "${{ steps.version.outputs.tag }}" dist-desktop/* --clobber

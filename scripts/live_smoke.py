@@ -8,11 +8,16 @@ import gaps — by exercising the actual transport, not a mock. The fake model
 (scripts/fake_openai_server.py) returns a canned completion so the turn reaches a
 terminal state without a real gateway.
 
+`--bin <path>` smokes a PyInstaller-frozen sidecar (the desktop build) instead of
+`python -m server` — same wire checks, but against the actual frozen binary, so
+per-platform under-collection fails CI instead of the first desktop user.
+
 Exit 0 on success, non-zero (with a diagnostic) on any failure.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import socket
@@ -34,6 +39,23 @@ def _free_port() -> int:
     return port
 
 
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="protoAgent live-smoke")
+    ap.add_argument(
+        "--bin",
+        dest="bin_path",
+        default=None,
+        help="smoke a frozen server binary (the desktop sidecar) instead of `python -m server`",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=float,
+        default=90.0,
+        help="seconds to wait for /healthz (frozen onefile binaries self-extract on first boot)",
+    )
+    return ap.parse_args()
+
+
 def _wait_healthz(port: int, timeout: float = 90.0) -> bool:
     end = time.time() + timeout
     url = f"http://127.0.0.1:{port}/healthz"
@@ -49,6 +71,7 @@ def _wait_healthz(port: int, timeout: float = 90.0) -> bool:
 
 
 def main() -> int:
+    args = _parse_args()
     fake_port, agent_port = _free_port(), _free_port()
     cfg_dir = Path(tempfile.mkdtemp(prefix="smoke-cfg-"))
     (cfg_dir / "langgraph-config.yaml").write_text(
@@ -66,13 +89,21 @@ def main() -> int:
         "PYTHONPATH": str(ROOT),
     }
 
+    if args.bin_path:
+        # Frozen sidecar: run from a neutral cwd with no PYTHONPATH so the repo
+        # checkout can't paper over PyInstaller under-collection — the desktop
+        # app won't have the repo on disk either.
+        env.pop("PYTHONPATH", None)
+        agent_cmd = [str(Path(args.bin_path).resolve()), "--ui", "none", "--port", str(agent_port)]
+        agent_cwd = str(cfg_dir)
+    else:
+        agent_cmd = [sys.executable, "-m", "server", "--ui", "none", "--port", str(agent_port)]
+        agent_cwd = str(ROOT)
+
     fake = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "fake_openai_server.py"), str(fake_port)])
-    agent = subprocess.Popen(
-        [sys.executable, "-m", "server", "--ui", "none", "--port", str(agent_port)],
-        cwd=str(ROOT), env=env,
-    )
+    agent = subprocess.Popen(agent_cmd, cwd=agent_cwd, env=env)
     try:
-        if not _wait_healthz(agent_port):
+        if not _wait_healthz(agent_port, timeout=args.timeout):
             print("FAIL: /healthz never returned 200 (server did not become ready)")
             return 1
         print("ok: /healthz 200 (lean server booted + graph compiled)")
