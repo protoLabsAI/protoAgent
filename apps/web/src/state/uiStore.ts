@@ -36,12 +36,12 @@ const _layoutStorage = createJSONStorage(() => ({
 // Core surfaces are fixed literals; plugin views (ADR 0026) add dynamic surfaces keyed
 // `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal autocomplete while allowing
 // those runtime keys.
+// The "agent" surface folded into Settings ▸ Workspace (ADR 0048 S-C); Knowledge is
+// now store-only (its Memory settings live in Settings ▸ Workspace ▸ Memory).
 export type Surface =
-  | "chat" | "activity" | "studio" | "knowledge" | "agent" | "plugins" | "settings" | (string & {});
+  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "settings" | (string & {});
 export type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
-export type AgentTab = "identity" | "settings" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
 export type PluginsTab = "local" | "market" | "download";
-export type KnowledgeTab = "store" | "settings";
 export type ActivityTab = "thread" | "inbox";
 // Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
 // section sub-nav. `settingsScope` picks the home; `settingsSection` the active
@@ -55,9 +55,7 @@ const clampWidth = (w: number) => Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, Math.r
 type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
-  agentTab: AgentTab;
   pluginsTab: PluginsTab;
-  knowledgeTab: KnowledgeTab;
   settingsScope: SettingsScope;
   settingsSection: string;
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
@@ -84,9 +82,7 @@ type UIState = {
   toggleQuickBar: (id: string) => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
-  setAgentTab: (t: AgentTab) => void;
   setPluginsTab: (t: PluginsTab) => void;
-  setKnowledgeTab: (t: KnowledgeTab) => void;
   setSettingsScope: (s: SettingsScope) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
@@ -104,10 +100,18 @@ type UIState = {
  * falls back to the default via the store's merge. Exported for unit testing. */
 export function migrateUiState(persisted: unknown): unknown {
   if (persisted && typeof persisted === "object") {
-    // v2: drop the obsolete `railOf` (side map). v3 (ADR 0048): drop the flat
-    // `settingsTab` — replaced by `settingsScope` + `settingsSection`, which fall
-    // back to the store defaults via the persist merge.
-    const { railOf: _drop, settingsTab: _drop2, ...rest } = persisted as Record<string, unknown>;
+    // v2: drop the obsolete `railOf` (side map). v3 (ADR 0048): drop `settingsTab`
+    // (→ `settingsScope` + `settingsSection`) and the `agentTab` / `knowledgeTab`
+    // keys whose surfaces folded into Settings ▸ Workspace. All fall back to the
+    // store defaults via the persist merge. (A stale "agent" left in `railOrder` is
+    // harmless — railSurfaces() filters ids with no surface metadata.)
+    const {
+      railOf: _drop,
+      settingsTab: _drop2,
+      agentTab: _drop3,
+      knowledgeTab: _drop4,
+      ...rest
+    } = persisted as Record<string, unknown>;
     return rest;
   }
   return persisted;
@@ -118,9 +122,7 @@ export const useUI = create<UIState>()(
     (set) => ({
       surface: "chat",
       rightPanel: "beads",
-      agentTab: "identity",
       pluginsTab: "local",
-      knowledgeTab: "store",
       settingsScope: "host" as SettingsScope,
       settingsSection: "overview",
       fleetStartNew: false,
@@ -129,7 +131,7 @@ export const useUI = create<UIState>()(
       leftCollapsed: false,
       rightWidth: 360,
       railOrder: {
-        left: ["chat", "activity", "studio", "knowledge", "agent", "plugins", "settings"],
+        left: ["chat", "activity", "studio", "knowledge", "plugins", "settings"],
         right: ["beads", "goals", "schedule"],
       },
       moveSurface: (id, side) =>
@@ -174,9 +176,7 @@ export const useUI = create<UIState>()(
         }),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
-      setAgentTab: (agentTab) => set({ agentTab }),
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
-      setKnowledgeTab: (knowledgeTab) => set({ knowledgeTab }),
       // Switching home resets to that home's first section (its own default lives in
       // SettingsSurface); callers that want a specific section call setSettingsSection too.
       setSettingsScope: (settingsScope) => set({ settingsScope }),

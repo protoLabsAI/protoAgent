@@ -32,23 +32,32 @@ test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) 
     "Commons",
   ]);
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
-  // The Workspace home → its sections; System holds the runtime/perf knobs.
+  // The Workspace home → the focused agent's makeup + settings (ADR 0048 fold).
   await tab(page, "Workspace");
   expect(await page.locator(".pl-tabs").nth(1).locator("button").allTextContents()).toEqual([
+    "Identity",
+    "Settings",
+    "Tools",
+    "MCP",
+    "Subagents",
+    "Skills",
+    "Middleware",
+    "Memory",
+    "System",
     "Theme",
     "Plugins",
-    "System",
   ]);
   await tab(page, "System");
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
-test("Agent settings live in the Agent view's Settings tab", async ({ page }) => {
+test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
-  // Model + Routing render here, not in the central Settings surface.
+  // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);
   const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
@@ -59,7 +68,8 @@ test("Agent settings live in the Agent view's Settings tab", async ({ page }) =>
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
@@ -82,7 +92,8 @@ test("a restart-flagged System field shows the restart banner", async ({ page })
 // inheritance badge; an overridden host-scoped field offers reset-to-inherited.
 test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   await expect(page.locator(".settings-group-title").first()).toBeVisible();
   // model.name inherits from the host layer.

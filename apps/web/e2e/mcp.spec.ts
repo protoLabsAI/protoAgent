@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-// Agent → MCP tab: add/remove MCP servers inline (hot reload). The mock runtime
-// status ships one server (echo); add/remove hit the mocked /api/mcp/servers.
+// Settings ▸ Workspace ▸ MCP: add/remove MCP servers inline (hot reload). The mock
+// runtime status ships one server (echo); add/remove hit the mocked /api/mcp/servers.
 
 test("MCP tab lists servers and adds one inline", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.getByRole("tab", { name: "MCP", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
@@ -21,7 +22,8 @@ test("MCP tab lists servers and adds one inline", async ({ page }) => {
 
 test("MCP tab imports servers from pasted JSON", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.getByRole("tab", { name: "MCP", exact: true }).click();
 
   await page.getByRole("button", { name: /Add server/ }).click();
