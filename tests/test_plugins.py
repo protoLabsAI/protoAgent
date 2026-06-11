@@ -439,3 +439,47 @@ def test_min_version_garbage_warns_and_loads(tmp_path, monkeypatch, caplog) -> N
     assert [t.name for t in res.tools] == ["typoed_tool"]
     assert res.meta[0]["loaded"] is True
     assert any("min_protoagent_version" in r.message for r in caplog.records)
+
+
+_MULTIFILE_INIT = '''
+from langchain_core.tools import tool
+from .impl import greeting
+
+@tool
+def say() -> str:
+    """say the greeting"""
+    return greeting()
+
+def register(registry):
+    registry.register_tool(say)
+'''
+
+
+def test_reload_picks_up_edited_sibling_submodule(tmp_path, monkeypatch) -> None:
+    """The devkit iterate loop: editing a SIBLING module (`impl.py`, not just
+    `__init__.py`) and reloading must serve the new code. The loader purges the
+    plugin's sys.modules subtree before re-exec, so a stale cached submodule can't
+    shadow the edit. (Regression for the plain-reload submodule-staleness gap.)"""
+    d = tmp_path / "multi"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text("id: multi\nname: Multi\nversion: 0.1.0\n")
+    (d / "__init__.py").write_text(_MULTIFILE_INIT)
+    (d / "impl.py").write_text("def greeting():\n    return 'v1'\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+
+    res1 = load_plugins(_cfg(plugins_enabled=["multi"]))
+    say1 = next(t for t in res1.tools if getattr(t, "name", "") == "say")
+    assert say1.invoke({}) == "v1"
+
+    # edit the SIBLING module, then reload — the new greeting must be live, not stale.
+    # (Bump the mtime so the .pyc bytecode cache, granular to 1s, can't serve v1 on a
+    # same-second test edit; in real use edits are seconds apart so this is moot.)
+    import os
+    import time
+
+    (d / "impl.py").write_text("def greeting():\n    return 'v2'\n")
+    _t = time.time() + 10
+    os.utime(d / "impl.py", (_t, _t))
+    res2 = load_plugins(_cfg(plugins_enabled=["multi"]))
+    say2 = next(t for t in res2.tools if getattr(t, "name", "") == "say")
+    assert say2.invoke({}) == "v2"

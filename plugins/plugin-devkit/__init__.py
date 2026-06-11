@@ -33,11 +33,24 @@ def _emit_scaffolded(pid: str, kind: str) -> None:
         pass
 
 
+def _plugin_meta(pid: str) -> dict | None:
+    """The latest load meta for a plugin (``{id, loaded, error, tools, …}``) off the
+    runtime — set by the loader on every (re)load. ``None`` if the loader didn't see it."""
+    from runtime.state import STATE
+
+    return next((m for m in (getattr(STATE, "plugin_meta", []) or []) if m.get("id") == pid), None)
+
+
 def _live_enable(pid: str) -> tuple[bool, str]:
     """Enable a plugin in the RUNNING agent + hot-reload — the same path the console
     enable toggle uses (#822): tools/subagents/middleware/MCP rebuild with the graph
     and the plugin's router hot-mounts, so a freshly enabled plugin is live with no
-    restart. No-ops cleanly when there's no live graph (the CLI / tests)."""
+    restart. No-ops cleanly when there's no live graph (the CLI / tests).
+
+    Crucially it confirms the plugin actually LOADED — ``load_plugins`` is best-effort
+    per-plugin, so a ``register()`` that raises is *skipped*, not fatal: the config
+    reload "succeeds" while the plugin is silently not live. We surface that instead of
+    a false 'loaded live', so the agent can fix-and-reload instead of testing a no-op."""
     try:
         from runtime.state import STATE
 
@@ -52,7 +65,14 @@ def _live_enable(pid: str) -> tuple[bool, str]:
         ok, msgs = _apply_settings_changes(
             config={"plugins": {"enabled": enabled, "disabled": disabled}}
         )
-        return (ok, "enabled + loaded live") if ok else (False, "; ".join(msgs) or "reload failed")
+        if not ok:
+            return (False, "; ".join(msgs) or "reload failed")
+        meta = _plugin_meta(pid)
+        if meta is None:
+            return (False, "enabled in config, but the loader didn't discover it — check the id and that it's in the plugins dir")
+        if not meta.get("loaded"):
+            return (False, f"enabled, but it FAILED to load: {meta.get('error') or 'unknown error'} — fix __init__.py, then call reload_plugins")
+        return (True, "enabled + loaded live")
     except Exception as e:  # noqa: BLE001 — enable is best-effort; the skeleton still landed
         return (False, f"auto-enable failed: {e}")
 
@@ -173,9 +193,12 @@ def enable_plugin(plugin_id: str) -> str:
 
 @tool
 def reload_plugins() -> str:
-    """Hot-reload all enabled plugins — re-exec their code so edits you made to a
-    plugin's ``__init__.py`` take effect WITHOUT a restart. Use after editing a
-    plugin you're iterating on; the new tools/views are live on your NEXT turn."""
+    """Hot-reload all enabled plugins — re-exec their code (every file, not just
+    ``__init__.py``) so edits you made take effect WITHOUT a restart. Use after editing
+    a plugin you're iterating on; the new tools/views are live on your NEXT turn.
+
+    Reports which plugins FAILED to load (a syntax error, a bad import) so you fix-and-
+    reload instead of testing stale/no-op code — a failed plugin is skipped, never fatal."""
     try:
         from runtime.state import STATE
 
@@ -184,10 +207,17 @@ def reload_plugins() -> str:
         from server.agent_init import _apply_settings_changes
 
         ok, msgs = _apply_settings_changes()  # bare call = pure reload (picks up file edits)
-        return (
-            "✓ reloaded — your plugin edits are live on the next turn."
-            if ok else f"✗ reload failed: {'; '.join(msgs)}"
-        )
+        if not ok:
+            return f"✗ reload failed: {'; '.join(msgs)}"
+        failed = [
+            (m["id"], m.get("error") or "unknown error")
+            for m in (getattr(STATE, "plugin_meta", []) or [])
+            if not m.get("loaded")
+        ]
+        if failed:
+            detail = "; ".join(f"{pid}: {err}" for pid, err in failed)
+            return f"⚠ reloaded, but these plugins FAILED to load — fix the code and reload again: {detail}"
+        return "✓ reloaded — your plugin edits are live on the next turn."
     except Exception as e:  # noqa: BLE001
         return f"✗ reload failed: {e}"
 
