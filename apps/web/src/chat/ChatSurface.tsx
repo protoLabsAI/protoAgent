@@ -153,6 +153,15 @@ function ChatSessionSlot({
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Auto-grow the single-row composer to fit its content (capped by max-height in
+  // CSS, then it scrolls). Runs on every draft change incl. programmatic ones
+  // (slash completion, send-clears-the-draft).
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  }, [draft]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
   // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
@@ -520,18 +529,6 @@ function ChatSessionSlot({
       )}
 
       <div className="composer-wrap">
-        {/* Model control, where you actually chat (ADR 0048) — a chip showing the active
-            model alias; click to tune model / temperature / max tokens. Same field +
-            cascade as Settings ▸ Workspace ▸ Settings. */}
-        <div className="composer-toolbar">
-          <QuickSetting
-            keys={["model.name", "model.temperature", "model.max_tokens"]}
-            summaryKey="model.name"
-            title="Model"
-            label="Model settings"
-            icon={<SlidersHorizontal size={14} />}
-          />
-        </div>
         {status === "streaming" && statusMessage ? (
           <div className="composer-status">
             <Loader2 className="spin" size={12} />
@@ -620,7 +617,7 @@ function ChatSessionSlot({
             }
           }}
           placeholder="Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
-          rows={3}
+          rows={1}
         />
         {status === "streaming" ? (
           <Button type="button" onClick={() => void stop()}>
@@ -634,6 +631,18 @@ function ChatSessionSlot({
           </Button>
         )}
         </form>
+        {/* Model control, under the input (ADR 0048) — a chip showing the active model
+            alias; click to tune model / temperature / max tokens. Same field + cascade
+            as Settings ▸ Workspace ▸ Settings. */}
+        <div className="composer-toolbar">
+          <QuickSetting
+            keys={["model.name", "model.temperature", "model.max_tokens"]}
+            summaryKey="model.name"
+            title="Model"
+            label="Model settings"
+            icon={<SlidersHorizontal size={14} />}
+          />
+        </div>
       </div>
     </div>
   );
