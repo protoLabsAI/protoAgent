@@ -72,6 +72,42 @@ def register_knowledge_routes(app) -> None:
             log.exception("[playbooks] delete failed")
             return {"enabled": True, "deleted": False, "error": str(exc)}
 
+    # Promote a private skill into the shared commons (ADR 0041 "shared brain,
+    # private hands") — the one curated lift that makes the layered tier useful.
+    # Only available when the index is layered (it has a ``promote`` method); in
+    # scoped/shared mode there's a single library and nothing to promote into.
+    # The id is the private-DB rowid, so resolve the name within the ``private``
+    # tier (commons rows carry their own rowids — never promote those).
+    @app.post("/api/playbooks/{skill_id}/promote")
+    async def _api_playbook_promote(skill_id: int):
+        idx = STATE.skills_index
+        if idx is None:
+            return {"enabled": False, "promoted": False}
+        promote = getattr(idx, "promote", None)
+        if promote is None:
+            return {
+                "enabled": True,
+                "promoted": False,
+                "error": "skills aren't in layered mode — set skills.scope: layered to share a commons.",
+            }
+        try:
+            match = next(
+                (
+                    s
+                    for s in idx.all_skills()
+                    if s.get("id") == skill_id and s.get("tier", "private") == "private"
+                ),
+                None,
+            )
+            if match is None:
+                return {"enabled": True, "promoted": False, "error": "no private skill with that id"}
+            name = match.get("name", "")
+            ok = bool(promote(name))
+            return {"enabled": True, "promoted": ok, "name": name}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[playbooks] promote failed")
+            return {"enabled": True, "promoted": False, "error": str(exc)}
+
     # --- Knowledge store (ADR 0020) ----------------------------------------
     # Searchable view of the agent's knowledge base (knowledge/store.py, FTS5):
     # findings, daily-log entries, harvested sessions, operator notes — the same

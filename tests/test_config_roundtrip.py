@@ -159,6 +159,9 @@ CONFIG_TO_DICT_GOLDEN = {
         "max_age_days": 30,
         "prune_interval_hours": 6,
     },
+    "commons": {
+        "path": "",
+    },
     "compaction": {
         "enabled": True,
         "keep_messages": 20,
@@ -252,6 +255,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "db_path": "/sandbox/skills.db",
         "dir": "",
         "enabled": True,
+        "scope": "",
         "top_k": 5,
     },
     "subagents": {

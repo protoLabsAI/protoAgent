@@ -131,6 +131,19 @@ FIELDS: list[Field] = [
           "On session retirement, also distil durable facts (aux model) and "
           "consolidate them into the store. Rides the harvest pass."),
 
+    # ── Skills (ADR 0041 tiered stores) ──────────────────────────────────────
+    # `skills.scope` is the agent's own choice of how it participates in the
+    # fleet's skill library; `commons.path` is the box-shared location of that
+    # library (host-scoped — every agent on the box reads the same commons).
+    Field("skills.scope", "skills_scope", "Skill sharing", "select", "Skills",
+          "How this agent uses the skill library: scoped (private only) · shared "
+          "(the one box commons) · layered (read the commons ∪ private, write "
+          "private, promote proven skills up). Blank = derived (scoped).",
+          options=["scoped", "shared", "layered"]),
+    Field("commons.path", "commons_path", "Commons location", "string", "Skills",
+          "Box-shared skill commons read by every agent on this machine. "
+          "Blank = ~/.protoagent/commons.", scope="host"),
+
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
@@ -234,6 +247,10 @@ _SECTION_CATEGORY = {
     "Tools": "Agent",
     # Memory — knowledge/recall config (rendered in the Knowledge view's Settings tab).
     "Knowledge": "Memory",
+    # Skills — the agent's skill-sharing tier + the box commons (ADR 0041). Agent
+    # category today (Agent ▸ Settings); folds into Workspace ▸ Skills, with
+    # commons.path (host-scoped) surfacing in Host/App (ADR 0048).
+    "Skills": "Agent",
     # System — runtime + performance knobs (central Settings → System).
     "Compaction": "System",
     "Caching": "System",

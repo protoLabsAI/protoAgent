@@ -478,6 +478,10 @@ export type Playbook = {
   confidence: number;
   last_used: string | null;
   created_at: string | null;
+  // Tier (ADR 0041 layered skills): "private" | "commons". Present only when the
+  // index is layered (the agent reads a shared commons ∪ its private library);
+  // absent in scoped/shared mode, where there's a single library and no promote.
+  tier?: "private" | "commons";
 };
 
 // One row from the knowledge store (knowledge/store.py chunks table), as the

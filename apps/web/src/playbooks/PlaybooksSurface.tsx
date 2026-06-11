@@ -1,6 +1,6 @@
 import { Input } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { BookMarked, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { ArrowUpToLine, BookMarked, Library, Pin, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -32,6 +32,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<Playbook | null>(null);
+  const [promoting, setPromoting] = useState<number | null>(null);
 
   async function load() {
     setLoading(true);
@@ -63,6 +64,27 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
 
   const pinned = filtered.filter((p) => p.source === "disk").length;
   const learned = filtered.length - pinned;
+  // Tier is present only when the index is layered (commons ∪ private). When it
+  // is, surface a commons count so the operator sees the shared library at a glance.
+  const layered = playbooks.some((p) => p.tier);
+  const fromCommons = filtered.filter((p) => p.tier === "commons").length;
+
+  async function promote(p: Playbook) {
+    setPromoting(p.id);
+    try {
+      const r = await api.promotePlaybook(p.id);
+      if (!r.promoted) {
+        onError(r.error || "promote failed");
+        return;
+      }
+      onError("");
+      await load(); // the skill now also reads from the commons tier
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPromoting(null);
+    }
+  }
 
   async function confirmDelete() {
     if (!pending) return;
@@ -84,7 +106,7 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
     <section className="panel stage-panel" data-testid="playbooks-surface">
       <PanelHeader
         title="Skills"
-        kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned`}
+        kicker={`methodology the agent retrieves into context · ${pinned} pinned · ${learned} learned${layered ? ` · ${fromCommons} from commons` : ""}`}
         actions={
           <Button icon variant="ghost" type="button" onClick={() => void load()} disabled={loading} title="Refresh">
             <RefreshCw size={16} className={loading ? "spin" : ""} />
@@ -131,6 +153,17 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                         </Badge>
                       </span>
                     )}
+                    {p.tier === "commons" ? (
+                      <span title="Shared commons — readable by every agent on this box">
+                        <Badge status="neutral">
+                          <Library size={12} /> commons
+                        </Badge>
+                      </span>
+                    ) : p.tier === "private" ? (
+                      <span title="Private to this agent — promote to share it with the fleet">
+                        <Badge status="neutral">private</Badge>
+                      </span>
+                    ) : null}
                     <strong>{p.name}</strong>
                   </div>
                   <p className="playbook-desc">{p.description}</p>
@@ -145,6 +178,18 @@ export function PlaybooksSurface({ onError }: { onError: (message: string) => vo
                 <div className="playbook-meta">
                   <span title="confidence">conf {Math.round((p.confidence ?? 1) * 100)}%</span>
                   <span title="last used">used {ago(p.last_used)}</span>
+                  {p.tier === "private" ? (
+                    <Button
+                      type="button"
+                      icon variant="ghost"
+                      title="Promote to the shared commons (every agent on this box can then reuse it)"
+                      onClick={() => void promote(p)}
+                      disabled={promoting === p.id}
+                      data-testid={`playbook-promote-${p.id}`}
+                    >
+                      <ArrowUpToLine size={14} className={promoting === p.id ? "spin" : ""} />
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     icon variant="danger"

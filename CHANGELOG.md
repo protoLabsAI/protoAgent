@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent was told a no-op worked; they now read the real per-plugin load status and surface
   "FAILED to load: <error>" so you fix-and-reload instead of testing nothing.
 ### Added
+- **The shared-skill commons is now legible in the console (ADR 0041 / 0048).** The
+  layered skill tier ("shared brain, private hands" — read commons ∪ private, write
+  private) shipped at the data layer but was invisible: the Skills surface couldn't tell
+  a private skill from a commons one, the one curated action (`promote` a private skill
+  into the box-shared commons) had no API route or button, and the skill-sharing mode was
+  YAML-only. Now: a **tier badge** (commons / private) on each skill, a **Promote** action
+  on private skills (`POST /api/playbooks/{id}/promote` over `LayeredSkillsIndex.promote`),
+  and two new settings fields — `skills.scope` (`scoped` · `shared` · `layered`, per-agent)
+  and `commons.path` (the box-shared commons location, host-scoped). Surfacing the second
+  of protoAgent's two inheritance systems (the skill **union**, alongside the ADR 0047
+  settings **override** cascade). Part of the settings-IA reorg (#916).
 - **macOS desktop releases are now verified pristine — and the DMG itself is notarized.**
   Tauri notarizes the `.app` inside the bundle, but the DMG *container* shipped without its
   own ticket; the workflow now runs `notarytool submit` + `stapler staple` on the DMG, then

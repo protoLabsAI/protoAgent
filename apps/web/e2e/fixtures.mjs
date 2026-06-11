@@ -464,11 +464,13 @@ export const PLAYBOOKS = [
     id: 1, name: "web-research", description: "Plan → search → read → synthesize → cite.",
     tools_used: ["web_search", "fetch_url"], source: "disk", confidence: 1.0,
     last_used: "2026-06-01T18:00:00+00:00", created_at: "2026-05-29T00:00:00+00:00",
+    tier: "commons",   // layered index (ADR 0041): already in the shared commons
   },
   {
     id: 2, name: "pr-triage-flow", description: "Learned: how to triage a PR review backlog.",
     tools_used: ["github_get_pr", "github_list_issues"], source: "emitted", confidence: 0.62,
     last_used: "2026-05-31T12:00:00+00:00", created_at: "2026-05-30T00:00:00+00:00",
+    tier: "private",   // private to this agent → eligible for Promote
   },
 ];
 
