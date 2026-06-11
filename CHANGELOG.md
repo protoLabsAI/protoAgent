@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other store already used. `KnowledgeMiddleware.load_memory` drops its duplicate path
   literal and defers to the writer's resolved `MEMORY_PATH`, so reader and writer can't
   drift. `MEMORY_PATH` env override unchanged.
+- **The console is an installable PWA (manifest-only — deliberately no service worker).**
+  The pre-console-era `/manifest.json` was stale (`start_url: "/"`, SVG-only icons) and
+  never linked from the React console; `static/sw.js` was served but never registered.
+  Now: the manifest targets `/app/` (id/start_url/scope — fleet slug windows included),
+  gains PNG icons (192/512 + apple-touch-icon, derived from the desktop app icon), and
+  the console links it (plus `theme-color`). Install-to-dock/homescreen works in
+  Chrome/Edge/Safari with **zero service-worker risk**: no SSE interception on `/a2a`,
+  no stale-asset caching (the version-coherence class), no WKWebView SW flakiness — the
+  link 404s inertly inside the Tauri webview. `sw.js` stays unregistered.
 
 ### Fixed
 - **A secret saved for an installed-but-DISABLED plugin now routes to `secrets.yaml`,

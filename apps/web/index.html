@@ -4,7 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#9b87f2" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%protolabs-icon-outline.svg" />
+    <!-- Installable PWA: manifest only, deliberately NO service worker — a SW
+         would intercept the /a2a SSE stream and cache stale console assets
+         (the version-coherence class). The server serves /manifest.json with
+         the proper media type; in the Tauri webview this link 404s inertly. -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
