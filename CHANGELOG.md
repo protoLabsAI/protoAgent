@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A declined or failed tool now shows the red X on its card, not a green "done".**
+  A denied `run_command` returned a normal string, so the card closed *green* with the
+  decline text — the opposite of how a denial should read. `run_command` now raises on
+  deny (and on execution error), so the ToolNode stamps the result `status="error"`; that
+  flows through as a `phase="failed"` tool-call DataPart and the card renders the X (the
+  protocol already supported the failed phase — nothing new on the wire). Enforcement-
+  blocked tools get the same treatment. With the card already sitting yellow/running
+  during the approval pause and turning green on approve, a gated action now reads exactly
+  as intended: **yellow while you decide → green on approve, red X on deny** — no extra
+  "approved" bubble (#904).
 - **Approving a gated action no longer dumps an "approved" bubble into the chat.** When
   the agent gated a command behind an Approve/Deny prompt, the resume posted the literal
   word `approved`/`denied` as a *user message* — noise that cluttered the transcript and

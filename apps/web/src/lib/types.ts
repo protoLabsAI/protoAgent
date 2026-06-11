@@ -299,6 +299,7 @@ export type ToolEvent = {
   phase: "start" | "end";
   input?: string;
   output?: string;
+  error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
 };
 
 export type ChatMessage = {

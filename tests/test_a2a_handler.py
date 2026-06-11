@@ -354,6 +354,44 @@ async def test_tool_events_surface_as_tool_call_dataparts():
 
 
 @pytest.mark.asyncio
+async def test_errored_tool_end_surfaces_phase_failed():
+    """A tool_end flagged error → a phase=\"failed\" tool-call DataPart (the card
+    renders the X), carrying the error text. A declined run_command takes this path."""
+    import json
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_start", {"id": "t1", "name": "run_command", "input": {"command": "rm -rf /"}})
+        yield ("tool_end", {"id": "t1", "name": "run_command",
+                            "output": "Command declined by the operator — not run", "error": True})
+        yield ("done", "ok")
+
+    app = _build_app(stream)
+    payloads = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream("POST", "/a2a", headers=A2A_HEADERS, json={
+            "jsonrpc": "2.0", "id": "s", "method": "SendStreamingMessage",
+            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+        }) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                frame = json.loads(line[5:].strip())
+                status = frame.get("result", {}).get("statusUpdate", {}).get("status", {})
+                msg = status.get("message")
+                if not msg:
+                    continue
+                for part in msg.get("parts", []):
+                    p = pa.parse_tool_call(part)
+                    if p is not None:
+                        payloads.append(p)
+
+    failed = next((p for p in payloads if p["phase"] == "failed"), None)
+    assert failed is not None, [p["phase"] for p in payloads]
+    assert failed["name"] == "run_command"
+    assert "declined" in (failed.get("error") or "")
+
+
+@pytest.mark.asyncio
 async def test_text_deltas_stream_as_incremental_artifact_frames():
     """Token-by-token: each `text` delta is forwarded as its own artifact-update
     (append) frame, so the console fills the bubble live instead of the whole
