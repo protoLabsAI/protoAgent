@@ -132,6 +132,17 @@ export const runtimeStatusQuery = () =>
     queryFn: () => api.runtimeStatus(),
   });
 
+// The HUB's runtime status (never slug-routed) — used ONLY for the tenant uid, which
+// must track the origin's backend, not the focused agent. A separate key from the
+// slug-routed `runtime` so switching agents never confuses it; the uid is stable, so
+// it doesn't poll.
+export const hostRuntimeStatusQuery = () =>
+  queryOptions({
+    queryKey: ["runtime", "host"] as const,
+    queryFn: () => api.hostRuntimeStatus(),
+    staleTime: Infinity,
+  });
+
 // Delegate registry (ADR 0025) — read non-suspense in the Settings → Integrations
 // panel so a 404 (delegates plugin disabled) degrades gracefully instead of
 // blanking Settings. Invalidated after create/update/delete.

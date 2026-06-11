@@ -112,7 +112,7 @@ import { SubagentsPanel } from "./SubagentsPanel";
 import { MiddlewarePanel } from "./MiddlewarePanel";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
-import { runtimeStatusQuery } from "../lib/queries";
+import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -273,6 +273,10 @@ export function App() {
     refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
   });
   const runtime = runtimeQ.data ?? null;
+
+  // Tenant uid is the HUB's, never the focused agent's (which changes on every fleet
+  // swap and would wrongly wipe the chat view). Host-pinned, stable, low-churn.
+  const hostUidQ = useQuery({ ...hostRuntimeStatusQuery(), retry: 30, retryDelay: 1000 });
 
   // Plugin-contributed rail surfaces (ADR 0026): each enabled plugin's declared
   // views become a dynamic rail icon (keyed plugin:<id>:<viewId>) whose panel is
@@ -666,9 +670,11 @@ export function App() {
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
       <FleetTurnWatch />
-      {/* Tenant guard: if a DIFFERENT backend now owns this origin (port handed
-          between agents), drop the previous tenant's persisted chat view. */}
-      <TenantGuard uid={runtime?.instance_uid} />
+      {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
+          a fork booted on the old port), drop the previous tenant's persisted chat view.
+          Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps
+          the same hub, so it must not clear chat on a normal swap. */}
+      <TenantGuard uid={hostUidQ.data?.instance_uid} />
       {/* Cold-start gate: holds over the app until the runtime probe first
           resolves (engine up), so the ~30s frozen-sidecar boot shows
           "Starting <agent>…" rather than a "Load failed" flash. The DS BootGate

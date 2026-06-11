@@ -4,14 +4,15 @@ import { useEffect } from "react";
 import { SWITCHED_FLAG, tenantCheck } from "../lib/tenant";
 
 // Tenant guard: localStorage is keyed by ORIGIN, but the backend behind an origin can
-// change (a port handed from one agent to another — e.g. a fork booted on the old
-// port). The chat store persists full transcripts client-side, so without a check the
-// new tenant's window renders the PREVIOUS agent's conversations. The server exposes a
-// stable per-data-root uid (runtime-status `instance_uid`); on mismatch we drop the
-// previous tenant's chat view (all slugs) + the turn-watcher state, then reload so the
+// change (a fork booted on the old port — a different data root now answers here). The
+// chat store persists full transcripts client-side, so without a check the new tenant's
+// window renders the PREVIOUS one's conversations. The `uid` here is the HUB's stable
+// per-data-root uid (host-pinned runtime status, NOT the focused agent's — switching
+// fleet agents keeps the same hub, so a normal swap must NOT trip this). On mismatch we
+// drop the persisted chat view (all slugs) + the turn-watcher state, then reload so the
 // already-hydrated stores restart clean. Layout/theme/authToken stay — layout is
 // cosmetic, theme is server-side per agent, and clearing a bearer token could lock the
-// operator out. Same data root ⇒ same uid, so restarts/upgrades of the SAME agent
+// operator out. Same hub data root ⇒ same uid, so restarts/upgrades + agent swaps
 // never trip this.
 
 export function TenantGuard({ uid }: { uid: string | undefined }) {

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Swapping between fleet agents wiped the chat view.** The tenant guard (which
+  clears persisted chat when the backend behind an origin re-keys) was reading the
+  *focused agent's* `instance_uid` (slug-routed runtime status). Every fleet swap
+  changes the focused agent → its uid changes → the guard fired and cleared **all**
+  slugs' chat. It now keys on the **hub's** uid (a host-pinned runtime read, never
+  slug-routed) — the hub is the actual tenant of the origin and is stable across
+  swaps, so switching agents keeps each agent's chat. The guard still fires on a real
+  re-key (a fork booting on the hub's old port).
 - **The fleet proxy now forwards WebSocket upgrades (#883).** The hub's
   `/agents/<slug>/*` reverse proxy was HTTP-only (it even stripped `Upgrade`/
   `Connection`), so a fleet member's plugin that opens a live WS — `agent_browser`'s

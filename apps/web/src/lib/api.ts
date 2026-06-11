@@ -36,6 +36,9 @@ import type {
 
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
+  /** Pin to the HUB (never slug-route) — for origin-level reads like the tenant uid
+   * that must NOT follow the focused agent. */
+  host?: boolean;
 };
 
 type A2APart = {
@@ -182,12 +185,14 @@ function isAgentPath(path: string) {
   );
 }
 
-export function apiUrl(path: string) {
+export function apiUrl(path: string, opts?: { host?: boolean }) {
   if (/^https?:\/\//.test(path)) return path;
   // Agent-level paths route through the focused agent's proxy, keyed by the URL slug.
+  // `opts.host` forces the HUB (no slug routing) — for origin-level reads (the tenant
+  // uid) that must stay on the hub regardless of which agent is focused.
   let p = path;
   const slug = currentSlug();
-  if (slug !== "host" && isAgentPath(path)) {
+  if (!opts?.host && slug !== "host" && isAgentPath(path)) {
     p = `/agents/${encodeURIComponent(slug)}${path}`;
   }
   const base = defaultApiBase();
@@ -230,15 +235,16 @@ function applyAuth(headers: Headers): Headers {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers = applyAuth(new Headers(options.headers));
+  const { host, ...init } = options;  // `host` is ours (routing), not a fetch RequestInit field
+  const headers = applyAuth(new Headers(init.headers));
   let body: BodyInit | undefined;
-  if (options.body !== undefined) {
+  if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
-    body = JSON.stringify(options.body);
+    body = JSON.stringify(init.body);
   }
 
-  const response = await fetch(apiUrl(path), {
-    ...options,
+  const response = await fetch(apiUrl(path, { host }), {
+    ...init,
     headers,
     body,
   });
@@ -417,6 +423,14 @@ async function consumeSse(
 export const api = {
   runtimeStatus() {
     return request<RuntimeStatus>("/api/runtime/status");
+  },
+
+  // The HUB's runtime status — NEVER slug-routed. The TenantGuard keys on the hub's
+  // `instance_uid` (the real tenant of this origin), which is STABLE across agent
+  // swaps. The slug-routed runtimeStatus() returns the FOCUSED agent's uid, which
+  // changes on every switch and would wrongly wipe the chat view each time.
+  hostRuntimeStatus() {
+    return request<RuntimeStatus>("/api/runtime/status", { host: true });
   },
 
   telemetrySummary(since?: string) {
