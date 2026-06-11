@@ -12,11 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **Adopt `@protolabsai/ui@0.26.1`** — picks up the AppShell drag fix (protoContent#212:
-  a transparent drag overlay during a divider/reopen gesture so the resize tracks smoothly
-  over plugin iframes and the `col-resize` cursor stays correct, plus the `WithIframePanels`
-  story). Removes the app-side interim guard from #903 (`.pl-appshell-frame--dragging iframe
-  { pointer-events: none }`) — the design system now owns that behavior.
+- **Adopt `@protolabsai/ui@0.26.2`** — picks up the AppShell iframe-drag fix
+  (protoContent #212 + #214): resizing a panel that hosts a plugin iframe now tracks
+  smoothly and collapses on release, via `.pl-appshell-frame--dragging iframe { pointer-events:
+  none }` (the window keeps the gesture over the iframe; the col-resize cursor is inherited by
+  the column behind it). 0.26.1 also tried a full-window drag overlay, but it covered the
+  divider handle and broke double-click-to-collapse — caught by our layout e2e — so 0.26.2
+  dropped it. Removes the app-side interim guard from #903; the design system now owns it.
 
 ### Fixed
 - **A declined or failed tool now shows the red X on its card, not a green "done".**
