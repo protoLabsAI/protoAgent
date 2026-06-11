@@ -201,11 +201,15 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
             # Close the card keyed by the tool_call id (the ToolMessage carries it);
-            # fall back to run_id/name for non-tool-message producers.
+            # fall back to run_id/name for non-tool-message producers. A ToolMessage
+            # the ToolNode stamped status="error" (a raised tool — a declined
+            # run_command, an execution error, an enforcement block) closes the card
+            # as a failure (X) instead of a green "done".
             yield ("tool_end", {
                 "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
                 "name": name,
                 "output": _coerce_tool_output(output),
+                "error": getattr(output, "status", None) == "error",
             })
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")

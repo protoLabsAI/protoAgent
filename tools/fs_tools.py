@@ -25,7 +25,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 
 from tools.shell import run_command as _shell_run
 
@@ -277,10 +277,13 @@ def build_fs_tools(config) -> list:
                     "project": project,
                 })
                 if not _approved(decision):
-                    return f"Command not run — the operator declined: {command!r}"
+                    # Raise (not return) so the ToolNode stamps the ToolMessage
+                    # status="error": the chat card then renders the declined action
+                    # as a failure (red X) instead of a green "done" with decline text.
+                    raise ToolException(f"Command declined by the operator — not run: {command!r}")
             res = await _shell_run(argv, cwd=str(root), timeout=timeout)
             if res.error:
-                return f"Error: {res.error}"
+                raise ToolException(res.error)
             body = res.stdout or "(no output)"
             if res.stderr:
                 body += f"\n[stderr]\n{res.stderr}"

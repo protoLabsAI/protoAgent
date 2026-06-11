@@ -306,7 +306,7 @@ function dataByMime(parts: RawPart[] | undefined, mime: string): unknown {
  * single ever-overwriting card — the "only one tool at a time" symptom. */
 function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
   const d = dataByMime(parts, TOOL_CALL_MIME) as
-    | { toolCallId?: string; name?: string; phase?: string; args?: string; result?: string }
+    | { toolCallId?: string; name?: string; phase?: string; args?: string; result?: string; error?: string }
     | null;
   if (!d) return null;
   return {
@@ -314,7 +314,9 @@ function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
     name: d.name || "",
     phase: d.phase === "started" ? "start" : "end",
     input: d.args,
-    output: d.result,
+    // A "failed" end carries the error text in `error`; fall back to it for the body.
+    output: d.result ?? d.error,
+    error: d.phase === "failed" || Boolean(d.error),
   };
 }
 

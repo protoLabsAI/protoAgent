@@ -73,6 +73,7 @@ class EnforcementMiddleware(AgentMiddleware):
         return ToolMessage(
             content=f"Blocked by policy: {reason}",
             tool_call_id=request.tool_call.get("id", ""),
+            status="error",  # the chat card renders a policy block as a failure (X), not green
         )
 
     def wrap_tool_call(self, request, handler):

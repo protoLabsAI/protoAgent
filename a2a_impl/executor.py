@@ -436,12 +436,17 @@ def _tool_call_part(event_type: str, payload: Any) -> Part | None:
     plain text status part so text-only consumers still see progress.
     """
     if isinstance(payload, dict):
-        phase = "started" if event_type == "tool_start" else "completed"
+        errored = event_type == "tool_end" and bool(payload.get("error"))
+        # A failed tool end carries phase="failed" (+ the error text) so the card
+        # renders the X glyph instead of the green "done".
+        phase = "started" if event_type == "tool_start" else ("failed" if errored else "completed")
         kwargs: dict[str, Any] = {}
         if event_type == "tool_start" and payload.get("input") is not None:
             kwargs["args"] = payload.get("input")
         if event_type == "tool_end" and payload.get("output") is not None:
             kwargs["result"] = payload.get("output")
+        if errored:
+            kwargs["error"] = str(payload.get("output") or "tool failed")
         emit = pa.emit_tool_call(
             str(payload.get("id", "")),
             str(payload.get("name", "")),

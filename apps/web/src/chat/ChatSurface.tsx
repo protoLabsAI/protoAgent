@@ -397,14 +397,16 @@ function ChatSessionSlot({
                 if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
                 else calls.push(card);
               } else {
-                // end — flip the matching card to done (or create one if the
-                // start frame was missed). Stamp elapsed when we saw the start.
+                // end — flip the matching card to done/error (or create one if the
+                // start frame was missed). A failed end (e.g. a declined run_command)
+                // closes the card as an error (X). Stamp elapsed when we saw the start.
                 const startedAt = idx >= 0 ? calls[idx].startedAt : undefined;
                 const durationMs = startedAt !== undefined ? now - startedAt : undefined;
+                const endStatus = evt.error ? "error" : "done";
                 if (idx >= 0) {
-                  calls[idx] = { ...calls[idx], output: evt.output, status: "done", durationMs };
+                  calls[idx] = { ...calls[idx], output: evt.output, status: endStatus, durationMs };
                 } else {
-                  calls.push({ id: evt.id, name: evt.name, output: evt.output, status: "done" });
+                  calls.push({ id: evt.id, name: evt.name, output: evt.output, status: endStatus });
                 }
               }
               return { ...message, toolCalls: calls };

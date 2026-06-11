@@ -133,6 +133,24 @@ def test_run_command_executes_in_project_cwd(workspace):
     assert "README.md" in out
 
 
+def test_run_command_declined_raises(workspace, monkeypatch):
+    """A declined approval RAISES (ToolException) rather than returning a string —
+    so the ToolNode stamps status="error" and the chat card shows the X, not a green
+    'done'. interrupt() is stubbed to the deny decision (no graph runtime needed)."""
+    import langgraph.types
+    from langchain_core.tools import ToolException
+
+    _, a, _ = workspace
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "denied")
+    t = _tools(_Cfg(
+        filesystem_projects=[{"name": "a", "path": str(a)}],
+        filesystem_allow_run=True,
+        filesystem_run_requires_approval=True,
+    ))
+    with pytest.raises(ToolException):
+        asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
+
+
 # ── config round-trip ──────────────────────────────────────────────────────────
 
 
