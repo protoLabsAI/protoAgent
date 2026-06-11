@@ -100,12 +100,22 @@ public chrome — its data calls are the gated part). The console iframes the pa
 `building-react-plugin-views`. An event under `<id>.*` lights your plugin's rail icon (a notification
 dot) until the user opens it.
 
-## 5. Test it
-- Enable it: `plugins: { enabled: [my-plugin] }`, restart, then
-  `GET /api/runtime/status` → the plugin shows `loaded: true` with its tools/views.
+## 5. Test it — live, no restart
+You don't need to restart to try a plugin you built. With **plugin-devkit** enabled:
+- `scaffold_plugin(...)` already **enabled** it (the default) — its tools/view are
+  live on your **next turn**. Call its `<id>_hello` to confirm.
+- Iterate: edit the plugin's `__init__.py`, then call **`reload_plugins`** — the
+  loader re-execs the file, so your change is live next turn (no restart).
+- Built a plugin some other way (CLI / by hand)? Call **`enable_plugin("<id>")`** to
+  turn it on + hot-reload, or toggle it in the console Plugins panel (#822).
+- `GET /api/runtime/status` → the plugin shows `loaded: true` with its tools/views.
 - Unit-test the tool/registration like `tests/test_plugins.py` does.
 - If it declares `requires_pip`, `python -m server plugin install-deps my-plugin`
   first (a missing dep gives a clear error on enable).
+
+From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill`
+scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
+scaffolds an ADR-0040 bundle.
 
 ## 6. Distribute (optional)
 Publish as a git repo; others install by URL:
@@ -121,7 +131,10 @@ Remove cleanly with `plugin uninstall <id>` (`--purge` also drops config + secre
   literal, not an f-string (`__doc__` is None for f-string "docstrings").
 - Discovery reads the manifest as **data**; code runs only on **enable**. Keep the
   manifest importable-free.
-- Adding routes/surfaces/views needs a **restart** (they mount once at init); the
-  rail picks up a new view from `runtime-status` without a console rebuild.
+- **Enabling** a plugin is fully live: tools/subagents/middleware/MCP rebuild with
+  the graph and its router (which serves any view) **hot-mounts** (#822) — no restart.
+  Only **disabling** leaves a stale route behind (FastAPI can't unmount), so that path
+  alone wants a restart. The rail picks up a new view from `runtime-status` without a
+  console rebuild.
 - Don't edit core files to wire a plugin in — if you need to, you're missing a
   seam; file it (see the operator-fork contract) instead of re-porting each sync.
