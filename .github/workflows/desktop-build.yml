@@ -309,7 +309,7 @@ jobs:
     name: updater manifest (latest.json)
     needs: build
     if: github.event_name == 'push' && github.repository == 'protoLabsAI/protoAgent'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-protolabs-linux
     timeout-minutes: 10
     steps:
       - name: Setup Node
