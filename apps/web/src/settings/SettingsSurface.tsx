@@ -104,6 +104,9 @@ export function SettingsSurface() {
 
   return (
     <>
+      {/* The scope home toggle. INTERIM: stacked over the section Tabs because the DS
+          has no segmented control yet — adopt `Tabs variant="segmented"` / SegmentedControl
+          when protoContent#218 ships. */}
       <Tabs
         responsive
         active={scope}
