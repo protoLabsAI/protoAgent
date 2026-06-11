@@ -234,6 +234,23 @@ function applyAuth(headers: Headers): Headers {
   return headers;
 }
 
+/** An HTTP error from `request()` that carries the status code, so callers (and the
+ *  QueryClient's retry policy) can react to it without parsing the message. */
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/** Cold start: a just-switched-to fleet agent answers 409 (the member isn't running
+ *  yet — `activate` is still spawning it) or 502 (it's booting but not bound) for a few
+ *  seconds until it's up. These are transient, not failures — retry through them. */
+export function isColdStart(error: unknown): boolean {
+  const s = error instanceof ApiError ? error.status : 0;
+  return s === 409 || s === 502;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { host, ...init } = options;  // `host` is ours (routing), not a fetch RequestInit field
   const headers = applyAuth(new Headers(init.headers));
@@ -257,7 +274,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       detail = await response.text();
     }
-    throw new Error(detail || "request failed");
+    throw new ApiError(response.status, detail || "request failed");
   }
 
   return (await response.json()) as T;
