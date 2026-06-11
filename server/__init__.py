@@ -328,7 +328,10 @@ def _main():
     # reachable by anything that can reach the port). Containers set
     # PROTOAGENT_HOST=0.0.0.0 (entrypoint / deploy manifests) because their
     # boundary is the network policy + published port, not the in-container bind.
-    parser.add_argument("--host", type=str, default=os.environ.get("PROTOAGENT_HOST", "127.0.0.1"))
+    # Default None ⇒ resolve from the Host-layer cascade after config load (ADR 0047
+    # D8 network.bind, which folds in the PROTOAGENT_HOST env fallback); an explicit
+    # --host always wins.
+    parser.add_argument("--host", type=str, default=None)
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument(
         "--ui",
@@ -821,6 +824,17 @@ def _main():
             return RedirectResponse(url="/app/")
 
     app = fastapi_app
+
+    # Resolve the bind interface (Host layer, ADR 0047 D8). An explicit --host wins;
+    # otherwise take the cascade-resolved network.bind (leaf > host-config.yaml > env
+    # PROTOAGENT_HOST > 127.0.0.1). STATE.graph_config is loaded by now (agent_init);
+    # the env read is a defensive fallback for the degenerate no-config path.
+    if not args.host:
+        args.host = (
+            STATE.graph_config.bind_host if STATE.graph_config
+            else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
+        ) or "127.0.0.1"
+
     log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full

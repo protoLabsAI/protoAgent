@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Box-runtime knobs (bind interface, fleet ports, discovery, warm policy) are now
+  Host-layer settings, not just scattered env vars** (ADR 0047 D8 — the cascade's
+  final slice). `network.bind`, `fleet.port_base`, `fleet.discovery.port_min/port_max/mdns`,
+  and `fleet.warm.max/grace_seconds` join `FIELDS` as `scope="host"`, so they cascade
+  App → `host-config.yaml` → agent-leaf like every other host default and get a home in
+  **Settings ▸ Host / App ▸ Host config** (with the inherited-from-Host / override / reset
+  badges for free). Each pairs with an **env-var fallback** so existing `PROTOAGENT_HOST` /
+  `PROTOAGENT_FLEET_MAX_WARM` / `PROTOAGENT_FLEET_WARM_GRACE` boxes keep working unchanged —
+  precedence is **file > env > default** (a value set in the file/UI can't be silently
+  shadowed by a leftover env var), and an explicit `--host` flag still wins over all of
+  them. The host process's bind, the workspace port picker, fleet discovery (scan range +
+  mDNS gate), and the warm-agent supervisor now read the resolved config instead of reading
+  env at the call site; a CLI/no-config context falls back to env exactly as before.
 - **An app update can no longer silently strand fleet members on the old binary**
   (version-coherence P2). Members are detached processes — one that survives a hub
   update (crashed hub, or the `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` opt-out) keeps

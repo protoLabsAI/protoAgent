@@ -112,6 +112,22 @@ def list_workspaces() -> list[dict]:
     return out
 
 
+def _port_base() -> int:
+    """Base port for fleet workspace agents (Host layer, ADR 0047 D8). Reads the
+    resolved ``fleet.port_base`` from the live config (which already folds in the
+    PROTOAGENT_* env fallback); falls back to the module default in a CLI/no-STATE
+    context."""
+    try:
+        from runtime.state import STATE
+
+        cfg = getattr(STATE, "graph_config", None)
+        if cfg is not None:
+            return int(getattr(cfg, "fleet_port_base", PORT_BASE) or PORT_BASE)
+    except Exception:  # noqa: BLE001 — best-effort; no live config ⇒ the constant
+        pass
+    return PORT_BASE
+
+
 def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
@@ -124,7 +140,7 @@ def _pick_port(explicit: int | None) -> int:
             used.add(int(STATE.active_port))
     except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
         pass
-    p = PORT_BASE + 1
+    p = _port_base() + 1
     while p in used:
         p += 1
     return p

@@ -110,6 +110,21 @@ def _set_dotted(out: dict, dotted: str, value) -> None:
     cur[parts[-1]] = value
 
 
+def _env_default(name: str, default, cast=str):
+    """Env-fallback for a promoted host knob (ADR 0047 D8). Returns the env var's
+    value (cast) when set+non-empty, else ``default``. Used as the ``.get(key, …)``
+    fallback in ``from_dict`` so resolution is **file > env > app-default**: env is
+    consulted only when the merged (host⊕leaf) dict omits the key, keeping
+    promotion of an env-configured box zero-migration."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _filter_to_host_keys(raw: dict) -> dict:
     """Keep only the host-scoped FIELDS keys present in a raw host-config doc.
 
@@ -508,6 +523,21 @@ class LangGraphConfig:
     # whether the plist should exist.
     autostart_on_boot: bool = False
 
+    # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs promoted out of
+    # scattered env/CLI reads into the Host cascade layer (scope="host" in FIELDS).
+    # Each pairs with an env-var fallback in ``from_dict`` (file > env > default), so
+    # existing PROTOAGENT_* boxes keep working with zero migration. Consumed by the
+    # host process (uvicorn bind / workspace port picker / fleet discovery + warm
+    # supervisor) — a workspace leaf override is a silent no-op (the host process
+    # reads its own config), see ADR §5.
+    bind_host: str = "127.0.0.1"          # uvicorn bind interface; env: PROTOAGENT_HOST
+    fleet_port_base: int = 7870           # workspace agents get port_base+1, +2, …
+    discovery_port_min: int = 7860        # fleet discovery scan window (inclusive)
+    discovery_port_max: int = 7910
+    discovery_mdns: bool = True           # advertise + browse the _protoagent._tcp mDNS channel
+    fleet_max_warm: int = 0               # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
+    fleet_warm_grace_seconds: int = 0     # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE
+
     # Operator-console directory allowlist — the extra directories the
     # React console's beads/notes APIs may read and write. The protoAgent
     # repo root is always allowed implicitly (it's the default project);
@@ -629,6 +659,12 @@ class LangGraphConfig:
         auth = data.get("auth", {})
         runtime = data.get("runtime", {})
         operator = data.get("operator", {})
+        # Box runtime (Host layer, ADR 0047 D8) — `or {}` because a present-but-empty
+        # section parses to None.
+        network = data.get("network", {}) or {}
+        fleet = data.get("fleet", {}) or {}
+        discovery = fleet.get("discovery", {}) or {}
+        warm = fleet.get("warm", {}) or {}
 
         # Secret overlay wins when present; otherwise the (now secret-free)
         # main YAML value, otherwise the dataclass default — and a blank
@@ -733,6 +769,17 @@ class LangGraphConfig:
             instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
             auth_token=secret_auth_token or auth.get("token", cls.auth_token),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
+            # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
+            # fallback only fires when the merged dict omits the key (zero-migration).
+            bind_host=network.get("bind", _env_default("PROTOAGENT_HOST", cls.bind_host)),
+            fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
+            discovery_port_min=discovery.get("port_min", cls.discovery_port_min),
+            discovery_port_max=discovery.get("port_max", cls.discovery_port_max),
+            discovery_mdns=discovery.get("mdns", cls.discovery_mdns),
+            fleet_max_warm=warm.get("max", _env_default("PROTOAGENT_FLEET_MAX_WARM", cls.fleet_max_warm, int)),
+            fleet_warm_grace_seconds=warm.get(
+                "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
+            ),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
             filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),

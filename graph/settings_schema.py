@@ -179,6 +179,39 @@ FIELDS: list[Field] = [
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
           "Install/remove the boot LaunchAgent.", restart=True),
+
+    # ── Fleet (Host layer, ADR 0047 D8) ──────────────────────────────────────
+    # Box-wide runtime knobs promoted out of env/CLI into the Host cascade layer.
+    # All scope="host": the box default every co-located agent inherits (file > env
+    # > default; the matching PROTOAGENT_* env var stays the fallback). Consumed by
+    # the host process — a workspace leaf override is a silent no-op (ADR §5).
+    Field("network.bind", "bind_host", "Bind interface", "string", "Fleet",
+          "Network interface the server listens on. 127.0.0.1 = loopback only (safe "
+          "default); 0.0.0.0 = all interfaces (token-gate the A2A endpoint first). An "
+          "explicit --host flag still wins. Env fallback: PROTOAGENT_HOST.",
+          restart=True, scope="host"),
+    Field("fleet.port_base", "fleet_port_base", "Workspace port base", "number", "Fleet",
+          "Base TCP port for fleet workspace agents — each gets port_base+1, +2, … "
+          "unless given an explicit port.", minimum=1, maximum=65535, restart=True, scope="host"),
+    Field("fleet.discovery.port_min", "discovery_port_min", "Discovery scan: min port", "number",
+          "Fleet", "Low end (inclusive) of the port window fleet discovery probes on the "
+          "LAN / tailnet.", minimum=1, maximum=65535, scope="host"),
+    Field("fleet.discovery.port_max", "discovery_port_max", "Discovery scan: max port", "number",
+          "Fleet", "High end (inclusive) of the discovery port window.",
+          minimum=1, maximum=65535, scope="host"),
+    Field("fleet.discovery.mdns", "discovery_mdns", "mDNS discovery", "bool", "Fleet",
+          "Advertise + browse the _protoagent._tcp mDNS/Bonjour channel so LAN siblings "
+          "find each other automatically. Off = no mDNS (tailnet + manual register still "
+          "work); useful where multicast is noisy or blocked.", scope="host"),
+    Field("fleet.warm.max", "fleet_max_warm", "Warm-agent cap", "number", "Fleet",
+          "Max fleet agents kept running at once; the least-recently-active beyond this "
+          "are spun down (LRU). 0 = unlimited. Env fallback: PROTOAGENT_FLEET_MAX_WARM.",
+          minimum=0, scope="host"),
+    Field("fleet.warm.grace_seconds", "fleet_warm_grace_seconds", "Warm eviction grace (s)",
+          "number", "Fleet",
+          "Spare an agent touched within this many seconds from LRU eviction (it may be "
+          "mid-turn). 0 = pure LRU. Env fallback: PROTOAGENT_FLEET_WARM_GRACE.",
+          minimum=0, scope="host"),
 ]
 
 _BY_KEY = {f.key: f for f in FIELDS}
@@ -257,6 +290,10 @@ _SECTION_CATEGORY = {
     "Middleware": "System",
     "Runtime": "System",
     "Telemetry": "System",
+    # Fleet — box-runtime host knobs (ADR 0047 D8). System category so the host-scoped
+    # fields surface in Settings ▸ Host / App ▸ Host config (which renders the host
+    # fields of the Agent+System categories).
+    "Fleet": "System",
     # Discord / Google / other plugin sections → "Plugins" (the default).
 }
 

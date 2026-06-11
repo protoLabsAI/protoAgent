@@ -41,6 +41,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "audit_middleware": True,
     "autostart_on_boot": False,
     "aux_model": "",
+    "bind_host": "127.0.0.1",
     "cache_warming_enabled": False,
     "cache_warming_interval_seconds": 3300,
     "chat_template_kwargs": None,
@@ -54,6 +55,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "compaction_keep_messages": 20,
     "compaction_model": "",
     "compaction_trigger": "fraction:0.8",
+    "discovery_mdns": True,
+    "discovery_port_max": 7910,
+    "discovery_port_min": 7860,
     "egress_allowed_hosts": [],
     "embed_model": "qwen3-embedding",
     "enforcement_disallowed_tools": [],
@@ -67,6 +71,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_enabled": True,
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,
+    "fleet_max_warm": 0,
+    "fleet_port_base": 7870,
+    "fleet_warm_grace_seconds": 0,
     "goal_enabled": True,
     "goal_eval_model": "",
     "goal_max_iterations": 8,
@@ -177,6 +184,18 @@ CONFIG_TO_DICT_GOLDEN = {
         "enabled": False,
         "timeout": 30,
     },
+    "fleet": {
+        "port_base": 7870,
+        "discovery": {
+            "port_min": 7860,
+            "port_max": 7910,
+            "mdns": True,
+        },
+        "warm": {
+            "max": 0,
+            "grace_seconds": 0,
+        },
+    },
     "goal": {
         "enabled": True,
         "eval_model": "",
@@ -221,6 +240,9 @@ CONFIG_TO_DICT_GOLDEN = {
         "name": "protolabs/reasoning",
         "provider": "openai",
         "temperature": 0.2,
+    },
+    "network": {
+        "bind": "127.0.0.1",
     },
     "operator": {
         "allowed_dirs": [],
@@ -371,6 +393,14 @@ EMITTED_ATTRS = {
     # telemetry.*
     "telemetry_enabled",
     "telemetry_retention_days",
+    # network.bind / fleet.* (box runtime, ADR 0047 D8)
+    "bind_host",
+    "fleet_port_base",
+    "discovery_port_min",
+    "discovery_port_max",
+    "discovery_mdns",
+    "fleet_max_warm",
+    "fleet_warm_grace_seconds",
 }
 
 

@@ -251,6 +251,10 @@ HOST_SCOPED_KEYS = {
     # commons.path is box-level (ADR 0041 commons read by every agent on the box);
     # skills.scope stays "agent" (each agent picks its own sharing mode).
     "commons.path",
+    # Box runtime (ADR 0047 D8) — env/CLI knobs promoted into the Host layer.
+    "network.bind", "fleet.port_base",
+    "fleet.discovery.port_min", "fleet.discovery.port_max", "fleet.discovery.mdns",
+    "fleet.warm.max", "fleet.warm.grace_seconds",
 }
 
 
