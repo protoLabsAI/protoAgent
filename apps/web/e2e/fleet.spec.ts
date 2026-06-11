@@ -9,7 +9,7 @@ test.describe.configure({ mode: "serial" });
 async function openAgents(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Agents", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
 }
 
 test("Agents tab lists the host (this instance) + peers, host active by default", async ({ page }) => {
@@ -142,7 +142,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
 
   // Unregister from the fleet manager (the remote agent itself is untouched).
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Agents", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
   await page.locator(".fleet-row", { hasText: "remy" })
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);

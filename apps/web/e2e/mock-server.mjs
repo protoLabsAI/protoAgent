@@ -388,6 +388,12 @@ const server = createServer(async (req, res) => {
       FLEET.agents = FLEET.agents.filter((a) => a.name !== name && a.id !== name);
       return sendJson(res, { ok: true, name, removed: [name] });
     }
+    if (req.method === "POST" && /^\/api\/playbooks\/\d+\/promote$/.test(pathname)) {
+      const id = Number(pathname.split("/").at(-2));
+      const p = PLAYBOOKS.find((x) => x.id === id);
+      if (p) p.tier = "commons"; // promoted: now reads from the commons tier
+      return sendJson(res, { enabled: true, promoted: true, name: p?.name });
+    }
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
       return sendJson(res, { enabled: true, deleted: true });
     }

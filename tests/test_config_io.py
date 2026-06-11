@@ -135,10 +135,10 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # when their plugin is enabled (surfaced via plugin_config), and a default
     # LangGraphConfig() carries no plugin_config.
     assert set(d.keys()) == {
-        "model", "subagents", "middleware", "knowledge", "skills", "mcp", "plugins",
-        "identity", "auth", "runtime", "operator", "agent_runtime", "checkpoint",
-        "compaction", "execute_code", "goal", "operator_mcp", "prompt_cache",
-        "routing", "telemetry",
+        "model", "subagents", "middleware", "knowledge", "skills", "commons", "mcp",
+        "plugins", "identity", "auth", "runtime", "operator", "agent_runtime",
+        "checkpoint", "compaction", "execute_code", "goal", "operator_mcp",
+        "prompt_cache", "routing", "telemetry",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature

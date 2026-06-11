@@ -238,8 +238,9 @@ def test_fields_types_match_dataclass(field):
 # --------------------------------------------------------------------------- #
 
 # The fields whose shared default lives at the HOST layer (gateway/model/routing/
-# cache/telemetry infra + org branding). Everything else is "agent". Locked here so
-# a new Field can't silently land in the wrong cascade layer.
+# cache/telemetry infra + org branding + the box-shared skill commons location).
+# Everything else is "agent". Locked here so a new Field can't silently land in the
+# wrong cascade layer.
 HOST_SCOPED_KEYS = {
     "model.api_base", "model.provider", "model.name",
     "routing.aux_model", "routing.fallback_models",
@@ -247,6 +248,9 @@ HOST_SCOPED_KEYS = {
     "prompt_cache.warm.enabled", "prompt_cache.warm.interval_seconds",
     "telemetry.enabled", "telemetry.retention_days",
     "identity.org",
+    # commons.path is box-level (ADR 0041 commons read by every agent on the box);
+    # skills.scope stays "agent" (each agent picks its own sharing mode).
+    "commons.path",
 }
 
 

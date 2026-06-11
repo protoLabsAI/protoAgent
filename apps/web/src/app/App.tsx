@@ -74,19 +74,17 @@ import { InboxPanel } from "../inbox/InboxPanel";
 import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
-import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
-import { SettingsSurface, SETTINGS_TABS, type SettingsTab } from "../settings/SettingsSurface";
+import { SettingsSurface } from "../settings/SettingsSurface";
+import { SettingsOverlay } from "../settings/SettingsOverlay";
+import { ThemeQuickButton } from "../settings/ThemeQuickButton";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
   type ActivityTab,
-  type AgentTab,
-  type KnowledgeTab,
   type PluginsTab,
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
-import { SettingsCategoryPanel } from "../settings/SettingsCategory";
 import { api } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
@@ -105,11 +103,6 @@ import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { IdentityPanel } from "../agent/IdentityPanel";
-import { ToolsPanel } from "./ToolsPanel";
-import { McpPanel } from "./McpPanel";
-import { SubagentsPanel } from "./SubagentsPanel";
-import { MiddlewarePanel } from "./MiddlewarePanel";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
@@ -226,14 +219,11 @@ export function App() {
   // Background-streaming indicator for the Chat rail (narrow selector → only
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
-  const agentTab = useUI((s) => s.agentTab);
-  const setAgentTab = useUI((s) => s.setAgentTab);
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
-  const knowledgeTab = useUI((s) => s.knowledgeTab);
-  const setKnowledgeTab = useUI((s) => s.setKnowledgeTab);
-  const settingsTab = useUI((s) => s.settingsTab);
-  const setSettingsTab = useUI((s) => s.setSettingsTab);
+  const setSettingsScope = useUI((s) => s.setSettingsScope);
+  const setSettingsSection = useUI((s) => s.setSettingsSection);
+  const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const activityTab = useUI((s) => s.activityTab);
   const setActivityTab = useUI((s) => s.setActivityTab);
   const rightPanel = useUI((s) => s.rightPanel);
@@ -259,6 +249,8 @@ export function App() {
   >(null);
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
+  // The one-stop-shop Settings overlay (ADR 0048) — opened by the topbar gear.
+  const [settingsOverlayOpen, setSettingsOverlayOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
   // always renders; the retry doubles as the desktop sidecar boot-probe. The
@@ -478,7 +470,7 @@ export function App() {
     // "studio" (Workflows) is contributed via src/ext/workflows.tsx, gated on the
     // workflows plugin (lean core) — no longer a hardcoded core surface.
     { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
-    { id: "agent", label: "Agent", icon: <Bot size={18} /> },
+    // "agent" folded into Settings ▸ Workspace (ADR 0048 S-C) — no longer a rail surface.
     { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
     { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
     { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
@@ -526,27 +518,9 @@ export function App() {
             {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
           </>
         );
-      case "agent":
-        return (
-          <>
-            <Tabs responsive active={agentTab} onSelect={(t) => setAgentTab(t as AgentTab)} items={[
-              { id: "identity", label: "Identity", icon: Sparkles },
-              { id: "settings", label: "Settings", icon: Settings2 },
-              { id: "tools", label: "Tools", icon: Wrench },
-              { id: "mcp", label: "MCP", icon: Plug },
-              { id: "subagents", label: "Subagents", icon: Bot },
-              { id: "skills", label: "Skills", icon: BookMarked },
-              { id: "middleware", label: "Middleware", icon: Layers },
-            ].map(toTab)} />
-            {agentTab === "identity" ? <IdentityPanel /> : null}
-            {agentTab === "settings" ? <SettingsCategoryPanel category="Agent" title="Settings" /> : null}
-            {agentTab === "tools" ? <ToolsPanel /> : null}
-            {agentTab === "mcp" ? <McpPanel /> : null}
-            {agentTab === "subagents" ? <SubagentsPanel /> : null}
-            {agentTab === "skills" ? <PlaybooksSurface onError={setError} /> : null}
-            {agentTab === "middleware" ? <MiddlewarePanel /> : null}
-          </>
-        );
+      // The Agent surface folded into Settings ▸ Workspace (ADR 0048 S-C). Its tabs
+      // (Identity/Settings/Tools/MCP/Subagents/Skills/Middleware) are now Workspace
+      // sections in SettingsSurface.
       case "plugins":
         return (
           <>
@@ -558,23 +532,13 @@ export function App() {
             <PluginsSurface tab={pluginsTab} />
           </>
         );
+      // Knowledge is the searchable Store; its Memory settings folded into
+      // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
-        return (
-          <>
-            <Tabs responsive active={knowledgeTab} onSelect={(t) => setKnowledgeTab(t as KnowledgeTab)} items={[
-              { id: "store", label: "Store", icon: Database },
-              { id: "settings", label: "Settings", icon: Settings2 },
-            ].map(toTab)} />
-            {knowledgeTab === "store" ? <KnowledgeStore onError={setError} /> : <SettingsCategoryPanel category="Memory" title="Settings" />}
-          </>
-        );
+        return <KnowledgeStore onError={setError} />;
       case "settings":
-        return (
-          <>
-            <Tabs responsive active={settingsTab} onSelect={(t) => setSettingsTab(t as SettingsTab)} items={SETTINGS_TABS.map(toTab)} />
-            <SettingsSurface tab={settingsTab} />
-          </>
-        );
+        // SettingsSurface owns its own two-level nav (home + section, ADR 0048).
+        return <SettingsSurface />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       case "beads":
@@ -731,12 +695,34 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
+              // Fleet now lives under Host / App ▸ Fleet (ADR 0048); ask the panel to
+              // open the new-agent picker on mount.
               setSurface("settings");
-              setSettingsTab("agents");
+              setSettingsScope("host");
+              setSettingsSection("fleet");
+              setFleetStartNew(true);
             }}
           />
         }
         org={runtime?.identity?.org || "protoLabs.studio"}
+        actions={
+          <>
+            {/* Quick-settings (ADR 0048). Model tuning lives on the chat composer (by the
+                input); the topbar keeps appearance + the gear to the full one-stop-shop. */}
+            <ThemeQuickButton />
+            <Button
+              icon
+              variant="ghost"
+              type="button"
+              title="Open settings"
+              aria-label="Open settings"
+              data-testid="topbar-settings"
+              onClick={() => setSettingsOverlayOpen(true)}
+            >
+              <Settings2 size={16} />
+            </Button>
+          </>
+        }
         status={
           <button
             type="button"
@@ -911,6 +897,8 @@ export function App() {
         Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
         its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
     <ContextMenuRenderer />
+    {/* The one-stop-shop Settings overlay (ADR 0048) — the topbar gear opens it. */}
+    <SettingsOverlay open={settingsOverlayOpen} onClose={() => setSettingsOverlayOpen(false)} />
     </>
   );
 }

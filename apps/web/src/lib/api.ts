@@ -491,6 +491,15 @@ export const api = {
     );
   },
 
+  // Promote a private skill into the shared commons (ADR 0041) — only meaningful
+  // when the index is layered; the route reports promoted:false with a hint otherwise.
+  promotePlaybook(id: number) {
+    return request<{ enabled: boolean; promoted: boolean; name?: string; error?: string }>(
+      `/api/playbooks/${id}/promote`,
+      { method: "POST" },
+    );
+  },
+
   setupStatus() {
     return request<SetupStatus>("/api/config/setup-status");
   },

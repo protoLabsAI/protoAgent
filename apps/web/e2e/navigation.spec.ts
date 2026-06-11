@@ -46,9 +46,11 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
 
-test("agent surface: identity lands, then tools and MCP tabs", async ({ page }) => {
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing tab
+test("workspace settings: identity lands, then tools and MCP sections", async ({ page }) => {
+  // The agent makeup folded into Settings ▸ Workspace (ADR 0048 S-C).
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing section
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
   await page.locator(".pl-tabs").getByRole("tab", { name: "Tools", exact: true }).click();
@@ -80,14 +82,14 @@ test("plugins section: Local / Market / Download tabs", async ({ page }) => {
 test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Move off the defaults: a left surface (Agent) + a non-default right-panel tab (Goals — Beads
+  // Move off the defaults: a left surface (Plugins) + a non-default right-panel tab (Goals — Beads
   // is the default, and clicking the default-active one would toggle it closed).
-  await page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
   await page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true }).click();
 
   // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
   await page.reload({ waitUntil: "load" });
-  await expect(page.locator(".pl-rail").getByRole("button", { name: "Agent", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true })).toHaveClass(/active/);
   await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true })).toHaveClass(/active/);
 });
 

@@ -92,3 +92,6 @@ sites/marketing/.astro/
 config/*/secrets.yaml
 config/*/langgraph-config.yaml
 config/*/.setup-complete
+
+# Playwright run artifacts
+test-results/

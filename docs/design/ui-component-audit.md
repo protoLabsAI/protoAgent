@@ -103,6 +103,12 @@ What the console needs that **`@protolabsai/ui@0.4.0` does not provide.** Ordere
 
 Context-menu **registry/store** (`ContextType` keying is app domain logic — only the *renderer* needs the DS Menu), chat tool-renderers, the workflow builder canvas, plugin-iframe host, setup-wizard flow logic.
 
+Settings IA (ADR 0048, #916) — all compose DS primitives (`Dialog`, `Button`, `Badge`, `Tabs`, `PanelHeader`, `Input/Select/Textarea`, `ThemePanel`); the logic is app-coupled, so they stay local:
+- **`QuickSetting`** — a gear→dialog that edits named fields via *our* settings schema + the `/api/settings` cascade (host-scoped → host layer). The *pattern* is reusable, but the binding is app domain.
+- **`SettingsOverlay`** — wraps our two-home `SettingsSurface` in a DS `Dialog`.
+- **`ThemeQuickButton`** — wraps our per-agent `ThemeSurface` (which calls `/api/theme`) in a DS `Dialog`.
+- **`CommonsPanel`** — the box-shared skills commons (ADR 0041).
+
 ---
 
 ## Filed upstream (protoContent)
@@ -138,7 +144,11 @@ Context-menu **registry/store** (`ContextType` keying is app domain logic — on
 | [#143](https://github.com/protoLabsAI/protoContent/issues/143) | `MobileNav` (bottom quick-bar + drawer) | Filed — source handed over; offered to PR |
 | [#144](https://github.com/protoLabsAI/protoContent/issues/144) | `AppShell` composite (controlled; app keeps persistence) | Filed |
 
-Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu now; Popover/Combobox/Select later) styled with `--pl-*`; everything else className-only; no Tailwind.** Segmented Tabs variant spec'd on #137 (UI team to add).
+Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu now; Popover/Combobox/Select later) styled with `--pl-*`; everything else className-only; no Tailwind.**
+
+| # | Request | Priority | Status |
+|---|---|---|---|
+| [#218](https://github.com/protoLabsAI/protoContent/issues/218) | `Tabs` `segmented` variant / `SegmentedControl` (two-level nav scope toggle) | P2 | Filed 2026-06-11 — was only spec'd on the closed #137; now an actionable child. **Interim:** the settings **Host / App \| Workspace** home toggle stacks a second `<Tabs>` row (`SettingsSurface.tsx`) — retire on adoption. |
 
 ## Console adoption status (branch `ds-adoption-sweep`, 2026-06-09)
 

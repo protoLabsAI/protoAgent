@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-// The Delegates panel (ADR 0025) lives under Settings → Plugins: it lists the
-// configured delegates (GET /api/delegates), and an Add form with a type picker
-// driven by GET /api/delegate-types. Mocked endpoints in e2e/mock-server.mjs.
+// The Delegates panel (ADR 0025) lives under Settings ▸ Workspace ▸ Plugins (ADR 0048):
+// it lists the configured delegates (GET /api/delegates), and an Add form with a type
+// picker driven by GET /api/delegate-types. Mocked endpoints in e2e/mock-server.mjs.
 
 async function openIntegrations(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Plugins", exact: true }).click();
 }
 

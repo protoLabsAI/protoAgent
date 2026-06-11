@@ -12,8 +12,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { SettingsTab } from "../settings/SettingsSurface";
-
 // Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
 // active surface, plugins out. In the single-agent product that fell out for free (each agent
 // is its own origin → its own localStorage); the unified console collapses that, so we namespace
@@ -38,13 +36,17 @@ const _layoutStorage = createJSONStorage(() => ({
 // Core surfaces are fixed literals; plugin views (ADR 0026) add dynamic surfaces keyed
 // `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal autocomplete while allowing
 // those runtime keys.
+// The "agent" surface folded into Settings ▸ Workspace (ADR 0048 S-C); Knowledge is
+// now store-only (its Memory settings live in Settings ▸ Workspace ▸ Memory).
 export type Surface =
-  | "chat" | "activity" | "studio" | "knowledge" | "agent" | "plugins" | "settings" | (string & {});
+  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "settings" | (string & {});
 export type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
-export type AgentTab = "identity" | "settings" | "tools" | "mcp" | "subagents" | "skills" | "middleware";
 export type PluginsTab = "local" | "market" | "download";
-export type KnowledgeTab = "store" | "settings";
 export type ActivityTab = "thread" | "inbox";
+// Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
+// section sub-nav. `settingsScope` picks the home; `settingsSection` the active
+// section within it (a free string so each home owns its own section ids).
+export type SettingsScope = "host" | "workspace";
 
 const RIGHT_MIN = 280;
 const RIGHT_MAX = 720;
@@ -53,10 +55,12 @@ const clampWidth = (w: number) => Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, Math.r
 type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
-  agentTab: AgentTab;
   pluginsTab: PluginsTab;
-  knowledgeTab: KnowledgeTab;
-  settingsTab: SettingsTab;
+  settingsScope: SettingsScope;
+  settingsSection: string;
+  // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
+  // and asks the fleet panel to open the new-agent picker on mount, then clears it.
+  fleetStartNew: boolean;
   activityTab: ActivityTab;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
@@ -78,10 +82,10 @@ type UIState = {
   toggleQuickBar: (id: string) => void;
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
-  setAgentTab: (t: AgentTab) => void;
   setPluginsTab: (t: PluginsTab) => void;
-  setKnowledgeTab: (t: KnowledgeTab) => void;
-  setSettingsTab: (t: SettingsTab) => void;
+  setSettingsScope: (s: SettingsScope) => void;
+  setSettingsSection: (s: string) => void;
+  setFleetStartNew: (b: boolean) => void;
   setActivityTab: (t: ActivityTab) => void;
   setRightCollapsed: (b: boolean) => void;
   setLeftCollapsed: (b: boolean) => void;
@@ -96,7 +100,18 @@ type UIState = {
  * falls back to the default via the store's merge. Exported for unit testing. */
 export function migrateUiState(persisted: unknown): unknown {
   if (persisted && typeof persisted === "object") {
-    const { railOf: _drop, ...rest } = persisted as Record<string, unknown>;
+    // v2: drop the obsolete `railOf` (side map). v3 (ADR 0048): drop `settingsTab`
+    // (→ `settingsScope` + `settingsSection`) and the `agentTab` / `knowledgeTab`
+    // keys whose surfaces folded into Settings ▸ Workspace. All fall back to the
+    // store defaults via the persist merge. (A stale "agent" left in `railOrder` is
+    // harmless — railSurfaces() filters ids with no surface metadata.)
+    const {
+      railOf: _drop,
+      settingsTab: _drop2,
+      agentTab: _drop3,
+      knowledgeTab: _drop4,
+      ...rest
+    } = persisted as Record<string, unknown>;
     return rest;
   }
   return persisted;
@@ -107,16 +122,16 @@ export const useUI = create<UIState>()(
     (set) => ({
       surface: "chat",
       rightPanel: "beads",
-      agentTab: "identity",
       pluginsTab: "local",
-      knowledgeTab: "store",
-      settingsTab: "overview" as SettingsTab,
+      settingsScope: "host" as SettingsScope,
+      settingsSection: "overview",
+      fleetStartNew: false,
       activityTab: "thread",
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
       railOrder: {
-        left: ["chat", "activity", "studio", "knowledge", "agent", "plugins", "settings"],
+        left: ["chat", "activity", "studio", "knowledge", "plugins", "settings"],
         right: ["beads", "goals", "schedule"],
       },
       moveSurface: (id, side) =>
@@ -161,10 +176,12 @@ export const useUI = create<UIState>()(
         }),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
-      setAgentTab: (agentTab) => set({ agentTab }),
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
-      setKnowledgeTab: (knowledgeTab) => set({ knowledgeTab }),
-      setSettingsTab: (settingsTab) => set({ settingsTab }),
+      // Switching home resets to that home's first section (its own default lives in
+      // SettingsSurface); callers that want a specific section call setSettingsSection too.
+      setSettingsScope: (settingsScope) => set({ settingsScope }),
+      setSettingsSection: (settingsSection) => set({ settingsSection }),
+      setFleetStartNew: (fleetStartNew) => set({ fleetStartNew }),
       setActivityTab: (activityTab) => set({ activityTab }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
@@ -182,7 +199,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 2, // v2: railOf (side map) → railOrder (ordered lists per rail)
+      version: 3, // v2: railOf→railOrder. v3: settingsTab→settingsScope+settingsSection (ADR 0048)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
     },
   ),

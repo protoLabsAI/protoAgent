@@ -37,7 +37,13 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
 // categories, editable, saving to the host layer. Surfaced as its own Settings tab.
 // TODO(ADR 0047 §7): gate to the host console (slug=host); for now it renders for any
 // focused agent, clearly labeled "box-shared", so the slice isn't blocked on gating.
-export function HostDefaultsPanel({ categories = ["Agent", "System"] }: { categories?: string[] }) {
+export function HostDefaultsPanel({
+  categories = ["Agent", "System"],
+  title = "Host defaults",
+}: {
+  categories?: string[];
+  title?: string;
+}) {
   // ONE panel — the host-scoped fields across all the given categories render
   // together under a single header + Save bar + explainer (grouped by their
   // section). Previously this mapped one full SettingsCategory PER category, which
@@ -51,7 +57,7 @@ export function HostDefaultsPanel({ categories = ["Agent", "System"] }: { catego
               <SettingsCategory
                 category={categories[0]}
                 categories={categories}
-                title="Host defaults"
+                title={title}
                 emptyHint="No box-shared defaults on this box yet."
                 hostLayer
               />
@@ -400,7 +406,7 @@ function SettingRow({
   );
 }
 
-function SettingInput({ field, value, onChange }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void }) {
+export function SettingInput({ field, value, onChange }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void }) {
   const id = `set-${field.key}`;
 
   if (field.type === "bool") {

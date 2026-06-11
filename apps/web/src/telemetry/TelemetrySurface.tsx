@@ -21,6 +21,7 @@ import { Suspense } from "react";
 
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
+import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { telemetryQuery } from "../lib/queries";
 
@@ -71,6 +72,9 @@ function TelemetryBody() {
         kicker={`per-turn cost & latency · ${summary?.turns ?? 0} turns recorded`}
         actions={
           <>
+            {/* Quick-set the box-shared telemetry policy (ADR 0048) — both host-scoped,
+                so this saves to the host layer. */}
+            <QuickSetting keys={["telemetry.enabled", "telemetry.retention_days"]} title="Telemetry" label="Telemetry settings" />
             <Button icon variant="ghost" type="button" onClick={() => void downloadTelemetryCsv()}
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
