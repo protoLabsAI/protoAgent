@@ -268,11 +268,16 @@ function ChatSessionSlot({
   // sends the response as a follow-up on the same session — the server feeds it
   // to the agent via Command(resume=…). A form response is serialized to JSON.
   async function resumeHitl(response: Record<string, unknown> | string) {
+    // An approval gate (Approve/Deny on, e.g., run_command) isn't conversation — resume
+    // the turn but DON'T append an "approved"/"denied" user bubble. The outcome lives on
+    // the tool card itself (running → done on approve, error on deny), so the bubble is
+    // just noise. A form/question answer IS meaningful content, so those stay visible.
+    const silent = hitl?.kind === "approval";
     setHitl(null);
-    void runTurn(typeof response === "string" ? response : JSON.stringify(response));
+    void runTurn(typeof response === "string" ? response : JSON.stringify(response), { hidden: silent });
   }
 
-  async function runTurn(content: string) {
+  async function runTurn(content: string, opts: { hidden?: boolean } = {}) {
     if (!session || !content) return;
     const userMessage: ChatMessage = {
       id: messageId(),
@@ -292,7 +297,12 @@ function ChatSessionSlot({
 
     setDraft("");
     setStatusMessage("submitted");
-    chatStore.updateMessages(session.id, [...messages, userMessage, assistant]);
+    // `hidden` (an approval resume) sends `content` to the server but omits the user
+    // bubble — the agent still receives the approve/deny, the chat just doesn't show it.
+    chatStore.updateMessages(
+      session.id,
+      opts.hidden ? [...messages, assistant] : [...messages, userMessage, assistant],
+    );
     chatStore.setSessionStatus(session.id, "streaming");
     onError("");
 

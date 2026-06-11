@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Approving a gated action no longer dumps an "approved" bubble into the chat.** When
+  the agent gated a command behind an Approve/Deny prompt, the resume posted the literal
+  word `approved`/`denied` as a *user message* — noise that cluttered the transcript and
+  broke the read of the tool flow. An approval resume is now silent: the agent still gets
+  the decision, but the outcome belongs to the tool card (running → done on approve), not a
+  redundant bubble. Real input — `request_user_input` forms and `ask_human` questions —
+  still shows the answer, since that *is* conversation.
 - **Resizing panels felt sloppy and "wouldn't close right" over plugin views.** The DS
   AppShell's divider drag tracks the pointer on `window` listeners, so a plugin-view
   **iframe** captured `pointermove`/`pointerup` the instant the pointer crossed it — the
