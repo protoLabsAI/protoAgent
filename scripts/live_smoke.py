@@ -30,6 +30,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Windows consoles/pipes default to cp1252, which can't encode "✓" — the smoke
+# then dies at its own success banner. Force UTF-8 (lossy on truly odd terminals).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _free_port() -> int:
     s = socket.socket()
