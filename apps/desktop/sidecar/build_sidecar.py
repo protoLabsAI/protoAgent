@@ -7,8 +7,11 @@ React console itself, so the binary stays as small as this dependency stack allo
 
 Run from a venv with the runtime deps + PyInstaller installed:
 
-    pip install -r requirements.txt pyinstaller
+    pip install -r requirements.txt pyinstaller "mcp[cli]"
     python apps/desktop/sidecar/build_sidecar.py
+
+(``mcp[cli]`` is a build-env-only need: ``--collect-all mcp`` imports every mcp
+submodule, and ``mcp.cli`` raises at import when typer is missing.)
 
 The target triple matches Tauri's expectation (``rustc`` host), so the binary
 lands at the exact name Tauri looks for during ``tauri build``.

@@ -114,9 +114,12 @@ jobs:
         # Freezes `server` into binaries/protoagent-server-<triple> — the
         # externalBin Tauri bundles. The React console is the UI; no server-side
         # UI extras are bundled.
+        # mcp[cli] is a build-env requirement, not a runtime dep: --collect-all
+        # mcp imports every mcp submodule, and mcp.cli hard-errors at import
+        # when typer is missing (broke all legs once an unpinned mcp drifted).
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip install -r requirements.txt pyinstaller "mcp[cli]"
           python apps/desktop/sidecar/build_sidecar.py
           ls -la apps/desktop/src-tauri/binaries/
 
