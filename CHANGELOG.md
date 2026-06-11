@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **A configured plugin/model secret now shows a clear "set" badge in Settings.** Secrets
+  never echo their value, so a saved key looked identical to an empty one ("did it save?").
+  The generic Settings surface now renders a "set" badge next to a configured secret field
+  (matching the Delegates panel) — a saved token is glanceable, not just a faint placeholder.
+  (First slice of the plugin/bundle lifecycle tightening — single-agent.)
+
+### Changed
 - **Adopt `@protolabsai/ui@0.26.2`** — picks up the AppShell iframe-drag fix
   (protoContent #212 + #214): resizing a panel that hosts a plugin iframe now tracks
   smoothly and collapses on release, via `.pl-appshell-frame--dragging iframe { pointer-events:
