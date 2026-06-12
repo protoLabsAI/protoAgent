@@ -21,6 +21,14 @@ from tools.lg_tools import get_all_tools
 def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None):
     middleware = []
 
+    # Self-heal a thread left with a dangling tool_call (a tool that hung while
+    # the user sent the next message, an interrupted turn, …) before anything
+    # else touches the history — otherwise the provider 400s every later turn
+    # ("insufficient tool messages following tool_calls"). No-op on a healthy
+    # history, so it never affects a normal turn.
+    from graph.middleware.tool_call_repair import ToolCallRepairMiddleware
+    middleware.append(ToolCallRepairMiddleware())
+
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
     # first/outermost so the cache breakpoint lands on the stable system
     # prefix; KnowledgeMiddleware's context is delivered just after it.
@@ -541,9 +549,21 @@ def create_agent_graph(
 
     # Programmatic tool calling — opt-in. Built last so it can wrap every
     # other tool (including task/task_batch) but never itself.
+    # Not in the frozen desktop build: it spawns a Python subprocess, but the
+    # PyInstaller binary has no standalone interpreter (sys.executable is the
+    # server itself). Don't even offer it to the model there — the Settings
+    # toggle is hidden too (graph.settings_schema.build_schema). From source /
+    # Docker it works normally.
     if config.execute_code_enabled:
-        from tools.execute_code import build_execute_code_tool
-        all_tools.append(build_execute_code_tool(all_tools, config=config))
+        import sys as _sys
+        if getattr(_sys, "frozen", False):
+            logging.getLogger(__name__).warning(
+                "execute_code is enabled but unavailable in the packaged desktop build "
+                "(no standalone Python interpreter) — not loading the tool."
+            )
+        else:
+            from tools.execute_code import build_execute_code_tool
+            all_tools.append(build_execute_code_tool(all_tools, config=config))
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
     # search_tools meta-tool is built over the full set (so it can surface any

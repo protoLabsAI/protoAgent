@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Identity panel: the "Saving writes SOUL.md…" helper + save status now sit
   ABOVE the SOUL.md editor** (next to the Save button), instead of trailing under
   it — so the editor runs to the panel bottom without a footer of helper text.
+- **`execute_code` is hidden and disabled in the desktop app**, and its Settings
+  helper text was rewritten. It can't run in the packaged build (no standalone
+  Python interpreter to spawn), so the frozen sidecar no longer offers the tool to
+  the model *or* shows its toggle. The helper text also now states plainly that the
+  subprocess is "isolation, not a true sandbox" (the old text oversold it). From
+  source / Docker: unchanged, still off by default.
 
 ### Fixed
 - **Desktop first-run: panels no longer flash "Load failed" and need a reload.**
@@ -32,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   old selector, so the 84px inset silently stopped applying and the window's
   traffic-light buttons crowded the logo. Pointed the `.is-tauri-mac` inset at
   `.app-topbar`.
+- **`execute_code` no longer poisons a chat thread in the desktop app.** It spawns
+  `sys.executable -u <script>`, but in the frozen build that's the server binary,
+  not Python — so the spawn hung and the model's tool call never got a result,
+  leaving a dangling `tool_calls` message that 400'd every later turn
+  (`insufficient tool messages following tool_calls`). `run_code` now returns a
+  clean error in a frozen build instead of the broken spawn.
+- **The agent self-heals a chat thread left with a dangling tool_call.** Any turn
+  that persists an assistant `tool_calls` message whose result never landed (a
+  hung tool + a follow-up message, an interrupted/crashed turn, a dropped stream)
+  used to 400 *every* later turn until the chat was deleted. A new
+  `ToolCallRepairMiddleware` drops the unanswered tool_call from the history before
+  each model call so the request is valid again — a no-op on a healthy history, so
+  it never touches a normal turn.
 
 ## [0.35.2] - 2026-06-12
 

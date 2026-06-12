@@ -139,6 +139,19 @@ async def _connect_write(fd: int):
 
 async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate: int = 6000) -> str:
     """Run ``code`` in a child process with a tool-RPC bridge; return its stdout."""
+    if getattr(sys, "frozen", False):
+        # In a PyInstaller build (the desktop app) ``sys.executable`` is the frozen
+        # server binary, NOT a Python interpreter — ``<binary> -u <script>`` would
+        # relaunch the server, not run the script. There's no standalone Python to
+        # spawn. Refuse cleanly with a tool RESULT (so the tool_call is answered and
+        # the thread can't be left with a dangling tool_call that 400s every later
+        # turn) rather than attempting the broken spawn.
+        return (
+            "Error: execute_code is unavailable in the packaged desktop app — it needs a "
+            "standalone Python interpreter to spawn, which the frozen build doesn't ship. "
+            "Run protoAgent from source or in Docker to use it, or turn it off under "
+            "Settings ▸ Tools ▸ Enable execute_code."
+        )
     path = _build_runner_file(code)
     # Pipes: child writes requests on req_w; parent writes responses on resp_w.
     req_r, req_w = os.pipe()
