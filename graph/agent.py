@@ -555,6 +555,7 @@ def create_agent_graph(
     # toggle is hidden too (graph.settings_schema.build_schema). From source /
     # Docker it works normally.
     if config.execute_code_enabled:
+        import logging
         import sys as _sys
         if getattr(_sys, "frozen", False):
             logging.getLogger(__name__).warning(

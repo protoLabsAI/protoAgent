@@ -22,7 +22,7 @@ touches a thread that would otherwise 400.
 from __future__ import annotations
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 
 def _tc_id(tc) -> str | None:

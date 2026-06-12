@@ -96,7 +96,12 @@ def test_config_wires_middleware():
     from graph.config import LangGraphConfig
     from graph.agent import _build_middleware
     mw = _build_middleware(LangGraphConfig(), knowledge_store=None)
-    assert mw[0].__class__.__name__ == "PromptCacheMiddleware"
+    names = [m.__class__.__name__ for m in mw]
+    # ToolCallRepairMiddleware runs first — heal a dangling-tool_call history before
+    # anything else touches it; PromptCacheMiddleware stays the outermost *model*
+    # wrapper (repair only has before_model hooks, so the cache breakpoint is intact).
+    assert names[0] == "ToolCallRepairMiddleware"
+    assert names[1] == "PromptCacheMiddleware"
 
 
 @pytest.mark.asyncio
