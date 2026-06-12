@@ -75,6 +75,13 @@ export function IdentityPanel() {
               <span>Agent name</span>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-agent" data-testid="identity-name" />
             </label>
+            {/* Save feedback + what saving does — ABOVE the editor (near the Save button), so the
+                SOUL.md editor runs to the panel bottom instead of being trailed by helper text. */}
+            {save.isError ? <p className="error-strip" role="alert">Save failed — check the server log.</p> : null}
+            {save.isSuccess && !dirty ? <p className="muted">Saved — agent reloaded.</p> : null}
+            <p className="muted soul-hint">
+              Saving writes SOUL.md + config and hot-reloads the agent. The name updates the A2A card and console.
+            </p>
             <div className="field soul-field">
               <div className="soul-head">
                 <span>SOUL.md — the agent's persona &amp; system identity</span>
@@ -98,11 +105,6 @@ export function IdentityPanel() {
                 </div>
               )}
             </div>
-            {save.isError ? <p className="error-strip" role="alert">Save failed — check the server log.</p> : null}
-            {save.isSuccess && !dirty ? <p className="muted">Saved — agent reloaded.</p> : null}
-            <p className="muted" style={{ fontSize: "12px" }}>
-              Saving writes SOUL.md + config and hot-reloads the agent. The name updates the A2A card and console.
-            </p>
           </>
         )}
       </div>

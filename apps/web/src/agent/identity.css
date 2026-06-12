@@ -39,3 +39,9 @@
 }
 .soul-preview > :first-child { margin-top: 0; }
 .soul-preview > :last-child { margin-bottom: 0; }
+/* Helper line above the SOUL.md editor (what "Save & reload" does). Small + tight —
+   the .identity-body gap owns the vertical rhythm, so no extra margin here. */
+.soul-hint {
+  font-size: 12px;
+  margin: 0;
+}

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Identity panel: the "Saving writes SOUL.md…" helper + save status now sit
+  ABOVE the SOUL.md editor** (next to the Save button), instead of trailing under
+  it — so the editor runs to the panel bottom without a footer of helper text.
+
 ### Fixed
 - **Desktop first-run: panels no longer flash "Load failed" and need a reload.**
   The cold-start retry policy only rode out HTTP 409/502 (a fleet member spawning),
