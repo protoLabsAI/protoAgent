@@ -39,3 +39,27 @@ def test_notes_storage_is_instance_scoped(tmp_path, monkeypatch) -> None:
     notes = _load_notes()
     notes.write_note.invoke({"content": "alpha-note"})
     assert (tmp_path / "alpha" / "note.md").read_text(encoding="utf-8") == "alpha-note"
+
+
+def test_editor_view_follows_the_four_rules() -> None:
+    """The served editor page must stay four-rules compliant
+    (docs/how-to/build-a-plugin-view.md): kit css+js linked slug-aware (rule 4),
+    data fetched via the kit's authed apiFetch (rules 2+3), and no hand-rolled
+    theme map (the pre-kit page carried a hex :root token block that ignored
+    the operator's theme)."""
+    html = _load_notes()._EDITOR_HTML
+    # Rule 4 — the same-origin DS kit, base-prefixed by hand (loads before the kit exists).
+    assert "/_ds/plugin-kit.css" in html
+    assert "/_ds/plugin-kit.js" in html
+    assert 'location.pathname.split("/plugins/")[0]' in html  # slug-aware base
+    # Rules 2+3 — gated data path via the kit's slug-aware authed fetch.
+    assert 'apiFetch("/api/plugins/notes/note"' in html
+    assert "initPluginView" in html
+    # The kit is an ES MODULE — it must load via dynamic import from a module
+    # script, never a classic <script src> (SyntaxError: Unexpected token 'export').
+    assert 'type="module"' in html
+    assert 'import(window.__base + "/_ds/plugin-kit.js")' in html
+    # No hand-rolled theme: hex colors and a bespoke handshake listener are the
+    # antipattern the kit replaces.
+    assert "#0a0a0c" not in html
+    assert 'addEventListener("message"' not in html

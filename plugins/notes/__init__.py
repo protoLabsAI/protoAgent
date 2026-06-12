@@ -148,58 +148,78 @@ def register(registry) -> None:
     registry.register_router(_build_data_router(), prefix="/api/plugins/notes")
 
 
-# The editor page the console iframes (ADR 0026 bridge → bearer + theme). A self-contained markdown
-# editor: debounced autosave (PUT /note), an edit↔preview toggle (marked from CDN), and a poll that
-# adopts the agent's writes. Dark by default, following the console theme. No host build — the
-# plugin serves its own UI, so it works installed from a git URL (ADR 0038).
+# The editor page the console iframes. A self-contained markdown editor: debounced
+# autosave (PUT /note), an edit↔preview toggle (marked from CDN, degrades to raw text
+# offline), and a poll that adopts the agent's writes. No host build — the plugin
+# serves its own UI, so it works installed from a git URL (ADR 0038).
 #
-# FLEET-PROXY-SAFE FETCH (ADR 0042): the iframe (the PUBLIC page) loads at /plugins/notes/view on the
-# host window, but at /agents/<slug>/plugins/notes/view when this agent is viewed through the fleet
-# proxy. So it derives `base` from its own path (= "" on host, "/agents/<slug>" when proxied) and
-# prefixes EVERY data fetch — never hardcode an absolute "/api/..." or the proxied window would hit
-# the host agent. The data path stays the GATED /api/plugins/notes/note, fetched with the token.
-_EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><style>
-  :root{ --bg:#0a0a0c; --bg-raised:#161616; --fg:#ededed; --fg-muted:#9aa0aa; --border:#2a2a30; --brand:#a78bfa; }
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
-    font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+# FOUR-RULES COMPLIANT (docs/how-to/build-a-plugin-view.md, the chat_example pattern):
+#   3. SLUG-AWARE — the kit's apiFetch derives the base (host vs /agents/<slug> proxy)
+#      for every data call; only the kit's own <link>/<script> are base-prefixed by
+#      hand (they load before the kit exists).
+#   4. LINK THE KIT — <base>/_ds/plugin-kit.{css,js} replaces the hand-rolled hex
+#      token map + bespoke protoagent:init listener + manual bearer headers this page
+#      carried before: plugin-kit.js maps the operator's live theme onto --pl-*
+#      (initial handshake AND protoagent:theme re-themes), and apiFetch attaches the
+#      token. Local <style> is layout-only.
+_EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
+<script>
+  "use strict";
+  // Slug-aware base (ADR 0042), computed FIRST: the kit's own assets load before the
+  // kit exists, so they're the one thing prefixed by hand (rule 4).
+  window.__base = location.pathname.split("/plugins/")[0];
+  document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
+</script>
+<style>
+  /* Layout only — colors/typography come from plugin-kit.css's --pl-* tokens, which
+     plugin-kit.js re-skins to the operator's live theme on the handshake. */
+  html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
+    font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
   #wrap{display:flex;flex-direction:column;height:100%}
-  #bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--fg-muted)}
-  #bar button{background:transparent;border:1px solid var(--border);color:var(--fg-muted);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
-  #ed{flex:1;min-height:0;resize:none;border:0;outline:none;padding:12px;background:transparent;color:var(--fg);
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.6}
+  #bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;
+    border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border);
+    font-size:12px;color:var(--pl-color-fg-muted)}
+  #ed{flex:1;min-height:0;resize:none;border:0;outline:none;padding:12px;background:transparent;
+    color:var(--pl-color-fg);font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);
+    font-size:13px;line-height:1.6}
   #pv{flex:1;min-height:0;overflow:auto;padding:12px;display:none}
-  #pv :is(h1,h2,h3){color:var(--fg)} #pv code{background:var(--bg-raised);padding:2px 5px;border-radius:5px}
+  #pv :is(h1,h2,h3){color:var(--pl-color-fg)}
+  #pv code{background:var(--pl-color-bg-raised);padding:2px 5px;border-radius:var(--pl-radius)}
 </style></head><body>
 <div id="wrap">
-  <div id="bar"><span id="status">Notes</span><button id="toggle" type="button">Preview</button></div>
+  <div id="bar"><span id="status">Notes</span>
+    <button id="toggle" class="pl-btn pl-btn--sm" type="button">Preview</button></div>
   <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false"></textarea>
   <div id="pv"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-<script>
-  var token=null, lastSynced="", dirty=false, preview=false, t=null;
+<script type="module">
+  "use strict";
+  // plugin-kit.js is an ES MODULE (it has export statements) — a classic
+  // <script src> throws "Unexpected token 'export'" and never sets the
+  // window.protoPluginView global. Dynamic import is the no-build way to load it
+  // with a slug-aware URL (a static import specifier can't carry the base).
+  // Older host with no /_ds route: fall back to a tokenless same-origin shim
+  // (fine locally; gated instances always serve the kit).
+  let kit;
+  try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
+  catch (e) { kit = { initPluginView(){}, apiFetch: (p, i) => fetch(window.__base + p, i) }; }
+  var lastSynced="", dirty=false, preview=false, t=null;
   var ed=document.getElementById("ed"), pv=document.getElementById("pv"), st=document.getElementById("status"), tg=document.getElementById("toggle");
-  // Slug-aware base (ADR 0042): the iframe (PUBLIC page) lives at /plugins/notes/view on the host
-  // window or /agents/<slug>/plugins/notes/view when proxied. base = "" (host) or "/agents/<slug>"
-  // (proxied); prefix EVERY data fetch so the proxied window talks to ITS agent, never the host's.
-  var base = location.pathname.split("/plugins/")[0];
-  window.addEventListener("message", function(e){
-    var m=e.data||{}; if(m.type!=="protoagent:init") return; token=m.token||null;
-    if(m.theme){ var r=document.documentElement.style;
-      if(m.theme.bg)r.setProperty("--bg",m.theme.bg); if(m.theme.fg)r.setProperty("--fg",m.theme.fg);
-      if(m.theme.fgMuted)r.setProperty("--fg-muted",m.theme.fgMuted); if(m.theme.border)r.setProperty("--border",m.theme.border); }
-  });
-  function hdr(extra){ var h=extra||{}; if(token)h["Authorization"]="Bearer "+token; return h; }
+  // The kit owns the protoagent:init handshake (bearer + theme, incl. live re-themes)
+  // and authed slug-aware fetches; on a token-gated instance the first token arrives
+  // with the handshake, so re-load then (the immediate load() covers tokenless local).
+  kit.initPluginView(function(){ if(!dirty) load(); });
   function renderPreview(){ pv.innerHTML = window.marked ? marked.parse(ed.value||"") : ed.value; }
   tg.onclick=function(){ preview=!preview; if(preview){renderPreview();pv.style.display="block";ed.style.display="none";tg.textContent="Edit";}
     else{pv.style.display="none";ed.style.display="block";tg.textContent="Preview";} };
   ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,700); });
   async function save(){ try{
-      var r=await fetch(base+"/api/plugins/notes/note",{method:"PUT",headers:hdr({"Content-Type":"application/json"}),body:JSON.stringify({content:ed.value})});
+      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:ed.value})});
       if(!r.ok)throw 0; lastSynced=ed.value; dirty=false; st.textContent="Saved ✓";
     }catch(e){ st.textContent="Save failed"; } }
   async function load(){ try{
-      var a=await fetch(base+"/api/plugins/notes/note",{headers:hdr()}).then(function(r){return r.json();});
+      var a=await kit.apiFetch("/api/plugins/notes/note").then(function(r){return r.json();});
       if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; if(preview)renderPreview(); }
     }catch(e){} }
   load();

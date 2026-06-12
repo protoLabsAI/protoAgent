@@ -165,7 +165,10 @@ The console serves the design-system kit same-origin at **`<base>/_ds/plugin-kit
 no-hardcode escape hatch. `plugin-kit.css` gives `--pl-*` tokens + `.pl-*` components;
 `plugin-kit.js` does the handshake and exposes a tiny API.
 
-Link both slug-aware (RULE 3 + 4):
+Link both slug-aware (RULE 3 + 4). **`plugin-kit.js` is an ES module** (`export` statements) — a
+classic `<script src>` throws `Unexpected token 'export'` and never runs it, so the JS half loads
+with a **dynamic `import()`** (a static import specifier can't carry the slug-aware base; only the
+CSS `<link>` is base-prefixed by hand, because it loads before any script can help):
 
 ```html
 <script>
@@ -174,12 +177,13 @@ Link both slug-aware (RULE 3 + 4):
   document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
 </script>
 ...
-<script src="" id="kit"></script>
-<script>document.getElementById("kit").src = window.__base + "/_ds/plugin-kit.js";</script>
+<script type="module">
+  const kit = await import(window.__base + "/_ds/plugin-kit.js");
+  // …the view's logic, using kit.initPluginView() / kit.apiFetch() …
+</script>
 ```
 
-The classic script-tag form exposes a **`window.protoPluginView`** global; the kit is also an ES
-module (`import { initPluginView } from ".../plugin-kit.js"`). The API:
+The API:
 
 | Helper | What it does |
 |---|---|
@@ -187,15 +191,18 @@ module (`import { initPluginView } from ".../plugin-kit.js"`). The API:
 | `getToken()` | The captured operator bearer (null until the handshake delivers one). |
 | `apiUrl(path)` | Resolves a root-relative `path` to its **slug-aware** URL — prepends `/agents/<slug>` under the fleet proxy, leaves it untouched on the host window (plugin-kit 0.26+). Idempotent: a path already under the base is returned as-is. |
 | `apiFetch(input, init?)` | A same-origin `fetch` that resolves `input` through `apiUrl` (**slug-aware** — pass a bare `/api/...`, no manual base) **and** attaches `Authorization: Bearer <token>` when present. Use it for every gated `/api/...` call. |
-| `window.protoPluginView` | The same helpers as a global, for no-build classic script-tag pages. |
 
 So a whole view's handshake + authed fetch is:
 
 ```js
-const kit = window.protoPluginView;
+const kit = await import(window.__base + "/_ds/plugin-kit.js");
 kit.initPluginView();                         // handshake + live re-theme, hands-free
 const res = await kit.apiFetch("/api/chat", { method: "POST", body: ... });  // slug-aware, no manual base
 ```
+
+> The kit also assigns a `window.protoPluginView` global when it runs, but that only happens after
+> the module is evaluated — don't rely on it from a separate classic `<script>`; import the module
+> and use what it returns.
 
 Prefer the kit over hardcoding hex values, a theme map, or a CDN — colors and the handshake both come
 from the console's own DS, so your view always matches the operator's live theme.
