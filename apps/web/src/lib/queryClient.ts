@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 
-import { isColdStart } from "./api";
+import { is401, isColdStart } from "./api";
 
 // One QueryClient for the whole console (ADR 0013). Surfaces fetch with
 // `useSuspenseQuery` so loading is a <Suspense> fallback and errors are caught
@@ -23,8 +23,13 @@ export const queryClient = new QueryClient({
       // so a panel stays in its loading state until the agent is up. Everything else
       // keeps the single retry. (Queries that opt out via `retry: false` are unaffected;
       // a genuinely-down agent still surfaces via the shell's boot-gate "isn't responding".)
-      retry: (failureCount, error) =>
-        isColdStart(error) ? failureCount < 25 : failureCount < 1,
+      // 401 never retries: the answer can't change until the operator enters a
+      // token — the AuthGate prompt (#873) owns recovery (it invalidates every
+      // query after the token is saved).
+      retry: (failureCount, error) => {
+        if (is401(error)) return false;
+        return isColdStart(error) ? failureCount < 25 : failureCount < 1;
+      },
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 3000),
       refetchOnWindowFocus: false,
     },

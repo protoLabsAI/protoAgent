@@ -34,6 +34,8 @@ import type {
   WorkflowSummary,
 } from "./types";
 
+import { notifyAuthRequired } from "./auth";
+
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   /** Pin to the HUB (never slug-route) — for origin-level reads like the tenant uid
@@ -258,6 +260,12 @@ export function isColdStart(error: unknown): boolean {
   return true; // no HTTP response at all ⇒ not reachable yet (desktop sidecar booting)
 }
 
+/** True for a 401 from request() — retrying can't help until the operator supplies
+ *  a token (#873); the AuthGate owns recovery. */
+export function is401(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { host, ...init } = options;  // `host` is ours (routing), not a fetch RequestInit field
   const headers = applyAuth(new Headers(init.headers));
@@ -281,6 +289,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       detail = await response.text();
     }
+    // Wrong/expired/missing bearer on a token-gated deployment — surface the
+    // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.
+    if (response.status === 401) notifyAuthRequired();
     throw new ApiError(response.status, detail || "request failed");
   }
 
@@ -897,6 +908,7 @@ export const api = {
     });
 
     if (!response.ok) {
+      if (response.status === 401) notifyAuthRequired(); // token-gated chat turn (#873)
       throw new Error(`${response.status} ${response.statusText}`);
     }
 

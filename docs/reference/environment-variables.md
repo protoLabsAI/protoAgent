@@ -56,7 +56,7 @@ When unset, startup logs a WARNING (`"A2A auth token not configured — endpoint
 
 **Scope.** The guard covers everything that can drive the agent: `/a2a`, the operator API (`/api/*` — run subagents, rewrite config/SOUL, schedule jobs), `/api/chat`, and `/v1/*`. **Public (never guarded):** `/healthz`, `/.well-known/agent-card.json`, `/metrics`, the static console at `/app`, and the read-only `/api/events` SSE stream (browsers' `EventSource` can't send an `Authorization` header; it exposes only activity/inbox events, no action).
 
-**Console.** When a token is set, the React console reads it from `localStorage["protoagent.authToken"]` and sends it as a bearer on every API + A2A call. Set it once in the browser (`localStorage.setItem("protoagent.authToken", "<token>")`) for a token-protected deployment; local/desktop runs (no token) need nothing.
+**Console.** When a token is set, the React console sends it as a bearer on every API + A2A call. On the first 401 the console prompts for the token ("Authentication required") and stores it in `localStorage["protoagent.authToken"]` — no devtools needed; local/desktop runs (no token) need nothing.
 
 ## A2A agent-card endpoint
 

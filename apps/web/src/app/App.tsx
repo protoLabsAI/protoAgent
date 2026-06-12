@@ -60,10 +60,12 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
+import { AuthGate } from "./AuthGate";
+import { authRequired, subscribeAuth } from "../lib/auth";
 import { TenantGuard } from "./TenantGuard";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
 import { Button } from "@protolabsai/ui/primitives";
@@ -85,7 +87,7 @@ import {
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
-import { api } from "../lib/api";
+import { api, is401 } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { Alert } from "@protolabsai/ui/data";
@@ -260,7 +262,11 @@ export function App() {
   // briefly freezes it, so we want to notice the moment it's live again.
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
-    retry: 30,
+    // 30 boot-probe retries, but a 401 stops immediately: retrying can't fix a
+    // missing bearer, and a retrying probe would reopen the AuthGate the moment
+    // the operator dismissed it (#873). The gate's invalidateQueries restarts
+    // the probe once a token is saved.
+    retry: (failureCount, error) => !is401(error) && failureCount < 30,
     retryDelay: 1000,
     refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
   });
@@ -268,7 +274,11 @@ export function App() {
 
   // Tenant uid is the HUB's, never the focused agent's (which changes on every fleet
   // swap and would wrongly wipe the chat view). Host-pinned, stable, low-churn.
-  const hostUidQ = useQuery({ ...hostRuntimeStatusQuery(), retry: 30, retryDelay: 1000 });
+  const hostUidQ = useQuery({
+    ...hostRuntimeStatusQuery(),
+    retry: (failureCount, error) => !is401(error) && failureCount < 30,
+    retryDelay: 1000,
+  });
 
   // Plugin-contributed rail surfaces (ADR 0026): each enabled plugin's declared
   // views become a dynamic rail icon (keyed plugin:<id>:<viewId>) whose panel is
@@ -349,6 +359,11 @@ export function App() {
   // copy/escape-hatch swap. STUCK_AFTER_MS=45s — past it, offer "Continue anyway"
   // so a graph that never compiles can't trap the operator on the loading screen.
   const bootFailed = !runtime && runtimeQ.isError;
+  // Token-gated first run (#873): the boot probe itself 401s. The BootGate's
+  // "Starting… / isn't responding" copy is wrong for that — and its overlay
+  // (z-1900) would cover the AuthGate dialog (z-1000) — so the gate yields to
+  // the token prompt while auth is needed.
+  const authNeeded = useSyncExternalStore(subscribeAuth, authRequired);
   // White-labelled gate copy: identity.name → display name (forks read their own).
   const bootName = brandName(runtime?.identity?.name);
   const [bootStuck, setBootStuck] = useState(false);
@@ -645,7 +660,7 @@ export function App() {
           is a slot-only shell with no `ready` — the host owns the gate by
           conditionally rendering it, and computes the failed/loading copy +
           escape-hatch action. Name flows from identity so forks white-label. */}
-      {!bootReady && (
+      {!bootReady && !authNeeded && (
         // role=status live region restores the screen-reader announcement the old
         // gate carried ("Starting…" / "isn't responding") during the ~30s cold start
         // — the DS BootGate shell doesn't own one. Host wrapper, no CSS (interim
@@ -679,6 +694,10 @@ export function App() {
           />
         </div>
       )}
+      {/* Token prompt (#873): any 401 — panel query, boot probe, chat turn — opens
+          this. Rendered AFTER the BootGate so a token-gated deployment's first run
+          (where the boot probe itself 401s) shows the prompt on top of the gate. */}
+      <AuthGate />
       {/* macOS desktop: the topbar IS the window's drag region (its brand insets
           right of the native traffic lights — see `.is-tauri-mac .topbar`).
           Interactive children (the status dot) stay clickable; harmless on web. */}
