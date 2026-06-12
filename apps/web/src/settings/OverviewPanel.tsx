@@ -1,5 +1,5 @@
 import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, Database, HardDrive, Settings2, Sparkles } from "lucide-react";
+import { Bot, Database, HardDrive, Settings2, Sparkles, Tag } from "lucide-react";
 import { Suspense, type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
@@ -38,10 +38,14 @@ function StatusBody() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
   return (
     <>
-      <PanelHeader title="Overview" kicker={runtime.model?.name || "model not configured"} />
+      <PanelHeader
+        title="Overview"
+        kicker={`${runtime.model?.name || "model not configured"}${runtime.version ? ` · v${runtime.version}` : ""}`}
+      />
       <div className="stage-body">
         <div className="metric-grid">
           <Metric icon={<Bot size={16} />} label="Agent" value={brandName(runtime.identity?.name)} />
+          <Metric icon={<Tag size={16} />} label="Version" value={runtime.version ? `v${runtime.version}` : "—"} />
           <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime.model?.provider || "none"} />
           <Metric icon={<Database size={16} />} label="Knowledge" value={runtime.knowledge.resolved_path || runtime.knowledge.configured_path || "disabled"} />
           <Metric icon={<Sparkles size={16} />} label="Goal mode" value={runtime.goal.enabled ? "on" : "off"} />
