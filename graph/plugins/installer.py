@@ -407,14 +407,23 @@ def _ls_remote_sha(source_url: str, ref: str) -> str:
 
     # `git ls-remote <url> <ref>` prints "<sha>\t<refname>" lines; with no ref it
     # lists everything and we take HEAD. We always pass an explicit refspec when we
-    # have one (branch/tag), else "HEAD".
-    out = _git("ls-remote", source_url, ref or "HEAD", timeout=_LSREMOTE_TIMEOUT_S)
-    sha = ""
+    # have one (branch/tag), else "HEAD". For an ANNOTATED tag the bare refspec
+    # returns the tag-object SHA — never equal to the lock's commit SHA, so a naive
+    # compare reports a permanent false "behind" (ADR 0049). Ask for the peeled
+    # `<ref>^{}` too and prefer it; branches/HEAD/lightweight tags simply don't
+    # match the peeled refspec and fall back to the bare line.
+    refspecs = [ref, ref + "^{}"] if ref else ["HEAD"]
+    out = _git("ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S)
+    sha = peeled = ""
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) == 2 and parts[0].strip():
-            sha = parts[0].strip()
-            break
+        if len(parts) != 2 or not parts[0].strip():
+            continue
+        if parts[1].strip().endswith("^{}"):
+            peeled = peeled or parts[0].strip()
+        else:
+            sha = sha or parts[0].strip()
+    sha = peeled or sha
     _lsremote_cache[key] = (now, sha)
     return sha
 

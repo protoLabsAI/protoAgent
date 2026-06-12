@@ -1,0 +1,50 @@
+# A protoAgent plugin BUNDLE (ADR 0040) with the PIN LIFECYCLE baked in (ADR 0049).
+# Copy this repo layout to publish your own bundle:  protoagent.bundle.yaml at the
+# root + scripts/ + .github/workflows/verify-bundle.yml.   Install:
+#   python -m server plugin install <this-repo-url>
+#
+# THE PIN RULES (ADR 0049 — what keeps this bundle from rotting):
+#
+#   1. Pin release TAGS, not raw SHAs. A tag is legible ("pinned v0.1.0, v0.1.2
+#      available"), ls-remote-able (the console's update advisory can see it), and it
+#      nudges plugin repos toward a release discipline. The installer still locks the
+#      resolved commit SHA in plugins.lock — the tag is the *requested* ref, the lock
+#      stays the reproducibility truth. Raw SHAs remain fine for unreleased forks.
+#   2. Record `verified_against:` — the core version this exact pin set was last
+#      verified on. Metadata, not a gate: tooling surfaces it, nothing enforces it.
+#   3. Never bump a pin by hand-editing alone — let CI prove it. The verify workflow
+#      installs THIS manifest into a scratch agent and probes every declared console
+#      view; the scheduled leg opens a pin-bump PR when a member tags a new release.
+#      A pin that only moves through a passing verify literally means "last verified
+#      working".
+#
+# KEEP MEMBER ENTRIES ON ONE LINE — scripts/check_bundle_updates.py rewrites the
+# `ref:` token in place (comment-preserving) and expects the `- { id, url, ref }`
+# inline form below.
+
+id: my-stack
+name: My Stack
+description: >-
+  One-line pitch for the composed agent this bundle stands up.
+
+# The core version this pin set was last verified against (rule 2). The verify
+# workflow checks out this protoAgent ref for the smoke, so the claim is tested,
+# not aspirational. Bump it when you re-verify on a newer core.
+verified_against: 0.35.3
+
+plugins:
+  - { id: delegates, builtin: true }                                                  # ships with protoAgent
+  - { id: project_board, url: https://github.com/protoLabsAI/projectBoard-plugin,  ref: v0.1.1 }
+  - { id: agent_browser, url: https://github.com/protoLabsAI/agent-browser-plugin, ref: v0.1.1 }
+
+enabled: [delegates, project_board, agent_browser]   # suggested turn-on list (you apply it)
+config:                                              # recommended defaults (you apply them)
+  agent_browser:
+    panel_mode: full
+
+# Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the
+# new-agent picker. Additive metadata; it doesn't change the bundle shape.
+archetype:
+  label: My Stack
+  icon: Boxes
+  blurb: One-line pitch shown on the archetype card.
