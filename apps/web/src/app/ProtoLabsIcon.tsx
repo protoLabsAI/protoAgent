@@ -15,6 +15,8 @@
  *   text / no-compete contexts (what the launch splash + boot gate use).
  * - `white`: white robot, no background — for dark chrome (e.g. a title bar).
  */
+import { useId } from "react";
+
 export function ProtoLabsIcon({
   size = 64,
   variant = "flat",
@@ -29,13 +31,19 @@ export function ProtoLabsIcon({
    *  name) — avoids a redundant nested "protoLabs.studio" announcement. */
   decorative?: boolean;
   /** Stroke the (outline) mark with the brand gradient instead of solid lavender,
-   *  matching the gradient wordmark. References `#pl-brand-gradient` — the def the
-   *  DS Splash renders (or mount <BrandGradientDef/>). CSS can't gradient a slotted
-   *  SVG from outside, so the fill must live on the SVG itself. */
+   *  matching the gradient wordmark. The gradient def lives ON this SVG (below) so
+   *  it's self-contained — and it MUST be `userSpaceOnUse`: an objectBoundingBox
+   *  gradient (e.g. the DS `#pl-brand-gradient`) can't paint the mark's eyes/ears,
+   *  which are axis-aligned strokes with a zero-area bbox — Chrome/WebKit drop them
+   *  entirely. (We used to reference `#pl-brand-gradient`, which is exactly why the
+   *  Splash logo lost its eyes + ears.) */
   gradientStroke?: boolean;
 }) {
+  // Unique, selector-safe id per instance (useId yields ":r0:"-style ids; strip
+  // the colons so the funciri url(#…) and any tooling stay happy).
+  const gradId = `pl-grad-${useId().replace(/:/g, "")}`;
   const robotStroke = gradientStroke
-    ? "url(#pl-brand-gradient)"
+    ? `url(#${gradId})`
     : variant === "outline"
       ? "#9b87f2"
       : "#ffffff";
@@ -50,6 +58,18 @@ export function ProtoLabsIcon({
       className={className}
       {...a11y}
     >
+      {gradientStroke && (
+        <defs>
+          {/* userSpaceOnUse + coords in the mark's LOCAL space (the paths' own
+              coordinate system, inside the translate/scale group) — paints every
+              subpath including the zero-area eye/ear strokes. lavender → brand
+              violet, matching the gradient wordmark. */}
+          <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1="2" y1="4" x2="22" y2="20">
+            <stop offset="0" stopColor="#9b87f2" />
+            <stop offset="1" stopColor="#7c3aed" />
+          </linearGradient>
+        </defs>
+      )}
       {variant === "flat" && (
         <rect x="16" y="16" width="224" height="224" rx="56" fill="#9b87f2" />
       )}
