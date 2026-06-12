@@ -13,5 +13,18 @@
          or broader code-signing exceptions unless a shipped feature requires it. -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
+    <!-- REQUIRED for the PyInstaller server sidecar. The frozen onefile extracts
+         and dlopen()s a bundled Python.framework signed with a different Team ID
+         than our Developer ID. Under the hardened runtime, library validation
+         refuses to map a library whose Team ID differs from the process's —
+         "code signature ... not valid for use in process: ... different Team IDs"
+         — so the sidecar cannot start at all in the signed/notarized build (the
+         backend never comes up; the console loads but every API call fails).
+         Disabling library validation is the sanctioned, notarization-permitted
+         exception for embedded interpreters. Tauri signs the sidecar with this
+         same plist, so the entitlement reaches the process doing the dlopen.
+         (Shipped in v0.35.0 WITHOUT this → the desktop app was dead on arrival.) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

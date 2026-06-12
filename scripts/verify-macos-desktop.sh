@@ -64,16 +64,22 @@ codesign -dvv "$APP" 2>&1 | grep -q "TeamIdentifier=" || { echo "FAIL: no TeamId
 echo "ok: Developer ID authority + team identifier"
 
 ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null)"
-for key in com.apple.security.network.client com.apple.security.network.server com.apple.security.cs.allow-jit; do
+# disable-library-validation is REQUIRED: the PyInstaller sidecar dlopen()s a
+# Python.framework with a different Team ID, which the hardened runtime blocks
+# without it (the sidecar — hence the whole backend — was DOA in v0.35.0).
+for key in com.apple.security.network.client com.apple.security.network.server \
+           com.apple.security.cs.allow-jit com.apple.security.cs.disable-library-validation; do
   echo "$ENTITLEMENTS" | grep -q "$key" || { echo "FAIL: missing entitlement: $key"; exit 1; }
 done
-for key in com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation; do
+# Still keep the blast radius tight — nothing broader than the declared set.
+for key in com.apple.security.cs.allow-unsigned-executable-memory \
+           com.apple.security.cs.allow-dyld-environment-variables; do
   if echo "$ENTITLEMENTS" | grep -q "$key"; then
     echo "FAIL: forbidden entitlement present: $key"
     exit 1
   fi
 done
-echo "ok: entitlements exactly as declared (network client/server + JIT; nothing broader)"
+echo "ok: entitlements exactly as declared (network client/server + JIT + library-validation exception for the frozen sidecar; nothing broader)"
 
 spctl --assess --type execute --verbose=4 "$APP"
 echo "ok: Gatekeeper accepts the app"

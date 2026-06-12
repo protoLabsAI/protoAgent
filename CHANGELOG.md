@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The desktop app's backend now actually starts (it was dead on arrival in
+  v0.35.0).** The signed/notarized macOS build runs the PyInstaller server
+  sidecar under the hardened runtime, which enables **library validation** — and
+  the frozen onefile extracts and `dlopen()`s a bundled `Python.framework` signed
+  with a different Team ID than our Developer ID. Library validation refused to
+  map it (`code signature ... not valid for use in process: ... different Team
+  IDs`), so the sidecar never started: the console loaded but every API call
+  failed (no beads, no settings, the boot gate stuck on "…attention in
+  Settings"). Added the sanctioned, notarization-permitted
+  `com.apple.security.cs.disable-library-validation` entitlement so the embedded
+  interpreter loads. CI missed it because the frozen-sidecar smoke runs on the
+  **unsigned** binary (before bundling) — added a **post-sign smoke** that boots
+  the signed sidecar from the bundled `.app`, so a signing-induced backend
+  failure fails the build instead of shipping. `verify-macos-desktop.sh` now
+  *requires* the entitlement (it previously forbade it).
+- **Desktop release builds now write logs.** `tauri-plugin-log` was initialised
+  only under `cfg!(debug_assertions)`, so release builds produced no log file —
+  which is why the sidecar boot failure above left no trace on disk. Logging is
+  now always on; `[sidecar]` stdout/stderr (including a boot crash) is captured
+  to `~/Library/Logs/studio.protolabs.protoagent/`.
+
 ## [0.35.0] - 2026-06-12
 
 ### Added

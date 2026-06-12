@@ -287,13 +287,16 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Init logging in RELEASE too (was debug-only): a release build that
+            // wrote no logs is exactly why the v0.35.0 sidecar failure was opaque
+            // — "no logs?". tauri-plugin-log's default targets include the OS log
+            // dir (~/Library/Logs/studio.protolabs.protoagent/), so the captured
+            // `[sidecar]` stdout/stderr (incl. a boot crash) lands on disk.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            )?;
             app.manage(SidecarProcess::default());
 
             // Pin the sidecar to the fixed port the web client falls back to in
