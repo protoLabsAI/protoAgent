@@ -340,4 +340,10 @@ jobs:
             --notes "protoAgent ${TAG} — see the GitHub Release for details." \
             --out latest.json
           cat latest.json
-          gh release upload "$TAG" latest.json --clobber
+          # --repo is required: this job never checks out the repo (it only
+          # `gh release download`s bundles), so without it `gh release upload`
+          # tries to infer the repo from `git remote` and dies with
+          # "not a git repository" — stranding latest.json off the release
+          # (the in-app updater manifest). The download step above already
+          # passes --repo for the same reason.
+          gh release upload "$TAG" latest.json --repo "${{ github.repository }}" --clobber
