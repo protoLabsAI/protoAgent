@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent spawned from the archetype.
 
 ### Fixed
+- **Force re-install no longer claims a live hot-mount it can't deliver (#942).**
+  Re-installing a plugin whose router is already mounted re-registers the router on
+  reload, but FastAPI can't swap a mounted router in place — the fresh routes keep
+  serving the OLD code until a restart, while `POST /api/plugins/install` answered
+  `restart_recommended: false` (hardcoded). The install route now reads the live
+  mount registry (which survives a disable, unlike plugin meta) and flags the
+  restart honestly, and it purges the re-installed plugin's module subtree before
+  the reload (parity with the update route) so a multi-file plugin's tools run the
+  fresh checkout. The update route's restart heuristic also gained the
+  mount-registry check for the disabled-but-still-mounted case.
 - **Annotated-tag pins no longer report a permanent false "Update available".**
   `git ls-remote <url> <tag>` returns the *tag object* SHA for an annotated tag —
   never equal to the lock's commit SHA — so tag-pinned plugins (e.g. `artifact@v0.2.1`)

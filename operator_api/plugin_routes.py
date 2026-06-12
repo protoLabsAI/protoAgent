@@ -17,6 +17,11 @@ DISABLE is the residual restart case: FastAPI has no route-removal API, so a
 disabled plugin's view/route lingers on the live app until a process restart
 (documented in ``_mount_plugin_routers``). We flag ``restart_recommended`` only
 when disabling a plugin that contributed a view/route/surface.
+
+FORCE RE-INSTALL (and UPDATE, which is a force re-install at the recorded ref) is
+the other residual case (#942): the reload re-registers the plugin's router, but the
+mount keeps the FIRST one (FastAPI can't swap in place) — the freshly installed
+routes don't serve until a process restart, so both routes flag it.
 """
 
 from __future__ import annotations
@@ -58,6 +63,45 @@ def _enabled_ids_from_summary(summary: dict) -> list[str]:
         return suggested or members
     pid = summary.get("id")
     return [str(pid)] if pid else []
+
+
+def _installed_ids_from_summary(summary: dict) -> list[str]:
+    """The plugin id(s) whose CODE this install just placed on disk — for a bundle,
+    its fetched members only (``builtin`` members aren't fetched, so they can't have
+    been replaced under a live mount)."""
+    if "bundle" in summary:
+        return [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
+    pid = summary.get("id")
+    return [str(pid)] if pid else []
+
+
+def _has_surface(meta: dict | None) -> bool:
+    """True when the plugin contributed a view / router / background surface — the
+    contributions FastAPI can't unmount or swap in place (restart territory)."""
+    return bool(meta and (meta.get("views") or meta.get("routers") or meta.get("surfaces")))
+
+
+def _mounted_router_ids() -> set[str]:
+    """Plugin ids with a router currently mounted on the live app. This is the mount
+    ground truth (``_mount_plugin_routers``'s registry) — unlike ``plugin_meta`` it
+    survives a disable, whose router lingers mounted with no meta entry."""
+    keys = getattr(STATE, "plugin_router_keys", None) or set()
+    return {pid for (pid, _prefix) in keys}
+
+
+def _purge_plugin_modules(plugin_id: str) -> None:
+    """Drop a plugin's module subtree from ``sys.modules`` so the next reload
+    re-execs every file from disk. The loader re-execs the entry ``__init__`` each
+    reload, but a multi-file plugin's ``from .tools import …`` resolves the SUBMODULE
+    through ``sys.modules`` — which still holds the OLD code after a force
+    re-install. Scoped to the plugin's own prefix; the reload rebuilds it."""
+    import sys
+
+    from graph.plugins.loader import _plugin_module_name
+
+    prefix = _plugin_module_name(plugin_id)
+    for name in [n for n in list(sys.modules) if n == prefix or n.startswith(prefix + ".")]:
+        sys.modules.pop(name, None)
 
 
 def register_plugin_routes(app) -> None:
@@ -107,6 +151,23 @@ def register_plugin_routes(app) -> None:
         # NO separate enable step and NO restart (the router hot-mounts, #822). Opt out
         # with PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (back to strict install ≠ enable).
         ids = _enabled_ids_from_summary(summary)
+        # Snapshot BEFORE the reload: which just-(re)installed plugins were already
+        # LIVE — a mounted router (mount registry; survives disable) or a loaded
+        # view/router/surface (meta). For those, the reload can't deliver the fresh
+        # routes: the re-registered router is dropped in favour of the mounted one
+        # (FastAPI can't swap in place), so the OLD code keeps serving (#942).
+        fresh = _installed_ids_from_summary(summary)
+        mounted = _mounted_router_ids()
+        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
+        stale_after_reload = [
+            pid for pid in fresh if pid in mounted or _has_surface(prev_meta.get(pid))
+        ]
+        # Same parity for code the reload CAN swap: drop each re-installed plugin's
+        # module subtree so tools/middleware re-exec from the fresh checkout (the
+        # update route's multi-file fix; a first install is a no-op here).
+        for pid in fresh:
+            _purge_plugin_modules(pid)
+
         enabled_now: list[str] = []
         reloaded = False
         enable_error: str | None = None
@@ -134,7 +195,9 @@ def register_plugin_routes(app) -> None:
             "installed": summary,
             "enabled": enabled_now,        # the ids now live
             "reloaded": reloaded,
-            "restart_recommended": False,  # enable hot-mounts the router/view (#822)
+            # A FIRST install hot-mounts fully live (#822); a force re-install over a
+            # live router serves stale routes until restart (#942).
+            "restart_recommended": bool(stale_after_reload),
             "enable_error": enable_error,
         }
 
@@ -174,9 +237,6 @@ def register_plugin_routes(app) -> None:
         # Enabling hot-mounts the router that serves the view (#822) — fully live, no
         # restart. Only DISABLE leaves a stale route behind (no FastAPI unmount), so we
         # recommend a restart when turning OFF a plugin that contributed a view/route/surface.
-        def _has_surface(m: dict | None) -> bool:
-            return bool(m and (m.get("views") or m.get("routers") or m.get("surfaces")))
-
         restart = bool(not want and _has_surface(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
@@ -226,23 +286,9 @@ def register_plugin_routes(app) -> None:
         reloaded = False
         if is_enabled:
             # Force a genuinely fresh import of the just-pulled code before the
-            # reload. The loader re-execs a plugin's entry __init__ from disk every
-            # reload, but a multi-file plugin's `from .tools import …` resolves the
-            # SUBMODULE through sys.modules — which still holds the OLD code after a
-            # force re-install. Drop this plugin's whole module subtree so the reload
-            # re-execs every file from disk (scoped to its own prefix; the reload
-            # rebuilds it). This is what makes UPDATE deliver fresh code where the
-            # enable path's hot-mount alone wouldn't for a multi-file plugin.
-            import sys
-
-            from graph.plugins.loader import _plugin_module_name
-
-            _mod_prefix = _plugin_module_name(plugin_id)
-            for _name in [
-                n for n in list(sys.modules)
-                if n == _mod_prefix or n.startswith(_mod_prefix + ".")
-            ]:
-                sys.modules.pop(_name, None)
+            # reload — what makes UPDATE deliver fresh code for a multi-file plugin
+            # where the enable path's hot-mount alone wouldn't.
+            _purge_plugin_modules(plugin_id)
 
             # Reload through the enable route's path so the freshly pulled code
             # hot-mounts (router re-mount, tools/middleware/MCP rebuild — #822).
@@ -258,18 +304,17 @@ def register_plugin_routes(app) -> None:
             reloaded = True
 
         # FastAPI can't swap an already-mounted router in place, so a view/route-
-        # contributing plugin's OLD route lingers until a process restart — flag it
-        # (mirrors the enable route's surface heuristic).
-        def _has_surface(m: dict | None) -> bool:
-            return bool(m and (m.get("views") or m.get("routers") or m.get("surfaces")))
-
+        # contributing plugin's OLD route lingers until a process restart — flag it.
+        # The mount registry catches the disabled-but-still-mounted case meta misses.
         return {
             "ok": True,
             "id": plugin_id,
             "version": summary.get("version"),
             "resolved_sha": summary.get("resolved_sha"),
             "reloaded": reloaded,
-            "restart_recommended": bool(_has_surface(meta)),
+            "restart_recommended": bool(
+                _has_surface(meta) or plugin_id in _mounted_router_ids()
+            ),
         }
 
     @app.delete("/api/plugins/{plugin_id}")

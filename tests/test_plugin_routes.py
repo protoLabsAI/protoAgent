@@ -15,8 +15,12 @@ def _client():
     return TestClient(app)
 
 
-def _wire(monkeypatch, *, enabled, disabled, meta):
-    """Fake the hot-reload apply + STATE; return a dict that captures the config patch."""
+def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=()):
+    """Fake the hot-reload apply + STATE; return a dict that captures the config patch.
+
+    ``router_keys`` seeds the live-mount registry (``STATE.plugin_router_keys``,
+    ``{(plugin_id, prefix), …}``) — the ground truth for "this plugin's router is
+    already mounted" that the force re-install restart check reads (#942)."""
     captured: dict = {}
     fake = types.ModuleType("server.agent_init")
 
@@ -31,6 +35,7 @@ def _wire(monkeypatch, *, enabled, disabled, meta):
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_router_keys", set(router_keys), raising=False)
     return captured
 
 
@@ -141,3 +146,83 @@ def test_install_succeeds_even_if_enable_reload_fails(monkeypatch):
     assert resp.status_code == 200                            # the install itself didn't 500
     body = resp.json()
     assert body["installed"]["id"] == "demo" and body["enabled"] == [] and "graph compile failed" in body["enable_error"]
+
+
+# ── force re-install over a LIVE plugin can't hot-swap its router (#942) ──────────
+def test_fresh_install_hot_mounts_no_restart(monkeypatch):
+    # First install: nothing mounted yet, the reload hot-mounts the router (#822) —
+    # fully live, no restart. The pre-#942 posture, preserved.
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy"}).json()
+    assert body["reloaded"] is True
+    assert body["restart_recommended"] is False
+
+
+def test_force_reinstall_over_mounted_router_recommends_restart(monkeypatch):
+    # The plugin's router is already mounted → the reload re-registers it and the
+    # mount DROPS the new one (FastAPI can't swap in place) — the fresh routes don't
+    # serve until a process restart. The response must say so, not claim hot-mount.
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[],
+          router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
+    assert body["reloaded"] is True
+    assert body["restart_recommended"] is True
+
+
+def test_force_reinstall_over_disabled_lingering_router_recommends_restart(monkeypatch):
+    # Disable doesn't unmount, so the router lingers with NO plugin_meta entry —
+    # the mount registry is the signal that survives (the meta check alone misses it).
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[],
+          router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
+    assert body["restart_recommended"] is True
+
+
+def test_bundle_reinstall_flags_restart_only_for_mounted_members(monkeypatch):
+    # A bundle re-install over one live member + one fresh member → restart (the
+    # live member's routes are stale); builtin members are never fetched → ignored.
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=["board"], disabled=[], meta=[],
+          router_keys={("board", "/plugins/board")})
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
+        "bundle": "pm-stack", "installed": [{"id": "board"}, {"id": "browser"}],
+        "enabled": ["board", "browser"]})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack", "force": True}).json()
+    assert body["restart_recommended"] is True
+
+
+def test_force_reinstall_purges_module_subtree(monkeypatch):
+    # Parity with the update route: the reload re-execs the entry __init__, but a
+    # multi-file plugin's submodules resolve through sys.modules — purge them so the
+    # fresh checkout is what actually runs.
+    from graph.plugins import installer
+    from graph.plugins.loader import _plugin_module_name
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[],
+          router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    mod = _plugin_module_name("boardy")
+    monkeypatch.setitem(sys.modules, mod, types.ModuleType(mod))
+    monkeypatch.setitem(sys.modules, mod + ".tools", types.ModuleType(mod + ".tools"))
+    _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True})
+    assert mod not in sys.modules and (mod + ".tools") not in sys.modules
+
+
+def test_update_route_flags_restart_for_disabled_lingering_router(monkeypatch):
+    # The update route's restart heuristic also reads the mount registry now — a
+    # disabled-but-still-mounted plugin (no meta) updating at its ref needs a restart.
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[],
+          router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setattr(installer, "list_installed", lambda: [
+        {"id": "boardy", "source_url": "https://x/boardy", "requested_ref": "v1"}])
+    monkeypatch.setattr(installer, "install",
+                        lambda url, ref=None, **k: {"id": "boardy", "version": "2", "resolved_sha": "b" * 40})
+    body = _client().post("/api/plugins/boardy/update").json()
+    assert body["reloaded"] is False                          # disabled → nothing to reload
+    assert body["restart_recommended"] is True

@@ -1089,6 +1089,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     else:
         new_graph = None
         new_inbox_store = None
+        # Setup pending → no graph build, so no middleware was resolved. Without
+        # this, the commit below raises UnboundLocalError and EVERY pre-setup
+        # reload 500s (e.g. installing a plugin during the wizard, whose
+        # auto-enable reloads through here).
+        new_middleware = []
 
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
