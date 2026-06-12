@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A render error no longer white-screens the console** (#872): a root error
+  boundary around the app shows a full-page recovery card — Reload, plus "Reset
+  chat data & reload" which clears `protoagent.chat.sessions*` (the known way a
+  corrupt blob bricks render) while keeping layout/theme/auth token. Fork-registered
+  chat surfaces (`src/ext`) are boundary-wrapped too, so a throw stays contained in
+  the slot. Persisted chat sessions are now shape-validated on load — invalid
+  members are dropped (the rest survive) instead of throwing later in render.
+
 ### Changed
 - **Design system bumped `@protolabsai/ui` 0.26.2 → 0.29.0 (+ `@protolabsai/design` 0.5.1).**
   Brings the OS-adaptive light theme + 10 builtin theme presets (Theme panel picks them

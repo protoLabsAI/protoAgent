@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ensureActiveSessions, MAX_ACTIVE_SESSIONS, type ChatState } from "./chat-store";
+import {
+  ensureActiveSessions,
+  sanitizePersisted,
+  MAX_ACTIVE_SESSIONS,
+  type ChatSession,
+  type ChatState,
+} from "./chat-store";
 
 // ensureActiveSessions is the LRU that decides which chat sessions stay mounted.
 // Its load-bearing invariant: it must NEVER evict a session that is mid-stream
@@ -184,5 +190,72 @@ describe("persist debouncing", () => {
     const { flushChatPersist } = await freshStore();
     flushChatPersist();
     expect(setItem).not.toHaveBeenCalled();
+  });
+});
+
+// sanitizePersisted is the pure half of loadPersisted (#872): a corrupt or
+// hand-edited localStorage blob must never reach render — drop the bad
+// sessions, keep the good ones, and re-point currentSessionId if its target
+// was dropped. null = nothing usable (the caller starts a fresh session).
+
+function mkSession(id: string, overrides: Partial<ChatSession> = {}): ChatSession {
+  return {
+    id,
+    title: `chat ${id}`,
+    messages: [{ role: "user", content: "hi" }],
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+describe("sanitizePersisted", () => {
+  it("returns null for non-objects and shapeless blobs", () => {
+    expect(sanitizePersisted(null)).toBeNull();
+    expect(sanitizePersisted("corrupt")).toBeNull();
+    expect(sanitizePersisted(42)).toBeNull();
+    expect(sanitizePersisted({})).toBeNull();
+    expect(sanitizePersisted({ sessions: "not-an-array" })).toBeNull();
+  });
+
+  it("passes a valid blob through intact", () => {
+    const blob = { version: 1, sessions: [mkSession("a"), mkSession("b")], currentSessionId: "b" };
+    expect(sanitizePersisted(blob)).toEqual(blob);
+  });
+
+  it("drops invalid members and keeps the rest", () => {
+    const good = mkSession("a");
+    const out = sanitizePersisted({
+      sessions: [
+        good,
+        null,
+        "garbage",
+        { id: "no-other-fields" },
+        mkSession("bad-messages", { messages: [{ role: "user" }] as never }),
+        mkSession("bad-role", { messages: [{ role: "alien", content: "x" }] as never }),
+      ],
+      currentSessionId: "a",
+    });
+    expect(out?.sessions).toEqual([good]);
+  });
+
+  it("returns null when no session survives (caller starts fresh)", () => {
+    expect(sanitizePersisted({ sessions: [null, { id: "x" }] })).toBeNull();
+    expect(sanitizePersisted({ sessions: [] })).toBeNull();
+  });
+
+  it("re-points currentSessionId at the first survivor when its target was dropped", () => {
+    const out = sanitizePersisted({
+      sessions: [mkSession("a"), "corrupt"],
+      currentSessionId: "the-dropped-one",
+    });
+    expect(out?.currentSessionId).toBe("a");
+  });
+
+  it("accepts sessions with empty messages and optional message fields", () => {
+    const s = mkSession("a", {
+      messages: [{ role: "assistant", content: "", taskId: "t1", status: "done" }],
+    });
+    expect(sanitizePersisted({ sessions: [s], currentSessionId: "a" })?.sessions).toEqual([s]);
   });
 });
