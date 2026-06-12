@@ -9,9 +9,9 @@ test("the topbar gear opens the Settings overlay (the two-home one-stop-shop)", 
   await page.getByTestId("topbar-settings").click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  // The same two scope homes render inside the overlay.
-  await expect(dialog.getByRole("tab", { name: "Host / App", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("tab", { name: "Workspace", exact: true })).toBeVisible();
+  // The same two scope homes render inside the overlay (the segmented toggle).
+  await expect(dialog.getByRole("button", { name: "Host / App", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
 });
 
 test("the chat composer model chip edits a field in a dialog and saves", async ({ page }) => {

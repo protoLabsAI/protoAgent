@@ -49,7 +49,7 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
 test("workspace settings: identity lands, then tools and MCP sections", async ({ page }) => {
   // The agent makeup folded into Settings ▸ Workspace (ADR 0048 S-C).
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing section
   await expect(page.getByTestId("identity-name")).toBeVisible();
 

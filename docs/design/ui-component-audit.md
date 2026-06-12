@@ -148,7 +148,7 @@ Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu
 
 | # | Request | Priority | Status |
 |---|---|---|---|
-| [#218](https://github.com/protoLabsAI/protoContent/issues/218) | `Tabs` `segmented` variant / `SegmentedControl` (two-level nav scope toggle) | P2 | Filed 2026-06-11 — was only spec'd on the closed #137; now an actionable child. **Interim:** the settings **Host / App \| Workspace** home toggle stacks a second `<Tabs>` row (`SettingsSurface.tsx`) — retire on adoption. |
+| [#218](https://github.com/protoLabsAI/protoContent/issues/218) | `Tabs` `segmented` variant / `SegmentedControl` (two-level nav scope toggle) | P2 | **Shipped in ui 0.28.0, adopted 2026-06-12** — the settings **Host / App \| Workspace** home toggle (`SettingsSurface.tsx`) and the MCP add-server **Form \| Paste JSON** toggle (`McpPanel.tsx`, the last `.segmented` hand-roll) both use `<Tabs variant="segmented">`; the local `.segmented` CSS block is deleted. |
 
 ## Console adoption status (branch `ds-adoption-sweep`, 2026-06-09)
 

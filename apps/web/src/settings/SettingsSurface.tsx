@@ -104,11 +104,9 @@ export function SettingsSurface() {
 
   return (
     <>
-      {/* The scope home toggle. INTERIM: stacked over the section Tabs because the DS
-          has no segmented control yet — adopt `Tabs variant="segmented"` / SegmentedControl
-          when protoContent#218 ships. */}
       <Tabs
-        responsive
+        variant="segmented"
+        ariaLabel="Settings scope"
         active={scope}
         onSelect={(t) => selectHome(t as SettingsScope)}
         items={tabItems(SETTINGS_HOMES)}
