@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Desktop first-run: panels no longer flash "Load failed" and need a reload.**
+  The cold-start retry policy only rode out HTTP 409/502 (a fleet member spawning),
+  but the desktop sidecar's ~12s first-launch boot is a *connection-refused* network
+  error (WKWebView reports it as `TypeError: Load failed`) with no HTTP status — so
+  beads/notes/etc. fell through to the single-retry default, gave up before the
+  sidecar bound its port, and stuck in the error fallback until manually reloaded.
+  `isColdStart` now also treats a response-less fetch failure as "not up yet", so
+  those panels stay in their loading state and resolve once the sidecar is ready.
+- **macOS desktop: the brand again clears the native traffic lights.** A rename of
+  the topbar element (`.topbar` → `.app-topbar`) left the title-bar inset rule on the
+  old selector, so the 84px inset silently stopped applying and the window's
+  traffic-light buttons crowded the logo. Pointed the `.is-tauri-mac` inset at
+  `.app-topbar`.
+
 ## [0.35.2] - 2026-06-12
 
 ### Fixed

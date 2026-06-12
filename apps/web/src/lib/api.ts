@@ -243,12 +243,19 @@ export class ApiError extends Error {
   }
 }
 
-/** Cold start: a just-switched-to fleet agent answers 409 (the member isn't running
- *  yet — `activate` is still spawning it) or 502 (it's booting but not bound) for a few
- *  seconds until it's up. These are transient, not failures — retry through them. */
+/** Cold start: the backend isn't answering *yet*, but will be shortly — retry through
+ *  it instead of flashing an error. Two shapes:
+ *   - HTTP 409 / 502: a just-switched-to fleet agent (the member isn't running yet —
+ *     `activate` is still spawning it) or its hub proxy (booting, not bound).
+ *   - A fetch that threw before any response (no ApiError status): the LOCAL desktop
+ *     sidecar isn't bound to its port yet during the ~12s first-launch boot. WKWebView
+ *     surfaces this as `TypeError: Load failed` — which is exactly why the beads/notes
+ *     panels showed "Load failed" and had to be reloaded on a fresh desktop start.
+ *  A genuinely-down backend just keeps the panels in their loading state until the
+ *  shell's boot-gate ("isn't responding") takes over — same as before. */
 export function isColdStart(error: unknown): boolean {
-  const s = error instanceof ApiError ? error.status : 0;
-  return s === 409 || s === 502;
+  if (error instanceof ApiError) return error.status === 409 || error.status === 502;
+  return true; // no HTTP response at all ⇒ not reachable yet (desktop sidecar booting)
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {

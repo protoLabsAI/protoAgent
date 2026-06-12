@@ -13,11 +13,17 @@ describe("cold-start detection (ApiError / isColdStart)", () => {
     expect(isColdStart(new ApiError(502, "not reachable"))).toBe(true);
   });
 
-  it("does NOT treat other failures (404/500) or plain errors as cold-start", () => {
+  it("does NOT treat real HTTP failures (404/500) as cold-start", () => {
     expect(isColdStart(new ApiError(404, "nope"))).toBe(false);
     expect(isColdStart(new ApiError(500, "boom"))).toBe(false);
-    expect(isColdStart(new Error("network"))).toBe(false);
-    expect(isColdStart(undefined)).toBe(false);
+  });
+
+  it("treats a fetch with no HTTP response as cold-start (desktop sidecar booting)", () => {
+    // WKWebView throws `TypeError: Load failed` (Chrome: "Failed to fetch") when the
+    // local sidecar isn't bound to its port yet on first launch — ride it out rather
+    // than flashing "Load failed" in the beads/notes panels.
+    expect(isColdStart(new TypeError("Load failed"))).toBe(true);
+    expect(isColdStart(new Error("Failed to fetch"))).toBe(true);
   });
 });
 
