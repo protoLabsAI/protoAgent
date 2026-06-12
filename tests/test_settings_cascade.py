@@ -336,3 +336,125 @@ def test_pop_keys_from_yaml_prunes_and_is_idempotent():
     # Idempotent — popping again is a no-op, never raises.
     pop_keys_from_yaml(doc, ["prompt_cache.warm.enabled"])
     assert "prompt_cache" not in doc
+
+
+# ── D8: box-runtime knobs promoted into the Host layer (ADR 0047 D8) ───────────
+# bind interface / fleet port base / discovery range+mDNS / supervisor warm policy
+# are now host-scoped FIELDS. Each resolves file > env > app-default (the env var is
+# the zero-migration fallback), and the host process call sites read the live config.
+
+
+def _fleet_env_clear(monkeypatch):
+    """Start each env-precedence test from a clean slate — a dev's shell may already
+    export these (conftest only defaults PROTOAGENT_HOST_CONFIG)."""
+    for name in ("PROTOAGENT_HOST", "PROTOAGENT_FLEET_MAX_WARM", "PROTOAGENT_FLEET_WARM_GRACE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_d8_app_defaults_when_nothing_set(monkeypatch):
+    """No file, no leaf, no env → the dataclass (App) defaults."""
+    _fleet_env_clear(monkeypatch)
+    cfg = LangGraphConfig.from_dict({})
+    assert cfg.bind_host == "127.0.0.1"
+    assert cfg.fleet_port_base == 7870
+    assert (cfg.discovery_port_min, cfg.discovery_port_max) == (7860, 7910)
+    assert cfg.discovery_mdns is True
+    assert cfg.fleet_max_warm == 0
+    assert cfg.fleet_warm_grace_seconds == 0
+
+
+def test_d8_env_fallback_when_key_absent(monkeypatch):
+    """A promoted knob falls back to its PROTOAGENT_* env var when the merged dict
+    omits the key — the bridge that makes promotion zero-migration."""
+    _fleet_env_clear(monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_HOST", "0.0.0.0")
+    monkeypatch.setenv("PROTOAGENT_FLEET_MAX_WARM", "3")
+    monkeypatch.setenv("PROTOAGENT_FLEET_WARM_GRACE", "15")
+    cfg = LangGraphConfig.from_dict({})
+    assert cfg.bind_host == "0.0.0.0"
+    assert cfg.fleet_max_warm == 3
+    assert cfg.fleet_warm_grace_seconds == 15
+
+
+def test_d8_file_wins_over_env(monkeypatch):
+    """File > env: a key present in the (host/leaf) dict beats the env var."""
+    _fleet_env_clear(monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_HOST", "0.0.0.0")
+    monkeypatch.setenv("PROTOAGENT_FLEET_MAX_WARM", "3")
+    cfg = LangGraphConfig.from_dict({"network": {"bind": "127.0.0.1"}, "fleet": {"warm": {"max": 9}}})
+    assert cfg.bind_host == "127.0.0.1"
+    assert cfg.fleet_max_warm == 9
+
+
+def test_d8_bad_env_value_degrades_to_default(monkeypatch):
+    """A non-integer env var for an int knob degrades to the app default, not a crash."""
+    _fleet_env_clear(monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_FLEET_MAX_WARM", "not-a-number")
+    assert LangGraphConfig.from_dict({}).fleet_max_warm == 0
+
+
+def test_d8_host_file_sets_box_runtime_leaf_overrides(tmp_path, monkeypatch):
+    """End-to-end cascade for fleet knobs: host-config.yaml sets the box default,
+    a leaf value overrides it (git-style), env is the lowest fallback."""
+    _fleet_env_clear(monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_FLEET_MAX_WARM", "1")  # lowest precedence
+    _host_yaml(tmp_path, "fleet:\n  port_base: 8000\n  warm:\n    max: 5\n", monkeypatch)
+    path = _agent_yaml(tmp_path, "fleet:\n  warm:\n    max: 7\n")  # leaf overrides warm, silent on port_base
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.fleet_max_warm == 7       # leaf wins over host + env
+    assert cfg.fleet_port_base == 8000   # inherited from host
+
+
+def test_d8_host_cannot_inject_via_unscoped_key(tmp_path, monkeypatch):
+    """The fleet knobs are host-scoped, so a host file CAN set them (unlike an
+    agent-scoped key) — confirms the scope tagging took effect."""
+    _fleet_env_clear(monkeypatch)
+    _host_yaml(tmp_path, "network:\n  bind: 0.0.0.0\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(str(tmp_path / "absent.yaml"))
+    assert cfg.bind_host == "0.0.0.0"  # host-scoped key applied from the host file
+
+
+def test_d8_supervisor_warm_policy_reads_live_config(monkeypatch):
+    """supervisor.max_warm()/grace prefer the resolved config; fall back to env with
+    no live config (the CLI/no-STATE path keeps today's behavior)."""
+    import runtime.state as rs
+    from graph.fleet import supervisor
+
+    class _Cfg:
+        fleet_max_warm = 4
+        fleet_warm_grace_seconds = 12
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+    assert supervisor.max_warm() == 4
+    assert supervisor._warm_grace_seconds() == 12
+
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    monkeypatch.setenv("PROTOAGENT_FLEET_MAX_WARM", "6")
+    assert supervisor.max_warm() == 6
+
+
+def test_d8_discovery_helpers_read_live_config(monkeypatch):
+    """discovery resolves its port range + mDNS gate from the Host-layer config."""
+    import runtime.state as rs
+    from graph.fleet import discovery
+
+    class _Cfg:
+        discovery_port_min = 9000
+        discovery_port_max = 9100
+        discovery_mdns = False
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+    assert discovery._config_port_range() == (9000, 9100)
+    assert discovery._mdns_enabled() is False
+
+
+def test_d8_manager_port_base_reads_live_config(monkeypatch):
+    """_pick_port bases its scan on the resolved fleet.port_base."""
+    import runtime.state as rs
+    from graph.workspaces import manager
+
+    class _Cfg:
+        fleet_port_base = 8200
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+    assert manager._port_base() == 8200

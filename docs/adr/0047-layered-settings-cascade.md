@@ -425,6 +425,21 @@ throughout:
 3. Promote env/CLI host knobs into `FIELDS` as `scope="host"` (with env fallback)
    + add the Host/Machine settings view.
 
+**Status — all three slices SHIPPED.** Slices 1–2 landed with the settings-IA fold
+(PR #925). Slice 3 (this) promotes the box-runtime knobs `network.bind`,
+`fleet.port_base`, `fleet.discovery.port_min/port_max/mdns`, and
+`fleet.warm.max/grace_seconds` into `FIELDS` (`scope="host"`, section "Fleet" →
+category System, so they surface in Settings ▸ Host / App ▸ Host config). The
+env-fallback bridge lives in `from_dict` as `section.get(key, _env_default(ENV, default))`,
+fixing **Open decision #2 to file > env > default** (operator, 2026-06-11): the file/UI
+value wins, the `PROTOAGENT_*` env var is the zero-migration fallback consulted only when
+the merged dict omits the key, and an explicit `--host` flag wins over both. The four call
+sites (`server.__init__` uvicorn bind, `manager._pick_port`, `fleet.discovery`, and
+`fleet.supervisor.max_warm`/`_warm_grace_seconds`) read the resolved config via the lazy
+`runtime.state.STATE` accessor, falling back to env in a CLI/no-config context. Data-root /
+`PROTOAGENT_AUTO_SCOPE` is intentionally NOT promoted (it resolves where `host-config.yaml`
+itself lives — chicken-and-egg; stays env/CLI).
+
 ## 4. Migration / back-compat
 
 **ZERO migration. Zero new bytes on disk for any existing deployment.**

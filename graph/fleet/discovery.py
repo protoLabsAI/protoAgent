@@ -33,6 +33,38 @@ _SERVICE_TYPE = "_protoagent._tcp.local."
 _zc = None  # the advertised Zeroconf instance (None until advertise())
 _info = None
 
+# App-layer defaults for the discovery knobs (Host layer, ADR 0047 D8) — used when no
+# live config is loaded (CLI/test context). Mirror the LangGraphConfig dataclass defaults.
+_DEFAULT_PORT_RANGE = (7860, 7910)
+
+
+def _cfg():
+    """The live ``LangGraphConfig`` (or ``None`` in a CLI/no-STATE context). Lazy import
+    to avoid an import-time cycle. Lets the discovery knobs (port range + mDNS toggle,
+    ADR 0047 D8 ``fleet.discovery.*``) be resolved from the Host cascade while keeping
+    ``discover``/``advertise`` parametric for tests."""
+    try:
+        from runtime.state import STATE
+
+        return getattr(STATE, "graph_config", None)
+    except Exception:  # noqa: BLE001 — no live config ⇒ the app defaults
+        return None
+
+
+def _mdns_enabled() -> bool:
+    cfg = _cfg()
+    return bool(getattr(cfg, "discovery_mdns", True)) if cfg is not None else True
+
+
+def _config_port_range() -> tuple[int, int]:
+    cfg = _cfg()
+    if cfg is None:
+        return _DEFAULT_PORT_RANGE
+    return (
+        int(getattr(cfg, "discovery_port_min", _DEFAULT_PORT_RANGE[0])),
+        int(getattr(cfg, "discovery_port_max", _DEFAULT_PORT_RANGE[1])),
+    )
+
 
 def _local_ip() -> str:
     """Best-effort LAN IP (the address other machines reach us on); 127.0.0.1 if offline."""
@@ -58,6 +90,9 @@ def advertise(name: str, port: int) -> None:
     """
     global _zc, _info
     if _zc is not None or not port:
+        return
+    if not _mdns_enabled():  # Host layer (ADR 0047 D8): fleet.discovery.mdns=false ⇒ no advert
+        log.info("[discovery] mDNS disabled (fleet.discovery.mdns=false) — not advertising %s", name)
         return
     if _on_event_loop():
         log.warning("[discovery] advertise() called on an event loop thread — refusing "
@@ -209,19 +244,32 @@ def _browse_mdns(timeout: float) -> list[dict]:
     return found
 
 
+async def _no_results() -> list[dict]:
+    """A do-nothing channel — substituted for the mDNS browse when it's disabled."""
+    return []
+
+
 async def discover(*, known: set | None = None,
-                   port_range: tuple[int, int] = (7860, 7910), timeout: float = 1.5) -> list[dict]:
+                   port_range: tuple[int, int] | None = None, timeout: float = 1.5,
+                   mdns: bool | None = None) -> list[dict]:
     """Other protoAgents (local + LAN + tailnet) minus the ones already in the fleet.
 
     ``known`` is a set of ``(host, port)`` already known (the host itself + existing members);
     those are filtered out. Returns ``[{name, url, host, port}]`` — duplicates by
     ``(host, port)`` are collapsed; a dual-homed machine (LAN IP via mDNS + ``100.x``
-    via tailnet) intentionally keeps both addresses."""
+    via tailnet) intentionally keeps both addresses.
+
+    ``port_range`` and ``mdns`` default to the resolved Host-layer config (ADR 0047 D8
+    ``fleet.discovery.*``) when left ``None`` — pass them explicitly in tests."""
     known = known or set()
+    if port_range is None:
+        port_range = _config_port_range()
+    if mdns is None:
+        mdns = _mdns_enabled()
     skip_local = {p for (h, p) in known if h in ("127.0.0.1", "localhost")}
     local, network, tailnet = await asyncio.gather(  # independent channels — scan concurrently
         _scan_local(port_range, skip_local),
-        asyncio.to_thread(_browse_mdns, timeout),
+        asyncio.to_thread(_browse_mdns, timeout) if mdns else _no_results(),
         _scan_tailnet(port_range, known),
     )
     # An mDNS advert carrying THIS machine's own IP is a co-located agent — the same

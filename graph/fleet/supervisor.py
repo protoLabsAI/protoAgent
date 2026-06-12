@@ -558,10 +558,47 @@ def version_skew_warning() -> str | None:
 # target is resumed and the least-recently-active agents beyond the cap are stopped —
 # their sessions persist (instance.id-scoped checkpoints) and resume on the next switch.
 
+def _live_config():
+    """The live ``LangGraphConfig`` (or ``None`` in a CLI/no-STATE context). Lazy
+    import to avoid an import-time cycle — same idiom as ``_pick_port`` /
+    ``runtime_status``."""
+    try:
+        from runtime.state import STATE
+
+        return getattr(STATE, "graph_config", None)
+    except Exception:  # noqa: BLE001 — no live config ⇒ caller's env fallback
+        return None
+
+
 def max_warm() -> int:
-    """Warm-agent cap from ``PROTOAGENT_FLEET_MAX_WARM`` (0/unset = unlimited)."""
+    """Warm-agent cap (Host layer, ADR 0047 D8) — the resolved ``fleet.warm.max``
+    (0/unset = unlimited). Reads the live config (which already folds in the
+    PROTOAGENT_FLEET_MAX_WARM env fallback, file > env > default); falls back to the
+    env var directly when no config is loaded."""
+    cfg = _live_config()
+    if cfg is not None:
+        try:
+            return max(0, int(getattr(cfg, "fleet_max_warm", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
     try:
         return max(0, int(os.environ.get("PROTOAGENT_FLEET_MAX_WARM", "0")))
+    except ValueError:
+        return 0
+
+
+def _warm_grace_seconds() -> int:
+    """LRU-eviction grace (Host layer, ADR 0047 D8) — the resolved
+    ``fleet.warm.grace_seconds`` (0 = pure LRU). Live config first (env fallback
+    folded in), else the PROTOAGENT_FLEET_WARM_GRACE env var directly."""
+    cfg = _live_config()
+    if cfg is not None:
+        try:
+            return max(0, int(getattr(cfg, "fleet_warm_grace_seconds", 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(os.environ.get("PROTOAGENT_FLEET_WARM_GRACE", "0") or "0")
     except ValueError:
         return 0
 
@@ -595,7 +632,8 @@ def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> 
     # Opt-in grace (default 0 = pure LRU, unchanged): a positive value spares agents touched
     # within that window, trading a temporarily-over-cap fleet for not killing a recently-active
     # (possibly mid-turn) agent. Off by default so rapid switching still bounds the warm set.
-    grace = int(os.environ.get("PROTOAGENT_FLEET_WARM_GRACE", "0") or "0")
+    # Host layer (ADR 0047 D8): resolved fleet.warm.grace_seconds, env fallback when no config.
+    grace = _warm_grace_seconds()
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace)).isoformat()
     candidates = [n for n, r in running if n != protect and r.get("last_active", "") < cutoff]
     evicted: list[str] = []

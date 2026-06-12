@@ -139,6 +139,8 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
         "plugins", "identity", "auth", "runtime", "operator", "agent_runtime",
         "checkpoint", "compaction", "execute_code", "goal", "operator_mcp",
         "prompt_cache", "routing", "telemetry",
+        # Box runtime (Host layer, ADR 0047 D8).
+        "network", "fleet",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
