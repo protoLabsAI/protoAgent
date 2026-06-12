@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ADR 0049 — bundle pin lifecycle**: a bundle pin means *"last verified working"* —
+  pin release **tags** (not raw SHAs), record `verified_against:` (core version), and
+  let a **verify-and-bump CI loop** own the pin (install the pin set into a scratch
+  agent → probe every declared console view → auto-PR tag bumps). Reference template
+  with the rules baked in under `examples/bundles/template/` (manifest + verify/bump
+  scripts + workflow); adopted by the pm-stack bundle. Motivated by the pm-stack
+  incident: stale authoring-time pins shipped 404 Board/Browser panels to every
+  agent spawned from the archetype.
+
+### Fixed
+- **Annotated-tag pins no longer report a permanent false "Update available".**
+  `git ls-remote <url> <tag>` returns the *tag object* SHA for an annotated tag —
+  never equal to the lock's commit SHA — so tag-pinned plugins (e.g. `artifact@v0.2.1`)
+  showed "behind" forever and Update could never clear it. The check now also asks for
+  the peeled `<tag>^{}` ref and compares commit-to-commit.
+
 ## [0.35.3] - 2026-06-12
 
 ### Changed

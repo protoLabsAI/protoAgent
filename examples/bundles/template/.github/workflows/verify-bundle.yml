@@ -1,0 +1,69 @@
+# Bundle verify-and-bump loop (ADR 0049). Copy into your bundle repo's
+# .github/workflows/ — under examples/ in protoAgent this file is inert.
+#
+# Two jobs:
+#   verify — installs THIS manifest's pin set into a scratch agent on a fresh
+#            protoAgent checkout and probes every declared console view. Runs on
+#            every PR (so a pin-bump must prove itself), on demand, and weekly
+#            (so a rotted pin set turns the schedule red instead of rotting silently).
+#   bump   — (schedule/dispatch only) checks each tag-pinned member for a newer
+#            release tag and opens a PR with the bump; that PR then runs `verify`.
+name: verify-bundle
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The core to verify against — keep in sync with the manifest's
+      # `verified_against:` (a release tag), or use `main` to verify ahead.
+      - uses: actions/checkout@v4
+        with:
+          repository: protoLabsAI/protoAgent
+          ref: main
+          path: protoagent
+
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync protoAgent deps
+        working-directory: protoagent
+        run: uv sync
+
+      - name: Verify pin set (install + load + probe declared views)
+        working-directory: protoagent
+        run: uv run --no-sync python "$GITHUB_WORKSPACE/scripts/verify_bundle.py" "$GITHUB_WORKSPACE"
+
+  bump:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag-pinned members for newer releases
+        id: check
+        run: |
+          python3 scripts/check_bundle_updates.py protoagent.bundle.yaml | tee /tmp/bumps.txt
+          echo "changed=$(git diff --quiet && echo false || echo true)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pin-bump PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="bump-pins-$(date +%Y%m%d)"
+          git config user.name "bundle-bot"
+          git config user.email "bundle-bot@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "chore: bump plugin pins to latest release tags"
+          git push origin "$branch"
+          gh pr create --fill --body "$(printf 'Automated pin bump (ADR 0049).\n\n```\n%s\n```\n\nMerging requires the verify job green — the pin only moves through a passing verification.' "$(cat /tmp/bumps.txt)")"

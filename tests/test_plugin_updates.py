@@ -118,6 +118,43 @@ def test_empty_ref_uses_head(monkeypatch):
     assert seen[0] == ("ls-remote", "https://x/y.git", "HEAD")
 
 
+def test_annotated_tag_compares_peeled_commit(monkeypatch):
+    """An ANNOTATED tag's bare refspec resolves to the tag-object SHA — never equal
+    to the lock's commit SHA, so the naive compare reported a permanent false
+    "behind" (ADR 0049). The peeled ``<ref>^{}`` line must win the compare."""
+    tag_object = "c" * 40
+    _lock(monkeypatch, [
+        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v1.2.3",
+         "resolved_sha": _CUR},
+    ])
+    seen: list[tuple] = []
+
+    def _git(*args, **kw):
+        seen.append(args)
+        return f"{tag_object}\trefs/tags/v1.2.3\n{_CUR}\trefs/tags/v1.2.3^{{}}"
+
+    monkeypatch.setattr(installer, "_git", _git)
+    row = installer.check_updates()[0]
+    assert row["latest_sha"] == _CUR
+    assert row["behind"] is False
+    # both the bare and the peeled refspec are requested in ONE ls-remote call
+    assert seen[0] == ("ls-remote", "https://x/y.git", "v1.2.3", "v1.2.3^{}")
+
+
+def test_lightweight_tag_or_branch_falls_back_to_bare_line(monkeypatch):
+    """A branch / lightweight tag matches only the bare refspec — no peeled line —
+    and the compare keeps working off it."""
+    _lock(monkeypatch, [
+        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v2.0.0",
+         "resolved_sha": _CUR},
+    ])
+    monkeypatch.setattr(
+        installer, "_git", lambda *a, **k: f"{_LATEST}\trefs/tags/v2.0.0")
+    row = installer.check_updates()[0]
+    assert row["latest_sha"] == _LATEST
+    assert row["behind"] is True
+
+
 def test_error_when_ls_remote_fails(monkeypatch):
     _lock(monkeypatch, [
         {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",

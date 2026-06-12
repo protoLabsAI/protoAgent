@@ -70,6 +70,25 @@ The freshness check runs `git ls-remote` against the recorded `source_url` and i
 timeout-bounded + briefly cached, so it never hangs the panel. Pinned plugins skip
 the network entirely.
 
+## Keep a bundle fresh (the pin lifecycle)
+
+A **bundle** (ADR 0040) pins each member so the combo it installs is the combo that
+was verified together — but a pin that nothing re-verifies rots silently: the first
+real bundle shipped pins that predated its members' console-view fixes, and every
+agent spawned from the archetype got 404 panels. [ADR 0049](../adr/0049-bundle-pin-lifecycle.md)
+gives the pin a lifecycle that keeps "last verified working" literally true:
+
+1. **Pin release tags, not raw SHAs** (`ref: v0.1.1`) — legible, and the freshness
+   check above can follow them (annotated tags compare by peeled commit).
+2. **Record `verified_against:`** — the core version the pin set was last verified on.
+3. **Let CI own the pin** — a verify job installs the manifest's pin set into a
+   scratch agent and probes every declared console view on each PR + weekly, and a
+   scheduled bump job opens a PR when a member tags a new release.
+
+Start from the in-repo template — manifest, verify + bump scripts, and the GitHub
+workflow, with the rules commented inline:
+[`examples/bundles/template/`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/bundles/template).
+
 ## Publish one
 
 > **Start from the devkit.** Enable the bundled **`plugin-devkit`** plugin
