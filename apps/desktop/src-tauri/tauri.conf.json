@@ -7,7 +7,7 @@
     "frontendDist": "../../web/dist",
     "devUrl": "http://127.0.0.1:5173/app/",
     "beforeDevCommand": "npm --workspace @protoagent/web run dev",
-    "beforeBuildCommand": "npm --workspace @protoagent/web run build -- --base ./"
+    "beforeBuildCommand": "npm --workspace @protoagent/web run build -- --base /"
   },
   "app": {
     "windows": [],

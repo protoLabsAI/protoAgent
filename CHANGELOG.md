@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Switching agents in the desktop app no longer breaks the window.** The desktop
+  build pinned Vite's `--base ./` (relative), so the bundled `index.html`
+  referenced its JS/CSS relatively. At the root URL that's fine, but the fleet
+  switcher navigates to a real path (`tauri://localhost/agent/<slug>/`), where
+  `./assets/…` resolved to `/agent/<slug>/assets/…` — which doesn't exist, so
+  Tauri's asset resolver fell back to `index.html` and the browser rejected it
+  (`'text/html' is not a valid JavaScript MIME type`, `Did not parse stylesheet`).
+  Switched the desktop build to an absolute `--base /` so assets always resolve
+  from the protocol root regardless of route. (`apiBase()` already hard-targets
+  `127.0.0.1:7870` in the Tauri context, and `agentHref` reads `BASE_URL`, so
+  navigation + API are unaffected.)
+
+### Added
+- **The app version is shown in Settings ▸ Host / App ▸ Overview** (the runtime
+  status already carries it — `0.35.1` etc.; the frozen desktop sidecar reports
+  its bundled version per #894). Surfaced as a "Version" tile and in the panel
+  subtitle, so there's an at-a-glance "about" for which build you're running.
+
 ## [0.35.1] - 2026-06-12
 
 ### Fixed
