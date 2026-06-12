@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.35.2",
+    "date": "2026-06-12",
+    "changes": [
+      "Switching agents in the desktop app no longer breaks the window.",
+      "The app version is shown in Settings ▸ Host / App ▸ Overview"
+    ]
+  },
+  {
     "version": "v0.35.1",
     "date": "2026-06-12",
     "changes": [
