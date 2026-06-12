@@ -214,6 +214,24 @@ jobs:
             npm run build -- --bundles "$BUNDLES"
           fi
 
+      - name: Smoke-test the SIGNED sidecar (macOS)
+        if: runner.os == 'macOS' && steps.build.outputs.signed == 'true'
+        shell: bash
+        # The pre-bundle smoke (above) boots the UNSIGNED PyInstaller binary, so it
+        # CANNOT see a signing-induced failure. Hardened-runtime signing turns on
+        # library validation, which refuses to dlopen the frozen Python.framework
+        # (a different Team ID) unless `disable-library-validation` is entitled —
+        # exactly the regression that shipped a dead backend in v0.35.0 (sidecar
+        # never started → console up, every API call failing). Boot the SIGNED
+        # sidecar from the freshly-bundled .app so that class of bug fails the
+        # build here, not in a user's hands.
+        run: |
+          set -euo pipefail
+          APP="$(ls -d apps/desktop/src-tauri/target/release/bundle/macos/*.app | head -1)"
+          BIN="${APP}/Contents/MacOS/protoagent-server"
+          echo "Smoking signed sidecar: ${BIN}"
+          python scripts/live_smoke.py --bin "${BIN}" --timeout 180
+
       - name: Collect artifacts
         shell: bash
         # Normalize every bundle into dist-desktop/ as
