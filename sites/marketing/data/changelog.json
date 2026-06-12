@@ -1,5 +1,39 @@
 [
   {
+    "version": "v0.35.0",
+    "date": "2026-06-12",
+    "changes": [
+      "**Box-runtime knobs (bind interface, fleet ports, discovery, warm policy) are now",
+      "An app update can no longer silently strand fleet members on the old binary",
+      "The desktop app updates itself in place.",
+      "**Session memory now persists on non-container hosts (and stops writing to the drive",
+      "The console is an installable PWA (manifest-only — deliberately no service worker).",
+      "**A secret saved for an installed-but-DISABLED plugin now routes to secrets.yaml,",
+      "**The devkit's \"edit then reload_plugins\" loop now picks up edits to EVERY file, and",
+      "Settings are reorganized around *scope* — a two-home shell + contextual quick-settings.",
+      "The shared-skill commons is now legible in the console.",
+      "macOS desktop releases are now verified pristine — and the DMG itself is notarized.",
+      "Desktop builds for Linux and Windows.",
+      "A configured plugin/model secret now shows a clear \"set\" badge in Settings.",
+      "Adopt @protolabsai/ui@0.26.2",
+      "**A fleet member's plugin secret (e.g",
+      "Switching to a not-yet-running fleet agent no longer flashes errors in its panels.",
+      "A declined or failed tool now shows the red X on its card, not a green \"done\".",
+      "Approving a gated action no longer dumps an \"approved\" bubble into the chat.",
+      "Resizing panels felt sloppy and \"wouldn't close right\" over plugin views.",
+      "Swapping between fleet agents wiped the chat view.",
+      "The fleet proxy now forwards WebSocket upgrades (#883).",
+      "Installing a plugin from the console now auto-enables + runs it",
+      "Grouped the loose root-level modules into packages",
+      "The Gradio chat UI (the --ui full tier).",
+      "**The desktop app reported its version as 0.0.0 (version-coherence Cross-cutting",
+      "**Fleet members render plugin views with no design system (version-coherence",
+      "The plugin devkit can now build a plugin AND run it live — no restart",
+      "plugin new / plugin new-bundle CLI",
+      "Spin local fleet members down when the host exits (version-coherence Axis 1)."
+    ]
+  },
+  {
     "version": "v0.34.0",
     "date": "2026-06-10",
     "changes": [
