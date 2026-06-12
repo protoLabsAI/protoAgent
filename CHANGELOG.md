@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the slot. Persisted chat sessions are now shape-validated on load — invalid
   members are dropped (the rest survive) instead of throwing later in render.
 
+### Added
+- **The console prompts for the operator token on 401** (#873): any unauthorized
+  response — panel query, boot probe, or chat turn — opens an "Authentication
+  required" dialog that saves the bearer to `protoagent.authToken` and refetches
+  in place (no reload, no devtools). 401s no longer burn retries, and a token-gated
+  first run shows the prompt instead of the BootGate's misleading "isn't responding".
+
 ### Changed
 - **Design system bumped `@protolabsai/ui` 0.26.2 → 0.29.0 (+ `@protolabsai/design` 0.5.1).**
   Brings the OS-adaptive light theme + 10 builtin theme presets (Theme panel picks them
