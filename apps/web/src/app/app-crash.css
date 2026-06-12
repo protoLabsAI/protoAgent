@@ -1,0 +1,47 @@
+/* Full-page fallback for the root error boundary (#872). Token-driven so it follows
+   the operator's theme even while the app proper is broken. */
+
+.app-crash {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: var(--bg, var(--pl-bg, #0a0a0c));
+  color: var(--fg, var(--pl-fg, #ededed));
+}
+
+.app-crash > svg {
+  color: var(--warning, #d29922);
+}
+
+.app-crash h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.app-crash__msg {
+  max-width: 560px;
+  margin: 0;
+  color: var(--fg-muted, #9aa0aa);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.app-crash__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.app-crash__hint {
+  max-width: 480px;
+  margin: 0;
+  color: var(--fg-muted, #9aa0aa);
+  font-size: 12px;
+}

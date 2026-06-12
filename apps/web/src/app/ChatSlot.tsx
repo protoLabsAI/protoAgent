@@ -2,6 +2,7 @@ import type { PluginView as PluginViewMeta } from "../lib/types";
 
 import { registeredSurfaces } from "../ext";
 import { ChatSurface } from "../chat/ChatSurface";
+import { ErrorBoundary, PanelError } from "./ErrorBoundary";
 import { PluginView } from "./PluginView";
 
 // The chat surface is a SLOT, not a hardcoded panel (ADR 0045). Resolution order:
@@ -30,7 +31,13 @@ export function ChatSlot({
   if (ext) {
     return (
       <div className="chat-slot" style={{ display: active ? "contents" : "none" }}>
-        {ext.render()}
+        {/* Fork-registered surfaces are arbitrary code — a throw must stay contained
+            in the slot, not unmount the app (#872). */}
+        <ErrorBoundary
+          fallback={({ error, reset }) => <PanelError error={error} reset={reset} label="chat surface" />}
+        >
+          {ext.render()}
+        </ErrorBoundary>
       </div>
     );
   }

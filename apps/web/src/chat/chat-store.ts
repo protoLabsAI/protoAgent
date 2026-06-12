@@ -15,7 +15,7 @@ export type ChatSession = {
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
-type PersistedChatState = {
+export type PersistedChatState = {
   version: number;
   sessions: ChatSession[];
   currentSessionId: string | null;
@@ -60,25 +60,63 @@ function createSession(): ChatSession {
   };
 }
 
+// A corrupt/hand-edited member must not reach render — it would throw past the
+// panel boundaries and white-screen the app (#872). Only the fields render
+// dereferences unconditionally are required; optional message fields can be
+// anything (they're guarded at use).
+function isValidSession(s: unknown): s is ChatSession {
+  if (!s || typeof s !== "object") return false;
+  const x = s as Record<string, unknown>;
+  return (
+    typeof x.id === "string" &&
+    typeof x.title === "string" &&
+    typeof x.createdAt === "number" &&
+    typeof x.updatedAt === "number" &&
+    Array.isArray(x.messages) &&
+    x.messages.every((m) => {
+      if (!m || typeof m !== "object") return false;
+      const msg = m as Record<string, unknown>;
+      return (
+        (msg.role === "user" || msg.role === "assistant" || msg.role === "system") &&
+        typeof msg.content === "string"
+      );
+    })
+  );
+}
+
+/** Pure half of loadPersisted (unit-tested): drop invalid sessions, keep the rest,
+ *  and re-point currentSessionId if it referenced a dropped one. Returns null when
+ *  nothing usable survives (caller starts fresh). */
+export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const p = parsed as Partial<PersistedChatState>;
+  const sessions = (Array.isArray(p.sessions) ? p.sessions : [])
+    .filter(isValidSession)
+    .slice(0, MAX_SESSIONS);
+  if (!sessions.length) return null;
+  return {
+    version: 1,
+    sessions,
+    currentSessionId: sessions.some((s) => s.id === p.currentSessionId)
+      ? (p.currentSessionId as string)
+      : sessions[0].id,
+  };
+}
+
 function loadPersisted(): PersistedChatState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) throw new Error("empty");
-    const parsed = JSON.parse(raw) as Partial<PersistedChatState>;
-    const sessions = Array.isArray(parsed.sessions) ? parsed.sessions.slice(0, MAX_SESSIONS) : [];
-    return {
-      version: 1,
-      sessions,
-      currentSessionId: parsed.currentSessionId || sessions[0]?.id || null,
-    };
+    const state = raw ? sanitizePersisted(JSON.parse(raw)) : null;
+    if (state) return state;
   } catch {
-    const session = createSession();
-    return {
-      version: 1,
-      sessions: [session],
-      currentSessionId: session.id,
-    };
+    // Corrupt JSON or storage unavailable — fall through to a fresh session.
   }
+  const session = createSession();
+  return {
+    version: 1,
+    sessions: [session],
+    currentSessionId: session.id,
+  };
 }
 
 function persist(state: ChatState) {

@@ -4,6 +4,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { AppCrash } from "./app/AppCrash";
+import { ErrorBoundary } from "./app/ErrorBoundary";
 // ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) first, then
 // Tailwind + the shadcn→token bridge, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
@@ -20,10 +22,15 @@ void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigat
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
-    </QueryClientProvider>
+    {/* The ROOT boundary (#872): anything a panel boundary doesn't catch lands on a
+        full-page recovery card instead of a white screen. Outermost so a throw in
+        the providers themselves is caught too. */}
+    <ErrorBoundary fallback={({ error }) => <AppCrash error={error} />}>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );
