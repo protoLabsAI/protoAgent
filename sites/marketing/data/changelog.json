@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.35.1",
+    "date": "2026-06-12",
+    "changes": [
+      "**The desktop app's backend now actually starts (it was dead on arrival in",
+      "Desktop release builds now write logs."
+    ]
+  },
+  {
     "version": "v0.35.0",
     "date": "2026-06-12",
     "changes": [

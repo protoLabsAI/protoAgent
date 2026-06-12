@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-06-12
+
 ### Fixed
 - **The desktop app's backend now actually starts (it was dead on arrival in
   v0.35.0).** The signed/notarized macOS build runs the PyInstaller server
