@@ -81,7 +81,21 @@ let INSTALLED_PLUGINS = [];
 // `POST /{id}/update` the entry is cleared so the row flips to "up to date".
 let PLUGIN_UPDATES = {};
 
-function handleApiGet(pathname) {
+// Fleet state is the one slice of the mock backend the specs MUTATE (create /
+// stop / rename / add-remote). Isolate it PER SPEC so parallel files and serial-
+// group retries can't observe each other's writes: every `x-e2e-fleet` request
+// header gets its own lazy deep-clone of the FLEET baseline, and a spec resets
+// its own scope between tests via POST /api/__test__/fleet/reset. Requests with
+// no header share the "default" scope.
+const fleetScopes = new Map();
+const cloneFleet = (f) => JSON.parse(JSON.stringify(f));
+function fleetFor(req) {
+  const scope = req.headers["x-e2e-fleet"] || "default";
+  if (!fleetScopes.has(scope)) fleetScopes.set(scope, cloneFleet(FLEET));
+  return fleetScopes.get(scope);
+}
+
+function handleApiGet(pathname, fleet = FLEET) {
   switch (pathname) {
     case "/api/runtime/status":
       return RUNTIME_STATUS;
@@ -152,11 +166,11 @@ function handleApiGet(pathname) {
     case "/api/theme":
       return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
     case "/api/fleet":
-      return { agents: FLEET.agents };
+      return { agents: fleet.agents };
     case "/api/fleet/discover":
       // One discoverable sibling on the LAN (not in the fleet) — candidates for
       // add-as-delegate or add-to-fleet (remote member).
-      return { discovered: FLEET.agents.some((a) => a.name === "remy") ? [] : [
+      return { discovered: fleet.agents.some((a) => a.name === "remy") ? [] : [
         { name: "remy", url: "http://192.168.5.50:7871", host: "192.168.5.50", port: 7871 },
       ] };
     case "/api/archetypes":
@@ -305,12 +319,18 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
-      const payload = handleApiGet(pathname);
+      const payload = handleApiGet(pathname, fleetFor(req));
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
     const body = await readBody(req);
+    const fleet = fleetFor(req);
+    if (pathname === "/api/__test__/fleet/reset" && req.method === "POST") {
+      // Per-spec hermeticity: restore this scope's fleet to the baseline.
+      fleetScopes.set(req.headers["x-e2e-fleet"] || "default", cloneFleet(FLEET));
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/settings") {
       // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"
       // (box-shared host-config.yaml). The mock just echoes which layer it wrote.
@@ -335,46 +355,46 @@ const server = createServer(async (req, res) => {
     if (req.method === "DELETE" && /^\/api\/plugins\/workflows\/[^/]+$/.test(pathname)) {
       return sendJson(res, { deleted: true });
     }
-    // Fleet (ADR 0042) — mutate the in-memory FLEET so create/start/stop/activate/remove round-trip.
+    // Fleet (ADR 0042) — mutate this scope's fleet so create/start/stop/activate/remove round-trip.
     if (pathname === "/api/fleet" && req.method === "POST") {
       const name = String(body.name || "").trim();
       if (!/^[A-Za-z0-9-_]+$/.test(name)) return sendJson(res, { detail: "invalid name" }, 400);
       // Ids are opaque + immutable (name-<4hex>); the name is the editable display label.
       const agent = { name, id: `${name}-ab12`, port: 7899, pid: 5000, running: true, bundle: body.bundle || "" };
-      FLEET.agents.push(agent);
+      fleet.agents.push(agent);
       return sendJson(res, { ok: true, agent, installed: [] });
     }
     if (pathname === "/api/fleet/remotes" && req.method === "POST") {
       const name = String(body.name || "").trim();
-      if (FLEET.agents.some((a) => a.name === name)) return sendJson(res, { detail: "an agent named " + name + " already exists" }, 400);
+      if (fleet.agents.some((a) => a.name === name)) return sendJson(res, { detail: "an agent named " + name + " already exists" }, 400);
       const agent = { name, id: `${name}-re01`, port: null, pid: null, running: true, bundle: "", remote: true, url: body.url, a2a: `${body.url}/a2a` };
-      FLEET.agents.push(agent);
+      fleet.agents.push(agent);
       return sendJson(res, { ok: true, agent });
     }
     if (req.method === "DELETE" && /^\/api\/fleet\/remotes\/[^/]+$/.test(pathname)) {
       const ident = decodeURIComponent(pathname.split("/").pop());
-      const a = FLEET.agents.find((x) => x.remote && (x.id === ident || x.name === ident));
+      const a = fleet.agents.find((x) => x.remote && (x.id === ident || x.name === ident));
       if (!a) return sendJson(res, { detail: "no remote member" }, 400);
-      FLEET.agents = FLEET.agents.filter((x) => x !== a);
+      fleet.agents = fleet.agents.filter((x) => x !== a);
       return sendJson(res, { ok: true, id: a.id, name: a.name });
     }
     if (req.method === "PATCH" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
       const ident = decodeURIComponent(pathname.split("/").pop());
-      const a = FLEET.agents.find((x) => x.id === ident || x.name === ident);
+      const a = fleet.agents.find((x) => x.id === ident || x.name === ident);
       if (!a) return sendJson(res, { detail: "no such agent" }, 400);
-      if (FLEET.agents.some((x) => x.name === body.name && x.id !== a.id))
+      if (fleet.agents.some((x) => x.name === body.name && x.id !== a.id))
         return sendJson(res, { detail: "an agent with that name already exists" }, 400);
       a.name = String(body.name || "").trim();
       return sendJson(res, { ok: true, id: a.id, name: a.name });
     }
     if (pathname === "/api/fleet/down" && req.method === "POST") {
-      FLEET.agents.forEach((a) => { a.running = false; a.pid = null; });
-      return sendJson(res, { ok: true, stopped: FLEET.agents.map((a) => a.name) });
+      fleet.agents.forEach((a) => { a.running = false; a.pid = null; });
+      return sendJson(res, { ok: true, stopped: fleet.agents.map((a) => a.name) });
     }
     {
       const m = pathname.match(/^\/api\/fleet\/([^/]+)\/(start|stop|activate)$/);
       if (m && req.method === "POST") {
-        const a = FLEET.agents.find((x) => x.name === m[1] || x.id === m[1]);
+        const a = fleet.agents.find((x) => x.name === m[1] || x.id === m[1]);
         if (!a) return sendJson(res, { detail: "no such agent" }, 400);
         if (m[2] === "start") { a.running = true; a.pid = 5001; return sendJson(res, { ok: true, agent: a }); }
         if (m[2] === "stop") { a.running = false; a.pid = null; return sendJson(res, { ok: true, name: a.name, stopped: true }); }
@@ -385,7 +405,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "DELETE" && /^\/api\/fleet\/[^/]+$/.test(pathname)) {
       const name = decodeURIComponent(pathname.split("/").pop());
-      FLEET.agents = FLEET.agents.filter((a) => a.name !== name && a.id !== name);
+      fleet.agents = fleet.agents.filter((a) => a.name !== name && a.id !== name);
       return sendJson(res, { ok: true, name, removed: [name] });
     }
     if (req.method === "POST" && /^\/api\/playbooks\/\d+\/promote$/.test(pathname)) {

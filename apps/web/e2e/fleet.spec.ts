@@ -6,6 +6,18 @@ import { expect, test } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
+// This spec MUTATES the mock fleet (create / stop / rename / add-remote). Claim a
+// private fleet scope (the mock keys state on x-e2e-fleet) and reset it to baseline
+// before every test — including serial-group retries — so a write can never leak
+// into the next test, a retry, or another spec. The scope is keyed on the parallel
+// worker so even concurrent runners (repeat-each, if mode:serial is ever lifted)
+// stay isolated from each other.
+test.beforeEach(async ({ page }, testInfo) => {
+  const scope = `fleet-spec-${testInfo.parallelIndex}`;
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope }); // app fetches carry it
+  await page.request.post("/api/__test__/fleet/reset", { headers: { "x-e2e-fleet": scope } });
+});
+
 async function openAgents(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
