@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Design system bumped `@protolabsai/ui` 0.26.2 → 0.29.0 (+ `@protolabsai/design` 0.5.1).**
+  Brings the OS-adaptive light theme + 10 builtin theme presets (Theme panel picks them
+  up automatically), two token fixes splash.css silently depended on (`--pl-space-5`,
+  `--pl-font-weight-semibold`), and the new `@protolabsai/ui/ai` chat module (not yet
+  adopted). The settings **Host / App | Workspace** home toggle and the MCP add-server
+  **Form | Paste JSON** toggle now use the DS `Tabs variant="segmented"` pill control
+  (our protoContent#218 request, shipped in 0.28) — retiring the stacked-tabs interim
+  and the last hand-rolled `.segmented` CSS.
+
 ### Added
 - **ADR 0049 — bundle pin lifecycle**: a bundle pin means *"last verified working"* —
   pin release **tags** (not raw SHAs), record `verified_against:` (core version), and

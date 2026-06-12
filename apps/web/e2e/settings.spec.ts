@@ -11,8 +11,14 @@ async function openSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
 }
 
-// Click a home (row 1) or a section (row 2) — names are unique across both strips.
+// Click a home (row 1 — the segmented scope toggle, role=button) or a section
+// (row 2 — a real tablist) — names are unique across both strips.
 async function tab(page, name) {
+  const home = page.locator(".pl-tabs--segmented").getByRole("button", { name, exact: true });
+  if (await home.count()) {
+    await home.click();
+    return;
+  }
   await page.locator(".pl-tabs").getByRole("tab", { name, exact: true }).click();
 }
 
@@ -55,7 +61,7 @@ test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) 
 test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
   await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
@@ -69,7 +75,7 @@ test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
@@ -93,7 +99,7 @@ test("a restart-flagged System field shows the restart banner", async ({ page })
 test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Workspace", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
   await expect(page.locator(".settings-group-title").first()).toBeVisible();
   // model.name inherits from the host layer.

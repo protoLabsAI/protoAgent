@@ -4,7 +4,7 @@ import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery 
 import { Suspense, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
@@ -67,9 +67,17 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
         else if (formValid) add.mutate();
       }}
     >
-      <div className="segmented mcp-add-modes">
-        <button type="button" className={mode === "form" ? "active" : ""} onClick={() => setMode("form")}>Form</button>
-        <button type="button" className={mode === "json" ? "active" : ""} onClick={() => setMode("json")}>Paste JSON</button>
+      <div className="mcp-add-modes">
+        <Tabs
+          variant="segmented"
+          ariaLabel="Add-server input mode"
+          active={mode}
+          onSelect={(t) => setMode(t as "form" | "json")}
+          items={[
+            { id: "form", label: "Form" },
+            { id: "json", label: "Paste JSON" },
+          ]}
+        />
       </div>
 
       {mode === "json" ? (
