@@ -1,6 +1,6 @@
 id: notes
 name: Notes
-version: 0.1.0
+version: 0.2.0
 description: >-
   A single shared markdown note the agent and the operator both read and write.
   The flagship reference plugin (ADR 0034 S4) — it owns its storage, its agent

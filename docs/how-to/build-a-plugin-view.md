@@ -36,22 +36,24 @@ Reload. (`chat_example` claims the chat slot; a normal view adds a rail icon ins
 
 ## The kit helper API (`plugin-kit.js`)
 
-The console serves the design-system kit same-origin at `<base>/_ds/plugin-kit.{css,js}`. Load it as
-an ES module (`import { initPluginView } from ".../plugin-kit.js"`) or use the
-`window.protoPluginView` global from a classic script tag:
+The console serves the design-system kit same-origin at `<base>/_ds/plugin-kit.{css,js}`.
+**`plugin-kit.js` is an ES module** — a classic `<script src>` throws
+`Unexpected token 'export'` and never runs it, so load it with a **dynamic `import()`**
+(the slug-aware URL can't be a static import specifier):
 
 | Helper | What it does |
 |---|---|
 | `initPluginView(onInit?)` | Listens for the `protoagent:init` handshake (bearer + theme) **and** live `protoagent:theme` re-themes, mapping the console theme onto the DS `--pl-*` tokens. Call once on load. |
 | `getToken()` | The captured operator bearer (null until the handshake delivers one). |
-| `apiFetch(input, init?)` | Same-origin `fetch` with `Authorization: Bearer <token>` attached when present — for every gated `/api/...` call. |
-| `window.protoPluginView` | The same three helpers as a global, for no-build pages. |
+| `apiFetch(input, init?)` | Same-origin `fetch` with `Authorization: Bearer <token>` attached when present, resolved slug-aware — pass a bare `/api/...`, no manual base. For every gated `/api/...` call. |
 
-```js
-const kit = window.protoPluginView;
-kit.initPluginView();                                   // handshake + live re-theme, hands-free
-const base = location.pathname.split("/plugins/")[0];   // "" or "/agents/<slug>"
-const res = await kit.apiFetch(base + "/api/plugins/mychart/data");
+```html
+<script type="module">
+  const base = location.pathname.split("/plugins/")[0];   // "" or "/agents/<slug>"
+  const kit = await import(base + "/_ds/plugin-kit.js");
+  kit.initPluginView();                                   // handshake + live re-theme, hands-free
+  const res = await kit.apiFetch("/api/plugins/mychart/data"); // slug-aware, no manual base
+</script>
 ```
 
 ## Next

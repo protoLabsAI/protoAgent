@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chat surfaces (`src/ext`) are boundary-wrapped too, so a throw stays contained in
   the slot. Persisted chat sessions are now shape-validated on load — invalid
   members are dropped (the rest survive) instead of throwing later in render.
+- **The documented kit-loading pattern for plugin views was broken** — `plugin-kit.js`
+  is an ES module, so the classic `<script src>` the docs and `chat_example` taught
+  threw `Unexpected token 'export'` and the page's kit logic never ran. The notes
+  editor, `chat_example`, and both plugin-view guides now load the kit via dynamic
+  `import(base + "/_ds/plugin-kit.js")` (filed upstream as protoContent#224).
 
 ### Added
 - **The console prompts for the operator token on 401** (#873): any unauthorized
@@ -28,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first run shows the prompt instead of the BootGate's misleading "isn't responding".
 
 ### Changed
+- **The Notes plugin editor adopts the DS plugin kit (rule 4)** — `plugin-kit.css`
+  `--pl-*` tokens + `initPluginView` + slug-aware authed `apiFetch` replace its
+  hand-rolled hex theme map, bespoke `protoagent:init` listener, and manual bearer
+  headers; the editor now follows the operator's live theme (including the new
+  OS-adaptive light presets). Notes plugin → 0.2.0.
 - **Design system bumped `@protolabsai/ui` 0.26.2 → 0.29.0 (+ `@protolabsai/design` 0.5.1).**
   Brings the OS-adaptive light theme + 10 builtin theme presets (Theme panel picks them
   up automatically), two token fixes splash.css silently depended on (`--pl-space-5`,

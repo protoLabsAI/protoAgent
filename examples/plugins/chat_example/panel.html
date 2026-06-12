@@ -91,19 +91,18 @@
     <button id="send" class="pl-btn pl-btn--primary" type="submit">Send</button>
   </form>
 </div>
-<!-- RULE 4: the kit's JS, same-origin + slug-aware. Gives window.protoPluginView
-     ({ initPluginView, apiFetch, getToken }) — the no-build handshake + authed fetch. -->
-<script src="" id="kit"></script>
-<script>
-  document.getElementById("kit").src = window.__base + "/_ds/plugin-kit.js";
-</script>
-<script>
+<!-- RULE 4: the kit's JS, same-origin + slug-aware. plugin-kit.js is an ES MODULE
+     (export statements) — a classic <script src> throws "Unexpected token 'export'"
+     and never sets the window.protoPluginView global. Dynamic import() is the
+     no-build way to load it with a slug-aware URL (a static import specifier can't
+     carry the base). -->
+<script type="module">
   "use strict";
   const base = window.__base;
 
   // ── RULE 4: the kit handles the protoagent:init handshake (bearer + theme) and
   // re-skins its --pl-* tokens to the operator's live theme. We just listen. ──
-  const kit = window.protoPluginView;
+  const kit = await import(window.__base + "/_ds/plugin-kit.js");
   kit.initPluginView();
 
   // ── RULE 3: one session per agent, keyed by slug-aware base; New session rotates it. ──

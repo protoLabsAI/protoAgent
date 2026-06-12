@@ -149,6 +149,7 @@ Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu
 | # | Request | Priority | Status |
 |---|---|---|---|
 | [#218](https://github.com/protoLabsAI/protoContent/issues/218) | `Tabs` `segmented` variant / `SegmentedControl` (two-level nav scope toggle) | P2 | **Shipped in ui 0.28.0, adopted 2026-06-12** — the settings **Host / App \| Workspace** home toggle (`SettingsSurface.tsx`) and the MCP add-server **Form \| Paste JSON** toggle (`McpPanel.tsx`, the last `.segmented` hand-roll) both use `<Tabs variant="segmented">`; the local `.segmented` CSS block is deleted. |
+| [#224](https://github.com/protoLabsAI/protoContent/issues/224) | `plugin-kit.js` classic-`<script>` contract is impossible (the file is ESM — `Unexpected token 'export'`, the `window.protoPluginView` global never sets) | P2 | Filed 2026-06-12. **App-side fixed** (notes-adopts-kit PR): the notes editor + `chat_example` + both plugin-view docs now load the kit via dynamic `import(base + "/_ds/plugin-kit.js")` from a module script. |
 
 ## Console adoption status (branch `ds-adoption-sweep`, 2026-06-09)
 
