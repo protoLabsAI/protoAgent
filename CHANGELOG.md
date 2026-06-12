@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.3] - 2026-06-12
+
 ### Changed
 - **Identity panel: the "Saving writes SOUL.md…" helper + save status now sit
   ABOVE the SOUL.md editor** (next to the Save button), instead of trailing under

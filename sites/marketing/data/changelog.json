@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.35.3",
+    "date": "2026-06-12",
+    "changes": [
+      "**Identity panel: the \"Saving writes SOUL.md…\" helper + save status now sit",
+      "Desktop first-run: panels no longer flash \"Load failed\" and need a reload.",
+      "macOS desktop: the brand again clears the native traffic lights."
+    ]
+  },
+  {
     "version": "v0.35.2",
     "date": "2026-06-12",
     "changes": [
