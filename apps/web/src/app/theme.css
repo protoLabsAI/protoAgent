@@ -121,8 +121,10 @@
 /* macOS desktop (invisible title bar): inset the brand so it clears the native
    traffic lights that float top-left over the content. The topbar carries
    `data-tauri-drag-region`, so this area drags the window. Mac build ONLY — the
-   browser has no traffic lights, so no inset there. */
-.app-shell.is-tauri-mac .topbar {
+   browser has no traffic lights, so no inset there.
+   NB: the brand bar is `.app-topbar` (App.tsx) — a rename left this rule on the
+   old `.topbar`, so the inset silently stopped clearing the lights. */
+.app-shell.is-tauri-mac .app-topbar {
   padding-left: 84px;
 }
 
