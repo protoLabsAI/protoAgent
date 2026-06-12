@@ -125,7 +125,7 @@
    NB: the brand bar is `.app-topbar` (App.tsx) — a rename left this rule on the
    old `.topbar`, so the inset silently stopped clearing the lights. */
 .app-shell.is-tauri-mac .app-topbar {
-  padding-left: 84px;
+  padding-left: 60px;
 }
 
 /* The splash → app hand-off cross-fade (default root view transition); a touch
