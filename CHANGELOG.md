@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-06-12
+
 ### Added
 - **Box-runtime knobs (bind interface, fleet ports, discovery, warm policy) are now
   Host-layer settings, not just scattered env vars** (ADR 0047 D8 — the cascade's
