@@ -113,23 +113,31 @@ def test_policy_reflects_projects_and_egress(tmp_path):
     )
     cfg = LangGraphConfig.from_yaml(p)
     policy = _gen().build_policy(cfg)
-    # filesystem: rw project under read_write, ro project under read_only
-    assert "/work/pixelgen" in policy and "/work/ORBIS" in policy
-    assert "/sandbox" in policy
-    # network: deny-by-default + gateway host + configured host
-    assert "default: deny" in policy
+    # v1 policy schema (validated against OpenShell v0.0.59).
+    assert "version: 1" in policy and "filesystem_policy:" in policy
+    # filesystem_policy: the write:true project lands under read_write, write:false
+    # under read_only — verify by section ORDER, not just presence.
+    rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
+    assert rw_idx < policy.index("/work/pixelgen") < ro_idx   # write:true → read_write
+    assert ro_idx < policy.index("/work/ORBIS")               # write:false → read_only
+    assert "project: pixelgen" in policy and "project: orbis" in policy
+    assert "/sandbox" in policy  # data root, read-write
+    # network_policies: deny-by-default egress allowlist (only listed endpoints
+    # reachable) carrying the gateway host + the configured host.
+    assert "network_policies:" in policy and "agent_egress:" in policy
     assert "api.proto-labs.ai" in policy
     assert "*.github.com" in policy
-    # process + inference domains present
-    assert "seccomp: default" in policy
-    assert "route_to: https://api.proto-labs.ai/v1" in policy
+    # process domain: the unprivileged image user (no seccomp / inference domain in v1).
+    assert "run_as_user: sandbox" in policy
 
 
 def test_policy_empty_config_is_default_deny(tmp_path):
     from graph.config import LangGraphConfig
 
     policy = _gen().build_policy(LangGraphConfig())
-    assert "default: deny" in policy
+    # Deny-by-default egress = a network_policies allowlist: nothing is reachable
+    # except the endpoints explicitly listed under agent_egress.
+    assert "network_policies:" in policy and "agent_egress:" in policy
     assert "/sandbox" in policy  # data root always read-write
 
 
