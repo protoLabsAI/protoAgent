@@ -45,6 +45,70 @@ def test_knowledge_search_and_browse(monkeypatch):
     assert browse["results"][0]["id"] == 2
 
 
+# ── chunk CRUD (operator curation) ────────────────────────────────────────────
+class _CrudKS:
+    """Backend double tracking add/delete calls (the ADR 0031 protocol surface)."""
+
+    def __init__(self, *, next_id=7, delete_ok=True):
+        self.next_id = next_id
+        self.delete_ok = delete_ok
+        self.added: list[tuple] = []
+        self.deleted: list[int] = []
+
+    def add_chunk(self, content, domain="general", **kwargs):
+        self.added.append((content, domain, kwargs))
+        return self.next_id
+
+    def delete_by_id(self, chunk_id):
+        self.deleted.append(chunk_id)
+        return self.delete_ok
+
+
+def test_chunk_add(monkeypatch):
+    ks = _CrudKS()
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.post("/api/knowledge/chunks", json={"content": "fact", "domain": "ops", "heading": "H"}).json()
+    assert body == {"enabled": True, "id": 7}
+    content, domain, kwargs = ks.added[0]
+    assert (content, domain) == ("fact", "ops")
+    # heading/source ride kwargs ONLY — the protocol guarantees nothing else positionally
+    assert kwargs["heading"] == "H" and kwargs["source_type"] == "operator"
+
+
+def test_chunk_add_requires_content(monkeypatch):
+    c = _client(monkeypatch, knowledge=_CrudKS())
+    assert c.post("/api/knowledge/chunks", json={"content": "  "}).status_code == 400
+
+
+def test_chunk_update_adds_revision_before_deleting_old(monkeypatch):
+    ks = _CrudKS(next_id=9)
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.put("/api/knowledge/chunks/3", json={"content": "fixed fact"}).json()
+    assert body == {"enabled": True, "id": 9, "replaced": True}
+    assert ks.added and ks.deleted == [3]
+
+
+def test_chunk_update_keeps_old_row_when_add_fails(monkeypatch):
+    ks = _CrudKS()
+    ks.add_chunk = lambda *a, **k: None  # store rejects the revision
+    c = _client(monkeypatch, knowledge=ks)
+    assert c.put("/api/knowledge/chunks/3", json={"content": "x"}).status_code == 400
+    assert ks.deleted == []                                   # the original survives
+
+
+def test_chunk_delete(monkeypatch):
+    ks = _CrudKS()
+    c = _client(monkeypatch, knowledge=ks)
+    assert c.delete("/api/knowledge/chunks/4").json() == {"enabled": True, "deleted": True}
+    assert ks.deleted == [4]
+
+
+def test_chunk_crud_disabled_without_store(monkeypatch):
+    c = _client(monkeypatch)
+    assert c.post("/api/knowledge/chunks", json={"content": "x"}).json()["enabled"] is False
+    assert c.delete("/api/knowledge/chunks/1").json() == {"enabled": False, "deleted": False}
+
+
 def test_playbooks_sorted_pinned_first(monkeypatch):
     class _SK:
         def all_skills(self):

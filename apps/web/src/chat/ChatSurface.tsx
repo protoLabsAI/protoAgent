@@ -64,6 +64,7 @@ export function ChatSurface({
   const chat = useChatState();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
+  const [harvestOnDelete, setHarvestOnDelete] = useState(false);
   const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
 
   useEffect(() => {
@@ -72,10 +73,10 @@ export function ChatSurface({
     }
   }, [chat.currentSessionId, chat.sessions.length]);
 
-  function closeSession(id: string) {
-    // Retire server-side (harvest history → knowledge, purge checkpoints),
-    // best-effort, then drop the tab locally.
-    void api.deleteChatSession(id).catch(() => {});
+  function closeSession(id: string, harvest: boolean) {
+    // Retire server-side (purge checkpoints; harvest into knowledge ONLY when
+    // the dialog's checkbox opted in), best-effort, then drop the tab locally.
+    void api.deleteChatSession(id, harvest).catch(() => {});
     chatStore.deleteSession(id);
   }
 
@@ -122,14 +123,30 @@ export function ChatSurface({
         confirmLabel="Delete chat"
         destructive
         onConfirm={() => {
-          if (pendingClose) closeSession(pendingClose);
+          if (pendingClose) closeSession(pendingClose, harvestOnDelete);
           setPendingClose(null);
+          setHarvestOnDelete(false);
         }}
-        onClose={() => setPendingClose(null)}
+        onClose={() => { setPendingClose(null); setHarvestOnDelete(false); }}
       >
-        {pendingCloseSession
-          ? `"${pendingCloseSession.title}" and its history will be removed. The conversation is first harvested into the knowledge base, then its checkpoints are purged — this can't be undone from here.`
-          : undefined}
+        {pendingCloseSession ? (
+          <>
+            <p style={{ margin: 0 }}>
+              {`"${pendingCloseSession.title}" and its history will be removed — this can't be undone from here.`}
+            </p>
+            {/* Harvest is OPT-IN: deleting a chat must not silently copy it into
+                searchable memory — the operator may be deleting it precisely to
+                get rid of it. */}
+            <label className="chat-delete-harvest">
+              <input
+                type="checkbox"
+                checked={harvestOnDelete}
+                onChange={(e) => setHarvestOnDelete(e.target.checked)}
+              />
+              Harvest into the knowledge base first (keeps a searchable summary)
+            </label>
+          </>
+        ) : undefined}
       </ConfirmDialog>
     </section>
   );

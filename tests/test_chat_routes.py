@@ -29,6 +29,27 @@ def test_api_chat_joins_assistant_parts(monkeypatch):
     assert body["response"] == "echo:hi"
 
 
+def test_delete_session_harvest_is_opt_in(monkeypatch):
+    # Deleting a chat must NOT silently copy it into the knowledge base: the
+    # route defaults harvest=False and forwards the dialog checkbox explicitly.
+    import operator_api.chat_routes as cr
+
+    calls: list[tuple] = []
+
+    async def _fake_retire(thread_id, *, harvest=None):
+        calls.append((thread_id, harvest))
+        return "chunk-1" if harvest else None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    c = _client(monkeypatch)
+
+    body = c.delete("/api/chat/sessions/s1").json()
+    assert body == {"deleted": True, "harvested": False}
+    body = c.delete("/api/chat/sessions/s2?harvest=true").json()
+    assert body == {"deleted": True, "harvested": True}
+    assert calls == [("a2a:s1", False), ("a2a:s2", True)]
+
+
 def test_healthz_ready_and_echoes_ui(monkeypatch):
     c = _client(monkeypatch, graph=object())
     r = c.get("/healthz")

@@ -46,12 +46,16 @@ def register_chat_routes(app, ui: str) -> None:
         return {"response": "\n\n".join(parts), "messages": result}
 
     @app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: str):
-        """Retire a chat session: harvest its conversation into the knowledge
-        base (if enabled), then purge its checkpoints. Called when the operator
-        deletes a chat tab, so deleted conversations don't linger to the TTL —
-        their substance lives on as searchable memory instead."""
-        chunk_id = await _retire_thread(f"a2a:{session_id}")
+    async def _api_delete_session(session_id: str, harvest: bool = False):
+        """Retire a chat session: purge its checkpoints, optionally harvesting
+        the conversation into the knowledge base first. Called when the
+        operator deletes a chat tab.
+
+        Harvest is OPT-IN (``?harvest=true`` — the delete dialog's checkbox):
+        deleting a chat must not silently copy it into searchable memory; the
+        operator may be deleting it precisely to get rid of it. The TTL prune
+        sweep keeps its own config-driven default (``checkpoint_harvest_enabled``)."""
+        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     # --- Goal mode API ------------------------------------------------------

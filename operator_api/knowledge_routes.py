@@ -3,15 +3,19 @@
 The console's "Knowledge" surface is a searchable Store + Playbooks (ADR 0020):
 the FTS5 knowledge base (findings, daily-log, harvested sessions, operator notes)
 and the procedural-memory skill index. Extracted from ``server._main`` (ADR 0023
-phase 3) into a ``register_knowledge_routes(app)`` registrar. Every route is
-read-only / best-effort and degrades to ``{"enabled": False}`` when its store is
-off; none ever 500s the console.
+phase 3) into a ``register_knowledge_routes(app)`` registrar. Browse/search is
+best-effort and degrades to ``{"enabled": False}`` when its store is off; none of
+the routes ever 500s the console. The chunk CRUD routes let the operator curate
+the store directly (add a fact, fix a stale one, drop a wrong one) — the same
+``KnowledgeBackend`` protocol surface every backend implements (ADR 0031).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+
+from fastapi.responses import JSONResponse
 
 from runtime.state import STATE
 
@@ -136,3 +140,65 @@ def register_knowledge_routes(app) -> None:
         except Exception:  # noqa: BLE001
             stats = {}
         return {"enabled": True, "query": q, "results": results, "stats": stats}
+
+    # --- Knowledge chunk CRUD (operator curation) ---------------------------
+    # The store fills up with harvested sessions / findings the operator could
+    # only read; these let them curate it: add a fact, fix a stale one, drop a
+    # wrong one. add/delete are the KnowledgeBackend protocol (ADR 0031); edit
+    # composes them (add the new revision FIRST, then delete the old — a failed
+    # add must never lose the original) so it works on every backend, and a
+    # hybrid store re-embeds the new content on the way in.
+
+    @app.post("/api/knowledge/chunks")
+    async def _api_knowledge_add(body: dict | None = None):
+        if STATE.knowledge_store is None:
+            return {"enabled": False, "id": None}
+        body = body or {}
+        content = str(body.get("content", "")).strip()
+        if not content:
+            return JSONResponse({"detail": "content is required"}, status_code=400)
+        chunk_id = await asyncio.to_thread(
+            lambda: STATE.knowledge_store.add_chunk(
+                content,
+                str(body.get("domain", "") or "general"),
+                # kwargs only beyond (content, domain) — the ADR 0031 protocol
+                # guarantees nothing else positionally.
+                heading=(str(body.get("heading", "")).strip() or None),
+                source="console",
+                source_type="operator",
+            )
+        )
+        if chunk_id is None:
+            return JSONResponse({"detail": "the store rejected the chunk"}, status_code=400)
+        return {"enabled": True, "id": chunk_id}
+
+    @app.put("/api/knowledge/chunks/{chunk_id}")
+    async def _api_knowledge_update(chunk_id: int, body: dict | None = None):
+        if STATE.knowledge_store is None:
+            return {"enabled": False, "id": None}
+        body = body or {}
+        content = str(body.get("content", "")).strip()
+        if not content:
+            return JSONResponse({"detail": "content is required"}, status_code=400)
+        new_id = await asyncio.to_thread(
+            lambda: STATE.knowledge_store.add_chunk(
+                content,
+                str(body.get("domain", "") or "general"),
+                heading=(str(body.get("heading", "")).strip() or None),
+                source=(body.get("source") or "console"),
+                source_type="operator",
+            )
+        )
+        if new_id is None:
+            return JSONResponse({"detail": "the store rejected the new revision"}, status_code=400)
+        deleted = await asyncio.to_thread(STATE.knowledge_store.delete_by_id, chunk_id)
+        if not deleted:
+            log.warning("[knowledge] edit of chunk %s left the old row (delete failed)", chunk_id)
+        return {"enabled": True, "id": new_id, "replaced": deleted}
+
+    @app.delete("/api/knowledge/chunks/{chunk_id}")
+    async def _api_knowledge_delete(chunk_id: int):
+        if STATE.knowledge_store is None:
+            return {"enabled": False, "deleted": False}
+        deleted = await asyncio.to_thread(STATE.knowledge_store.delete_by_id, chunk_id)
+        return {"enabled": True, "deleted": bool(deleted)}

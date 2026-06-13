@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /api/plugins/sync`) that re-clones every locked plugin at its pinned commit;
   anything already in `plugins.enabled` hot-reloads live. Fetch ≠ enable still
   holds — syncing never turns plugins on.
+- **Knowledge base CRUD from the console.** The Knowledge → Store view was
+  read-only; now the operator can curate it: **add** an entry (+ button — heading,
+  domain, content), **edit** a chunk in place, and **delete** one (with confirm).
+  Backed by `POST/PUT/DELETE /api/knowledge/chunks[/{id}]` on the ADR 0031 backend
+  protocol — edit adds the new revision *before* deleting the old row (a failed
+  save can't lose the original), and a hybrid store re-embeds the new content.
+  Operator-added entries carry `source: console / source_type: operator`.
+
+### Changed
+- **Harvest-on-delete is now opt-in.** Deleting a chat tab silently summarized the
+  conversation into the knowledge base first; the delete dialog now has a
+  **"Harvest into the knowledge base first"** checkbox (off by default — deleting a
+  chat shouldn't copy it into searchable memory unless you ask). The API gained
+  `DELETE /api/chat/sessions/{id}?harvest=true|false` (default false); the TTL
+  prune sweep keeps its config-driven `checkpoint_harvest_enabled` default.
 
 ### Fixed
 - **A render error no longer white-screens the console** (#872): a root error

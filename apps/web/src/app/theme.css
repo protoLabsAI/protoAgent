@@ -1540,6 +1540,12 @@ textarea {
 }
 .playbook-foot { margin-top: 16px; font-size: 11.5px; color: var(--fg-muted); display: flex; align-items: center; gap: 6px; }
 
+/* Knowledge store curation (add / edit / delete a chunk from the console). */
+.knowledge-chunk-form { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; margin: 8px 0; }
+.knowledge-chunk-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
+.knowledge-chunk-actions { display: flex; gap: 2px; }
+
 /* ── Delegates panel (ADR 0025) — moved to src/settings/delegates.css (#832). ── */
 
 /* Plugin-contributed console views (ADR 0026) — optional subnav above, iframe fills. */

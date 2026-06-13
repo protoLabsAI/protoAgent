@@ -502,6 +502,29 @@ export const api = {
     }>(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
   },
 
+  // Knowledge chunk CRUD — operator curation of the store (add a fact, fix a
+  // stale one, drop a wrong one). Edit replaces the chunk (new id): the server
+  // adds the revision first, then deletes the old row, so it works on every
+  // ADR 0031 backend and a hybrid store re-embeds on the way in.
+  addKnowledgeChunk(body: { content: string; domain?: string; heading?: string }) {
+    return request<{ enabled: boolean; id: number | null }>(
+      "/api/knowledge/chunks",
+      { method: "POST", body },
+    );
+  },
+  updateKnowledgeChunk(id: number, body: { content: string; domain?: string; heading?: string; source?: string | null }) {
+    return request<{ enabled: boolean; id: number | null; replaced: boolean }>(
+      `/api/knowledge/chunks/${id}`,
+      { method: "PUT", body },
+    );
+  },
+  deleteKnowledgeChunk(id: number) {
+    return request<{ enabled: boolean; deleted: boolean }>(
+      `/api/knowledge/chunks/${id}`,
+      { method: "DELETE" },
+    );
+  },
+
   deletePlaybook(id: number) {
     return request<{ enabled: boolean; deleted: boolean; error?: string }>(
       `/api/playbooks/${id}`,
@@ -820,11 +843,12 @@ export const api = {
     });
   },
 
-  // Retire a chat session server-side: harvest its history into knowledge (if
-  // enabled) then purge its checkpoints. Fire-and-forget on tab delete.
-  deleteChatSession(sessionId: string) {
+  // Retire a chat session server-side: purge its checkpoints, optionally
+  // harvesting the conversation into knowledge first (the delete dialog's
+  // opt-in checkbox). Fire-and-forget on tab delete.
+  deleteChatSession(sessionId: string, harvest = false) {
     return request<{ deleted: boolean; harvested: boolean }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}`,
       { method: "DELETE" },
     );
   },

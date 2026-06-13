@@ -123,3 +123,15 @@
   resize: none;
   overflow-y: auto;
 }
+
+/* Delete-chat dialog: the opt-in harvest checkbox (harvest is never automatic). */
+.chat-delete-harvest {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.chat-delete-harvest input { accent-color: var(--accent); }

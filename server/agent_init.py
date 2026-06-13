@@ -671,16 +671,27 @@ async def _monitor_goals_loop() -> None:
         await asyncio.sleep(max(5, interval))
 
 
-async def _retire_thread(thread_id: str) -> str | None:
+async def _retire_thread(thread_id: str, *, harvest: bool | None = None) -> str | None:
     """Harvest a thread to the knowledge base (best-effort) then delete its
     checkpoints. Shared by the prune sweep and explicit tab deletion. Returns
-    the harvested knowledge chunk id, if any."""
+    the harvested knowledge chunk id, if any.
+
+    ``harvest`` — ``None`` defers to ``checkpoint_harvest_enabled`` (the TTL
+    sweep's config-driven default); an explicit bool overrides it (the
+    delete-chat dialog's opt-in checkbox: an unchecked box must not harvest
+    just because the sweep is configured to, and a checked box is an explicit
+    operator request)."""
     import asyncio
 
     from graph.checkpoint_prune import delete_thread
 
     chunk_id = None
-    if STATE.graph_config is not None and getattr(STATE.graph_config, "checkpoint_harvest_enabled", False):
+    do_harvest = (
+        getattr(STATE.graph_config, "checkpoint_harvest_enabled", False)
+        if harvest is None
+        else harvest
+    )
+    if STATE.graph_config is not None and do_harvest:
         from graph.conversation_harvest import harvest_thread
         chunk_id = await harvest_thread(
             thread_id,
