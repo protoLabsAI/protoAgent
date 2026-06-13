@@ -814,6 +814,9 @@ export function App() {
         onCollapse={setRightCollapsed}
         leftCollapsed={leftCollapsed}
         onLeftCollapse={setLeftCollapsed}
+        // Let the left column narrow to 200 before it snaps/collapses (the DS default is
+        // 280, which left a 140–280 dead zone where a narrowed left snapped back up).
+        minLeftWidth={200}
         mobileItems={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
           ...s,
           dot: pluginDots[s.id] || undefined,
