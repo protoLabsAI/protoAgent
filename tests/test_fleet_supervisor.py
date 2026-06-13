@@ -105,6 +105,10 @@ def test_remote_member_lifecycle(tmp_path, monkeypatch):
         supervisor.add_remote("bad", "ftp://nope")              # not http(s)
     with pytest.raises(supervisor.FleetError):
         supervisor.add_remote("host", "http://h:1")             # reserved slug
+    # SSRF guard (#871): cloud-metadata / link-local is blocked even though private
+    # LAN/tailnet remotes (like ava above) are allowed.
+    with pytest.raises(supervisor.FleetError):
+        supervisor.add_remote("meta", "http://169.254.169.254/latest/meta-data/")
 
     # status(): remote rides along with the cached probe (no probe yet → stopped)
     entry = next(a for a in supervisor.status() if a.get("remote"))

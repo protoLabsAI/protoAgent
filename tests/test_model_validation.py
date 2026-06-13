@@ -33,7 +33,7 @@ def test_auth_error_strips_token_hash_and_key(monkeypatch):
     import httpx
     monkeypatch.setattr(httpx, "Client", _client_returning(_FakeResp(401, {"error": {"message": leaky}})))
 
-    ok, err = config_io.validate_model_connection("https://gw.example/v1", "sk-bogus", "m")
+    ok, err = config_io.validate_model_connection("https://8.8.8.8/v1", "sk-bogus", "m")
     assert ok is False
     # The actionable cause survives…
     assert "Authentication Error" in err
@@ -48,7 +48,7 @@ def test_clean_gateway_message_passes_through(monkeypatch):
         httpx, "Client",
         _client_returning(_FakeResp(400, {"error": {"message": "expected to start with 'sk-'"}})),
     )
-    ok, err = config_io.validate_model_connection("https://gw.example/v1", "bad", "m")
+    ok, err = config_io.validate_model_connection("https://8.8.8.8/v1", "bad", "m")
     assert ok is False
     assert "expected to start with 'sk-'" in err
 

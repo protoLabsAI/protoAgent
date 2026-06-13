@@ -131,3 +131,24 @@ def test_policy_empty_config_is_default_deny(tmp_path):
     policy = _gen().build_policy(LangGraphConfig())
     assert "default: deny" in policy
     assert "/sandbox" in policy  # data root always read-write
+
+
+# ── #871: allow_private mode (fleet remotes) ────────────────────────────────────
+
+
+def test_allow_private_permits_lan_but_blocks_metadata():
+    # Fleet remotes are normally LAN / tailnet / loopback — allow those, but ALWAYS
+    # block link-local/cloud-metadata, multicast, reserved (the real SSRF targets).
+    for ok in ("http://10.0.0.5:7870/", "http://192.168.1.20/", "http://127.0.0.1:7871/",
+               "http://100.119.239.8/"):  # tailnet
+        assert egress.check_url(ok, allow_private=True) is None, ok
+    for bad in ("http://169.254.169.254/latest/meta-data/",  # cloud metadata
+                "http://224.0.0.1/",                           # multicast
+                "http://0.0.0.0/"):                            # unspecified
+        assert egress.check_url(bad, allow_private=True) is not None, bad
+
+
+def test_default_mode_still_blocks_all_private():
+    # The model-probe path keeps the strict default — private + loopback blocked too.
+    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://169.254.169.254/"):
+        assert egress.check_url(bad) is not None, bad

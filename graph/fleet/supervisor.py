@@ -271,6 +271,17 @@ def add_remote(name: str, url: str, token: str = "") -> dict:
     url = (url or "").strip().rstrip("/")
     if not url.startswith(("http://", "https://")):
         raise FleetError(f"remote url must be http(s), got {url!r}")
+    # SSRF guard (#871): the hub reverse-proxies /agents/<slug>/* to this URL, so a
+    # registered remote can turn the hub into an internal-network proxy. Fleet remotes
+    # ARE normally private (LAN / tailnet / a co-located instance), so allow_private —
+    # but ALWAYS block link-local/cloud-metadata (169.254.169.254), multicast, reserved.
+    from security import egress
+
+    if egress.check_url(url, allow_private=True, block_unresolvable=False):
+        raise FleetError(
+            f"remote url {url} is blocked by the egress guard (link-local/metadata/"
+            f"reserved address); allowlist it via egress.allowed_hosts if intentional"
+        )
     with _remotes_lock():
         remotes = _load_remotes()
         taken = ({r["name"] for r in remotes.values()}

@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **SSRF: the model-probe and fleet-remote registration now run egress checks** (#871).
+  `list_gateway_models` / `validate_model_connection` (reached via `/api/config/models`
+  and `/api/config/test-model`) made a raw request to the operator-supplied `api_base`
+  with no guard — `api_base=http://169.254.169.254/…` was semi-blind SSRF that even
+  echoed the upstream body. They now run `egress.check_url` before the request (blocked
+  hosts need `egress.allowed_hosts`) and no longer echo raw upstream bodies. Registering
+  a fleet remote (`add_remote`) validates the URL too — `allow_private` keeps LAN /
+  tailnet / co-located remotes working while link-local / cloud-metadata / reserved
+  targets are always blocked. `egress.check_url` gains `allow_private` +
+  `block_unresolvable` modes (defaults unchanged for existing callers).
 - **A plugin's declared secret can no longer slip into the tracked config YAML when
   plugin discovery fails** (#877). `secret_paths()` swallowed any discovery error to an
   empty set, so a transient failure stopped recognizing a plugin's secret keys and
