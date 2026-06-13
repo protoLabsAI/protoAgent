@@ -46,6 +46,44 @@ def test_scaffold_plugin_refuses_overwrite(tmp_path):
         scaffold.scaffold_plugin("dup", target_dir=str(tmp_path))
 
 
+def test_scaffold_view_is_served_on_the_public_prefix(tmp_path):
+    """The view PAGE must be on the PUBLIC /plugins/<id> prefix (an iframe page-load
+    can't carry a bearer) — not the gated /api/plugins/<id> — and follow the four
+    rules (slug-aware base + DS kit)."""
+    scaffold.scaffold_plugin("Viewy", with_view=True, target_dir=str(tmp_path))
+    pdir = tmp_path / "viewy"
+    init = (pdir / "__init__.py").read_text()
+    manifest = (pdir / "protoagent.plugin.yaml").read_text()
+    assert 'prefix="/plugins/viewy"' in init  # public page route, not /api/plugins/viewy
+    assert "path: /plugins/viewy/view" in manifest
+    assert "/_ds/plugin-kit.css" in init and "split('/plugins/')" in init  # rules 3 + 4
+
+
+def test_scaffold_with_tests_is_shippable(tmp_path):
+    """with_tests writes a host-free suite + CI + dev deps + pyproject, version-coherent."""
+    import yaml
+
+    res = scaffold.scaffold_plugin("Shippable One", with_tests=True, target_dir=str(tmp_path))
+    pdir = tmp_path / "shippable-one"
+    for rel in (
+        "tests/conftest.py",
+        "tests/test_shippable_one.py",
+        ".github/workflows/ci.yml",
+        "requirements-dev.txt",
+        "pyproject.toml",
+    ):
+        assert (pdir / rel).exists(), rel
+    assert "tests/" in res.made
+    # the generated test file is valid Python
+    compile((pdir / "tests" / "test_shippable_one.py").read_text(), "t.py", "exec")
+    # manifest ↔ pyproject versions agree (the coherence a release should hold)
+    mv = yaml.safe_load((pdir / "protoagent.plugin.yaml").read_text())["version"]
+    assert f'version = "{mv}"' in (pdir / "pyproject.toml").read_text()
+    # ci.yml is valid YAML with a test job
+    ci = yaml.safe_load((pdir / ".github" / "workflows" / "ci.yml").read_text())
+    assert "test" in ci["jobs"]
+
+
 def test_scaffold_comms_plugin(tmp_path):
     res = scaffold.scaffold_plugin("My Chat", with_comms=True, target_dir=str(tmp_path))
     assert res.kind == "comms"

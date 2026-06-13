@@ -47,14 +47,23 @@ _VIEW_STUB = '''
 
     @router.get("/view")
     async def _view():
-        # The console iframes this page (ADR 0038) and postMessages it the operator
-        # bearer + theme (ADR 0026). Serve a sandboxed page; for untrusted/generated
-        # content keep the inner frame sandbox="allow-scripts" with no same-origin.
-        return HTMLResponse("<!doctype html><body style='background:#0a0a0c;color:#ededed;"
-                            "font-family:system-ui;padding:32px'><h1>{name}</h1>"
-                            "<p>Your plugin view — replace this page.</p></body>")
-    # Mounted under /api/plugins/{id} so it inherits the operator bearer gate (ADR 0026).
-    registry.register_router(router, prefix="/api/plugins/{id}")
+        # Four rules (ADR 0026/0038): serve the declared path · gate DATA (not the page)
+        # · slug-aware base · link the DS kit. Untrusted/generated HTML → nest it in an
+        # <iframe sandbox="allow-scripts"> with NO same-origin.
+        return HTMLResponse(
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<script>var B=location.pathname.split('/plugins/')[0];"  # "" on host, /agents/<slug> via proxy
+            "var l=document.createElement('link');l.rel='stylesheet';"
+            "l.href=B+'/_ds/plugin-kit.css';document.head.appendChild(l);</script>"
+            "<style>body{{margin:0;padding:32px;background:var(--pl-color-bg);"
+            "color:var(--pl-color-fg);font-family:var(--pl-font-sans,system-ui)}}</style>"
+            "</head><body><h1>{name}</h1>"
+            "<p>Your plugin view — replace this page. Load the kit JS and fetch gated data "
+            "with kit.apiFetch('/api/plugins/{id}/...').</p></body></html>"
+        )
+    # The PAGE is PUBLIC: an iframe page-load can't carry a bearer, so it must NOT be
+    # gated. Mount any DATA routes under /api/plugins/{id} for the operator bearer gate.
+    registry.register_router(router, prefix="/plugins/{id}")
 '''
 
 _MANIFEST_STUB = """id: {id}
@@ -95,6 +104,145 @@ steps:
       {{{{inputs.request}}}}
 output: "{{{{steps.do.output}}}}"
 """
+
+# Shippable-repo stubs (with_tests) — a host-free test suite + CI + dev deps, so a
+# standalone-repo plugin is green from birth. Written verbatim unless noted.
+_CONFTEST_STUB = '''"""Test bootstrap — load the plugin host-free (no protoAgent running).
+
+Executing __init__.py is safe: the host-only imports (fastapi, graph.*) are lazy
+(inside register()), so the suite needs only requirements-dev.txt.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def plugin():
+    spec = importlib.util.spec_from_file_location("plugin_under_test", ROOT / "__init__.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Registry:
+    """A fake registry — records what register() contributes, with no host."""
+
+    def __init__(self):
+        self.config = {}
+        self.tools, self.routers, self.surfaces, self.subagents, self.skill_dirs = [], [], [], [], []
+
+    def register_tool(self, t):
+        self.tools.append(t)
+
+    def register_tools(self, ts):
+        self.tools.extend(ts)
+
+    def register_router(self, router, prefix=""):
+        self.routers.append(prefix)
+
+    def register_surface(self, start, stop=None, name=None):
+        self.surfaces.append(name)
+
+    def register_subagent(self, cfg):
+        self.subagents.append(cfg)
+
+    def register_skill_dir(self, path):
+        self.skill_dirs.append(path)
+
+    def emit(self, *a, **k):
+        pass
+
+    def on(self, *a, **k):
+        pass
+
+
+@pytest.fixture
+def registry():
+    return _Registry()
+'''
+
+# .format(id=, name=) — no other literal braces.
+_TEST_STUB = '''"""Smoke tests for {name} — host-free (no protoAgent running)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_register_runs_host_free(plugin, registry):
+    plugin.register(registry)  # must not raise with no host present
+    # The scaffold wires its contributions here — replace with your real assertions.
+    assert registry.tools or registry.routers or registry.surfaces or registry.subagents
+
+
+def test_manifest_is_valid():
+    m = yaml.safe_load((ROOT / "protoagent.plugin.yaml").read_text())
+    assert m["id"] == "{id}" and m["version"]
+'''
+
+# Verbatim (the ${{ }} is GitHub Actions syntax — do NOT .format this).
+_CI_STUB = """name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    # The org's Namespace Linux profile; override NSC_RUNNER on a fork that lacks it.
+    runs-on: ${{ vars.NSC_RUNNER || 'namespace-profile-protolabs-linux' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt ruff
+      # Lint the whole plugin; format-check only tests/ (the generated starter
+      # __init__ is yours to shape). Broaden to `ruff format --check .` once you've
+      # run `ruff format .` on your code.
+      - run: ruff check . && ruff format --check tests/
+      - run: pytest -q
+"""
+
+_REQS_DEV_STUB = """# Test-only deps — the host (protoAgent) provides langchain-core + fastapi at
+# runtime; these let the suite run standalone in CI with no host.
+fastapi>=0.110
+langchain-core>=0.2
+pyyaml>=6
+httpx>=0.27
+pytest>=8
+# pytest-asyncio>=0.23   # uncomment if you add async tests (asyncio_mode below)
+"""
+
+# .format(id=) — no literal braces in this TOML.
+_PYPROJECT_STUB = """[project]
+name = "{id}"
+version = "0.1.0"            # keep in lockstep with protoagent.plugin.yaml
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# asyncio_mode = "auto"     # uncomment with pytest-asyncio for async tests
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+"""
+
 
 # Communication plugin (ADR 0029) — a ChatAdapter on the shared wirer.
 _COMMS_MANIFEST_STUB = """id: {id}
@@ -224,6 +372,7 @@ def scaffold_plugin(
     with_skill: bool = False,
     with_workflow: bool = False,
     with_comms: bool = False,
+    with_tests: bool = False,
     target_dir: str | None = None,
 ) -> Scaffolded:
     """Write a new plugin SKELETON (manifest + ``register()`` + optional
@@ -231,7 +380,11 @@ def scaffold_plugin(
 
     ``with_comms=True`` writes a **communication plugin** (ADR 0029) — a
     ``ChatAdapter`` skeleton on the shared wirer instead of the default tool
-    plugin. Raises ``FileExistsError`` if the id already exists.
+    plugin. ``with_tests=True`` also writes a **host-free test suite + CI +
+    requirements-dev + pyproject** so a standalone-repo plugin is green from birth
+    (skip it for a plugin bundled inside protoAgent, which uses the host's tests/CI;
+    not written for ``with_comms`` plugins, which import the host at module top).
+    Raises ``FileExistsError`` if the id already exists.
     """
     pid = slug(name)
     id_us = pid.replace("-", "_")
@@ -258,7 +411,7 @@ def scaffold_plugin(
         return Scaffolded(id=pid, path=target, made=made, kind="comms")
 
     views_block = (
-        f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /api/plugins/{pid}/view }}\n"
+        f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /plugins/{pid}/view }}\n"
         if with_view else ""
     )
     (target / "protoagent.plugin.yaml").write_text(
@@ -286,8 +439,24 @@ def scaffold_plugin(
         (target / "workflows").mkdir()
         (target / "workflows" / f"{pid}.yaml").write_text(_WORKFLOW_STUB.format(id=pid))
         made.append("workflows/")
+    if with_tests:
+        _write_test_harness(target, pid=pid, id_us=id_us, name=name)
+        made += ["tests/", ".github/workflows/ci.yml", "requirements-dev.txt", "pyproject.toml"]
 
     return Scaffolded(id=pid, path=target, made=made, kind="plugin")
+
+
+def _write_test_harness(target: Path, *, pid: str, id_us: str, name: str) -> None:
+    """Write the host-free test suite + CI + dev deps + pyproject (with_tests)."""
+    tdir = target / "tests"
+    tdir.mkdir()
+    (tdir / "conftest.py").write_text(_CONFTEST_STUB)
+    (tdir / f"test_{id_us}.py").write_text(_TEST_STUB.format(id=pid, name=name))
+    gh = target / ".github" / "workflows"
+    gh.mkdir(parents=True)
+    (gh / "ci.yml").write_text(_CI_STUB)
+    (target / "requirements-dev.txt").write_text(_REQS_DEV_STUB)
+    (target / "pyproject.toml").write_text(_PYPROJECT_STUB.format(id=pid))
 
 
 def _render_members(members: list[dict] | None) -> tuple[str, list[str]]:

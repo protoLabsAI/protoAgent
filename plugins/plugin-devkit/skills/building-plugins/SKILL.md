@@ -113,7 +113,14 @@ You don't need to restart to try a plugin you built. With **plugin-devkit** enab
 - If it declares `requires_pip`, `python -m server plugin install-deps my-plugin`
   first (a missing dep gives a clear error on enable).
 
-From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill`
+For a **standalone-repo** plugin (its own git repo, not bundled in protoAgent), pass
+`with_tests=True` (`scaffold_plugin`) / `--tests` (the CLI) to also get a **host-free
+test suite + CI + requirements-dev + pyproject** so the repo is green from birth: the
+suite imports the plugin with no host (lazy host imports + a fake registry) and `ruff`
++ `pytest` run in GitHub Actions. Keep host-only imports (`fastapi`, `graph.*`) inside
+`register()` so the suite needs only `requirements-dev.txt`.
+
+From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill --tests`
 scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
 scaffolds an ADR-0040 bundle.
 

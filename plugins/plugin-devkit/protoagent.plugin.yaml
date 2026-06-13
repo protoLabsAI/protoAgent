@@ -27,7 +27,8 @@ settings:
 emits:
   - plugin-devkit.scaffolded
 
-# Console view (ADR 0026/0038) — a quick-reference card, served under /api/plugins/* so it
-# inherits the operator bearer gate; the console iframes it.
+# Console view (ADR 0026/0038) — a quick-reference card. The PAGE is served on the
+# PUBLIC /plugins/<id> prefix: an iframe page-load can't carry a bearer, so the page
+# must NOT be bearer-gated (data routes, if any, ride /api/plugins/<id>).
 views:
-  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /api/plugins/plugin-devkit/guide }
+  - { id: guide, label: "Plugin Devkit", icon: Boxes, path: /plugins/plugin-devkit/guide }

@@ -29,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--skill", action="store_true", help="include a SKILL.md skill stub")
     pn.add_argument("--workflow", action="store_true", help="include a workflow YAML stub")
     pn.add_argument("--comms", action="store_true", help="a communication plugin (ChatAdapter, ADR 0029) instead of a tool plugin")
+    pn.add_argument("--tests", action="store_true", help="include a host-free test suite + CI + requirements-dev (for a standalone-repo plugin)")
     pn.add_argument("--dir", default=None, help="target dir (default: the live plugins dir the loader discovers)")
 
     pnb = sub.add_parser("new-bundle", help="scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040)")
@@ -62,7 +63,8 @@ def run_plugin_cli(argv: list[str]) -> int:
             try:
                 res = scaffold.scaffold_plugin(
                     args.name, summary=args.summary, with_view=args.view, with_skill=args.skill,
-                    with_workflow=args.workflow, with_comms=args.comms, target_dir=args.dir,
+                    with_workflow=args.workflow, with_comms=args.comms, with_tests=args.tests,
+                    target_dir=args.dir,
                 )
             except FileExistsError as e:
                 print(f"✗ {scaffold.slug(args.name)!r} already exists at {e}", file=sys.stderr)

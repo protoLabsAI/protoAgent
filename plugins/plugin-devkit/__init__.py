@@ -90,6 +90,7 @@ def _build_scaffold_tool(config: dict | None):
         with_skill: bool = False,
         with_workflow: bool = False,
         with_comms: bool = False,
+        with_tests: bool = False,
         enable: bool = True,
     ) -> str:
         """Scaffold a new protoAgent plugin SKELETON on disk AND enable it live —
@@ -105,6 +106,11 @@ def _build_scaffold_tool(config: dict | None):
         connect/receive/send, then enable it from Settings (it needs a token), so
         comms plugins are NOT auto-enabled here.
 
+        Set ``with_tests=True`` to also write a host-free test suite + CI +
+        requirements-dev + pyproject — use it when scaffolding a STANDALONE-repo
+        plugin (its own git repo) so it's shippable + green from birth; skip it for a
+        plugin bundled inside protoAgent (which rides the host's tests/CI).
+
         Use this when asked to create/build/scaffold a plugin; see the building-plugins
         skill for the contract.
         """
@@ -112,7 +118,7 @@ def _build_scaffold_tool(config: dict | None):
             res = scaffold.scaffold_plugin(
                 name, summary=summary, with_tool=with_tool, with_view=with_view,
                 with_skill=with_skill, with_workflow=with_workflow, with_comms=with_comms,
-                target_dir=target_dir,
+                with_tests=with_tests, target_dir=target_dir,
             )
         except FileExistsError as e:
             return f"✗ {scaffold.slug(name)!r} already exists at {e} — pick another name or remove it first."
@@ -240,8 +246,10 @@ def _plugin_architect() -> SubagentConfig:
             "`register(registry)` sketch. Follow the plugin contract: the manifest is "
             "data; code runs only on enable; config_section is a string; skills/ and "
             "workflows/ subdirs auto-load; declare requires_pip, don't assume it's "
-            "installed; console views are sandboxed iframes served under /api/plugins/<id> "
-            "(ADR 0038); plugins coordinate via the event bus (registry.emit/on), never "
+            "installed; console views are sandboxed iframes — serve the PAGE on the public "
+            "/plugins/<id> prefix (an iframe load can't carry a bearer) and its DATA on the "
+            "gated /api/plugins/<id> (ADR 0026/0038); plugins coordinate via the event bus "
+            "(registry.emit/on), never "
             "by importing each other (ADR 0039). Keep it to the smallest plugin that "
             "satisfies the request."
         ),
@@ -255,14 +263,30 @@ def _build_guide_router():
 
     router = APIRouter()
 
+    # This page is itself a four-rules-compliant view (the reference plugin should
+    # model the contract): it derives a slug-aware BASE, links the DS plugin-kit off
+    # it (so it themes live via --pl-* tokens), and serves NO bearer-gated data —
+    # it's a static card, so it lives on the PUBLIC /plugins/<id> prefix.
     @router.get("/guide")
     async def _guide():
-        html = """<!doctype html><html><head><meta charset="utf-8"><style>
-          html,body{margin:0;background:#0a0a0c;color:#ededed;font-family:ui-sans-serif,system-ui,sans-serif}
-          .wrap{max-width:52ch;margin:0 auto;padding:40px 28px;line-height:1.6}
-          h1{color:#a78bfa;font-size:22px;margin:0 0 4px} h2{color:#a78bfa;font-size:15px;margin:22px 0 6px}
-          code{background:#19191d;color:#a78bfa;padding:2px 6px;border-radius:5px;font-size:13px}
-          p,li{color:#a3a3ad;font-size:14px} ul{padding-left:18px}
+        html = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script>
+          // RULE 3 — slug-aware base ("" on host, "/agents/<slug>" through the fleet proxy).
+          var BASE = location.pathname.split("/plugins/")[0];
+          // RULE 4 — link the DS kit CSS off BASE so the card themes live (no hardcoded hex).
+          (function(){ var l=document.createElement("link"); l.rel="stylesheet";
+            l.href=BASE+"/_ds/plugin-kit.css"; document.head.appendChild(l); })();
+        </script>
+        <style>
+          html,body{margin:0;background:var(--pl-color-bg);color:var(--pl-color-fg);
+            font-family:var(--pl-font-sans, ui-sans-serif,system-ui,sans-serif)}
+          .wrap{max-width:54ch;margin:0 auto;padding:40px 28px;line-height:1.6}
+          h1{color:var(--pl-color-accent);font-size:22px;margin:0 0 4px}
+          h2{color:var(--pl-color-accent);font-size:15px;margin:22px 0 6px}
+          code{background:var(--pl-color-bg-raised);color:var(--pl-color-accent);
+            padding:2px 6px;border-radius:var(--pl-radius,5px);font-size:13px}
+          p,li{color:var(--pl-color-fg-muted);font-size:14px} ul{padding-left:18px}
         </style></head><body><div class="wrap">
           <h1>Plugin Devkit</h1>
           <p>This plugin gives the agent what it needs to build plugins — and is itself
@@ -270,7 +294,7 @@ def _build_guide_router():
           <h2>Build it live (no restart)</h2>
           <ul>
             <li><code>scaffold_plugin</code> — writes a skeleton <strong>and enables it</strong>; its
-                tools/view are live on the next turn</li>
+                tools/view are live on the next turn (pass <code>with_tests</code> for a shippable repo)</li>
             <li>edit the plugin's <code>__init__.py</code>, then <code>reload_plugins</code> — your change goes live</li>
             <li><code>enable_plugin</code> — turn on a plugin that's on disk but off</li>
             <li><code>scaffold_bundle</code> — a <code>protoagent.bundle.yaml</code> stack (ADR 0040)</li>
@@ -292,8 +316,9 @@ def _build_guide_router():
             <li><code>__init__.py</code> — <code>register(registry)</code> (tools, subagents, routes, MCP)</li>
             <li><code>skills/</code> + <code>workflows/</code> — auto-discovered data</li>
             <li><code>views:</code> — a rail icon → a <strong>sandboxed iframe</strong> of a page your plugin
-                serves (ADR 0038). Mount its router under <code>/api/plugins/&lt;id&gt;</code> so it's
-                bearer-gated; the console hands it the token + theme (ADR 0026).</li>
+                serves (ADR 0038). Serve the <strong>page</strong> on the public <code>/plugins/&lt;id&gt;</code>
+                prefix (an iframe load can't carry a bearer); its <strong>data</strong> calls ride the
+                gated <code>/api/plugins/&lt;id&gt;</code> via the DS kit's <code>apiFetch</code> (ADR 0026).</li>
           </ul>
           <h2>Events (ADR 0039)</h2>
           <ul>
@@ -317,6 +342,7 @@ def register(registry) -> None:
     registry.register_tool(enable_plugin)                            # turn on an on-disk plugin live
     registry.register_tool(reload_plugins)                           # pick up edits live
     registry.register_subagent(_plugin_architect())                  # a subagent
-    # Gated under /api/plugins/plugin-devkit (ADR 0026) — the console iframes /guide.
-    registry.register_router(_build_guide_router(), prefix="/api/plugins/plugin-devkit")
+    # PUBLIC /plugins/plugin-devkit (ADR 0026) — the console iframes /guide, and an
+    # iframe page-load can't carry a bearer, so the page route must NOT be gated.
+    registry.register_router(_build_guide_router(), prefix="/plugins/plugin-devkit")
     # skills/ + workflows/ auto-discover — no call needed (ADR 0027).
