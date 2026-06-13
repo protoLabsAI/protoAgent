@@ -22,8 +22,8 @@ Three structural gaps made that possible, and would make it recur:
 2. **Staleness is invisible at runtime.** `check_updates` deliberately skips the network
    for SHA-pinned entries (`pinned-skips-net`, ADR/PR #887) — correct as an auto-update
    guard, but it means a SHA-pinned bundle member *never even reports* `behind`.
-   Worse, tag-pinned entries reported a **permanent false positive**: `git ls-remote <url>
-   <tag>` returns the *tag object* SHA for an annotated tag (not the peeled commit), which
+   Worse, tag-pinned entries reported a **permanent false positive**: `git ls-remote <url> <tag>`
+   returns the *tag object* SHA for an annotated tag (not the peeled commit), which
    never equals the lock's `resolved_sha`.
 3. **Fixing the bundle repo fixes nothing deployed.** Pins are copied into each agent's
    `plugins.lock` at install; a bumped bundle repo does not propagate to already-spawned
@@ -57,7 +57,7 @@ which is strictly worse than a stale-but-functional pin. Instead:
    PR, which must pass the same verify to merge. After this, the pin only ever moves
    through a passing verification: "pin where it last worked" stops being an intention
    and becomes the mechanism. A reference implementation ships in-repo under
-   [`examples/bundles/template/`](../../examples/bundles/template/).
+   [`examples/bundles/template/`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/bundles/template).
 4. **Runtime surfacing (kept, and now honest).** Tag-pinned members keep reporting
    `behind` via the (fixed) ls-remote compare. SHA-pinned members keep `pinned-skips-net`;
    the `update_available_but_pinned` advisory and the bundle-level re-pin endpoint that

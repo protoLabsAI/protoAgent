@@ -6,7 +6,7 @@
 - **Tags:** settings, ux, information-architecture, fleet, host, console
 - **Related:** consumes [ADR 0047](./0047-layered-settings-cascade.md) (the
   per-field `Field.scope` host/agent cascade — this ADR is its UI surface);
-  reorganizes surfaces from [ADR 0020](./0020-run-from-chat-manage-from-surfaces.md)
+  reorganizes surfaces from [ADR 0020](./0020-console-ia-run-from-chat.md)
   (settings live in their home view), [ADR 0009](./0009-studio-control-stack.md)
   (the agent's makeup), and [ADR 0042](./0042-fleet-supervisor-unified-console.md)
   (fleet, slug routing, host = the first agent).
