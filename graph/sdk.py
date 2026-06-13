@@ -59,3 +59,28 @@ async def run_subagent(
         extra_tools=extra_tools,
         truncate=truncate,
     )
+
+
+async def complete(
+    prompt: str, *, system: str | None = None, model_name: str | None = None
+) -> str:
+    """Run a single **bare** LLM completion and return the text — no tools, no agent
+    loop, no persona, no memory. The clean primitive for a plugin that just needs the
+    model to answer a prompt (e.g. an interactive artifact calling back to the agent,
+    a one-shot classifier/summarizer). Distinct from :func:`run_subagent`, which runs a
+    full tool-using subagent. Uses the live config's model through the gateway; pass
+    ``model_name`` to target a different model on the same gateway, ``system`` for a
+    system instruction.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from graph.llm import create_llm
+
+    llm = create_llm(STATE.graph_config, model_name=model_name)
+    messages: list[Any] = []
+    if system:
+        messages.append(SystemMessage(system))
+    messages.append(HumanMessage(prompt))
+    resp = await llm.ainvoke(messages)
+    content = getattr(resp, "content", resp)
+    return content if isinstance(content, str) else str(content)

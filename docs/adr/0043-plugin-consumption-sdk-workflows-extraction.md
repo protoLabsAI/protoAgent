@@ -33,6 +33,13 @@ v1 is deliberately tiny — only what workflows needs:
 config/stores from runtime state), `subagent_types()`, and `config()`. Grow it
 deliberately as more plugins tap core; this is the seam we lean on going forward.
 
+> **Grown since:** `complete(prompt, *, system=None, model_name=None)` — a **bare** LLM
+> completion (no tools, no agent loop, no persona), distinct from `run_subagent`'s
+> full tool-using subagent. The clean primitive for a plugin that just needs the model
+> to answer a prompt — first consumer: the artifact plugin's interactive
+> `window.protoArtifact.ask()` bridge (artifacts call back to the agent, the
+> `window.claude.complete` analog).
+
 **2. Workflows becomes an opt-in plugin (`plugins/workflows`, `enabled: false`).**
 
 - The engine + registry move into the plugin (standalone — the engine was already
