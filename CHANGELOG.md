@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-06-13
+
 ### Changed
 - **The committed `plugins.lock` now ships empty.** A fresh clone previously
   inherited the upstream developer's local installs (artifact, doom) as
