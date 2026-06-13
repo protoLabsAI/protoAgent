@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.37.0",
+    "date": "2026-06-13",
+    "changes": [
+      "graph.sdk.complete() — a bare LLM completion for plugins.",
+      "Settings is a vertical-nav + collapsible-groups layout now.",
+      "Design system bumped to @protolabsai/ui 0.30.0",
+      "The topbar Settings overlay panel fills the full dialog height"
+    ]
+  },
+  {
     "version": "v0.36.0",
     "date": "2026-06-13",
     "changes": [
