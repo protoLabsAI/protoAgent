@@ -23,7 +23,7 @@ class Field:
     key: str                      # dotted YAML path, e.g. "model.temperature"
     attr: str                     # LangGraphConfig attribute holding the value
     label: str
-    type: str                     # string|number|bool|select|string_list|secret
+    type: str                     # string|text|number|bool|select|string_list|secret
     section: str
     description: str = ""
     restart: bool = False         # True = needs a full process restart (not hot-reload)
@@ -31,6 +31,12 @@ class Field:
     options_source: str = ""      # "models" → filled dynamically by the endpoint
     minimum: float | None = None
     maximum: float | None = None
+    # Conditional visibility (#963): {"key": "<sibling field key>", "equals": <value>}
+    # — or {"key", "in": [...]}, or just {"key"} for "is truthy". The console hides
+    # this field until the named sibling's *current form value* satisfies it (reactive
+    # to the in-form value, not just the saved one). The sibling key is the full dotted
+    # path for core fields; plugin specs may use the short key (resolved at build time).
+    depends_on: dict | None = None
     # Cascade layer this field's shared default lives at (ADR 0047). "agent" (the
     # leaf) by default; "host" = box-shared default in host-config.yaml. Git-style
     # advisory — a field is always overridable at a lower layer, so this only sets
@@ -376,6 +382,8 @@ def build_schema(
             entry["minimum"] = f.minimum
         if f.maximum is not None:
             entry["maximum"] = f.maximum
+        if f.depends_on:
+            entry["depends_on"] = f.depends_on   # #963 — full dotted sibling key
         groups.setdefault(f.section, {"section": f.section, "fields": []})["fields"].append(entry)
 
     # Plugin-declared settings fields (ADR 0019) — value from config.plugin_config,
@@ -408,6 +416,15 @@ def build_schema(
             entry["minimum"] = spec["minimum"]
         if spec.get("maximum") is not None:
             entry["maximum"] = spec["maximum"]
+        # #963 — a plugin spec uses the SHORT sibling key (e.g. depends_on.key
+        # "ask_enabled"); resolve it to the full dotted path the UI sees so the
+        # console can match it against the rendered sibling field.
+        dep = spec.get("depends_on")
+        if isinstance(dep, dict) and dep.get("key"):
+            dk = str(dep["key"])
+            if not dk.startswith(f"{sch.section}."):
+                dk = f"{sch.section}.{dk}"
+            entry["depends_on"] = {**dep, "key": dk}
         groups.setdefault(group, {"section": group, "fields": []})["fields"].append(entry)
         # A plugin that declares `test: true` (ADR 0029) gets a generic console
         # "Test connection" button posting the group's fields to its test route.

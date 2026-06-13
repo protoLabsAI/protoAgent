@@ -14,6 +14,7 @@ import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
+import { fieldVisible } from "./visibility";
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
@@ -117,6 +118,16 @@ export function SettingsCategory({
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
   const dirtyKeys = Object.keys(dirty);
+
+  // #963 — conditional field visibility. The live value of every in-scope field
+  // (the dirty edit if any, else the saved value), so a `depends_on` predicate is
+  // reactive to what's on the form right now, not just what was last saved.
+  const currentValues = useMemo(() => {
+    const m = new Map<string, unknown>();
+    for (const g of groups) for (const f of g.fields) m.set(f.key, f.key in dirty ? dirty[f.key] : f.value);
+    return m;
+  }, [groups, dirty]);
+  const isVisible = (field: SettingsField): boolean => fieldVisible(field, (k) => currentValues.get(k));
 
   const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
   const hasDiscord = groups.some((g) => g.section === "Discord");
@@ -278,7 +289,8 @@ export function SettingsCategory({
             group still announces it has unsaved edits. */}
         <Accordion className="settings-groups">
         {groups.map((group) => {
-          const groupDirty = group.fields.reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
+          const visibleFields = group.fields.filter(isVisible);   // #963
+          const groupDirty = visibleFields.reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
           return (
           <AccordionItem
             key={group.section}
@@ -290,7 +302,7 @@ export function SettingsCategory({
               </span>
             }
           >
-            {group.fields.map((field) => (
+            {visibleFields.map((field) => (
               <SettingRow
                 key={field.key}
                 field={field}
@@ -465,6 +477,19 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
         value={text}
         placeholder="one per line"
         onChange={(e) => onChange(e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))}
+      />
+    );
+  }
+  if (field.type === "text") {
+    // A scalar multiline string (#964) — a system prompt, template, or blurb. Renders
+    // a textarea but casts/saves exactly like `string` (one value, no list semantics).
+    return (
+      <Textarea
+        id={id}
+        className="setting-input setting-textarea"
+        rows={4}
+        value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
+        onChange={(e) => onChange(e.target.value)}
       />
     );
   }

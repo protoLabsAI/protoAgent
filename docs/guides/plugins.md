@@ -238,6 +238,19 @@ settings:                      # System → Settings group (named after the sect
   - { key: api_key,  label: "API key",       type: secret }
 ```
 
+**Field types:** `string` · `text` (multiline string — a system prompt / template) ·
+`number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret`.
+
+**Conditional fields** — add `depends_on` to show a field only once a sibling is set
+(e.g. an "enable X" toggle gates X's options); reactive to the in-form value:
+
+```yaml
+settings:
+  - { key: ask_enabled, label: "Interactive", type: bool }
+  - { key: ask_system,  label: "Ask system instruction", type: text,
+      depends_on: { key: ask_enabled, equals: true } }   # also: { key, in: [...] } | bare { key } = truthy
+```
+
 Read the resolved config (manifest defaults ⊕ YAML ⊕ secrets) in `register()`:
 
 ```python

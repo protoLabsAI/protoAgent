@@ -95,3 +95,63 @@ def test_nest_updates_builds_yaml_shape_and_drops_blank_secrets():
 def test_restart_keys_flags_only_restart_fields():
     keys = restart_keys({"runtime.autostart_on_boot": True, "model.temperature": 0.5})
     assert keys == ["runtime.autostart_on_boot"]
+
+
+# ── #964 text type + #963 depends_on ──────────────────────────────────────────
+
+
+def _fake_plugin_specs(monkeypatch, specs: list[dict]):
+    """Install fake plugin-declared settings specs (ADR 0019) so build_schema /
+    validate_flat see them as a plugin's `settings:`. Returns nothing — the schema
+    is read through the monkeypatched `_plugin_field_specs`."""
+    from types import SimpleNamespace
+
+    sch = SimpleNamespace(
+        section="artifact",
+        defaults={s["key"]: s.get("default") for s in specs},
+        test=False,
+    )
+    tuples = [(sch, f"artifact.{s['key']}", s["key"], s) for s in specs]
+    monkeypatch.setattr("graph.settings_schema._plugin_field_specs", lambda: tuples)
+
+
+def test_text_field_renders_as_text_and_validates_like_string(monkeypatch):
+    """#964 — a scalar `text` field surfaces its type verbatim and validates like a
+    plain string (a multiline value is fine; no list/number coercion)."""
+    _fake_plugin_specs(monkeypatch, [
+        {"key": "ask_system", "label": "Ask system", "type": "text", "default": ""},
+    ])
+    fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
+    assert fields["artifact.ask_system"]["type"] == "text"
+    assert validate_flat({"artifact.ask_system": "line 1\nline 2"})[0] is True
+
+
+def test_depends_on_resolves_plugin_short_key_to_full_key(monkeypatch):
+    """#963 — a plugin spec's `depends_on.key` is a SHORT sibling key; build_schema
+    resolves it to the full dotted path the console matches against."""
+    _fake_plugin_specs(monkeypatch, [
+        {"key": "ask_enabled", "label": "Interactive", "type": "bool", "default": False},
+        {"key": "ask_system", "label": "Ask system", "type": "text",
+         "depends_on": {"key": "ask_enabled", "equals": True}},
+    ])
+    fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
+    assert fields["artifact.ask_system"]["depends_on"] == {"key": "artifact.ask_enabled", "equals": True}
+    # An already-qualified key is left as-is (no double prefix).
+    _fake_plugin_specs(monkeypatch, [
+        {"key": "x", "label": "X", "type": "text",
+         "depends_on": {"key": "artifact.ask_enabled", "equals": True}},
+    ])
+    fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
+    assert fields["artifact.x"]["depends_on"]["key"] == "artifact.ask_enabled"
+
+
+def test_core_field_depends_on_passed_through(monkeypatch):
+    """#963 — a core Field's `depends_on` (full dotted key) flows through unchanged."""
+    from graph.settings_schema import Field
+
+    demo = Field("demo.child", "compaction_keep_messages", "Child", "number", "Demo",
+                 depends_on={"key": "compaction.enabled", "equals": True})
+    monkeypatch.setattr("graph.settings_schema.FIELDS", [demo])
+    groups = build_schema(LangGraphConfig())
+    entry = next(e for g in groups for e in g["fields"] if e["key"] == "demo.child")
+    assert entry["depends_on"] == {"key": "compaction.enabled", "equals": True}

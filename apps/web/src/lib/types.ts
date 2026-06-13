@@ -165,7 +165,8 @@ export type SlashCommand = {
 export type SettingsField = {
   key: string;
   label: string;
-  type: "string" | "number" | "bool" | "select" | "string_list" | "secret";
+  // "text" = a scalar multiline string (#964), rendered as a textarea but saved like "string".
+  type: "string" | "text" | "number" | "bool" | "select" | "string_list" | "secret";
   section: string;
   description?: string;
   restart: boolean;
@@ -175,6 +176,10 @@ export type SettingsField = {
   is_set?: boolean; // secrets only
   minimum?: number;
   maximum?: number;
+  // #963 — conditional visibility: hide this field until a sibling field's current
+  // form value satisfies the predicate. `key` is the sibling's full dotted key.
+  // {equals}: strict equality · {in}: membership · neither: sibling is truthy.
+  depends_on?: { key: string; equals?: unknown; in?: unknown[] };
   // Cascade layer this field's shared default lives at (ADR 0047): "agent" (the
   // per-agent leaf) or "host" (the box-shared host-config.yaml). Where the
   // Settings UI writes a "save to default" edit.

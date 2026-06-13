@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `thought_callback` (falling back to the progress narration) instead of being dropped.
   All in `plugins/coding_agent/acp_client.py`; the delegates plugin and project_board
   inherit it with no changes.
+- **Settings: a scalar multiline `text` field + conditional `depends_on` visibility**
+  (#964, #963). Long string settings (a system prompt, a template, a blurb) get a new
+  `text` field type that renders a textarea but saves exactly like `string` — no more
+  editing a paragraph in a one-line input. And any settings field (core `Field` or a
+  plugin's `settings:` spec) can declare `depends_on: {key, equals}` (or `{key, in: […]}`,
+  or a bare `{key}` for "is truthy") so it only shows once a prerequisite is set — the
+  "enable X → show X's options" pattern (e.g. the artifact plugin's *Ask system
+  instruction* appears only when *Interactive artifacts* is on). Reactive to the in-form
+  value; a plugin's short `depends_on.key` is resolved to its full dotted path at build.
 
 ### Fixed
 - **SSRF: the model-probe and fleet-remote registration now run egress checks** (#871).
