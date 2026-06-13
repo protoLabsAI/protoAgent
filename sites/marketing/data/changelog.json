@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.38.0",
+    "date": "2026-06-13",
+    "changes": [
+      "ACP client: restart-surviving sessions + thought streaming",
+      "Settings: a scalar multiline text field + conditional depends_on visibility",
+      "SSRF: the model-probe and fleet-remote registration now run egress checks",
+      "**A plugin's declared secret can no longer slip into the tracked config YAML when"
+    ]
+  },
+  {
     "version": "v0.37.0",
     "date": "2026-06-13",
     "changes": [

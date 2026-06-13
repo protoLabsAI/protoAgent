@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-06-13
+
 ### Added
 - **ACP client: restart-surviving sessions + thought streaming** (#970). The shared
   `coding_agent` ACP client (which the `delegates` plugin and `project_board` loop both
