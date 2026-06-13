@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`graph.sdk.complete()` — a bare LLM completion for plugins.** The ADR 0043
+  consumption SDK exposed only `run_subagent` (a full tool-using subagent); added
+  `complete(prompt, *, system=None, model_name=None)` — a single bare model call (no
+  tools, no agent loop, no persona) through the gateway. The clean primitive for a
+  plugin that just needs the model to answer a prompt; first consumer is the artifact
+  plugin's interactive `window.protoArtifact.ask()` bridge.
+
 ### Changed
 - **Settings is a vertical-nav + collapsible-groups layout now.** The two stacked
   horizontal tab strips (scope + up to 11 sections) overflowed and read as "intense"
@@ -25,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 0.29.
 - **Design system bumped to `@protolabsai/ui` 0.30.0** — adds `SideNav` (adopted by
   the settings rail above).
+
+### Fixed
+- **The topbar Settings overlay panel fills the full dialog height** — the rail +
+  panel now stretch to the overlay's bottom instead of stopping at the content height.
 
 ## [0.36.0] - 2026-06-13
 
