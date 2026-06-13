@@ -10,6 +10,7 @@ and client-cache eviction/teardown.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import pytest
@@ -130,6 +131,99 @@ async def test_acp_client_bad_workdir_raises_acp_error():
     client = AcpClient(sys.executable, [], cwd="/no/such/dir/anywhere")
     with pytest.raises(AcpError):
         await client.prompt("hi", timeout=10.0)
+
+
+# ── abort + auth lifecycle ────────────────────────────────────────────────────
+
+# Handshakes, then on session/prompt HANGS (never replies) — keeps reading stdin
+# so it can receive a session/cancel notification, which it records to a marker
+# file. Proves the client cancels the in-flight turn on the abort path instead of
+# leaving the session mid-generation.
+_CANCEL_AGENT = r'''
+import sys, json, os
+MARKER = os.environ.get("CANCEL_MARKER", "")
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        pass  # hang — wait for the client to cancel
+    elif method == "session/cancel":
+        if MARKER:
+            with open(MARKER, "w") as fh:
+                fh.write("cancelled")
+        break
+'''
+
+# Advertises an auth method, then rejects session/new with AUTH_REQUIRED (-32000).
+_AUTH_AGENT = r'''
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {
+            "protocolVersion": 1,
+            "authMethods": [{"id": "openai", "name": "Use OpenAI API key"}]}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid,
+              "error": {"code": -32000, "message": "auth required"}})
+'''
+
+
+async def test_prompt_timeout_sends_session_cancel(tmp_path):
+    script = tmp_path / "cancel_agent.py"
+    script.write_text(_CANCEL_AGENT, encoding="utf-8")
+    marker = tmp_path / "cancelled.marker"
+    client = AcpClient(
+        sys.executable, [str(script)], cwd=str(tmp_path), name="cancel",
+        env={"CANCEL_MARKER": str(marker)},
+    )
+    try:
+        with pytest.raises(AcpError):
+            await client.prompt("hang please", timeout=1.0)
+        # The timeout path must have sent session/cancel; the fake records it.
+        for _ in range(60):
+            if marker.exists():
+                break
+            await asyncio.sleep(0.05)
+        assert marker.exists(), "client did not send session/cancel on prompt timeout"
+    finally:
+        await client.close()
+
+
+async def test_session_new_auth_required_raises_actionable(tmp_path):
+    script = tmp_path / "auth_agent.py"
+    script.write_text(_AUTH_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="auth")
+    try:
+        with pytest.raises(AcpError) as ei:
+            await client.prompt("do work", timeout=10.0)
+    finally:
+        await client.close()
+    msg = str(ei.value)
+    assert "requires authentication" in msg   # actionable, not opaque
+    assert "openai" in msg                     # advertised auth method surfaced
+    assert ei.value.code == -32000             # AUTH_REQUIRED preserved
 
 
 # ── permission policy ─────────────────────────────────────────────────────────
