@@ -57,7 +57,7 @@ Any agent that speaks ACP works — just point `command`/`args` at it:
 ```yaml
 delegates:
   - { name: proto,       type: acp, command: proto, args: ["--acp"],                         workdir: ~/dev/my-repo }
-  - { name: claude-code, type: acp, command: npx,   args: ["@zed-industries/claude-code-acp"], workdir: ~/dev/my-repo }
+  - { name: claude-code, type: acp, command: npx,   args: ["--yes", "@zed-industries/claude-code-acp"], workdir: ~/dev/my-repo }
   - { name: codex,       type: acp, command: codex, args: ["acp"],                            workdir: ~/dev/my-repo }
   - { name: gemini,      type: acp, command: gemini, args: ["--experimental-acp"],            workdir: ~/dev/my-repo }
 ```
@@ -65,6 +65,16 @@ delegates:
 The binary must be installed and on the `PATH` of the process running protoAgent.
 A missing binary returns a clear error string to the agent (it doesn't crash) — the
 delegates panel's **Test** button probes this.
+
+The same `AcpClient` drives any of them — proto and Claude Code are both
+validated end-to-end. `--yes` on the `npx` form skips the first-run install
+prompt (which would otherwise hang the non-interactive spawn).
+
+> **Claude Code caveat:** `@zed-industries/claude-code-acp` launches the `claude`
+> binary, which **refuses to start nested inside another Claude Code session**
+> (`Error: Claude Code cannot be launched inside another Claude Code session`). Run
+> protoAgent from a normal shell — not from within a `claude` session — when using
+> the Claude Code agent.
 
 ## Use it
 

@@ -5,6 +5,26 @@ Status: **Superseded by [ADR 0025](./0025-unified-delegate-registry-and-panel.md
 reuses the ACP client mechanics below. `plugins/coding_agent/` remains as the shared ACP
 client library. (Originally: Accepted, PR1 — thin vertical.)
 
+## Update (2026-06) — full session lifecycle adopted
+
+PR1 was a deliberate "thin vertical" (handshake → one turn → auto-allow), so the
+mechanics described below are no longer the whole story. The shared client
+(`plugins/coding_agent/acp_client.py`) has since grown the full ACP session
+lifecycle:
+
+- **#969** — best-effort `session/cancel` on prompt abort (timeout / external
+  cancel) and actionable `AUTH_REQUIRED` handling (the client no longer surfaces an
+  opaque error when the agent isn't authenticated).
+- **#972** — `session/load` reattach for **restart-surviving threads** (gated on the
+  agent advertising the `loadSession` capability; the `sessionId` is persisted per
+  launch signature), `session/close` on teardown, real `protocolVersion`
+  negotiation (closes if the agent counters with an unsupported version), and
+  `agent_thought_chunk` surfaced as the reasoning trace.
+
+Validated end-to-end against both `proto --acp` and Claude Code (via
+`@zed-industries/claude-code-acp`) — the client is agent-agnostic. See the
+[coding-agents guide](/guides/coding-agents) for the current behaviour and config.
+
 ## Context
 
 protoAgent's lead agent already delegates in two ways: to **in-process LLM
