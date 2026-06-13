@@ -51,9 +51,22 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
 # ACP protocol version protoAgent speaks. Negotiated in `initialize`.
 PROTOCOL_VERSION = 1
 
+# JSON-RPC error code the agent returns from `session/new` when it has no
+# resolved auth (ACP `AUTH_REQUIRED`). The client surfaces an actionable message.
+AUTH_REQUIRED = -32000
+
 
 class AcpError(Exception):
-    """Any ACP transport / protocol failure. The caller speaks the message."""
+    """Any ACP transport / protocol failure. The caller speaks the message.
+
+    Carries the JSON-RPC error ``code`` when the failure came from an agent
+    error response (else ``None``), so callers can special-case e.g.
+    ``AUTH_REQUIRED``.
+    """
+
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class AcpClient:
@@ -90,6 +103,9 @@ class AcpClient:
 
         self._proc: asyncio.subprocess.Process | None = None
         self._session_id: str | None = None
+        # Captured from the `initialize` response (was previously discarded).
+        self._auth_methods: list[dict] = []
+        self._agent_capabilities: dict = {}
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
@@ -205,7 +221,13 @@ class AcpClient:
             fut = self._pending.pop(msg["id"], None)
             if fut and not fut.done():
                 if "error" in msg:
-                    fut.set_exception(AcpError(str(msg["error"])))
+                    err = msg.get("error") or {}
+                    if isinstance(err, dict):
+                        fut.set_exception(
+                            AcpError(str(err.get("message") or err), code=err.get("code"))
+                        )
+                    else:
+                        fut.set_exception(AcpError(str(err)))
                 else:
                     fut.set_result(msg.get("result"))
             return
@@ -325,10 +347,38 @@ class AcpClient:
     async def _respond_error(self, rid, code: int, message: str) -> None:
         await self._send({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
 
+    async def _cancel_session(self) -> None:
+        """Best-effort ``session/cancel`` notification: tell the agent to abandon
+        the in-flight turn so a reused session isn't left mid-generation.
+
+        Runs on the prompt abort path (timeout / external cancel / transport
+        failure), so it must never raise: no-op when the process is gone or no
+        session is open, and swallows any send error. ``session/cancel`` is a
+        notification (no id, no response)."""
+        proc = self._proc
+        if not (proc and proc.returncode is None and proc.stdin and self._session_id):
+            return
+        try:
+            proc.stdin.write(
+                (
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "session/cancel",
+                            "params": {"sessionId": self._session_id},
+                        }
+                    )
+                    + "\n"
+                ).encode()
+            )
+            await proc.stdin.drain()
+        except Exception as exc:  # noqa: BLE001 — abort path is best-effort
+            logger.debug("[acp/%s] session/cancel failed (best-effort): %s", self.name, exc)
+
     # -- handshake -----------------------------------------------------------
 
     async def _initialize(self) -> None:
-        await self._request(
+        result = await self._request(
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -340,12 +390,44 @@ class AcpClient:
                 },
             },
             timeout=30.0,
-        )
+        ) or {}
+        # Keep what the agent told us instead of discarding it: its auth methods
+        # (for an actionable auth-required message) and capabilities.
+        self._auth_methods = result.get("authMethods") or []
+        self._agent_capabilities = result.get("agentCapabilities") or {}
+        negotiated = result.get("protocolVersion")
+        if isinstance(negotiated, int) and negotiated != PROTOCOL_VERSION:
+            logger.warning(
+                "[acp/%s] agent negotiated ACP protocol v%s but client speaks v%s — "
+                "proceeding, but behaviour may differ",
+                self.name,
+                negotiated,
+                PROTOCOL_VERSION,
+            )
 
     async def _new_session(self) -> None:
-        result = await self._request(
-            "session/new", {"cwd": self.cwd, "mcpServers": self.mcp_servers}, timeout=30.0
-        )
+        try:
+            result = await self._request(
+                "session/new", {"cwd": self.cwd, "mcpServers": self.mcp_servers}, timeout=30.0
+            )
+        except AcpError as exc:
+            if exc.code == AUTH_REQUIRED:
+                methods = (
+                    ", ".join(
+                        str(m.get("id") or m.get("name"))
+                        for m in self._auth_methods
+                        if isinstance(m, dict)
+                    )
+                    or "(none advertised)"
+                )
+                raise AcpError(
+                    f"{self.name} agent requires authentication before a session can "
+                    f"start. Configure its credentials in the delegate env (e.g. "
+                    f"OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL). Advertised auth "
+                    f"methods: {methods}.",
+                    code=AUTH_REQUIRED,
+                ) from exc
+            raise
         self._session_id = (result or {}).get("sessionId")
         if not self._session_id:
             raise AcpError("session/new returned no sessionId")
@@ -382,6 +464,12 @@ class AcpClient:
                 },
                 timeout=timeout,
             )
+        except (AcpError, asyncio.CancelledError):
+            # Turn abandoned — internal timeout, external cancel (e.g. an
+            # orchestrator's wait_for watchdog), or transport failure. Tell the
+            # agent to drain it so the reused session isn't left mid-generation.
+            await self._cancel_session()
+            raise
         finally:
             self._progress = None
             self._on_tool = None
