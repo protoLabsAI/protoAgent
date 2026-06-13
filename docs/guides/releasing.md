@@ -22,11 +22,18 @@ you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──▶  Release 
 `latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
 independent of releases.
 
-The tag push also triggers `desktop-build.yml`, which builds the desktop app on
-a three-platform matrix and attaches the artifacts to the same GitHub Release:
-the macOS `.dmg` (signed + notarized — requires the full Apple secret set, the
-leg fails otherwise), the Linux `.AppImage` + `.deb`, and the Windows NSIS
-`-setup.exe` (both unsigned). See `apps/desktop/README.md` § Platforms & CI.
+A **minor/major** tag push (a `.0` patch component) also triggers
+`desktop-build.yml`, which builds the desktop app on a three-platform matrix and
+attaches the artifacts to the same GitHub Release: the macOS `.dmg` (signed +
+notarized — requires the full Apple secret set, the leg fails otherwise), the
+Linux `.AppImage` + `.deb`, and the Windows NSIS `-setup.exe` (both unsigned). See
+`apps/desktop/README.md` § Platforms & CI.
+
+> **Patch releases skip the desktop build.** `vX.Y.Z` with `Z>0` ships Docker + the
+> GitHub release but no new desktop binaries (a patch is a server fix; rebuilding the
+> 10×-billed macOS leg per patch is the bulk of CI cost). The in-app updater keeps
+> pointing at the last minor's build until the next minor. If a patch genuinely needs
+> a desktop rebuild, **Actions → Desktop Build → Run workflow** with the tag.
 When the org updater signing key is present, the legs also attach signed updater
 bundles and a fan-in job uploads `latest.json` — the manifest the desktop app's
 in-app updater polls. See `apps/desktop/README.md` § Updates.
