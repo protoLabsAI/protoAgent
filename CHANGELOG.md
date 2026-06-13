@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prune sweep keeps its config-driven `checkpoint_harvest_enabled` default.
 
 ### Fixed
+- **Drag-and-drop rail positions for plugin views now survive a reload.** On boot
+  the rail reconciler ran once against the not-yet-loaded plugin list, pruned every
+  persisted `plugin:` entry as "uninstalled", then re-appended the loaded views at
+  their manifest `placement` — silently wiping the operator's arrangement on every
+  reload and making the declared rail look like it always overrode the saved one.
+  The reconciler now waits for the runtime status to resolve (unknown ≠ empty); a
+  view's `placement` is only the default for its first appearance.
 - **A render error no longer white-screens the console** (#872): a root error
   boundary around the app shows a full-page recovery card — Reload, plus "Reset
   chat data & reload" which clears `protoagent.chat.sessions*` (the known way a

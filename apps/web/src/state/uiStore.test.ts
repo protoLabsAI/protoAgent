@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { migrateUiState } from "./uiStore";
+import { beforeEach, describe, it, expect } from "vitest";
+import { migrateUiState, useUI } from "./uiStore";
 
 // v1→v2 migration: the obsolete `railOf` (per-surface side map) must be dropped
 // so `railOrder` falls back to the default via the store's merge. A stale
@@ -34,5 +34,57 @@ describe("migrateUiState", () => {
     expect(migrateUiState(null)).toBeNull();
     expect(migrateUiState("nope")).toBe("nope");
     expect(migrateUiState(undefined)).toBeUndefined();
+  });
+});
+
+// reconcilePluginViews keeps plugin views as railOrder members: append new ones at
+// their manifest side, prune uninstalled ones — and NEVER move an id the operator
+// already placed. The manifest `placement` is a default for first appearance, not
+// an override of a persisted drag-and-drop layout. (The App-side caller must also
+// gate on the plugin list having LOADED: reconciling against the boot-time empty
+// set would prune every persisted entry and the reload would re-seed by manifest —
+// the layout-wipe bug this contract pins down.)
+describe("reconcilePluginViews", () => {
+  const seed = (left: string[], right: string[]) =>
+    useUI.setState({ railOrder: { left, right } });
+
+  beforeEach(() => seed(["chat", "plugin:doom:panel"], ["beads", "plugin:board:board", "notes"]));
+
+  it("keeps a moved view at its persisted side and position despite its declared side", () => {
+    // board's manifest says right→ but suppose the operator dragged doom to the left
+    // already; both views re-declare their manifest sides on every reconcile.
+    useUI.getState().reconcilePluginViews([
+      { id: "plugin:doom:panel", side: "right" }, // manifest says right; operator put it LEFT
+      { id: "plugin:board:board", side: "right" },
+    ]);
+    expect(useUI.getState().railOrder.left).toEqual(["chat", "plugin:doom:panel"]);
+    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes"]);
+  });
+
+  it("keeps mid-rail positions (no prune/re-append shuffle)", () => {
+    useUI.getState().reconcilePluginViews([{ id: "plugin:board:board", side: "right" }, { id: "plugin:doom:panel", side: "left" }]);
+    // board stays BETWEEN beads and notes — not re-appended to the bottom.
+    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes"]);
+  });
+
+  it("appends a NEW view at its declared side", () => {
+    useUI.getState().reconcilePluginViews([
+      { id: "plugin:doom:panel", side: "left" },
+      { id: "plugin:board:board", side: "right" },
+      { id: "plugin:browser:panel", side: "right" },
+    ]);
+    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes", "plugin:browser:panel"]);
+  });
+
+  it("prunes a view absent from a non-empty set, leaving core surfaces alone", () => {
+    useUI.getState().reconcilePluginViews([{ id: "plugin:doom:panel", side: "left" }]);
+    expect(useUI.getState().railOrder.left).toEqual(["chat", "plugin:doom:panel"]);
+    expect(useUI.getState().railOrder.right).toEqual(["beads", "notes"]);
+  });
+
+  it("prunes everything on an empty set — why the caller must gate on loaded", () => {
+    useUI.getState().reconcilePluginViews([]);
+    expect(useUI.getState().railOrder.left).toEqual(["chat"]);
+    expect(useUI.getState().railOrder.right).toEqual(["beads", "notes"]);
   });
 });

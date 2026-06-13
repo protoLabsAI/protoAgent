@@ -575,14 +575,20 @@ export function App() {
 
   // Keep plugin views as first-class railOrder members (ADR 0036) — append new ones, prune gone.
   // Keyed on a stable signature so the effect only fires when the view set actually changes.
+  // GATED on the runtime status having RESOLVED: on boot `runtime` is null → zero views →
+  // reconcile would prune every persisted `plugin:` entry as "uninstalled", and the loaded set
+  // would then re-append them at their MANIFEST placement — wiping the operator's drag-and-drop
+  // rail layout on every reload. Unknown ≠ empty: never reconcile against an unresolved list.
+  const pluginViewsLoaded = runtime !== null;
   const pluginViewSig = allPluginViews.map((v) => `${v.key}:${v.placement ?? "rail"}`).join(",");
   useEffect(() => {
+    if (!pluginViewsLoaded) return;
     reconcilePluginViews([
       ...pluginRail.map((v) => ({ id: v.key, side: "left" as const })),
       ...pluginRightPanels.map((v) => ({ id: v.key, side: "right" as const })),
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pluginViewSig, reconcilePluginViews]);
+  }, [pluginViewSig, pluginViewsLoaded, reconcilePluginViews]);
 
   // Active surface per rail, clamped to a member of that side (a moved surface never leaves a
   // stale active). Chat is no longer pinned — it lives on whichever rail holds it.
