@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Retrieval-quality eval harness** (`evals/retrieval.py` + `evals/retrieval_gold.yaml`).
+  Measures the knowledge store's retrieval in isolation — recall@k / hit-rate@k / MRR /
+  nDCG@k over a labelled gold set, split by query mode (keyword vs paraphrase) — which
+  the A2A side-effect suite never did. Reports the hybrid-vs-keyword recall lift and can
+  sweep the `vector_k` / `rrf_k` knobs. Runs against the real gateway embedder or a
+  deterministic offline bag-of-words embedder; metric math is pure + unit-tested. This is
+  the regression guard + measurement tool for the next RAG steps (chunking, contextual
+  enrichment, reranking).
+
 ### Changed
 - **Semantic recall tuned + made tunable** (RAG bake-off findings from internal research).
   `knowledge.top_k` raised 5 → 10 and the recall preview 240 → 1000 chars (more

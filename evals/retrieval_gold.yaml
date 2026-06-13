@@ -1,0 +1,130 @@
+# Retrieval-quality gold set for the knowledge store (see evals/retrieval.py).
+#
+# A small, labelled corpus + queries with the chunk(s) that SHOULD be retrieved.
+# Each query is tagged `mode`: "keyword" (lexical overlap — FTS5 should find it)
+# or "paraphrase" (semantically related but few/no shared content words — this is
+# where the vector half of the hybrid earns its keep). Chunks are referenced by a
+# stable `key`; the harness resolves keys → assigned chunk ids at seed time, so the
+# numeric ids never have to be hard-coded.
+#
+# This is deliberately operator-notes-scale (matching the store's design point).
+# It's a regression guard + a way to measure the impact of retrieval changes
+# (knob sweeps today; chunking / contextual enrichment / reranking next).
+
+corpus:
+  - key: scheduler
+    domain: fact
+    content: "The scheduler runs jobs on a cron-like cadence and survives restarts via a SQLite job store."
+  - key: embeddings
+    domain: fact
+    content: "Semantic recall embeds each chunk with qwen3-embedding and fuses keyword and vector hits with reciprocal rank fusion."
+  - key: a2a
+    domain: fact
+    content: "Agents talk to each other over the A2A protocol version 1.0 using JSON-RPC methods like message/send."
+  - key: restart
+    domain: fact
+    content: "The server can be restarted from the console; it drains in-flight work then re-execs the process."
+  - key: discord
+    domain: fact
+    content: "The Discord surface lets an operator direct-message the agent through a gated bot token."
+  - key: knowledge_store
+    domain: fact
+    content: "The knowledge base is a per-agent SQLite store with FTS5 keyword search and an optional vector layer."
+  - key: circuit_breaker
+    domain: fact
+    content: "When the embedding gateway returns errors repeatedly, a circuit breaker falls back to keyword-only search."
+  - key: harvest
+    domain: conversation
+    content: "When a chat session is retired, an auxiliary model summarizes it into the knowledge base before the raw history is pruned."
+  - key: facts_extract
+    domain: fact
+    content: "Durable facts are distilled from conversations and de-duplicated before being stored."
+  - key: skills
+    domain: fact
+    content: "Learned skills are indexed in a separate FTS5 store and injected into the prompt as a learned-skills block."
+  - key: delegates
+    domain: fact
+    content: "Delegate agents are registered with an endpoint and credentials so the agent can hand off subtasks."
+  - key: telemetry
+    domain: fact
+    content: "Each turn writes a cost and latency row to a local telemetry store, queryable through the API."
+  - key: plugins
+    domain: fact
+    content: "Plugins are installed, then enabled, then trusted; enabling hot-mounts the routes without a restart."
+  - key: acp_runtime
+    domain: fact
+    content: "An external coding agent can drive a turn over ACP instead of the native loop, selected by the agent_runtime setting."
+  - key: goals
+    domain: fact
+    content: "Goals have a drive or monitor disposition, with verifiers that check progress on a cadence."
+  - key: backup_note
+    domain: note
+    content: "Note: the production database backups run nightly at 2am and are kept for thirty days."
+  - key: oncall_note
+    domain: note
+    content: "Note: the on-call rotation hands off every Monday morning; page the secondary if there is no acknowledgement within ten minutes."
+  - key: workflows
+    domain: fact
+    content: "Workflows are declarative static DAGs over subagents, useful for adversarial deep-research recipes."
+  - key: caching
+    domain: fact
+    content: "Prompt caching reuses a cacheable prefix with a five-minute TTL to cut latency and cost on repeat traffic."
+  - key: tailnet
+    domain: fact
+    content: "Agents discover each other over mDNS on a LAN and over a Tailscale tailnet by probing online peers."
+
+queries:
+  - q: "scheduler cron cadence"
+    relevant: [scheduler]
+    mode: keyword
+  - q: "how does the agent run tasks on a timer"
+    relevant: [scheduler]
+    mode: paraphrase
+  - q: "reciprocal rank fusion"
+    relevant: [embeddings]
+    mode: keyword
+  - q: "which model turns text into vectors for search"
+    relevant: [embeddings]
+    mode: paraphrase
+  - q: "A2A message/send"
+    relevant: [a2a]
+    mode: keyword
+  - q: "how do agents communicate with one another"
+    relevant: [a2a]
+    mode: paraphrase
+  - q: "can I reboot the backend without using the terminal"
+    relevant: [restart]
+    mode: paraphrase
+  - q: "message the assistant from a chat app"
+    relevant: [discord]
+    mode: paraphrase
+  - q: "what happens to retrieval when the embedding service is down"
+    relevant: [circuit_breaker]
+    mode: paraphrase
+  - q: "summarize a conversation once it ends"
+    relevant: [harvest]
+    mode: paraphrase
+  - q: "hand a subtask off to another agent"
+    relevant: [delegates]
+    mode: paraphrase
+  - q: "installed and enabled plugins"
+    relevant: [plugins]
+    mode: keyword
+  - q: "run a turn with an external coding agent"
+    relevant: [acp_runtime]
+    mode: keyword
+  - q: "how long are nightly database backups kept"
+    relevant: [backup_note]
+    mode: paraphrase
+  - q: "who do I page when on-call doesn't respond"
+    relevant: [oncall_note]
+    mode: paraphrase
+  - q: "discover other agents on the network"
+    relevant: [tailnet]
+    mode: paraphrase
+  - q: "cut latency on repeated prompts"
+    relevant: [caching]
+    mode: paraphrase
+  - q: "where are extracted facts stored"
+    relevant: [facts_extract, knowledge_store]
+    mode: paraphrase

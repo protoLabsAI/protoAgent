@@ -147,8 +147,36 @@ never appears.** If the agent has to infer the tool from intent, that
 *is* the test — leaking the tool name into the prompt is testing
 instruction-following, not tool selection.
 
+## Retrieval quality (`evals/retrieval.py`)
+
+The suite above tests end-to-end behaviour over A2A. It does **not** measure
+retrieval quality in isolation — so an embedding/RRF/chunking change could regress
+recall and nothing would notice. `evals/retrieval.py` is that missing layer: it
+seeds a `HybridKnowledgeStore` from a labelled gold set (`retrieval_gold.yaml`),
+runs each query, and scores the ranked ids with **recall@k / hit-rate@k / MRR /
+nDCG@k** — overall and split by query mode (`keyword` vs `paraphrase`).
+
+```bash
+# Real gateway embedder (reads your config + secrets, same as boot):
+python -m evals.retrieval                  # hybrid vs keyword-only @k=10
+python -m evals.retrieval --sweep          # + a vector_k × rrf_k grid
+python -m evals.retrieval --k 5 --json evals/results/retrieval.json
+
+# Deterministic, offline (no gateway) — what the unit test uses:
+python -m evals.retrieval --embedder bow
+```
+
+It prints the **hybrid-vs-keyword recall lift** (the RAG bake-off's headline — the
+vector half should help most on paraphrase queries) and, with `--sweep`, ranks the
+two retrieval knobs surfaced in #985 (`knowledge.vector_k`, `knowledge.rrf_k`) by
+recall@k. The metric functions are pure and unit-tested (`tests/test_retrieval_eval.py`),
+including a constructed case that proves the harness captures the vector lift. This
+is the regression guard + measurement tool for the next RAG steps (chunking,
+contextual enrichment, reranking).
+
 ## References
 
 - Anthropic — [Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
+- Anthropic — [Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval)
 - BFCL V3 — [Multi-Turn](https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html)
 - [ToolSandbox](https://arxiv.org/html/2408.04682v1)
