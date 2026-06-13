@@ -335,7 +335,10 @@ export function SetupWizard({
           },
           knowledge: {
             db_path: state.knowledgePath.trim(),
-            embed_model: "nomic-embed-text",
+            // Match the code default + what the protoLabs gateway serves. A model the
+            // gateway can't access 401s every embed and silently degrades recall to
+            // keyword-only — the Settings▸Knowledge field is a gateway-model dropdown.
+            embed_model: "qwen3-embedding",
             top_k: Number(state.knowledgeTopK),
           },
           operator: {

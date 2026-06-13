@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Knowledge embeddings default to `qwen3-embedding`.** The setup wizard hard-coded
+  `nomic-embed-text`, which the protoLabs gateway doesn't serve — so semantic recall
+  401'd on every embed and silently degraded to keyword-only. The wizard now writes
+  `qwen3-embedding` (matching the code default), and the **Embedding model** field in
+  Settings▸Knowledge is now a gateway-model **dropdown** (pick from what your gateway
+  serves) instead of free text, so it can't be typo'd into a 401.
+
 ## [0.39.0] - 2026-06-13
 
 ### Added

@@ -121,8 +121,11 @@ FIELDS: list[Field] = [
           "Hybrid FTS5 + vector search via the embedding model (RRF-fused). Off = "
           "keyword-only. Needs the gateway to serve the embedding model; falls back "
           "to keyword search on outage.", restart=True),
-    Field("knowledge.embed_model", "embed_model", "Embedding model", "string", "Knowledge",
-          "Gateway alias used when semantic recall is on."),
+    Field("knowledge.embed_model", "embed_model", "Embedding model", "select", "Knowledge",
+          "Gateway model used to embed for semantic recall (NOT the chat model). Picked from "
+          "the models your gateway serves — a wrong alias silently degrades recall to "
+          "keyword-only. Falls back to a free-text field if the gateway can't be listed.",
+          options_source="models"),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
