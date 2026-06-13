@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.36.0",
+    "date": "2026-06-13",
+    "changes": [
+      "The committed plugins.lock now ships empty.",
+      "One-click plugin sync from the console.",
+      "Knowledge base CRUD from the console.",
+      "Harvest-on-delete is now opt-in.",
+      "Drag-and-drop rail positions for plugin views now survive a reload.",
+      "A render error no longer white-screens the console",
+      "The documented kit-loading pattern for plugin views was broken",
+      "The console prompts for the operator token on 401",
+      "The Notes plugin editor adopts the DS plugin kit (rule 4)",
+      "Design system bumped @protolabsai/ui 0.26.2 → 0.29.0 (+ @protolabsai/design 0.5.1).",
+      "ADR 0049 — bundle pin lifecycle",
+      "Force re-install no longer claims a live hot-mount it can't deliver (#942).",
+      "Annotated-tag pins no longer report a permanent false \"Update available\"."
+    ]
+  },
+  {
     "version": "v0.35.3",
     "date": "2026-06-12",
     "changes": [
