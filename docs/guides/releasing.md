@@ -31,6 +31,14 @@ When the org updater signing key is present, the legs also attach signed updater
 bundles and a fan-in job uploads `latest.json` — the manifest the desktop app's
 in-app updater polls. See `apps/desktop/README.md` § Updates.
 
+> **Runner cost.** Every other workflow runs on Namespace; the desktop matrix is
+> the only GitHub-hosted usage (macOS bills at 10×, Windows 2×). To move a leg onto
+> a Namespace profile once the org provisions one, set the repo variable
+> `DESKTOP_MACOS_RUNNER` / `DESKTOP_WINDOWS_RUNNER` / `DESKTOP_LINUX_RUNNER` to the
+> profile name — no workflow edit. Leave `DESKTOP_LINUX_RUNNER` unset unless the
+> profile's base image is glibc ≤ 2.35 (Ubuntu 22.04), or the AppImage's portability
+> floor rises. Defaults keep the current hosted runners.
+
 ## Cutting a release
 
 1. **Actions → Prepare Release → Run workflow.** Choose the **bump**: `patch`
