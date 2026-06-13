@@ -9,13 +9,16 @@ server side is e.g. ``proto --acp``. Spec: https://agentclientprotocol.com.
 Ported from ORBIS's ``acp/client.py`` (the canonical protoLabs ACP client).
 ADR 0024.
 
-PR1 scope (the thin vertical):
-  * handshake: ``initialize`` → ``session/new`` (cwd = the agent's config workdir)
+Surface:
+  * handshake: ``initialize`` (honors the negotiated ``protocolVersion`` — closes on
+    an unsupported counter) → ``session/load`` the persisted thread when the agent
+    advertises ``loadSession`` and we have a saved id, else ``session/new``
   * one turn: ``session/prompt`` → accumulate ``agent_message_chunk`` text as the
-    answer; narrate ``tool_call`` titles via ``progress_callback`` ("Editing
-    app.py", "Running pytest")
+    answer; narrate ``tool_call`` titles via ``progress_callback``; surface
+    ``agent_thought_chunk`` reasoning via ``thought_callback``
+  * lifecycle: ``session/cancel`` on prompt abort, ``session/close`` on teardown
   * auto-allow ``session/request_permission`` (the coding agent self-governs,
-    scoped to the session cwd — see ADR 0024). Policy + HITL gating land next.
+    scoped to the session cwd — see ADR 0024); the plugin injects a by-kind policy.
   * ``fs/*`` and ``terminal/*`` are NOT advertised — the coding agent uses its own
     file access, confined to the session ``cwd``.
 """
@@ -48,8 +51,13 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
             out.append(block["text"])
     return " ".join(o for o in out if o).strip()[:limit]
 
-# ACP protocol version protoAgent speaks. Negotiated in `initialize`.
+# ACP protocol version protoAgent speaks. Negotiated in `initialize`: the client
+# proposes ``PROTOCOL_VERSION`` and the agent echoes it (supported) or counters with
+# its latest. We only speak the versions in ``SUPPORTED_PROTOCOL_VERSIONS``; if the
+# agent counters with anything else we close the connection (spec: the client SHOULD
+# not proceed on an unsupported version) rather than warn-and-continue.
 PROTOCOL_VERSION = 1
+SUPPORTED_PROTOCOL_VERSIONS = (1,)
 
 # JSON-RPC error code the agent returns from `session/new` when it has no
 # resolved auth (ACP `AUTH_REQUIRED`). The client surfaces an actionable message.
@@ -87,12 +95,18 @@ class AcpClient:
         name: str = "acp",
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
+        session_id_path: Path | None = None,
     ) -> None:
         self.command = command
         self.args = list(args or [])
         self.cwd = str(Path(cwd).expanduser())
         self.env = env
         self.name = name
+        # Where the session id is persisted so a restart can ``session/load`` the
+        # same thread instead of starting fresh (ADR 0024 / #970). ``None`` ⇒ the
+        # session lives only as long as this subprocess. The factory derives the
+        # path from the client cache key so reattach is keyed to launch+policy+cwd.
+        self.session_id_path = session_id_path
         # MCP servers mounted into the ACP session (ADR 0033) — how the coding agent
         # gets protoAgent's operator tools (notes/beads/goals/…) over `session/new`.
         self.mcp_servers = list(mcp_servers or [])
@@ -106,6 +120,10 @@ class AcpClient:
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
+        self._protocol_version = PROTOCOL_VERSION   # the negotiated version
+        # True only while replaying history during ``session/load`` — suppresses the
+        # replayed updates so a silent reattach doesn't re-stream the thread.
+        self._loading = False
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
@@ -117,6 +135,7 @@ class AcpClient:
         self._progress: ProgressCallback | None = None
         self._on_tool: ToolCallback | None = None
         self._on_text: ProgressCallback | None = None
+        self._on_thought: ProgressCallback | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -147,7 +166,7 @@ class AcpClient:
         self._reader_task = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         await self._initialize()
-        await self._new_session()
+        await self._open_session()
         logger.info(
             "[acp/%s] up (pid=%s, session=%s, cwd=%s)",
             self.name,
@@ -160,7 +179,12 @@ class AcpClient:
         """Cancel the I/O tasks and reap the subprocess. Crucially this ``await``s
         ``proc.wait()`` so the child is reaped *while the loop is alive* — without
         it the subprocess transport lingers and its ``__del__`` fires after the loop
-        closes ("Event loop is closed"), and the stderr-drain task leaks."""
+        closes ("Event loop is closed"), and the stderr-drain task leaks.
+
+        Sends a best-effort ``session/close`` first — the graceful, spec-aligned
+        shutdown (and what matters if an agent ever serves multiple sessions per
+        process) before the SIGTERM that actually frees this one-process-per-session."""
+        await self._close_session()
         for task in (self._reader_task, self._stderr_task):
             if task and not task.done():
                 task.cancel()
@@ -243,6 +267,8 @@ class AcpClient:
     # -- inbound updates + requests -----------------------------------------
 
     async def _handle_update(self, params: dict) -> None:
+        if self._loading:
+            return  # replaying history during session/load — reattaching silently
         update = params.get("update") or {}
         kind = update.get("sessionUpdate")
         if kind == "agent_message_chunk":
@@ -250,6 +276,12 @@ class AcpClient:
             if text:
                 self._answer += text
                 await self._emit_text(text)   # stream the delta (token-ish) to the UI
+        elif kind == "agent_thought_chunk":
+            # The coder's reasoning trace — surface it (never folded into the answer)
+            # for parity with the native runtime's thinking stream.
+            text = (update.get("content") or {}).get("text", "")
+            if text:
+                await self._emit_thought(text)
         elif kind == "tool_call":
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start).
@@ -272,6 +304,10 @@ class AcpClient:
                     "output": _tool_output_preview(update),
                     "status": status,
                 })
+        elif kind:
+            # plan / current_mode_update / available_commands_update / usage_update —
+            # not surfaced yet, but logged so they're visibly dropped, not silent.
+            logger.debug("[acp/%s] unhandled session update %r", self.name, kind)
 
     async def _handle_request(self, msg: dict) -> None:
         method = msg.get("method")
@@ -321,6 +357,17 @@ class AcpClient:
             except Exception as exc:  # best-effort — streaming never breaks a turn
                 logger.warning("[acp/%s] text_callback raised: %s", self.name, exc)
 
+    async def _emit_thought(self, delta: str) -> None:
+        """Surface a reasoning delta. Routes to ``thought_callback`` when wired, else
+        falls back to ``progress_callback`` so thoughts are surfaced (not dropped)
+        even for callers that only wire narration — the issue's intent."""
+        cb = self._on_thought or self._progress
+        if cb and delta:
+            try:
+                await cb(delta)
+            except Exception as exc:  # best-effort — thoughts never break a turn
+                logger.warning("[acp/%s] thought_callback raised: %s", self.name, exc)
+
     # -- JSON-RPC primitives -------------------------------------------------
 
     async def _send(self, obj: dict) -> None:
@@ -347,14 +394,14 @@ class AcpClient:
     async def _respond_error(self, rid, code: int, message: str) -> None:
         await self._send({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
 
-    async def _cancel_session(self) -> None:
-        """Best-effort ``session/cancel`` notification: tell the agent to abandon
-        the in-flight turn so a reused session isn't left mid-generation.
+    async def _notify_session(self, method: str) -> None:
+        """Fire-and-forget a session lifecycle notification (``session/cancel`` on
+        abort, ``session/close`` on teardown). Notifications have no id and no
+        response, so this writes straight to stdin without a pending future.
 
-        Runs on the prompt abort path (timeout / external cancel / transport
-        failure), so it must never raise: no-op when the process is gone or no
-        session is open, and swallows any send error. ``session/cancel`` is a
-        notification (no id, no response)."""
+        Best-effort by contract — it runs on abort/teardown paths and must never
+        raise: no-op when the process is gone or no session is open, and any send
+        error is swallowed."""
         proc = self._proc
         if not (proc and proc.returncode is None and proc.stdin and self._session_id):
             return
@@ -362,18 +409,26 @@ class AcpClient:
             proc.stdin.write(
                 (
                     json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "method": "session/cancel",
-                            "params": {"sessionId": self._session_id},
-                        }
+                        {"jsonrpc": "2.0", "method": method,
+                         "params": {"sessionId": self._session_id}}
                     )
                     + "\n"
                 ).encode()
             )
             await proc.stdin.drain()
-        except Exception as exc:  # noqa: BLE001 — abort path is best-effort
-            logger.debug("[acp/%s] session/cancel failed (best-effort): %s", self.name, exc)
+        except Exception as exc:  # noqa: BLE001 — abort/teardown path is best-effort
+            logger.debug("[acp/%s] %s failed (best-effort): %s", self.name, method, exc)
+
+    async def _cancel_session(self) -> None:
+        """Tell the agent to abandon the in-flight turn so a reused session isn't
+        left mid-generation. Runs on the prompt abort path (timeout / external
+        cancel / transport failure)."""
+        await self._notify_session("session/cancel")
+
+    async def _close_session(self) -> None:
+        """Tell the agent to release the session before the subprocess is reaped —
+        the graceful, spec-aligned counterpart to the SIGTERM in ``close()``."""
+        await self._notify_session("session/close")
 
     # -- handshake -----------------------------------------------------------
 
@@ -395,15 +450,87 @@ class AcpClient:
         # (for an actionable auth-required message) and capabilities.
         self._auth_methods = result.get("authMethods") or []
         self._agent_capabilities = result.get("agentCapabilities") or {}
+        # Honor the negotiated protocol version (spec): the agent echoes our version
+        # if it supports it, else counters with its latest. If that counter is one we
+        # don't speak, the client SHOULD close rather than proceed on an incompatible
+        # wire. A missing version field is treated leniently as our own (older agents).
         negotiated = result.get("protocolVersion")
-        if isinstance(negotiated, int) and negotiated != PROTOCOL_VERSION:
-            logger.warning(
-                "[acp/%s] agent negotiated ACP protocol v%s but client speaks v%s — "
-                "proceeding, but behaviour may differ",
-                self.name,
-                negotiated,
-                PROTOCOL_VERSION,
+        if isinstance(negotiated, int):
+            if negotiated not in SUPPORTED_PROTOCOL_VERSIONS:
+                supported = "/".join(str(v) for v in SUPPORTED_PROTOCOL_VERSIONS)
+                raise AcpError(
+                    f"{self.name} agent negotiated ACP protocol v{negotiated}, but this "
+                    f"client only supports v{supported}. Update the coding agent or the "
+                    f"client so their ACP versions match."
+                )
+            self._protocol_version = negotiated
+
+    async def _open_session(self) -> None:
+        """Reattach the persisted session when possible, else start a fresh one.
+
+        If a session id was persisted for this launch signature AND the agent
+        advertises the ``loadSession`` capability, ``session/load`` reattaches the
+        thread (surviving a subprocess crash/restart) instead of losing it to a new
+        session. A failed load (expired/unknown id, agent refusal) falls back to a
+        fresh ``session/new`` so a stale id never wedges startup."""
+        persisted = self._read_persisted_session_id()
+        if persisted and self._agent_capabilities.get("loadSession"):
+            try:
+                await self._load_session(persisted)
+                logger.info("[acp/%s] reattached session %s (session/load)", self.name, persisted)
+                return
+            except AcpError as exc:
+                logger.info(
+                    "[acp/%s] session/load %s failed (%s) — starting fresh",
+                    self.name, persisted, exc,
+                )
+        await self._new_session()
+
+    async def _load_session(self, session_id: str) -> None:
+        """Reattach a persisted session (ACP ``session/load``). The agent replays its
+        history via ``session/update`` notifications — suppressed here (``_loading``)
+        since we're silently reattaching, not re-streaming the thread — then responds
+        ``null``. Caller gates this on the agent's ``loadSession`` capability."""
+        self._loading = True
+        try:
+            await self._request(
+                "session/load",
+                {"sessionId": session_id, "cwd": self.cwd, "mcpServers": self.mcp_servers},
+                timeout=60.0,
             )
+        finally:
+            self._loading = False
+        self._session_id = session_id
+
+    def _read_persisted_session_id(self) -> str | None:
+        """The session id saved for this launch signature, or None. Guards on a
+        matching ``cwd`` so a stale/copied file can't reattach a foreign workdir."""
+        path = self.session_id_path
+        if not path:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict) or data.get("cwd") != self.cwd:
+            return None
+        sid = data.get("sessionId")
+        return sid if isinstance(sid, str) and sid else None
+
+    def _persist_session_id(self, session_id: str) -> None:
+        """Save the session id (with its ``cwd``) so a later client for the same
+        launch signature can ``session/load`` it. Best-effort — never fatal."""
+        path = self.session_id_path
+        if not (path and session_id):
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"sessionId": session_id, "cwd": self.cwd, "command": self.command}),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.debug("[acp/%s] could not persist sessionId: %s", self.name, exc)
 
     async def _new_session(self) -> None:
         try:
@@ -431,6 +558,7 @@ class AcpClient:
         self._session_id = (result or {}).get("sessionId")
         if not self._session_id:
             raise AcpError("session/new returned no sessionId")
+        self._persist_session_id(self._session_id)
 
     # -- public: one turn ----------------------------------------------------
 
@@ -441,20 +569,23 @@ class AcpClient:
         progress_callback: ProgressCallback | None = None,
         tool_callback: ToolCallback | None = None,
         text_callback: ProgressCallback | None = None,
+        thought_callback: ProgressCallback | None = None,
         timeout: float = 600.0,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
 
         Streams ``tool_call`` titles to ``progress_callback`` (text narration), structured
-        start/end events to ``tool_callback`` (UI tool cards), and answer-text deltas to
-        ``text_callback`` (token-ish streaming) as the agent works. Raises ``AcpError`` on
-        transport/protocol failure.
+        start/end events to ``tool_callback`` (UI tool cards), answer-text deltas to
+        ``text_callback`` (token-ish streaming), and the coder's reasoning deltas to
+        ``thought_callback`` (``agent_thought_chunk``; falls back to ``progress_callback``)
+        as the agent works. Raises ``AcpError`` on transport/protocol failure.
         """
         await self._ensure_started()
         self._answer = ""
         self._progress = progress_callback
         self._on_tool = tool_callback
         self._on_text = text_callback
+        self._on_thought = thought_callback
         try:
             result = await self._request(
                 "session/prompt",
@@ -474,6 +605,7 @@ class AcpClient:
             self._progress = None
             self._on_tool = None
             self._on_text = None
+            self._on_thought = None
         stop = (result or {}).get("stopReason")
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, stop)
         return self._answer.strip()

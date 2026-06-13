@@ -24,7 +24,9 @@ the client applies to the coding agent's ``session/request_permission`` requests
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from pathlib import Path
 from typing import Callable
 
 from .acp_client import AcpClient
@@ -84,6 +86,18 @@ def _cache_key(spec: dict) -> tuple:
     )
 
 
+def _session_id_path(spec: dict) -> Path:
+    """Where this agent's ACP session id is persisted, so a restart can
+    ``session/load`` the same thread instead of starting fresh (#970). Keyed by a
+    digest of the full launch+policy signature (the same tuple as the client cache),
+    and ``scope_leaf``'d per instance like every other store so co-located hubs stay
+    isolated. Imported lazily to keep this library host-free for its unit tests."""
+    from infra.paths import data_home, scope_leaf
+
+    digest = hashlib.sha256(repr(_cache_key(spec)).encode()).hexdigest()[:16]
+    return scope_leaf(data_home() / "acp_sessions" / f"{digest}.json")
+
+
 def _client_for(spec: dict) -> AcpClient:
     """Get-or-create the cached client for an agent spec."""
     key = _cache_key(spec)
@@ -96,6 +110,7 @@ def _client_for(spec: dict) -> AcpClient:
             env=spec["env"],
             name=spec["name"],
             permission=_make_permission(spec),
+            session_id_path=_session_id_path(spec),
         )
         _CLIENTS[key] = client
     return client

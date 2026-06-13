@@ -11,6 +11,7 @@ and client-cache eviction/teardown.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 
 import pytest
@@ -226,6 +227,210 @@ async def test_session_new_auth_required_raises_actionable(tmp_path):
     assert ei.value.code == -32000             # AUTH_REQUIRED preserved
 
 
+# ── session lifecycle: load / close / version / thought (#970) ────────────────
+
+# Advertises the `loadSession` capability, records whether session/new vs
+# session/load fired (to a marker), and on load replays one history chunk BEFORE
+# responding null — so the test can prove the replay is suppressed on reattach.
+_LOADER_AGENT = r'''
+import sys, json, os
+MARKER = os.environ.get("MARKER", "")
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def mark(s):
+    if MARKER:
+        with open(MARKER, "w") as fh: fh.write(s)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {
+            "protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
+    elif method == "session/new":
+        mark("new")
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/load":
+        # Replay one history entry, then respond null (per spec).
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                                          "content": {"type": "text", "text": "OLD HISTORY"}}}})
+        mark("load:" + str(msg.get("params", {}).get("sessionId")))
+        send({"jsonrpc": "2.0", "id": mid, "result": None})
+    elif method == "session/prompt":
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                                          "content": {"type": "text", "text": "fresh"}}}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+'''
+
+# Emits an agent_thought_chunk (reasoning) then an agent_message_chunk (answer),
+# so the test can prove thoughts are surfaced separately and never folded in.
+_THOUGHT_AGENT = r'''
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "s1", "update": {"sessionUpdate": "agent_thought_chunk",
+                                          "content": {"type": "text", "text": "thinking hard"}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
+                                          "content": {"type": "text", "text": "the answer"}}}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+'''
+
+# Counters with protocolVersion 2 (which this client does not speak) — the client
+# must close rather than proceed.
+_V2_AGENT = r'''
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"protocolVersion": 2}})
+'''
+
+
+async def test_session_load_reattaches_persisted_session(tmp_path):
+    """A persisted session id + an agent that advertises loadSession ⇒ the client
+    session/loads (reattaches) rather than session/news, and the replayed history is
+    suppressed (the reattach is silent — only the new turn's text is the answer)."""
+    script = tmp_path / "loader_agent.py"
+    script.write_text(_LOADER_AGENT, encoding="utf-8")
+    marker = tmp_path / "which.marker"
+    sess_file = tmp_path / "sess.json"
+    sess_file.write_text(
+        json.dumps({"sessionId": "s1", "cwd": str(tmp_path), "command": sys.executable}),
+        encoding="utf-8",
+    )
+    client = AcpClient(
+        sys.executable, [str(script)], cwd=str(tmp_path), name="loader",
+        env={"MARKER": str(marker)}, session_id_path=sess_file,
+    )
+    try:
+        answer = await client.prompt("continue the thread", timeout=30.0)
+    finally:
+        await client.close()
+    assert answer == "fresh"                 # replayed "OLD HISTORY" suppressed
+    assert marker.read_text() == "load:s1"   # reattached via session/load, not new
+    assert client._session_id == "s1"
+
+
+async def test_session_new_persists_id_for_reattach(fake_agent, tmp_path):
+    """A fresh session/new writes its id (with cwd) to the session-id path so a
+    later client for the same launch signature can reattach it."""
+    sess_file = tmp_path / "sess.json"
+    client = AcpClient(
+        sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="persist",
+        session_id_path=sess_file,
+    )
+    try:
+        await client.prompt("go", timeout=30.0)
+    finally:
+        await client.close()
+    data = json.loads(sess_file.read_text(encoding="utf-8"))
+    assert data["sessionId"] == "s1"
+    assert data["cwd"] == str(tmp_path)
+
+
+async def test_persisted_id_ignored_when_agent_lacks_loadsession(fake_agent, tmp_path):
+    """A persisted id must NOT trigger session/load if the agent doesn't advertise
+    loadSession — the client falls back to a fresh session/new and overwrites it."""
+    sess_file = tmp_path / "sess.json"
+    sess_file.write_text(
+        json.dumps({"sessionId": "OLD", "cwd": str(tmp_path), "command": sys.executable}),
+        encoding="utf-8",
+    )
+    client = AcpClient(
+        sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="nolc",
+        session_id_path=sess_file,
+    )
+    try:
+        answer = await client.prompt("add a healthz route", timeout=30.0)
+    finally:
+        await client.close()
+    assert answer == "Hello world [ok]"   # ran a normal new-session turn
+    assert client._session_id == "s1"      # the new id, not the stale "OLD"
+    assert json.loads(sess_file.read_text(encoding="utf-8"))["sessionId"] == "s1"
+
+
+async def test_close_emits_session_close_before_reaping(fake_agent, tmp_path):
+    """close() sends a best-effort session/close while the child is still alive
+    (returncode None) — the graceful, spec-aligned shutdown before the SIGTERM."""
+    client = AcpClient(sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="close")
+    await client.prompt("go", timeout=30.0)
+    calls: list[tuple] = []
+    orig = client._notify_session
+
+    async def spy(method: str) -> None:
+        calls.append((method, client._proc.returncode))
+        await orig(method)
+
+    client._notify_session = spy
+    await client.close()
+    assert ("session/close", None) in calls  # emitted before the process was reaped
+
+
+async def test_initialize_rejects_unsupported_protocol_version(tmp_path):
+    """The agent counters with protocolVersion 2 (unsupported) — the client must
+    raise (close the connection) instead of warn-and-continue."""
+    script = tmp_path / "v2_agent.py"
+    script.write_text(_V2_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="v2")
+    try:
+        with pytest.raises(AcpError) as ei:
+            await client.prompt("hi", timeout=10.0)
+    finally:
+        await client.close()
+    msg = str(ei.value).lower()
+    assert "protocol" in msg and "v2" in msg
+
+
+async def test_agent_thought_chunk_surfaced_not_in_answer(tmp_path):
+    """agent_thought_chunk reasoning is routed to thought_callback and never folded
+    into the answer text."""
+    script = tmp_path / "thought_agent.py"
+    script.write_text(_THOUGHT_AGENT, encoding="utf-8")
+    thoughts: list[str] = []
+
+    async def on_thought(t: str) -> None:
+        thoughts.append(t)
+
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="thought")
+    try:
+        answer = await client.prompt("go", thought_callback=on_thought, timeout=30.0)
+    finally:
+        await client.close()
+    assert answer == "the answer"        # thought NOT folded into the answer
+    assert thoughts == ["thinking hard"]  # surfaced to the thought callback
+
+
 # ── permission policy ─────────────────────────────────────────────────────────
 
 _OPTS = [{"optionId": "a", "kind": "allow_once"}, {"optionId": "r", "kind": "reject_once"}]
@@ -296,6 +501,20 @@ async def test_evict_client_pops_and_closes():
     assert P._cache_key(spec) not in P._CLIENTS
     # idempotent: nothing cached for this spec now
     assert await P.evict_client(spec) is False
+
+
+def test_session_id_path_is_stable_and_keyed_per_signature():
+    """The factory derives a session-id path from the cache key — stable for the same
+    spec, distinct when the launch signature (e.g. workdir) changes."""
+    spec_a = {
+        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp/wt-a",
+        "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+    }
+    spec_b = {**spec_a, "workdir": "/tmp/wt-b"}
+    p_a, p_a2, p_b = P._session_id_path(spec_a), P._session_id_path(spec_a), P._session_id_path(spec_b)
+    assert p_a == p_a2                       # stable for the same signature
+    assert p_a != p_b                        # workdir is part of the key
+    assert p_a.name.endswith(".json") and p_a.parent.name == "acp_sessions"
 
 
 async def test_evict_client_swallows_close_errors():

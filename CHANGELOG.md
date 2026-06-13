@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ACP client: restart-surviving sessions + thought streaming** (#970). The shared
+  `coding_agent` ACP client (which the `delegates` plugin and `project_board` loop both
+  drive) gained the rest of the session lifecycle, so a coding thread no longer dies with
+  its subprocess. On start it now persists the `sessionId` per launch signature and, when
+  the agent advertises the `loadSession` capability, **`session/load`s the saved thread**
+  (replay suppressed — a silent reattach) instead of always `session/new`-ing; a stale id
+  falls back to a fresh session. `close()` sends a best-effort **`session/close`** before
+  the SIGTERM (graceful, spec-aligned teardown). `initialize` now **honors the negotiated
+  `protocolVersion`** — it closes the connection on an unsupported counter rather than
+  warn-and-continue. And **`agent_thought_chunk`** reasoning is surfaced via a new
+  `thought_callback` (falling back to the progress narration) instead of being dropped.
+  All in `plugins/coding_agent/acp_client.py`; the delegates plugin and project_board
+  inherit it with no changes.
+
 ### Fixed
 - **SSRF: the model-probe and fleet-remote registration now run egress checks** (#871).
   `list_gateway_models` / `validate_model_connection` (reached via `/api/config/models`

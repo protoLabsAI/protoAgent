@@ -124,11 +124,13 @@ delegate_to(target="proto", query=…)
   → AcpAdapter.dispatch (plugins/delegates/adapters.py)
       → AcpClient (plugins/coding_agent/acp_client.py)
           → spawn `command args` in workdir, JSON-RPC 2.0 over its stdio:
-            initialize → session/new(cwd) → session/prompt(query)
+            initialize → session/load(saved id) or session/new(cwd) → session/prompt(query)
           ← session/update {agent_message_chunk}  → accumulated into the answer
+          ← session/update {agent_thought_chunk}  → surfaced as the reasoning trace
           ← session/update {tool_call, title}       → narrated (logged)
           ← session/request_permission              → answered by the policy
   → returns the agent's final message text
+            … session/cancel on abort · session/close on teardown
 ```
 
 One `AcpClient` (subprocess + session) is **cached per launch+policy signature**
@@ -137,6 +139,16 @@ dispatches into a **transient, per-call `workdir`** — e.g. `dataclasses.replac
 a delegate onto a disposable git worktree — should call `AcpAdapter.teardown(d)` in
 a `finally` to reap that worktree's subprocess (a plain cache drop forgets the handle
 but leaves the process alive).
+
+### Sessions survive a restart
+
+The `sessionId` is persisted per launch signature (under `~/.protoagent/acp_sessions/`).
+On the next start, if the agent advertises the ACP `loadSession` capability the client
+**`session/load`s the saved thread** (replaying its history silently to reattach)
+instead of starting fresh — so a crash, a CI bounce, or a re-dispatch continues the
+same coding thread rather than losing its context. A stale or unknown id falls back to
+a fresh `session/new`. The ACP `protocolVersion` is negotiated at `initialize`; the
+client closes the connection if the agent counters with a version it doesn't speak.
 
 ## Eval it
 
