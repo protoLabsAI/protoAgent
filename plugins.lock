@@ -1,20 +1,3 @@
 {
-  "plugins": [
-    {
-      "id": "artifact",
-      "source_url": "https://github.com/protoLabsAI/artifact-plugin",
-      "requested_ref": "v0.2.1",
-      "resolved_sha": "e49f185f8366bb371114ef3eb35f1cec3842f321",
-      "installed_at": "2026-06-12T22:33:42.127934+00:00",
-      "by": "console"
-    },
-    {
-      "id": "doom",
-      "source_url": "https://github.com/protoLabsAI/doom-plugin",
-      "requested_ref": "",
-      "resolved_sha": "0d6f91b668d78573be83b1ba1b645c48ad0083de",
-      "installed_at": "2026-06-10T21:26:13.407111+00:00",
-      "by": "console"
-    }
-  ]
+  "plugins": []
 }

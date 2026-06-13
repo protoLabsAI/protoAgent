@@ -50,6 +50,12 @@ dir) the console flags each locked-but-missing plugin and offers a one-click
 **Sync plugins** button (`POST /api/plugins/sync`) — the same re-clone the CLI
 does; plugins that are already in `plugins.enabled` come up live on the spot.
 
+Upstream protoAgent ships the lock **empty** — a fresh clone starts with no
+third-party plugins, by design. Your installs append to it; **forks and
+deployments commit their lock** so their plugin set reproduces on every
+checkout. (That means the upstream developer's own installs show as a local
+diff on `plugins.lock` — expected; commit or discard as you see fit.)
+
 ## Keep one up to date
 
 Because the lock pins a commit SHA, an installed plugin doesn't move until you
