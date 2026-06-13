@@ -3,7 +3,12 @@ name: Deploy docs to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'package.json', 'package-lock.json']
+    paths: ['docs/**', 'package.json', 'package-lock.json', '.github/workflows/docs.yml']
+  # PR-level gate (#976): vitepress fails the build on parse errors AND dead links,
+  # so running docs:build here catches doc breakage at review time instead of letting
+  # it merge green and only go red on the main-only deploy. Build-only — no deploy.
+  pull_request:
+    paths: ['docs/**', 'package.json', 'package-lock.json', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:
@@ -12,7 +17,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Ref-scoped so a PR build never serializes behind (or cancels) the main pages
+  # deploy — each ref gets its own group; main keeps a stable group of its own.
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -27,11 +34,15 @@ jobs:
       - run: npm install
       - run: npm run docs:build
       - uses: actions/upload-pages-artifact@v3
+        # Only needed to feed the deploy job — skip on PRs (build-only gate).
+        if: github.event_name != 'pull_request'
         with:
           path: docs/.vitepress/dist
 
   deploy:
     needs: build
+    # Never deploy from a PR — PRs only validate the build above.
+    if: github.event_name != 'pull_request'
     runs-on: namespace-profile-protolabs-linux
     environment:
       name: github-pages
