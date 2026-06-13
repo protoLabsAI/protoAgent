@@ -47,13 +47,20 @@ class HybridKnowledgeStore(KnowledgeStore):
         embed_fn: EmbedFn | None = None,
         vector_k: int = 20,
         rrf_k: int = 60,
+        min_score: float = 0.0,
         breaker_threshold: int = 2,
         breaker_cooldown_s: float = 300.0,
+        preview_chars: int = 1000,
     ):
-        super().__init__(db_path)
+        super().__init__(db_path, preview_chars=preview_chars)
         self._embed_fn = embed_fn
         self._vector_k = vector_k
         self._rrf_k = rrf_k
+        # Relevance floor: drop fused hits whose RRF score is below this. 0 keeps
+        # all (today's behavior). >0 stops off-topic turns from injecting weak,
+        # best-effort chunks — tune against the retrieval eval, since RRF scores
+        # aren't normalized across queries.
+        self._min_score = max(0.0, float(min_score))
         self._breaker_threshold = breaker_threshold
         self._breaker_cooldown_s = breaker_cooldown_s
         self._embed_failures = 0
@@ -196,7 +203,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         for rank, cid in enumerate(vec_ids):
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._rrf_k + rank)
 
-        ordered = sorted(scores, key=lambda c: scores[c], reverse=True)[:k]
+        ordered = sorted(scores, key=lambda c: scores[c], reverse=True)
+        if self._min_score > 0:
+            ordered = [cid for cid in ordered if scores[cid] >= self._min_score]
+        ordered = ordered[:k]
         results: list[dict] = []
         for cid in ordered:
             if cid in by_id:
@@ -222,4 +232,4 @@ class HybridKnowledgeStore(KnowledgeStore):
             return None
         d = dict(row)
         preview = (d.get("heading") + ": " if d.get("heading") else "") + d.get("content", "")
-        return {"table": "chunks", "preview": preview[:240], **d}
+        return {"table": "chunks", "preview": preview[:self._preview_chars], **d}

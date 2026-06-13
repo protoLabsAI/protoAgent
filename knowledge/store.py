@@ -214,9 +214,13 @@ class KnowledgeStore:
     your own embedding layer.
     """
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None, *, preview_chars: int = 1000):
         self.path = _resolve_path(db_path)
         self._fts_available: bool | None = None
+        # How much of each hit's `heading: content` is returned as the `preview`
+        # the model sees on recall. Bumped from a hardcoded 240 (RAG bake-off:
+        # bigger previews carry more answer-bearing context at no retrieval cost).
+        self._preview_chars = max(1, int(preview_chars))
         self._init_db()
 
     # ── connection / schema ─────────────────────────────────────────────────
@@ -381,7 +385,7 @@ class KnowledgeStore:
             preview = (r["heading"] + ": " if r["heading"] else "") + r["content"]
             results.append({
                 "table": "chunks",
-                "preview": preview[:240],
+                "preview": preview[:self._preview_chars],
                 **dict(r),
             })
         return results

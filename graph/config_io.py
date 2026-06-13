@@ -335,7 +335,13 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     # in FIELDS, so they stay explicit.
     r = config.researcher
     _deep_merge(d, {
-        "knowledge": {"db_path": config.knowledge_db_path},
+        "knowledge": {
+            "db_path": config.knowledge_db_path,
+            # Breaker knobs aren't settings-schema fields (operational, config-only),
+            # so emit them here for round-trip completeness.
+            "embed_breaker_threshold": config.knowledge_embed_breaker_threshold,
+            "embed_breaker_cooldown_s": config.knowledge_embed_breaker_cooldown_s,
+        },
         "mcp": {
             "enabled": config.mcp_enabled,
             "servers": list(config.mcp_servers),

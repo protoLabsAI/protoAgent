@@ -376,7 +376,25 @@ class LangGraphConfig:
     # with RRF). On by default — semantic recall finds paraphrases keyword search
     # misses; the circuit breaker falls back to FTS5 on an embedding outage.
     knowledge_embeddings: bool = True
-    knowledge_top_k: int = 5
+    # How many recalled chunks are injected per turn. Bumped 5 → 10 (RAG bake-off:
+    # more candidates in-context lifted answer quality at sub-million-chunk scale).
+    knowledge_top_k: int = 10
+    # Hybrid-retrieval tuning (HybridKnowledgeStore knobs, ADR 0021) — surfaced so
+    # they're tunable without editing the store / via the retrieval eval:
+    #   vector_k  — FTS5 + vector candidates fused per query (the RRF pool).
+    #   rrf_k     — Reciprocal-Rank-Fusion constant (higher = flatter weighting).
+    #   min_score — drop fused hits below this score; 0 = keep all (a relevance
+    #               floor for off-topic turns; RRF scores aren't normalized, so
+    #               tune empirically).
+    #   recall_preview_chars — how much of each hit the model sees (was 240).
+    #   embed_breaker_* — the embed circuit breaker (consecutive failures to open
+    #               it; seconds it stays open before retrying the gateway).
+    knowledge_vector_k: int = 20
+    knowledge_rrf_k: int = 60
+    knowledge_min_score: float = 0.0
+    knowledge_recall_preview_chars: int = 1000
+    knowledge_embed_breaker_threshold: int = 2
+    knowledge_embed_breaker_cooldown_s: float = 300.0
 
     # Conversation checkpointer — persists each chat session's history per
     # thread_id so multi-turn chats survive a server restart. A path → durable
@@ -747,6 +765,15 @@ class LangGraphConfig:
             embed_model=knowledge.get("embed_model", cls.embed_model),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
+            knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
+            knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
+            knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),
+            knowledge_recall_preview_chars=knowledge.get(
+                "recall_preview_chars", cls.knowledge_recall_preview_chars),
+            knowledge_embed_breaker_threshold=knowledge.get(
+                "embed_breaker_threshold", cls.knowledge_embed_breaker_threshold),
+            knowledge_embed_breaker_cooldown_s=knowledge.get(
+                "embed_breaker_cooldown_s", cls.knowledge_embed_breaker_cooldown_s),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),

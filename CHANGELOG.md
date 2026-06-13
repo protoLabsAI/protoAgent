@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Semantic recall tuned + made tunable** (RAG bake-off findings from internal research).
+  `knowledge.top_k` raised 5 → 10 and the recall preview 240 → 1000 chars (more
+  answer-bearing context in-prompt at no retrieval cost). The hybrid-store knobs are now
+  config + Settings▸Knowledge fields instead of hardcoded: `knowledge.vector_k` (RRF
+  candidate pool), `knowledge.rrf_k` (fusion constant), `knowledge.min_score` (a relevance
+  floor, default 0 = off), `knowledge.recall_preview_chars`, and the embed circuit-breaker
+  threshold/cooldown — so retrieval can be tuned without editing the store. All defaults
+  preserve today's behavior except the deliberate top-k and preview bumps.
 - **Setup wizard slimmed to the essentials.** The Discord and Google steps are gone —
   both are managed in System → Settings (with their own Test/Connect actions), so the
   wizard no longer collects bot tokens or OAuth clients. Finishing setup now leaves any

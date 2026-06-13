@@ -126,6 +126,20 @@ FIELDS: list[Field] = [
           "the models your gateway serves — a wrong alias silently degrades recall to "
           "keyword-only. Falls back to a free-text field if the gateway can't be listed.",
           options_source="models"),
+    Field("knowledge.recall_preview_chars", "knowledge_recall_preview_chars", "Recall preview length",
+          "number", "Knowledge",
+          "How many characters of each recalled chunk the model sees. Bigger carries more "
+          "answer-bearing context at no retrieval cost.", minimum=1, restart=True),
+    Field("knowledge.vector_k", "knowledge_vector_k", "Hybrid candidate pool", "number", "Knowledge",
+          "How many FTS5 + vector candidates are fused (RRF) per query before the top-k cut. "
+          "Bigger = wider recall, slightly slower.", minimum=1, restart=True),
+    Field("knowledge.rrf_k", "knowledge_rrf_k", "RRF constant (k)", "number", "Knowledge",
+          "Reciprocal-Rank-Fusion constant. Higher flattens the rank weighting (60 is the "
+          "standard default).", minimum=1, restart=True),
+    Field("knowledge.min_score", "knowledge_min_score", "Recall relevance floor", "number", "Knowledge",
+          "Drop fused hits below this score; 0 keeps all. A floor stops off-topic turns from "
+          "injecting weak chunks — RRF scores aren't normalized, so tune empirically.",
+          minimum=0, restart=True),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",

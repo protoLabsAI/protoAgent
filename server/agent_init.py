@@ -278,11 +278,23 @@ def _build_knowledge_store(config):
                 embed_fn = create_embed_fn(config)
                 if embed_fn is not None:
                     log.info("[server] knowledge: hybrid store (FTS5 + embeddings via %s)", config.embed_model)
-                    return HybridKnowledgeStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
+                    return HybridKnowledgeStore(
+                        db_path=config.knowledge_db_path,
+                        embed_fn=embed_fn,
+                        vector_k=config.knowledge_vector_k,
+                        rrf_k=config.knowledge_rrf_k,
+                        min_score=config.knowledge_min_score,
+                        breaker_threshold=config.knowledge_embed_breaker_threshold,
+                        breaker_cooldown_s=config.knowledge_embed_breaker_cooldown_s,
+                        preview_chars=config.knowledge_recall_preview_chars,
+                    )
                 log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
             except Exception as exc:  # noqa: BLE001 — degrade to FTS5, never fail
                 log.warning("[server] hybrid store init failed: %s; FTS5 only", exc)
-        return KnowledgeStore(db_path=config.knowledge_db_path)
+        return KnowledgeStore(
+            db_path=config.knowledge_db_path,
+            preview_chars=config.knowledge_recall_preview_chars,
+        )
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
         return None
