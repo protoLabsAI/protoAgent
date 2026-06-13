@@ -2,7 +2,11 @@
   {
     "version": "v0.39.0",
     "date": "2026-06-13",
-    "changes": []
+    "changes": [
+      "Restart the server from the console — a gated POST /api/restart plus a Settings▸Plugins button (no terminal needed for a change that can't hot-load)",
+      "The left console panel can be dragged down to 200px without snapping back to 280",
+      "OpenShell deploy path validated end-to-end against OpenShell v0.0.59"
+    ]
   },
   {
     "version": "v0.38.0",

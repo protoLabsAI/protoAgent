@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.39.0] - 2026-06-13
 
+### Added
+- **Restart the server from the console** (#979). A gated `POST /api/restart` plus a
+  "Restart server" button in Settings▸Plugins gracefully restart the process (clean
+  shutdown, then re-exec) and the console reconnects on its own — no terminal `Ctrl-C`
+  needed after a change that can't hot-load.
+
+### Fixed
+- **The left console panel can narrow to 200px** (#980) — dragging it narrower no
+  longer snaps it back up to 280 (the AppShell `minLeftWidth` floor was the default).
+- **OpenShell deploy path validated end-to-end** against OpenShell v0.0.59 (#891).
+
 ## [0.38.0] - 2026-06-13
 
 ### Added
