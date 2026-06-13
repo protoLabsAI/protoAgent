@@ -3,7 +3,7 @@ import "./plugins.css";
 import { Button } from "@protolabsai/ui/primitives";
 import { Input } from "@protolabsai/ui/forms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Package, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, DownloadCloud, Loader2, Package, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
@@ -76,7 +76,25 @@ export function PluginsSection() {
     onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "uninstall failed"}`),
   });
 
+  const sync = useMutation({
+    mutationFn: () => api.syncPlugins(),
+    onSuccess: (res) => {
+      const fetched = res.plugins.filter((r) => r.status === "installed").map((r) => r.id);
+      const failed = res.plugins.filter((r) => r.status === "failed");
+      setStatus(
+        failed.length
+          ? `✗ sync: ${failed.map((f) => `${f.id} (${f.error ?? "failed"})`).join(", ")}${fetched.length ? ` — fetched ${fetched.join(", ")}` : ""}`
+          : fetched.length
+            ? `✓ fetched ${fetched.join(", ")}${res.reloaded ? " — enabled plugins are live" : ""}${res.reload_error ? ` — reload failed (${res.reload_error})` : ""}`
+            : "✓ nothing to sync — all locked plugins present",
+      );
+      invalidateAll();
+    },
+    onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "sync failed"}`),
+  });
+
   const plugins = list.data?.plugins ?? [];
+  const missing = plugins.filter((p) => !p.present);
 
   return (
     <section className="settings-section">
@@ -117,6 +135,27 @@ export function PluginsSection() {
         </button>
       </div>
       {status ? <p className="plugin-install-status" role="status">{status}</p> : null}
+
+      {/* Locked-but-missing plugins (fresh clone / restored data dir) → one-click sync */}
+      {missing.length ? (
+        <div className="plugin-sync-banner" role="status">
+          <AlertTriangle size={14} />
+          <span>
+            {missing.length === 1 ? <><code>{missing[0].id}</code> is</> : <>{missing.length} plugins are</>}{" "}
+            in <code>plugins.lock</code> but missing on disk.
+          </span>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            disabled={sync.isPending}
+            onClick={() => { setStatus(""); sync.mutate(); }}
+            title="Re-clone every locked plugin at its pinned commit"
+          >
+            {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
+          </Button>
+        </div>
+      ) : null}
 
       {/* Installed list */}
       {list.isError ? (
@@ -179,7 +218,7 @@ function PluginRow({
             </Button>
           ) : null}
           <span className={`plugin-state ${p.enabled ? "on" : "off"}`}>{p.enabled ? "enabled" : "not enabled"}</span>
-          {!p.present ? <span className="plugin-state warn"><AlertTriangle size={12} /> missing — run sync</span> : null}
+          {!p.present ? <span className="plugin-state warn"><AlertTriangle size={12} /> missing — sync above</span> : null}
         </div>
         {m?.description ? <p className="plugin-desc">{m.description}</p> : null}
         <p className="plugin-meta">

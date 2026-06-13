@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **One-click plugin sync from the console.** On a fresh checkout (or restored data
+  dir) `plugins.lock` lists plugins whose gitignored code isn't on disk; the Plugins
+  panel said "missing — run sync" but sync was CLI-only — a dead end for a new user.
+  The panel now shows a banner with a **Sync plugins** button (new
+  `POST /api/plugins/sync`) that re-clones every locked plugin at its pinned commit;
+  anything already in `plugins.enabled` hot-reloads live. Fetch ≠ enable still
+  holds — syncing never turns plugins on.
+
 ### Fixed
 - **A render error no longer white-screens the console** (#872): a root error
   boundary around the app shows a full-page recovery card — Reload, plus "Reset

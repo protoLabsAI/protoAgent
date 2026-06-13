@@ -1094,6 +1094,16 @@ export const api = {
   pluginUpdates() {
     return request<{ plugins: PluginUpdate[] }>("/api/plugins/updates");
   },
+  // Re-clone every locked plugin that's missing on disk (fresh clone / restored
+  // data dir). Fetches at the lock's resolved_sha; already-enabled plugins come
+  // up live via the same hot-reload the enable toggle uses.
+  syncPlugins() {
+    return request<{
+      plugins: { id: string; status: "present" | "installed" | "failed"; error?: string }[];
+      reloaded: boolean;
+      reload_error: string | null;
+    }>("/api/plugins/sync", { method: "POST" });
+  },
   // Pull the latest code at the plugin's recorded ref + hot-reload (same path as
   // enable). Returns whether the live reload landed and if a restart is still
   // recommended (a view/route plugin can't swap its mounted router in place).

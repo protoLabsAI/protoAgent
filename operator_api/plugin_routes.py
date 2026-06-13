@@ -250,6 +250,38 @@ def register_plugin_routes(app) -> None:
         non-fatal per entry — surfaced in each row's ``error``."""
         return {"plugins": installer.check_updates()}
 
+    @app.post("/api/plugins/sync")
+    async def _sync():
+        """Re-clone every locked plugin that's missing on disk (the console's
+        "missing" state; previously CLI-only as `python -m server plugin sync`).
+
+        The lock is the source of truth: each missing plugin re-installs at its
+        recorded ``resolved_sha`` — fetch, not update, and fetch ≠ enable (ADR
+        0027). If anything was fetched and is already in ``plugins.enabled``
+        (e.g. a restored data dir whose config still enables it), hot-reload so
+        it comes up live — a previously-missing plugin has no mounted router, so
+        the hot-mount path applies and no restart is needed."""
+        results = installer.sync(allow=_sources_allowlist())
+        fetched = {r["id"] for r in results if r.get("status") == "installed"}
+
+        reloaded = False
+        cfg = STATE.graph_config
+        enabled_now = set(getattr(cfg, "plugins_enabled", []) or [])
+        if fetched & enabled_now:
+            from server.agent_init import _apply_settings_changes
+
+            ok, messages = _apply_settings_changes(
+                config={"plugins": {"enabled": sorted(enabled_now),
+                                    "disabled": list(getattr(cfg, "plugins_disabled", []) or [])}},
+            )
+            if not ok:
+                # The fetch itself succeeded — surface the reload failure per row
+                # semantics rather than 500ing (mirrors the install route).
+                return {"plugins": results, "reloaded": False,
+                        "reload_error": "; ".join(messages) or "reload failed"}
+            reloaded = True
+        return {"plugins": results, "reloaded": reloaded, "reload_error": None}
+
     @app.post("/api/plugins/{plugin_id}/update")
     async def _update(plugin_id: str):
         """Pull the latest code for an installed plugin at its recorded ref, then

@@ -45,7 +45,10 @@ plugins:
 
 Install pins the **resolved commit SHA** and records it in a committed
 `plugins.lock`, so `plugin sync` reproduces the exact set. The code itself is
-gitignored (re-cloned from the lock).
+gitignored (re-cloned from the lock). On a fresh checkout (or a restored data
+dir) the console flags each locked-but-missing plugin and offers a one-click
+**Sync plugins** button (`POST /api/plugins/sync`) — the same re-clone the CLI
+does; plugins that are already in `plugins.enabled` come up live on the spot.
 
 ## Keep one up to date
 

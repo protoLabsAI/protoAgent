@@ -213,6 +213,49 @@ def test_force_reinstall_purges_module_subtree(monkeypatch):
     assert mod not in sys.modules and (mod + ".tools") not in sys.modules
 
 
+# ── sync: re-clone locked-but-missing plugins from the console (#947) ─────────────
+def test_sync_fetches_missing_and_reloads_enabled(monkeypatch):
+    # A locked plugin that's missing AND enabled (restored data dir): sync fetches it
+    # and hot-reloads so it comes up live — fresh code, no mounted router, no restart.
+    from graph.plugins import installer
+    captured = _wire(monkeypatch, enabled=["artifact"], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "sync", lambda allow=None: [
+        {"id": "artifact", "status": "installed"},
+        {"id": "doom", "status": "present"},
+    ])
+    body = _client().post("/api/plugins/sync").json()
+    assert body["reloaded"] is True and body["reload_error"] is None
+    assert captured["config"]["plugins"]["enabled"] == ["artifact"]
+    assert [p["status"] for p in body["plugins"]] == ["installed", "present"]
+
+
+def test_sync_skips_reload_when_nothing_fetched_is_enabled(monkeypatch):
+    # Fresh clone: locked plugins fetched but none enabled → no reload (fetch ≠ enable,
+    # ADR 0027 — turning them on stays the operator's explicit step).
+    from graph.plugins import installer
+    captured = _wire(monkeypatch, enabled=["discord"], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "sync", lambda allow=None: [
+        {"id": "artifact", "status": "installed"},
+    ])
+    body = _client().post("/api/plugins/sync").json()
+    assert body["reloaded"] is False and body["reload_error"] is None
+    assert "config" not in captured                           # no reload triggered
+
+
+def test_sync_surfaces_reload_failure_without_500(monkeypatch):
+    from graph.plugins import installer
+    _wire(monkeypatch, enabled=["artifact"], disabled=[], meta=[])
+    sys.modules["server.agent_init"]._apply_settings_changes = (
+        lambda config=None, soul=None: (False, ["graph compile failed"]))
+    monkeypatch.setattr(installer, "sync", lambda allow=None: [
+        {"id": "artifact", "status": "installed"},
+    ])
+    resp = _client().post("/api/plugins/sync")
+    assert resp.status_code == 200                            # the fetch itself landed
+    body = resp.json()
+    assert body["reloaded"] is False and "graph compile failed" in body["reload_error"]
+
+
 def test_update_route_flags_restart_for_disabled_lingering_router(monkeypatch):
     # The update route's restart heuristic also reads the mount registry now — a
     # disabled-but-still-mounted plugin (no meta) updating at its ref needs a restart.
