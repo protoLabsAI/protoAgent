@@ -146,6 +146,11 @@
   padding: 0;
   height: 80vh;
   overflow: hidden;
+  /* Flex column so the shell (.settings-shell { flex: 1 }) fills the 80vh — without
+     a flex parent the shell collapses to content height and the panel/rail don't
+     reach the dialog's full height. (In the stage, .pl-appshell__col supplies this.) */
+  display: flex;
+  flex-direction: column;
 }
 .theme-quick-dialog .pl-dialog__body {
   padding: 0;

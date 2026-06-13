@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toggle pinned on top, sections listed down the side), and each section's field
   **groups are collapsible** (DS `Accordion`, 0.29) with a "N unsaved" badge on a
   collapsed group that has edits. Field rows stack to a single column when the
-  in-rail settings column is narrow, and stay two-column in the wide topbar overlay.
-  The vertical nav is an app-local interim pending the DS `SideNav`
+  in-rail settings column is narrow, and stay two-column in the wide topbar overlay
+  (whose body is a flex column so the rail + panel fill its full height). The vertical
+  nav is an app-local interim pending the DS `SideNav`
   ([protoContent#225](https://github.com/protoLabsAI/protoContent/issues/225)); the
   collapsible groups use the shipped `Accordion`.
 
