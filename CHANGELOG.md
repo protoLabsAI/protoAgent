@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings is a vertical-nav + collapsible-groups layout now.** The two stacked
+  horizontal tab strips (scope + up to 11 sections) overflowed and read as "intense"
+  once the Workspace home grew. The section nav is now a **vertical rail** (the scope
+  toggle pinned on top, sections listed down the side), and each section's field
+  **groups are collapsible** (DS `Accordion`, 0.29) with a "N unsaved" badge on a
+  collapsed group that has edits. Field rows stack to a single column when the
+  in-rail settings column is narrow, and stay two-column in the wide topbar overlay.
+  The vertical nav is an app-local interim pending the DS `SideNav`
+  ([protoContent#225](https://github.com/protoLabsAI/protoContent/issues/225)); the
+  collapsible groups use the shipped `Accordion`.
+
 ## [0.36.0] - 2026-06-13
 
 ### Changed

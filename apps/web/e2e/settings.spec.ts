@@ -11,26 +11,26 @@ async function openSettings(page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
 }
 
-// Click a home (row 1 — the segmented scope toggle, role=button) or a section
-// (row 2 — a real tablist) — names are unique across both strips.
+// Click a home (the segmented scope toggle, role=button) or a section (the vertical
+// SideNav, role=button — interim, protoContent#225). Names are unique across both.
 async function tab(page, name) {
   const home = page.locator(".pl-tabs--segmented").getByRole("button", { name, exact: true });
   if (await home.count()) {
     await home.click();
     return;
   }
-  await page.locator(".pl-tabs").getByRole("tab", { name, exact: true }).click();
+  await page.locator(".settings-sidenav-list").getByRole("button", { name, exact: true }).click();
 }
 
 test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) => {
   await openSettings(page);
-  // Row 1 — the two scope homes (ADR 0048).
-  expect(await page.locator(".pl-tabs").first().locator("button").allTextContents()).toEqual([
+  // The two scope homes (ADR 0048) — the segmented toggle pinned atop the SideNav.
+  expect(await page.locator(".pl-tabs--segmented").locator("button").allTextContents()).toEqual([
     "Host / App",
     "Workspace",
   ]);
-  // Row 2 — the Host / App home's sections (the default home).
-  expect(await page.locator(".pl-tabs").nth(1).locator("button").allTextContents()).toEqual([
+  // The Host / App home's sections (the default home) — vertical SideNav (#225).
+  expect(await page.locator(".settings-sidenav-list").locator("button").allTextContents()).toEqual([
     "Overview",
     "Host config",
     "Fleet",
@@ -40,7 +40,7 @@ test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) 
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
   // The Workspace home → the focused agent's makeup + settings (ADR 0048 fold).
   await tab(page, "Workspace");
-  expect(await page.locator(".pl-tabs").nth(1).locator("button").allTextContents()).toEqual([
+  expect(await page.locator(".settings-sidenav-list").locator("button").allTextContents()).toEqual([
     "Identity",
     "Settings",
     "Tools",
@@ -54,18 +54,19 @@ test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) 
     "Plugins",
   ]);
   await tab(page, "System");
-  await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
-  expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Compaction", "Runtime"]);
+  // Field groups are collapsible accordions (DS 0.29); titles render in the trigger.
+  await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
+  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
 test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator(".settings-sidenav-list").getByRole("button", { name: "Settings", exact: true }).click();
   // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
-  await expect(page.locator(".settings-group-title").first()).toBeVisible(); // wait for the suspense load
-  expect(await page.locator(".settings-group-title").allTextContents()).toEqual(["Model", "Routing"]);
+  await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
+  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
   const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
   await expect(aux).toHaveValue("protolabs/fast");
   const key = page.locator('.setting-row[data-key="model.api_key"] input');
@@ -76,7 +77,7 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator(".settings-sidenav-list").getByRole("button", { name: "Settings", exact: true }).click();
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/turbo");
@@ -100,8 +101,8 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Settings", exact: true }).click();
-  await expect(page.locator(".settings-group-title").first()).toBeVisible();
+  await page.locator(".settings-sidenav-list").getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
   // model.name inherits from the host layer.
   await expect(
     page.locator('.setting-row[data-key="model.name"] .setting-inheritance'),
