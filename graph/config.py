@@ -60,7 +60,12 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
         schemas = discover_plugin_config(
             roots, set(plugins.get("enabled") or []), set(plugins.get("disabled") or []),
         )
-    except Exception:  # noqa: BLE001 — plugin config is best-effort
+    except Exception as e:  # noqa: BLE001 — plugin config is best-effort, but say so
+        log.warning(
+            "[plugins] config resolution failed — plugin config unavailable this load "
+            "(plugins behave as if unconfigured): %s",
+            e,
+        )
         return {}
 
     out: dict = {}

@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A plugin's declared secret can no longer slip into the tracked config YAML when
+  plugin discovery fails** (#877). `secret_paths()` swallowed any discovery error to an
+  empty set, so a transient failure stopped recognizing a plugin's secret keys and
+  `strip_secrets_from_doc` would write them into the main (exportable/forkable)
+  `langgraph-config.yaml` in plaintext. It now logs the failure and **falls back to the
+  last successfully-discovered set** (fail-safe, never empty). `_resolve_plugin_config`
+  likewise logs instead of silently returning `{}`.
+
 ## [0.37.0] - 2026-06-13
 
 ### Added

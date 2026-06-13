@@ -135,3 +135,66 @@ def test_disabled_plugin_secret_routes_to_secrets_not_plaintext(tmp_path, monkey
     main, secrets = split_secret_updates({"offp": {"api_key": "sek-ret"}})
     assert secrets == {"offp": {"api_key": "sek-ret"}}  # routed to the secret half
     assert "offp" not in main  # NOT left in the plaintext config YAML
+
+
+# ── #877: a plugin secret-path discovery failure must fail SAFE, not empty ──────
+
+
+def test_secret_paths_falls_back_to_cache_on_discovery_failure(monkeypatch, caplog):
+    """If plugin secret-path discovery raises, secret_paths() keeps the last
+    successfully-discovered plugin secrets (cached) rather than dropping to the base
+    set — otherwise strip_secrets_from_doc would let that key reach the main YAML."""
+    import logging
+
+    from graph import config_io
+
+    pair = ("myplugin", "api_key")
+
+    class _Schema:
+        section = "myplugin"
+        secrets = ["api_key"]
+
+    # 1) a good discovery populates the cache (the plugin secret is recognized).
+    monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
+    monkeypatch.setattr(
+        "graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()]
+    )
+    assert pair in config_io.secret_paths()
+
+    # 2) discovery now FAILS — the plugin secret must still be recognized (cached),
+    #    and the failure is logged (no silent downgrade).
+    def _boom():
+        raise RuntimeError("manifest parse blew up")
+
+    monkeypatch.setattr(
+        "graph.plugins.pconfig.installed_plugin_config_schemas", _boom
+    )
+    with caplog.at_level(logging.WARNING, logger="protoagent.config_io"):
+        paths = config_io.secret_paths()
+    assert pair in paths  # fail-safe: NOT dropped to the base set
+    assert any("secret-path discovery failed" in r.message for r in caplog.records)
+
+
+def test_a_plugin_secret_is_stripped_from_the_doc_even_if_rediscovery_fails(monkeypatch):
+    """End-to-end of the #877 guarantee: once a plugin secret is known, a later
+    discovery failure doesn't let strip_secrets_from_doc leave it in the main YAML."""
+    from graph import config_io
+
+    class _Schema:
+        section = "myplugin"
+        secrets = ["api_key"]
+
+    monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
+    monkeypatch.setattr(
+        "graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()]
+    )
+    config_io.secret_paths()  # prime the cache
+
+    monkeypatch.setattr(
+        "graph.plugins.pconfig.installed_plugin_config_schemas",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    doc = {"myplugin": {"api_key": "sk-should-be-stripped", "host": "ok-to-keep"}}
+    config_io.strip_secrets_from_doc(doc)
+    assert "api_key" not in doc["myplugin"]  # the secret never reaches the main YAML
+    assert doc["myplugin"]["host"] == "ok-to-keep"  # non-secret kept

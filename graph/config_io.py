@@ -118,6 +118,14 @@ SECRET_PATHS: tuple[tuple[str, str], ...] = (
 )
 
 
+# Last successfully-discovered plugin secret paths. On a discovery FAILURE we fall back
+# to this cache rather than an empty set — otherwise a transient error would stop
+# recognizing a plugin's declared secret keys, and strip_secrets_from_doc (which uses
+# secret_paths) would let that secret be written into the main, exportable/forkable YAML
+# in plaintext (#877). The cache only fails safe (more keys treated as secret).
+_PLUGIN_SECRET_PATHS_CACHE: tuple[tuple[str, str], ...] = ()
+
+
 def secret_paths() -> tuple[tuple[str, str], ...]:
     """Base ``SECRET_PATHS`` plus the (section, key) pairs each INSTALLED plugin
     declares as secrets (ADR 0019). Used by the split/strip logic so a plugin
@@ -125,15 +133,26 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
 
     Covers installed-but-DISABLED plugins too: otherwise a secret saved for a plugin
     that's off wouldn't be recognized as a secret and would be written to the live
-    config YAML in plaintext (the wrong file — configs get exported/backed-up/forked)."""
+    config YAML in plaintext (the wrong file — configs get exported/backed-up/forked).
+
+    On a discovery failure, falls back to the last successful set (never an empty one),
+    so a transient error can't silently downgrade a plugin secret to plaintext (#877)."""
+    global _PLUGIN_SECRET_PATHS_CACHE
     try:
         from graph.plugins.pconfig import installed_plugin_config_schemas
 
         extra = tuple(
             (sch.section, key) for sch in installed_plugin_config_schemas() for key in sch.secrets
         )
-    except Exception:  # noqa: BLE001 — plugin discovery is best-effort
-        extra = ()
+        _PLUGIN_SECRET_PATHS_CACHE = extra  # remember the good set for next time
+    except Exception as e:  # noqa: BLE001 — discovery is best-effort; fail SAFE, not empty
+        extra = _PLUGIN_SECRET_PATHS_CACHE
+        log.warning(
+            "[plugins] secret-path discovery failed — keeping %d cached plugin secret "
+            "path(s) so a declared secret isn't written to the main YAML in plaintext: %s",
+            len(extra),
+            e,
+        )
     return SECRET_PATHS + extra
 
 # Setup wizard state.
