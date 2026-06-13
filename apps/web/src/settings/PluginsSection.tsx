@@ -93,6 +93,14 @@ export function PluginsSection() {
     onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "sync failed"}`),
   });
 
+  const restart = useMutation({
+    mutationFn: () => api.restart(),
+    // The connection drops as the server drains; the app's boot gate shows "Starting…"
+    // and reconnects on its own once the fresh process is up.
+    onSuccess: () => setStatus("Restarting server… the console will reconnect when it's back."),
+    onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "restart failed"}`),
+  });
+
   const plugins = list.data?.plugins ?? [];
   const missing = plugins.filter((p) => !p.present);
 
@@ -177,6 +185,34 @@ export function PluginsSection() {
           ))}
         </ul>
       )}
+
+      {/* Server restart — for changes that can't hot-load (a plugin's console view or
+          background surface, and env/launch flags). The console reconnects on its own. */}
+      <div className="plugin-restart-row">
+        <span className="settings-section-sub">
+          A plugin's console view or background surface — and env / launch-flag changes — need a
+          server restart to take effect.
+        </span>
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          disabled={restart.isPending}
+          onClick={() => {
+            if (
+              window.confirm(
+                "Restart the server now? In-flight work finishes, then the console reconnects automatically.",
+              )
+            ) {
+              setStatus("Restarting server…");
+              restart.mutate();
+            }
+          }}
+          title="Gracefully restart the server process"
+        >
+          {restart.isPending ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Restart server
+        </Button>
+      </div>
     </section>
   );
 }

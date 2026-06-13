@@ -52,6 +52,8 @@ class AppState:
     # lets a config reload hot-mount a newly-enabled plugin's routes (no restart).
     fastapi_app: object = None
     plugin_router_keys: set = field(default_factory=set)
+    # Set by POST /api/restart: after uvicorn drains, _main re-execs a fresh process.
+    restart_requested: bool = False
     plugin_surfaces: list = field(default_factory=list)
     plugin_surface_handles: list = field(default_factory=list)
     plugin_meta: list = field(default_factory=list)

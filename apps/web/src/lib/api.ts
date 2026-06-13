@@ -462,6 +462,13 @@ export const api = {
     return request<RuntimeStatus>("/api/runtime/status");
   },
 
+  // Gracefully restart the server process (POST /api/restart) — the server drains and
+  // re-execs; the console reconnects via the boot gate. Always targets the HOST (the
+  // process you're connected to), never a slug-routed agent.
+  restart() {
+    return request<{ ok: boolean; restarting: boolean }>("/api/restart", { method: "POST", host: true });
+  },
+
   // The HUB's runtime status — NEVER slug-routed. The TenantGuard keys on the hub's
   // `instance_uid` (the real tenant of this origin), which is STABLE across agent
   // swaps. The slug-routed runtimeStatus() returns the FOCUSED agent's uid, which

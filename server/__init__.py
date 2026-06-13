@@ -649,6 +649,12 @@ def _main():
     register_knowledge_routes(fastapi_app)
     register_plugin_routes(fastapi_app)
 
+    # Operator server controls — POST /api/restart (graceful self-restart). Gated by
+    # the /api/* bearer middleware like every operator route; _main re-execs below.
+    from operator_api.runtime_routes import register_runtime_control_routes
+
+    register_runtime_control_routes(fastapi_app)
+
     # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.
     from operator_api.fleet_routes import register_fleet_routes
@@ -868,6 +874,17 @@ def _main():
     # CancelledError tracebacks. A bounded timeout lets in-flight work finish,
     # then force-closes the streams cleanly on a single Ctrl-C.
     uvicorn.run(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
+
+    # uvicorn.run() returns once the server has fully drained and released the port —
+    # either a real shutdown (Ctrl-C) or an operator restart (POST /api/restart set the
+    # flag + signalled SIGINT). On a restart, re-exec a fresh process HERE, so the new
+    # server can rebind the now-free port. os.execv never returns.
+    if STATE.restart_requested:
+        from operator_api.runtime_routes import reexec_command
+
+        cmd = reexec_command(sys.executable, sys.argv, bool(getattr(sys, "frozen", False)))
+        log.info("[restart] re-exec: %s", " ".join(cmd))
+        os.execv(cmd[0], cmd)
 
 
 if __name__ == "__main__":

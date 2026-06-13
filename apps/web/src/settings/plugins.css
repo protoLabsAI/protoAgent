@@ -54,3 +54,5 @@
 .plugin-review .warn { color: var(--warning); display: inline-flex; align-items: center; gap: 3px; }
 .plugin-enable-hint { font-size: 11px; color: var(--fg-secondary); margin: 6px 0 0; }
 .btn-icon.danger:hover { color: var(--danger); }
+.plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plugin-restart-row > span { margin: 0; }
