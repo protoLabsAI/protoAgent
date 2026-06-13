@@ -8,7 +8,7 @@ async function openIntegrations(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".settings-sidenav-list").getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
 }
 
 test("lists configured delegates with type + secret badges", async ({ page }) => {

@@ -2,7 +2,7 @@ import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, 
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { Tabs } from "@protolabsai/ui/navigation";
+import { SideNav, Tabs } from "@protolabsai/ui/navigation";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
 import { McpPanel } from "../app/McpPanel";
@@ -82,36 +82,6 @@ export const SETTINGS_HOMES: Home[] = [
   { id: "workspace", label: "Workspace", icon: Boxes, sections: WORKSPACE_SECTIONS },
 ];
 
-// Interim vertical section nav — DS `Tabs` is horizontal-only, and the Workspace
-// home's 11 sections overflow/read as "intense" in a strip. Filed as the DS
-// `SideNav` gap (protoContent#225); the adoption sweep retires this when it ships.
-function SectionNav({
-  sections,
-  active,
-  onSelect,
-}: {
-  sections: Section[];
-  active: string;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <nav className="settings-sidenav-list" aria-label="Settings sections">
-      {sections.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          className={`settings-sidenav-item${s.id === active ? " is-active" : ""}`}
-          aria-current={s.id === active ? "page" : undefined}
-          onClick={() => onSelect(s.id)}
-        >
-          <s.icon size={15} />
-          <span>{s.label}</span>
-        </button>
-      ))}
-    </nav>
-  );
-}
-
 export function SettingsSurface() {
   const scope = useUI((s) => s.settingsScope);
   const section = useUI((s) => s.settingsSection);
@@ -129,24 +99,32 @@ export function SettingsSurface() {
     if (!h.sections.some((s) => s.id === section)) setSection(h.sections[0].id);
   }
 
-  // Two-column settings shell (replaces the stacked horizontal tab strips): a left
-  // rail with the scope toggle pinned on top + the section list vertical below it,
-  // and the active section's panel filling the rest. Works at the overlay's 960px
-  // and as a full stage surface; the rail collapses to a top strip when narrow (CSS).
+  // Two-column settings shell: the DS SideNav rail (scope toggle pinned in its header
+  // slot + the sections down the side, ADR 0048) + the active section's panel filling
+  // the rest. Adopted from the interim hand-rolled rail once SideNav shipped in
+  // @protolabsai/ui 0.30.0 (protoContent#225 → #227). We deliberately DON'T pass
+  // `responsive`: its collapse-to-<select> fires at wrap ≤ 15rem, but our compact
+  // in-rail settings column sits below that, so it would render as a dropdown instead
+  // of the vertical nav — the opposite of the ask. The rail stays vertical in both the
+  // overlay and the stage; the narrow case is the separate mobile shell (ADR 0035 S4).
   return (
     <div className="settings-shell">
-      <aside className="settings-sidenav">
-        {/* Scope toggle: text-only (no icons) so "Host / App" + "Workspace" fit the
-            narrow rail without clipping; the sections below carry the icons. */}
-        <Tabs
-          variant="segmented"
-          ariaLabel="Settings scope"
-          active={scope}
-          onSelect={(t) => selectHome(t as SettingsScope)}
-          items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
-        />
-        <SectionNav sections={home.sections} active={active.id} onSelect={(t) => setSection(t)} />
-      </aside>
+      <SideNav
+        ariaLabel="Settings sections"
+        active={active.id}
+        onSelect={(t) => setSection(t)}
+        items={home.sections.map((s) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> }))}
+        // Scope toggle pinned atop the rail; text-only so both home labels fit.
+        header={
+          <Tabs
+            variant="segmented"
+            ariaLabel="Settings scope"
+            active={scope}
+            onSelect={(t) => selectHome(t as SettingsScope)}
+            items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
+          />
+        }
+      />
       <div className="settings-content">{active.render()}</div>
     </div>
   );

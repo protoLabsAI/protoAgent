@@ -53,10 +53,10 @@ test("workspace settings: identity lands, then tools and MCP sections", async ({
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing section
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
-  await page.locator(".settings-sidenav-list").getByRole("button", { name: "Tools", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Tools", exact: true }).click();
   await expect(page.getByText("web_search")).toBeVisible();
 
-  await page.locator(".settings-sidenav-list").getByRole("button", { name: "MCP", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 

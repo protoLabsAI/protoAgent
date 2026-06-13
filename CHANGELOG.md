@@ -19,10 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **groups are collapsible** (DS `Accordion`, 0.29) with a "N unsaved" badge on a
   collapsed group that has edits. Field rows stack to a single column when the
   in-rail settings column is narrow, and stay two-column in the wide topbar overlay
-  (whose body is a flex column so the rail + panel fill its full height). The vertical
-  nav is an app-local interim pending the DS `SideNav`
-  ([protoContent#225](https://github.com/protoLabsAI/protoContent/issues/225)); the
-  collapsible groups use the shipped `Accordion`.
+  (whose body is a flex column so the rail + panel fill its full height). The rail is
+  the DS `SideNav` ([protoContent#225](https://github.com/protoLabsAI/protoContent/issues/225),
+  shipped in `@protolabsai/ui` 0.30.0); the collapsible groups use the `Accordion`
+  from 0.29.
+- **Design system bumped to `@protolabsai/ui` 0.30.0** — adds `SideNav` (adopted by
+  the settings rail above).
 
 ## [0.36.0] - 2026-06-13
 
