@@ -360,11 +360,12 @@ def test_list_gateway_models_success(monkeypatch):
 
     monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
 
-    models, err = config_io.list_gateway_models("http://gateway:4000/v1", "test-key")
+    # Public IP literal: passes the egress guard (#871) without needing DNS in CI.
+    models, err = config_io.list_gateway_models("http://8.8.8.8:4000/v1", "test-key")
     assert err == ""
     assert models == ["model-a", "model-b", "model-c"]  # sorted
     called_url = fake_client.get.call_args[0][0]
-    assert called_url == "http://gateway:4000/v1/models"
+    assert called_url == "http://8.8.8.8:4000/v1/models"
 
 
 def test_list_gateway_models_empty_base_returns_error():
@@ -385,7 +386,7 @@ def test_list_gateway_models_http_error(monkeypatch):
 
     monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
 
-    models, err = config_io.list_gateway_models("http://bad-host/v1")
+    models, err = config_io.list_gateway_models("http://8.8.8.8/v1")
     assert models == []
     assert "connection failed" in err
 
@@ -395,7 +396,7 @@ def test_list_gateway_models_bad_status(monkeypatch):
 
     fake_response = MagicMock()
     fake_response.status_code = 401
-    fake_response.text = "unauthorized"
+    fake_response.text = "unauthorized-secret-leak"
 
     fake_client = MagicMock()
     fake_client.__enter__ = lambda self: fake_client
@@ -404,9 +405,27 @@ def test_list_gateway_models_bad_status(monkeypatch):
 
     monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
 
-    models, err = config_io.list_gateway_models("http://x/v1", "bad-key")
+    models, err = config_io.list_gateway_models("http://8.8.8.8/v1", "bad-key")
     assert models == []
     assert "401" in err
+    assert "unauthorized-secret-leak" not in err  # raw upstream body not echoed (#871)
+
+
+def test_list_gateway_models_blocks_internal_api_base(monkeypatch):
+    """#871 SSRF: an api_base pointed at cloud-metadata / an internal host is blocked
+    BEFORE any request (no probe, no echoed body)."""
+    from graph import config_io
+
+    called = {"n": 0}
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.get.side_effect = lambda *a, **k: called.__setitem__("n", called["n"] + 1)
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    models, err = config_io.list_gateway_models("http://169.254.169.254/latest/v1")
+    assert models == [] and "blocked" in err
+    assert called["n"] == 0  # never hit the network
 
 
 # ── list_available_tools ─────────────────────────────────────────────────────

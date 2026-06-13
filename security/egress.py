@@ -55,13 +55,18 @@ def _host_allowed(host: str) -> bool:
     return False
 
 
-def _blocked_ip(host: str) -> str | None:
+def _blocked_ip(host: str, *, allow_private: bool = False) -> str | None:
     """Resolve ``host`` and return the first address that is a private/internal
     SSRF target (loopback / link-local / private / multicast / reserved /
     unspecified), or the literal ``"unresolvable"`` when DNS fails (treated as
     unsafe, matching ``a2a_impl.stores``). ``None`` ⇒ the host resolves only to
     globally-routable addresses. One-shot resolution — not a DNS-rebinding
-    defence, but closes the trivial literal/redirect-to-internal vector."""
+    defence, but closes the trivial literal/redirect-to-internal vector.
+
+    ``allow_private=True`` permits private + loopback ranges (LAN / tailnet / a
+    co-located instance — the *normal* case for a fleet remote) while STILL
+    blocking link-local (incl. cloud-metadata ``169.254.169.254``), multicast,
+    reserved and unspecified — the actual SSRF/credential-theft targets."""
     try:
         ipaddress.ip_address(host)
         candidates = [host]
@@ -75,13 +80,15 @@ def _blocked_ip(host: str) -> str | None:
             ip = ipaddress.ip_address(addr)
         except ValueError:
             return addr
-        if (ip.is_loopback or ip.is_link_local or ip.is_private
-                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+        # link-local covers the cloud-metadata IP — always blocked.
+        if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return addr
+        if not allow_private and (ip.is_loopback or ip.is_private):
             return addr
     return None
 
 
-def check_url(url: str) -> str | None:
+def check_url(url: str, *, allow_private: bool = False, block_unresolvable: bool = True) -> str | None:
     """Return an error string if the URL's host is not permitted, else ``None``.
 
     Two layers:
@@ -92,6 +99,10 @@ def check_url(url: str) -> str | None:
       private / loopback / link-local / cloud-metadata / reserved address. This
       default-on SSRF guard stops the model `fetch_url`-ing an internal service
       or `169.254.169.254` even when no allowlist is configured.
+
+    ``allow_private=True`` keeps LAN/tailnet/loopback hosts (the normal fleet-remote
+    case) while still blocking link-local/metadata/multicast/reserved — for callers
+    that legitimately reach private peers but must never be steered at metadata.
     """
     try:
         host = (urlparse(url).hostname or "").lower()
@@ -106,13 +117,17 @@ def check_url(url: str) -> str | None:
             f"Error: egress to {host} is blocked — not in the egress allowlist "
             f"({', '.join(_allowed)}). Set egress.allowed_hosts to permit it."
         )
-    bad = _blocked_ip(host)
+    bad = _blocked_ip(host, allow_private=allow_private)
     if bad == "unresolvable":
-        return f"Error: egress to {host} is blocked — host did not resolve."
+        # An unresolvable host is not itself an SSRF target. Callers that register a
+        # URL for later use (a fleet remote that may come online afterwards) pass
+        # block_unresolvable=False; request-time callers keep the strict default.
+        return None if not block_unresolvable else f"Error: egress to {host} is blocked — host did not resolve."
     if bad:
+        kind = "link-local/metadata/reserved" if allow_private else "private/internal"
         return (
             f"Error: egress to {host} ({bad}) is blocked — it resolves to a "
-            f"private/internal address (SSRF guard). Allowlist it via "
+            f"{kind} address (SSRF guard). Allowlist it via "
             f"egress.allowed_hosts if this is intentional."
         )
     return None

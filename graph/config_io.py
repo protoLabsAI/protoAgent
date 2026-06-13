@@ -653,6 +653,13 @@ def list_gateway_models(
 
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
     url = api_base.rstrip("/") + "/models"
+    # SSRF guard (#871): an operator-supplied api_base must not steer this probe at an
+    # internal service or cloud-metadata (169.254.169.254). Blocked unless explicitly
+    # allowlisted via egress.allowed_hosts.
+    from security import egress
+
+    if egress.check_url(url):
+        return [], "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
     headers = {}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -664,8 +671,8 @@ def list_gateway_models(
         return [], f"connection failed: {e}"
 
     if resp.status_code >= 400:
-        detail = resp.text[:200] if resp.text else ""
-        return [], f"HTTP {resp.status_code} from {url}: {detail}"
+        # Don't echo the raw upstream body (#871) — just the status.
+        return [], f"HTTP {resp.status_code} from the gateway's /models"
 
     try:
         data = resp.json()
@@ -713,6 +720,11 @@ def validate_model_connection(
 
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
     url = api_base.rstrip("/") + "/chat/completions"
+    # SSRF guard (#871) — same as list_gateway_models.
+    from security import egress
+
+    if egress.check_url(url):
+        return False, "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
