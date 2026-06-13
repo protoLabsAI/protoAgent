@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Setup wizard slimmed to the essentials.** The Discord and Google steps are gone —
+  both are managed in System → Settings (with their own Test/Connect actions), so the
+  wizard no longer collects bot tokens or OAuth clients. Finishing setup now leaves any
+  existing Discord/Google config untouched (the YAML write merges, never replaces).
+- **GitHub Copilot is now selectable as the ACP runtime** in the setup wizard's coding-agent
+  list (`acp:copilot` → `copilot --acp`), matching the Settings runtime options.
+
 ### Fixed
 - **Knowledge embeddings default to `qwen3-embedding`.** The setup wizard hard-coded
   `nomic-embed-text`, which the protoLabs gateway doesn't serve — so semantic recall
