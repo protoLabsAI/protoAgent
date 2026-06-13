@@ -82,8 +82,35 @@ export const SETTINGS_HOMES: Home[] = [
   { id: "workspace", label: "Workspace", icon: Boxes, sections: WORKSPACE_SECTIONS },
 ];
 
-const tabItems = (xs: { id: string; label: string; icon: LucideIcon }[]) =>
-  xs.map((x) => ({ id: x.id, label: x.label, icon: <x.icon size={15} /> }));
+// Interim vertical section nav — DS `Tabs` is horizontal-only, and the Workspace
+// home's 11 sections overflow/read as "intense" in a strip. Filed as the DS
+// `SideNav` gap (protoContent#225); the adoption sweep retires this when it ships.
+function SectionNav({
+  sections,
+  active,
+  onSelect,
+}: {
+  sections: Section[];
+  active: string;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <nav className="settings-sidenav-list" aria-label="Settings sections">
+      {sections.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          className={`settings-sidenav-item${s.id === active ? " is-active" : ""}`}
+          aria-current={s.id === active ? "page" : undefined}
+          onClick={() => onSelect(s.id)}
+        >
+          <s.icon size={15} />
+          <span>{s.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export function SettingsSurface() {
   const scope = useUI((s) => s.settingsScope);
@@ -102,17 +129,25 @@ export function SettingsSurface() {
     if (!h.sections.some((s) => s.id === section)) setSection(h.sections[0].id);
   }
 
+  // Two-column settings shell (replaces the stacked horizontal tab strips): a left
+  // rail with the scope toggle pinned on top + the section list vertical below it,
+  // and the active section's panel filling the rest. Works at the overlay's 960px
+  // and as a full stage surface; the rail collapses to a top strip when narrow (CSS).
   return (
-    <>
-      <Tabs
-        variant="segmented"
-        ariaLabel="Settings scope"
-        active={scope}
-        onSelect={(t) => selectHome(t as SettingsScope)}
-        items={tabItems(SETTINGS_HOMES)}
-      />
-      <Tabs responsive active={active.id} onSelect={(t) => setSection(t)} items={tabItems(home.sections)} />
-      {active.render()}
-    </>
+    <div className="settings-shell">
+      <aside className="settings-sidenav">
+        {/* Scope toggle: text-only (no icons) so "Host / App" + "Workspace" fit the
+            narrow rail without clipping; the sections below carry the icons. */}
+        <Tabs
+          variant="segmented"
+          ariaLabel="Settings scope"
+          active={scope}
+          onSelect={(t) => selectHome(t as SettingsScope)}
+          items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
+        />
+        <SectionNav sections={home.sections} active={active.id} onSelect={(t) => setSection(t)} />
+      </aside>
+      <div className="settings-content">{active.render()}</div>
+    </div>
   );
 }

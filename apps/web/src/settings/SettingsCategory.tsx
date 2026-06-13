@@ -9,7 +9,7 @@ import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "luci
 import { Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
@@ -271,9 +271,25 @@ export function SettingsCategory({
         {status ? <p className="settings-status">{status}</p> : null}
         {!groups.length && !footer ? <p className="muted">{emptyHint || "Nothing to configure here."}</p> : null}
 
-        {groups.map((group) => (
-          <section className="settings-group" key={group.section}>
-            <p className="settings-group-title">{group.section}</p>
+        {/* Each field group is a collapsible accordion (DS 0.29) so a dense category
+            (the Workspace home's panels run long) can be tidied to the few sections
+            you're editing. Open by default — collapsing is the operator's tool, not a
+            hidden-by-default trap. A dirty-count badge rides the title so a collapsed
+            group still announces it has unsaved edits. */}
+        <Accordion className="settings-groups">
+        {groups.map((group) => {
+          const groupDirty = group.fields.reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
+          return (
+          <AccordionItem
+            key={group.section}
+            defaultOpen
+            title={
+              <span className="settings-group-head">
+                {group.section}
+                {groupDirty ? <Badge status="warning">{groupDirty} unsaved</Badge> : null}
+              </span>
+            }
+          >
             {group.fields.map((field) => (
               <SettingRow
                 key={field.key}
@@ -327,7 +343,7 @@ export function SettingsCategory({
             {group.test ? (
               <div className="settings-group-actions">
                 <Button
-                 
+
                   type="button"
                   onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
                   disabled={(testGroup.isPending && testingSection === group.section) || save.isPending}
@@ -337,8 +353,10 @@ export function SettingsCategory({
                 </Button>
               </div>
             ) : null}
-          </section>
-        ))}
+          </AccordionItem>
+          );
+        })}
+        </Accordion>
         {footer}
       </div>
     </>
