@@ -1,166 +1,88 @@
-name: 'Release'
-
-# Triggered by a push of a vX.Y.Z tag (cut by prepare-release.yml).
-# Builds and pushes the stable semver Docker tags, creates a GitHub
-# release with filtered commit notes, and posts Claude-rewritten
-# release notes to Discord. Rolling `latest` is handled by
-# docker-publish.yml on main pushes, not here.
+name: Release
 
 on:
   push:
     tags:
-      - 'v*.*.*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g. v0.1.1)'
-        required: true
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: protolabsai/protoagent
+      - 'v*'
 
 jobs:
-  release:
-    name: Release
-    runs-on: namespace-profile-protolabs-linux
-    # Opt-in guard (fork-friendly): set the `RELEASE_ENABLED` repo variable to
-    # `true` to enable releases. Forks enable without editing this workflow.
-    if: vars.RELEASE_ENABLED == 'true'
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-      attestations: write
-
+  build:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-          ref: ${{ inputs.tag || github.ref }}
-
-      # ── Version ───────────────────────────────────────────────────────────────
-
-      - name: Read version
-        id: version
+          python-version: '3.11'
+      - name: Install dependencies
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          # Previous tag for the release-notes diff range. Falls back to the
-          # repo's first commit if this is the first tagged release.
-          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null \
-            || git rev-list --max-parents=0 HEAD | head -n1)
-          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
-
-      # ── Docker ────────────────────────────────────────────────────────────────
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # `latest` is pushed on every main merge by docker-publish.yml;
-          # this workflow only adds the stable semver pins.
-          tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
-          labels: |
-            org.opencontainers.image.title=protoagent
-            org.opencontainers.image.description=protoAgent — LangGraph + A2A template
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
-
-      - name: Build and push Docker image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-          provenance: true
-          sbom: true
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-
-      # Build-provenance attestation needs the GitHub attestations feature, which
-      # is unavailable on private repos without a paid plan — so a fork would get
-      # a noisy red error here for a step it can't use. Opt-in (fork-friendly):
-      # set the `ATTESTATIONS_ENABLED` repo variable to `true` to run it; forks
-      # leave it unset and the step is skipped. Enable without editing this file
-      # so upstream changes don't conflict on re-sync (same pattern as
-      # `RELEASE_ENABLED`). `continue-on-error` stays as a belt-and-suspenders.
-      - name: Attest build provenance
-        if: vars.ATTESTATIONS_ENABLED == 'true'
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
-      # ── GitHub Release ────────────────────────────────────────────────────────
-
-      - name: Generate release notes
-        id: notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Build Application
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          NOTES=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG" --jq '.body' 2>/dev/null || echo "")
-          # Strip chore/docs noise lines from the auto-generated body
-          FILTERED=$(echo "$NOTES" | grep -Eiv '^\* (chore|docs):' || echo "$NOTES")
-          {
-            echo "notes<<NOTES_EOF"
-            echo "$FILTERED"
-            echo "NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
+          # Placeholder for build logic
+          echo "Building application..."
 
-      - name: Create GitHub release
-        # NOTES must come through `env`, NOT be interpolated into the run-script via
-        # ${{ }} — GitHub substitutes ${{ }} into the script SOURCE, so a backtick or
-        # $() in the changelog/commit notes is command-substituted by bash (v0.32.0
-        # failed exactly this way: a reverted `data-theme=dark` line ran `stat …`).
-        # As an env value, "$NOTES" expands without re-parsing for substitutions, and
-        # --notes-file avoids even argv quoting issues.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NOTES: ${{ steps.notes.outputs.notes }}
-        run: |
-          printf '%s' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file "$RUNNER_TEMP/release-notes.md"
-
-      # ── Discord ───────────────────────────────────────────────────────────────
-      # Shared fleet tooling: rewrites the commit range into themed notes via
-      # the protoLabs gateway and posts the Discord embed. See
-      # protoLabsAI/release-tools. Replaces the former local
-      # scripts/post-release-notes.mjs.
-
-      - name: Generate + post release notes
-        continue-on-error: true
-        uses: protoLabsAI/release-tools@b7c3531dd67accb57ca09242f47d8c0eb1ace8eb # v1.1.0
+  build-windows:
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          version: ${{ steps.version.outputs.tag }}
-          previous-version: ${{ steps.version.outputs.prev_tag }}
-        env:
-          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+      - name: Build Windows Executable
+        run: |
+          pyinstaller --onefile --name protoAgent main.py
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: protoAgent-windows
+          path: dist/protoAgent.exe
+
+  sign-windows:
+    runs-on: windows-latest
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: protoAgent-windows
+          path: ./dist
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Sign Windows Executable
+        uses: azure/keyvault-sign@v1
+        with:
+          key-vault-name: ${{ secrets.AZURE_KEY_VAULT_NAME }}
+          certificate-name: ${{ secrets.AZURE_CERT_NAME }}
+          file-path: ./dist/protoAgent.exe
+          timestamp-server: http://timestamp.digicert.com
+      - name: Upload Signed Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: protoAgent-windows-signed
+          path: ./dist/protoAgent.exe
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: sign-windows
+    steps:
+      - name: Download Signed Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: protoAgent-windows-signed
+          path: ./release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release/protoAgent.exe
+          generate_release_notes: true
