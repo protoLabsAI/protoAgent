@@ -1,11 +1,10 @@
 import "./chat.css";
-import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Empty } from "@protolabsai/ui/primitives";
+import { PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
   Loader2,
-  Send,
   SlidersHorizontal,
-  Square,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -169,16 +168,9 @@ function ChatSessionSlot({
   const [hitl, setHitl] = useState<HitlPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
+  // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // Auto-grow the single-row composer to fit its content (capped by max-height in
-  // CSS, then it scrolls). Runs on every draft change incl. programmatic ones
-  // (slash completion, send-clears-the-draft).
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, [draft]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
   // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
@@ -213,6 +205,47 @@ function ChatSessionSlot({
     setSlashIndex(0);
     setSlashDismissed(true); // a space follows, so it would close anyway
     textareaRef.current?.focus();
+  }
+
+  // Runs BEFORE the DS PromptInput's Enter-to-submit (via its onKeyDown seam):
+  // preventDefault to take over the key. Slash-menu nav wins while open; ⌘/Ctrl+Enter
+  // inserts a newline. Plain Enter falls through → PromptInput submits (→ send()).
+  function onComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (slashActive) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSlashIndex((i) => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        completeCommand(slashMatches[slashSel]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      // ⌘/Ctrl+Enter → newline at the caret (the textarea wouldn't on its own).
+      event.preventDefault();
+      const ta = textareaRef.current;
+      if (ta) {
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        setDraft(`${draft.slice(0, start)}\n${draft.slice(end)}`);
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        });
+      }
+    }
   }
 
   useEffect(() => {
@@ -552,102 +585,40 @@ function ChatSessionSlot({
             <span>{statusMessage}</span>
           </div>
         ) : null}
-        {slashActive ? (
-          <div className="slash-menu" role="listbox">
-            {slashMatches.map((cmd, index) => (
-              <button
-                type="button"
-                key={cmd.name}
-                role="option"
-                aria-selected={index === slashSel}
-                className={`slash-item${index === slashSel ? " active" : ""}`}
-                onMouseEnter={() => setSlashIndex(index)}
-                onClick={() => completeCommand(cmd)}
-              >
-                <span className="slash-name">/{cmd.name}</span>
-                <span className="slash-desc">{cmd.usage || cmd.description}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <form
-          className="composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send();
-          }}
-        >
-        <textarea
-          ref={textareaRef}
+        <PromptInput
           value={draft}
-          onChange={(event) => {
-            setDraft(event.target.value);
+          onChange={(v) => {
+            setDraft(v);
             setSlashDismissed(false); // re-open the menu when the input changes
           }}
-          onKeyDown={(event) => {
-            // Slash-command navigation takes priority while the menu is open.
-            if (slashActive) {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setSlashIndex((i) => (i + 1) % slashMatches.length);
-                return;
-              }
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
-                return;
-              }
-              if (event.key === "Enter" || event.key === "Tab") {
-                event.preventDefault();
-                completeCommand(slashMatches[slashSel]);
-                return;
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setSlashDismissed(true);
-                return;
-              }
-            }
-            // Enter sends; Cmd/Ctrl+Enter (and Shift+Enter) insert a newline.
-            if (event.key === "Enter") {
-              if (event.metaKey || event.ctrlKey) {
-                // Ctrl/Cmd+Enter → newline at the caret (the textarea wouldn't
-                // insert one for this combo on its own).
-                event.preventDefault();
-                const ta = textareaRef.current;
-                if (ta) {
-                  const start = ta.selectionStart;
-                  const end = ta.selectionEnd;
-                  const next = `${draft.slice(0, start)}\n${draft.slice(end)}`;
-                  setDraft(next);
-                  requestAnimationFrame(() => {
-                    ta.selectionStart = ta.selectionEnd = start + 1;
-                  });
-                }
-                return;
-              }
-              if (!event.shiftKey) {
-                // Plain Enter → send. (Shift+Enter falls through to a newline.)
-                event.preventDefault();
-                void send();
-              }
-            }
+          // The DS button is Send when idle, Stop (square) while streaming.
+          onSubmit={() => {
+            if (status === "streaming") void stop();
+            else void send();
           }}
+          loading={status === "streaming"}
           placeholder="Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
-          rows={1}
+          inputRef={textareaRef}
+          onKeyDown={onComposerKeyDown}
+          overlay={slashActive ? (
+            <div className="slash-menu" role="listbox">
+              {slashMatches.map((cmd, index) => (
+                <button
+                  type="button"
+                  key={cmd.name}
+                  role="option"
+                  aria-selected={index === slashSel}
+                  className={`slash-item${index === slashSel ? " active" : ""}`}
+                  onMouseEnter={() => setSlashIndex(index)}
+                  onClick={() => completeCommand(cmd)}
+                >
+                  <span className="slash-name">/{cmd.name}</span>
+                  <span className="slash-desc">{cmd.usage || cmd.description}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         />
-        {status === "streaming" ? (
-          <Button type="button" onClick={() => void stop()}>
-            <Square size={15} />
-            Stop
-          </Button>
-        ) : (
-          <Button variant="primary" type="submit" disabled={!canSend}>
-            <Send size={16} />
-            Send
-          </Button>
-        )}
-        </form>
         {/* Model control, under the input (ADR 0048) — a chip showing the active model
             alias; click to tune model / temperature / max tokens. Same field + cascade
             as Settings ▸ Workspace ▸ Settings. */}
