@@ -97,6 +97,18 @@ class HybridKnowledgeStore(KnowledgeStore):
         self._embed_failures = 0
         self._breaker_open_until = 0.0
 
+    def reset_embed_breaker(self) -> bool:
+        """Force the embedding circuit closed immediately.
+
+        Called when the gateway key is confirmed good out-of-band (a successful
+        "Test connection" of the live key) so semantic recall resumes at once
+        instead of waiting out ``breaker_cooldown_s``. Returns True if the
+        breaker was actually open (something changed) — lets callers log only
+        when it mattered. A no-op when already closed."""
+        was_open = self._breaker_open() or self._embed_failures > 0
+        self._record_embed_success()
+        return was_open
+
     def _embed(self, text: str) -> list[float] | None:
         if self._embed_fn is None or self._breaker_open():
             return None

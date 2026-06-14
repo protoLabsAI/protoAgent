@@ -167,3 +167,51 @@ def test_reset_settings_rejects_unknown_key(monkeypatch):
     resp = _client().post("/api/settings/reset", json={"keys": ["bogus.key"]}).json()
     assert resp["ok"] is False
     assert any("unknown setting: bogus.key" in m for m in resp["messages"])
+
+
+class _BreakerStore:
+    def __init__(self):
+        self.reset_calls = 0
+
+    def reset_embed_breaker(self):
+        self.reset_calls += 1
+        return True
+
+
+def _wire_test_model(monkeypatch, *, ok: bool):
+    monkeypatch.setitem(
+        sys.modules,
+        "graph.config_io",
+        _fake_module("graph.config_io", validate_model_connection=lambda b, k, m: (ok, "" if ok else "401")),
+    )
+    import runtime.state as rs
+    cfg = types.SimpleNamespace(api_base="http://g/v1", api_key="live-key", model_name="m")
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    store = _BreakerStore()
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    return store
+
+
+def test_test_model_success_clears_embed_breaker(monkeypatch):
+    """A passing Test-connection of the LIVE key (no form override) clears the
+    embedding circuit breaker so semantic recall recovers without the cooldown."""
+    store = _wire_test_model(monkeypatch, ok=True)
+    resp = _client().post("/api/config/test-model", json={}).json()
+    assert resp["ok"] is True
+    assert store.reset_calls == 1
+
+
+def test_test_model_failure_does_not_clear_breaker(monkeypatch):
+    store = _wire_test_model(monkeypatch, ok=False)
+    resp = _client().post("/api/config/test-model", json={}).json()
+    assert resp["ok"] is False
+    assert store.reset_calls == 0
+
+
+def test_test_model_with_form_key_does_not_clear_breaker(monkeypatch):
+    """Testing a CANDIDATE key (form override) must not touch the live store —
+    that key isn't what the running embedder uses yet."""
+    store = _wire_test_model(monkeypatch, ok=True)
+    resp = _client().post("/api/config/test-model", json={"api_key": "candidate"}).json()
+    assert resp["ok"] is True
+    assert store.reset_calls == 0

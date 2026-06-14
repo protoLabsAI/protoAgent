@@ -50,6 +50,23 @@ class SettingsResetRequest(BaseModel):
     keys: list[str] = []
 
 
+def _reset_live_embed_breaker() -> None:
+    """Clear the live knowledge store's embedding circuit breaker, if it has one.
+
+    Duck-typed: only ``HybridKnowledgeStore`` exposes ``reset_embed_breaker``; a
+    keyword-only base store or a plugin backend simply has no breaker to reset."""
+    store = STATE.knowledge_store
+    reset = getattr(store, "reset_embed_breaker", None)
+    if callable(reset):
+        try:
+            if reset():
+                import logging
+                logging.getLogger("protoagent.server").info(
+                    "[knowledge] embedding breaker cleared (live key tested OK)")
+        except Exception:  # noqa: BLE001 — never let a breaker reset break the test route
+            pass
+
+
 def register_config_routes(app) -> None:
     """Register the ``/api/config*`` + ``/api/settings*`` routes on ``app``."""
 
@@ -110,6 +127,14 @@ def register_config_routes(app) -> None:
         key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
         model = body.model or (STATE.graph_config.model_name if STATE.graph_config else "")
         ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
+        # A successful test of the LIVE saved key (no form-local override) proves the
+        # gateway + key are good again — so clear any open embedding circuit breaker
+        # now, instead of waiting out the cooldown. This is the recovery path for an
+        # out-of-band key fix (hand-edited secrets.yaml, env var, gateway-side fix):
+        # the settings-save path already resets it by rebuilding the store. Embeds use
+        # the same api_base/key, so a chat-completion success is a sound signal.
+        if ok and not body.api_key:
+            _reset_live_embed_breaker()
         return {"ok": ok, "error": error}
 
     # `/api/config/test-discord` (discord plugin) and `/api/config/google/status`

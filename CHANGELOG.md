@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list (`acp:copilot` → `copilot --acp`), matching the Settings runtime options.
 
 ### Fixed
+- **Embedding circuit breaker clears on a passing connection test.** After repeated embed
+  auth failures (e.g. an expired gateway key) the breaker latches open for
+  `embed_breaker_cooldown_s` and serves keyword-only FTS5. Fixing the key via Settings
+  already recovered instantly (the store is rebuilt with a fresh breaker), but an
+  out-of-band fix — hand-edited `secrets.yaml`, an env var, or a gateway-side recovery —
+  left recall degraded until the cooldown elapsed. A successful **Test connection** of the
+  live key (`/api/config/test-model` with no form-local key) now clears the breaker
+  immediately, so semantic recall resumes at once. New `HybridKnowledgeStore.reset_embed_breaker()`.
 - **Knowledge embeddings default to `qwen3-embedding`.** The setup wizard hard-coded
   `nomic-embed-text`, which the protoLabs gateway doesn't serve — so semantic recall
   401'd on every embed and silently degraded to keyword-only. The wizard now writes

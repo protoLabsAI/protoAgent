@@ -81,3 +81,38 @@ def test_circuit_breaker_falls_back_to_fts(tmp_path):
     store.search("calculator")
     store.search("calculator")
     assert calls["n"] == before  # breaker short-circuits embed_fn
+
+
+def test_reset_embed_breaker_closes_an_open_breaker(tmp_path):
+    fail = {"on": True}
+
+    def embed(text):
+        if fail["on"]:
+            raise RuntimeError("down")
+        return [1.0, 0.0]
+
+    store = HybridKnowledgeStore(
+        _db(tmp_path), embed_fn=embed, breaker_threshold=2, breaker_cooldown_s=999,
+    )
+    store.add_chunk("calculator math", domain="general")
+    store.search("calculator")  # trips the failures
+    store.search("calculator")  # breaker now open
+    assert store._breaker_open()
+
+    # Key fixed out-of-band; reset reports it actually cleared something.
+    fail["on"] = False
+    assert store.reset_embed_breaker() is True
+    assert not store._breaker_open()
+    # A no-op when already closed.
+    assert store.reset_embed_breaker() is False
+    # The embedder is exercised again now the breaker is closed.
+    n = {"c": 0}
+    orig = store._embed_fn
+
+    def counting(t):
+        n["c"] += 1
+        return orig(t)
+
+    store._embed_fn = counting
+    store.search("calculator")
+    assert n["c"] > 0  # embed_fn called again post-reset
