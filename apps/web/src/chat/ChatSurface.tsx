@@ -16,6 +16,7 @@ import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/ty
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import { chatStore, useChatState } from "./chat-store";
+import { ChatComponent } from "./ChatComponent";
 import { Markdown } from "./LazyMarkdown";
 import { ToolCalls } from "./ToolCalls";
 
@@ -530,6 +531,20 @@ function ChatSessionSlot({
             }),
           );
         },
+        onComponent: (spec) => {
+          // A renderable component (ADR 0051) — append to the assistant message; the
+          // registry renders it inline after the text.
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) =>
+              message.id === assistantId
+                ? { ...message, components: [...(message.components || []), spec] }
+                : message,
+            ),
+          );
+        },
         onDone: () => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
@@ -619,9 +634,12 @@ function ChatSessionSlot({
                       // ADR 0050) carry markdown — render it; only the user's own input
                       // stays literal.
                       <Markdown>{message.content}</Markdown>
-                  : message.status === "streaming" && !(message.toolCalls && message.toolCalls.length)
+                  : message.status === "streaming" && !(message.toolCalls && message.toolCalls.length) && !(message.components && message.components.length)
                     ? <Loader2 className="spin" size={15} />
                     : null}
+                {message.components && message.components.length > 0
+                  ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
+                  : null}
               </div>
             </article>
           ))

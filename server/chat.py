@@ -255,10 +255,20 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
             # the ToolNode stamped status="error" (a raised tool — a declined
             # run_command, an execution error, an enforcement block) closes the card
             # as a failure (X) instead of a green "done".
+            coerced = _coerce_tool_output(output)
+            # A show_component result (ADR 0051) carries a sentinel-wrapped payload — lift
+            # it into a `component` frame (→ a component-v1 DataPart) and strip it from the
+            # card so the user sees the rendered widget, not raw wire JSON.
+            if isinstance(coerced, str):
+                from graph.components import extract_component, strip_component
+                comp = extract_component(coerced)
+                if comp is not None:
+                    yield ("component", comp)
+                    coerced = strip_component(coerced)
             yield ("tool_end", {
                 "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
                 "name": name,
-                "output": _coerce_tool_output(output),
+                "output": coerced,
                 "error": getattr(output, "status", None) == "error",
             })
         elif kind == "on_chat_model_stream":

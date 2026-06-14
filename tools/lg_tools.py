@@ -102,6 +102,36 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 
 @tool
+def show_component(component: str, props: dict, title: str = "") -> str:
+    """Render a structured UI component inline in the chat (ADR 0051).
+
+    Use this to present structured data as a real widget instead of a markdown blob —
+    a comparison table, a status/metrics block, a plan/timeline. Data-only and safe;
+    for free-form generated HTML use an artifact instead.
+
+    Args:
+        component: one of ``"table"``, ``"keyvalue"``, ``"timeline"``.
+        props: the component's data:
+            - table:    ``{"columns": ["A","B"], "rows": [["a1","b1"], ...]}``
+            - keyvalue: ``{"items": [{"label": "Credits", "value": "183k"}, ...]}``
+            - timeline: ``{"steps": [{"label": "Buy hauler", "state": "done|active|todo",
+                          "detail": "…"}, ...]}``
+        title: optional heading shown above the component.
+
+    Renders immediately for the user; also briefly summarize the data in your text reply
+    (the component is a visual aid, not a substitute for your answer).
+    """
+    from graph.components import COMPONENT_TYPES, encode_component
+
+    if component not in COMPONENT_TYPES:
+        return f"Error: unknown component '{component}'. Use one of: {', '.join(COMPONENT_TYPES)}."
+    payload = dict(props or {})
+    if title and "title" not in payload:
+        payload["title"] = title
+    return f"Rendered a {component} component for the user. " + encode_component(component, payload)
+
+
+@tool
 @with_fallback()
 async def current_time(timezone: str = "UTC") -> str:
     """Return the current wall-clock time in the given IANA timezone.
@@ -747,7 +777,8 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     # LangGraph interrupt that only the lead turn's runner resumes. Subagents
     # (run outside that runner) must not get it, so it's gated by allowlist:
     # present in the full set for the lead agent, absent from subagent allowlists.
-    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
+    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input,
+             show_component]
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):

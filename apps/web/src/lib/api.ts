@@ -5,6 +5,7 @@ import type {
   BackgroundJobDTO,
   BeadsIssue,
   ChatMessage,
+  ComponentSpec,
   ConfigPayload,
   DelegateProbe,
   DelegateTypeSpec,
@@ -332,6 +333,7 @@ export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
+const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 
 type RawPart = {
   kind?: string;
@@ -381,6 +383,15 @@ function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
 }
 
 /** Pull the HITL form/question payload off an input-required frame's parts. */
+/** Decode a component-v1 DataPart (ADR 0051) → a {component, props} spec, or null. */
+export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
+  const d = dataByMime(parts, COMPONENT_MIME) as
+    | { component?: string; props?: Record<string, unknown> }
+    | undefined;
+  if (!d || typeof d.component !== "string") return null;
+  return { component: d.component, props: (d.props as Record<string, unknown>) || {} };
+}
+
 export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
   return (dataByMime(parts, HITL_MIME) as HitlPayload) || null;
 }
@@ -937,6 +948,7 @@ export const api = {
       onStatus?: (status: string) => void;
       onText?: (text: string, append: boolean) => void;
       onToolCall?: (evt: ToolEvent) => void;
+      onComponent?: (spec: ComponentSpec) => void;
       onInputRequired?: (payload: HitlPayload) => void;
       // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
       // turn (bad API key → 401). Carries the gateway's error text. Without this
@@ -1037,6 +1049,8 @@ export const api = {
         handlers.onStatus?.(messageText || state);
         const toolEvent = toolEventFromParts(parts);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
+        const component = componentFromParts(parts);
+        if (component) handlers.onComponent?.(component);
         // HITL pause: the turn parked awaiting the operator (0.3 `input-required`
         // / 1.0 `TASK_STATE_INPUT_REQUIRED`). Surface the form/question payload.
         if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
