@@ -323,6 +323,44 @@ def _record_a2a_telemetry(outcome) -> None:
         log.exception("[telemetry] failed to record turn %s", outcome.task_id)
 
 
+def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
+    """Per-frame progress hook (ADR 0051). Only background turns get a bus push — live
+    turns already stream over their own SSE. On the opening ``turn_started`` frame it
+    records the A2A task id on the job row (the handle ``stop_task`` needs); on tool
+    frames it republishes ``background.progress`` for the console's live job card.
+    Best-effort — never raises into the executor."""
+    if not context_id.startswith("background:"):
+        return
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return
+    job_id = context_id.split(":", 1)[1]
+    if not job_id:
+        return
+    phase = frame.get("phase")
+    if phase == "turn_started":
+        try:
+            mgr.store.set_a2a_task_id(job_id, task_id)
+        except Exception:  # noqa: BLE001
+            log.exception("[background] failed to record task id for %s", job_id)
+        return
+    out = frame.get("output")
+    if isinstance(out, str) and len(out) > 500:
+        out = out[:500] + "…"
+    _event_bus.publish(
+        "background.progress",
+        {
+            "job_id": job_id,
+            "task_id": task_id,
+            "phase": phase,  # "tool_start" | "tool_end"
+            "tool": frame.get("name"),
+            "tool_call_id": frame.get("id"),
+            "output": out,
+            "error": bool(frame.get("error")),
+        },
+    )
+
+
 def _handle_background_terminal(outcome) -> None:
     """Settle a finished background subagent job (ADR 0050).
 
@@ -339,7 +377,7 @@ def _handle_background_terminal(outcome) -> None:
     if not job_id:
         return
     state = getattr(outcome, "state", "completed")
-    status = "completed" if state == "completed" else "failed"
+    status = state if state in ("completed", "canceled") else "failed"
     text = extract_output(outcome.text) or outcome.text or ""
     try:
         mgr.store.mark_complete(job_id, status, text)

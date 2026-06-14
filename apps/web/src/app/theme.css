@@ -142,9 +142,14 @@
 }
 .bg-jobs-rowhead {
   display: flex;
+  align-items: stretch;
+}
+.bg-jobs-rowmain {
+  display: flex;
   align-items: flex-start;
   gap: 10px;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 9px 11px;
   border: 0;
   background: transparent;
@@ -152,10 +157,26 @@
   text-align: left;
   cursor: pointer;
 }
-.bg-jobs-rowhead:disabled {
+.bg-jobs-rowmain:disabled {
   cursor: default;
 }
-.bg-jobs-rowhead:not(:disabled):hover {
+.bg-jobs-rowmain:not(:disabled):hover {
+  background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
+}
+.bg-jobs-stop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  border: 0;
+  border-left: 1px solid var(--border, #2a2a31);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.bg-jobs-stop:hover {
+  color: var(--pl-color-status-error, #e5484d);
   background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
 }
 .bg-jobs-icon {
@@ -176,6 +197,23 @@
   font-size: 11px;
   color: var(--fg-secondary);
   text-transform: capitalize;
+}
+.bg-jobs-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.bg-jobs-tool.is-run {
+  color: var(--accent, #7c8cff);
+}
+.bg-jobs-tool.is-done {
+  color: var(--fg-secondary);
+}
+.bg-jobs-tool.is-err {
+  color: var(--pl-color-status-error, #e5484d);
 }
 .bg-jobs-ok {
   color: var(--accent, #7c8cff);

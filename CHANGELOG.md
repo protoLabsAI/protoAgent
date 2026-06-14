@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background jobs: realtime progress + stop/inspect controls** (ADR 0051) — a detached
+  background subagent's tool-by-tool progress now streams to the console: the jobs dialog
+  shows a live `⊷ web_search ✓ fetch_url …` feed per running job (a new executor progress
+  hook → `background.progress` bus channel). Each running job has a **Stop** button — and the
+  agent gets **`stop_task`** / **`task_output`** tools — backed by a *real* A2A `CancelTask`
+  that genuinely cancels the running turn (correcting a stale belief that cancel was mark-only).
+  A foreground `task` delegation can also **auto-background** when it overruns a time budget
+  (`BACKGROUND_AUTO_S`, off by default), so a long inline subagent stops freezing the turn.
+  Canceled turns now record telemetry instead of vanishing.
 - **Background-jobs console widget** (ADR 0050, Phase 3) — a pill in the utility bar shows a
   spinner + count while background subagents run and an unread dot when they finish; clicking
   it opens a dialog listing each job's status, live elapsed time, and (for finished jobs) its

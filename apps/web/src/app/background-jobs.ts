@@ -21,6 +21,31 @@ export function fmtElapsed(startIso?: string, endIso?: string): string {
   return `${h}h ${m % 60}m`;
 }
 
+// A background turn's tool, as surfaced by the `background.progress` channel (ADR 0051).
+export type ProgressTool = { id: string; tool: string; done: boolean; error: boolean };
+
+/** Merge a `background.progress` frame into a job's tool list, keyed by tool_call_id
+ *  (tool_start → running, tool_end → done/error). Capped so a chatty job can't grow
+ *  unbounded. Pure → unit-testable. */
+export function applyProgress(
+  prev: ProgressTool[],
+  frame: { phase?: string; tool?: string; tool_call_id?: string; error?: boolean },
+): ProgressTool[] {
+  const id = String(frame.tool_call_id || frame.tool || "");
+  if (!id) return prev;
+  const next = prev.slice();
+  const i = next.findIndex((t) => t.id === id);
+  const entry: ProgressTool = {
+    id,
+    tool: String(frame.tool || (i >= 0 ? next[i].tool : "tool")),
+    done: frame.phase === "tool_end",
+    error: !!frame.error,
+  };
+  if (i >= 0) next[i] = entry;
+  else next.push(entry);
+  return next.slice(-8);
+}
+
 /** Sort order for the jobs list: running first, then most-recently-touched. */
 export function byRecency(a: BackgroundJobDTO, b: BackgroundJobDTO): number {
   if (a.status === "running" && b.status !== "running") return -1;

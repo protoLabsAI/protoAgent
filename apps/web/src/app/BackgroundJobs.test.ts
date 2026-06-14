@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { byRecency, fmtElapsed } from "./background-jobs";
+import { applyProgress, byRecency, fmtElapsed } from "./background-jobs";
 import type { BackgroundJobDTO } from "../lib/types";
 
 function job(p: Partial<BackgroundJobDTO>): BackgroundJobDTO {
@@ -32,5 +32,31 @@ describe("byRecency", () => {
     const older = job({ id: "o", completed_at: "2026-06-14T00:00:00Z" });
     const newer = job({ id: "n", completed_at: "2026-06-14T02:00:00Z" });
     expect([older, newer].sort(byRecency).map((j) => j.id)).toEqual(["n", "o"]);
+  });
+});
+
+describe("applyProgress", () => {
+  it("adds a running tool on tool_start, flips it done on tool_end (keyed by id)", () => {
+    let p = applyProgress([], { phase: "tool_start", tool: "web_search", tool_call_id: "tc1" });
+    expect(p).toEqual([{ id: "tc1", tool: "web_search", done: false, error: false }]);
+    p = applyProgress(p, { phase: "tool_end", tool: "web_search", tool_call_id: "tc1" });
+    expect(p).toEqual([{ id: "tc1", tool: "web_search", done: true, error: false }]);
+  });
+
+  it("marks errors and keeps distinct tools", () => {
+    let p = applyProgress([], { phase: "tool_start", tool: "a", tool_call_id: "1" });
+    p = applyProgress(p, { phase: "tool_start", tool: "b", tool_call_id: "2" });
+    p = applyProgress(p, { phase: "tool_end", tool: "b", tool_call_id: "2", error: true });
+    expect(p.map((t) => [t.tool, t.done, t.error])).toEqual([
+      ["a", false, false],
+      ["b", true, true],
+    ]);
+  });
+
+  it("ignores a frame with no id and caps the list", () => {
+    expect(applyProgress([], { phase: "tool_start" })).toEqual([]);
+    let p: ReturnType<typeof applyProgress> = [];
+    for (let i = 0; i < 20; i++) p = applyProgress(p, { phase: "tool_start", tool_call_id: `t${i}` });
+    expect(p.length).toBe(8);
   });
 });

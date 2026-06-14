@@ -314,7 +314,7 @@ export type ToolEvent = {
 // carried (partially) on the background.{started,completed} bus events.
 export type BackgroundJobDTO = {
   id: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "canceled";
   subagent_type: string;
   description: string;
   origin_session?: string;

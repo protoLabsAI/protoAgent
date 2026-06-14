@@ -104,6 +104,53 @@ class BackgroundManager:
                 log.exception("[background] started-event publish failed for %s", job_id)
         return job_id
 
+    async def cancel(self, job_id: str) -> dict:
+        """Stop a running background job by cancelling its detached A2A turn (ADR 0051).
+
+        Sends a real ``CancelTask`` for the job's recorded A2A task id — the SDK cancels
+        the producer coroutine, which fires the executor's cancel telemetry and settles the
+        row. Returns ``{ok, status, detail}``. Idempotent: a no-op on an already-terminal
+        job."""
+        job = self.store.get(job_id)
+        if job is None:
+            return {"ok": False, "status": "unknown", "detail": f"No background job {job_id}."}
+        if job.status != "running":
+            return {"ok": False, "status": job.status, "detail": f"Job {job_id} already {job.status}."}
+        task_id = job.a2a_task_id
+        if not task_id:
+            # The turn hasn't announced its task id yet — settle the row so it can't hang;
+            # the turn may still finish server-side (mark_complete is then a no-op).
+            self.store.mark_complete(job_id, "canceled", "Canceled before the turn registered a task id.")
+            return {"ok": True, "status": "canceled", "detail": "Canceled (no task handle yet)."}
+
+        import httpx
+
+        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+        if self._bearer:
+            headers["Authorization"] = f"Bearer {self._bearer}"
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        body = {
+            "jsonrpc": "2.0", "id": str(uuid.uuid4()),
+            "method": "CancelTask", "params": {"id": task_id},
+        }
+        ok = True
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
+            if r.status_code >= 400:
+                log.warning("[background] CancelTask HTTP %d for %s", r.status_code, job_id)
+                ok = False
+        except Exception:  # noqa: BLE001
+            log.exception("[background] CancelTask failed for %s", job_id)
+            ok = False
+        # The executor's cancel telemetry usually settles the row first (with partial
+        # text); ensure it's settled regardless. mark_complete is idempotent.
+        self.store.mark_complete(
+            job_id, "canceled", (self.store.get(job_id) or job).result or "Canceled.",
+        )
+        return {"ok": ok, "status": "canceled", "detail": f"Canceled {job_id}."}
+
     async def _fire(self, job_id: str, prompt: str) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
 

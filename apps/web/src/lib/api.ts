@@ -509,6 +509,14 @@ export const api = {
     return request<{ enabled: boolean; jobs: BackgroundJobDTO[] }>("/api/background");
   },
 
+  // Stop a running background job (ADR 0051) — cancels its detached A2A turn.
+  stopBackground(jobId: string) {
+    return request<{ ok: boolean; status?: string; detail?: string }>(
+      `/api/background/${encodeURIComponent(jobId)}/cancel`,
+      { method: "POST" },
+    );
+  },
+
   telemetrySummary(since?: string) {
     const q = since ? `?since=${encodeURIComponent(since)}` : "";
     return request<{ enabled: boolean; summary: TelemetrySummary | null }>(

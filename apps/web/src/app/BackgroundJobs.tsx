@@ -1,24 +1,24 @@
 import { Dialog } from "@protolabsai/ui/overlays";
-import { Bot, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Square, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
-import { byRecency, fmtElapsed, nowIso } from "./background-jobs";
+import { applyProgress, byRecency, fmtElapsed, nowIso, type ProgressTool } from "./background-jobs";
 
-// Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3). Hydrates from
-// GET /api/background, then tracks live via the `background.{started,completed}`
-// bus events (scoped to this window's agent). The pill shows a spinner + count
-// while jobs run and an unread dot when jobs finish; clicking opens a dialog
-// listing each job's status, elapsed time, and (for finished jobs) its result.
-// Read-only — stop/kill controls are Phase 4. (Pure helpers live in
-// ./background-jobs so they're unit-testable without a react-dom import.)
+// Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
+// GET /api/background, then tracks live via the bus: `background.{started,completed}` for
+// lifecycle and `background.progress` for a running job's tool-by-tool feed. The pill shows
+// a spinner + count while jobs run and an unread dot when jobs finish; the dialog lists each
+// job's status, elapsed, live tool activity, result (markdown), and a Stop control for
+// running jobs. (Pure helpers live in ./background-jobs — react-dom-free + unit-tested.)
 
 export function BackgroundJobs() {
   const [enabled, setEnabled] = useState(false);
   const [jobs, setJobs] = useState<Record<string, BackgroundJobDTO>>({});
+  const [progress, setProgress] = useState<Record<string, ProgressTool[]>>({});
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [, setTick] = useState(0); // re-render for live elapsed while open
@@ -74,11 +74,26 @@ export function BackgroundJobs() {
       });
     });
 
+    const offProgress = onTopic("background.progress", (d) => {
+      const id = String(d.job_id || "");
+      if (!id) return;
+      setProgress((p) => ({
+        ...p,
+        [id]: applyProgress(p[id] || [], {
+          phase: String(d.phase || ""),
+          tool: d.tool ? String(d.tool) : undefined,
+          tool_call_id: d.tool_call_id ? String(d.tool_call_id) : undefined,
+          error: !!d.error,
+        }),
+      }));
+    });
+
     const offDone = onTopic("background.completed", (d) => {
       const id = String(d.job_id || "");
       if (!id) return;
+      const status = String(d.status);
       upsert(id, {
-        status: String(d.status) === "failed" ? "failed" : "completed",
+        status: status === "failed" || status === "canceled" ? (status as BackgroundJobDTO["status"]) : "completed",
         subagent_type: String(d.subagent_type || ""),
         description: String(d.description || ""),
         origin_session: String(d.origin_session || ""),
@@ -90,6 +105,7 @@ export function BackgroundJobs() {
 
     return () => {
       offStart();
+      offProgress();
       offDone();
     };
   }, []);
@@ -103,6 +119,16 @@ export function BackgroundJobs() {
     const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [open, running]);
+
+  async function stop(jobId: string) {
+    // Optimistic — flip to canceled immediately; the bus completion confirms.
+    setJobs((m) => (m[jobId] ? { ...m, [jobId]: { ...m[jobId], status: "canceled" } } : m));
+    try {
+      await api.stopBackground(jobId);
+    } catch {
+      /* best-effort; the registry stays source of truth */
+    }
+  }
 
   if (!enabled && list.length === 0) return null;
 
@@ -130,7 +156,7 @@ export function BackgroundJobs() {
           ) : (
             <ul className="bg-jobs-list">
               {list.map((j) => (
-                <BgJobRow key={j.id} job={j} />
+                <BgJobRow key={j.id} job={j} tools={progress[j.id] || []} onStop={stop} />
               ))}
             </ul>
           )}
@@ -140,39 +166,70 @@ export function BackgroundJobs() {
   );
 }
 
-function BgJobRow({ job }: { job: BackgroundJobDTO }) {
+function BgJobRow({
+  job,
+  tools,
+  onStop,
+}: {
+  job: BackgroundJobDTO;
+  tools: ProgressTool[];
+  onStop: (jobId: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const icon =
-    job.status === "running" ? (
-      <Loader2 size={14} className="spin" />
-    ) : job.status === "failed" ? (
-      <XCircle size={14} className="bg-jobs-fail" />
-    ) : (
-      <CheckCircle2 size={14} className="bg-jobs-ok" />
-    );
-  const elapsed = fmtElapsed(job.created_at, job.status === "running" ? undefined : job.completed_at);
-  const hasResult = job.status !== "running" && !!job.result;
+  const running = job.status === "running";
+  const icon = running ? (
+    <Loader2 size={14} className="spin" />
+  ) : job.status === "failed" ? (
+    <XCircle size={14} className="bg-jobs-fail" />
+  ) : (
+    <CheckCircle2 size={14} className="bg-jobs-ok" />
+  );
+  const elapsed = fmtElapsed(job.created_at, running ? undefined : job.completed_at);
+  const hasResult = !running && !!job.result;
+  const recentTools = tools.slice(-3);
   return (
     <li className="bg-jobs-row">
-      <button
-        type="button"
-        className="bg-jobs-rowhead"
-        onClick={() => hasResult && setExpanded((v) => !v)}
-        aria-expanded={hasResult ? expanded : undefined}
-        disabled={!hasResult}
-      >
-        <span className="bg-jobs-icon">{icon}</span>
-        <span className="bg-jobs-meta">
-          <span className="bg-jobs-title">
-            <strong>{job.subagent_type || "agent"}</strong> — {job.description || "(no description)"}
+      <div className="bg-jobs-rowhead">
+        <button
+          type="button"
+          className="bg-jobs-rowmain"
+          onClick={() => hasResult && setExpanded((v) => !v)}
+          aria-expanded={hasResult ? expanded : undefined}
+          disabled={!hasResult}
+        >
+          <span className="bg-jobs-icon">{icon}</span>
+          <span className="bg-jobs-meta">
+            <span className="bg-jobs-title">
+              <strong>{job.subagent_type || "agent"}</strong> — {job.description || "(no description)"}
+            </span>
+            <span className="bg-jobs-sub">
+              {job.status}
+              {elapsed ? ` · ${elapsed}` : ""}
+              {hasResult ? (expanded ? " · hide result" : " · show result") : ""}
+            </span>
+            {running && recentTools.length > 0 ? (
+              <span className="bg-jobs-tools">
+                {recentTools.map((t) => (
+                  <span key={t.id} className={`bg-jobs-tool ${t.error ? "is-err" : t.done ? "is-done" : "is-run"}`}>
+                    {t.error ? "✗" : t.done ? "✓" : "⊷"} {t.tool}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </span>
-          <span className="bg-jobs-sub">
-            {job.status}
-            {elapsed ? ` · ${elapsed}` : ""}
-            {hasResult ? (expanded ? " · hide result" : " · show result") : ""}
-          </span>
-        </span>
-      </button>
+        </button>
+        {running ? (
+          <button
+            type="button"
+            className="bg-jobs-stop"
+            onClick={() => onStop(job.id)}
+            title="Stop this background agent"
+            aria-label="Stop"
+          >
+            <Square size={12} />
+          </button>
+        ) : null}
+      </div>
       {hasResult && expanded ? (
         <div className="bg-jobs-result">
           <Markdown>{job.result || ""}</Markdown>

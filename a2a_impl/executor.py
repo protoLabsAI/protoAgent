@@ -27,6 +27,7 @@ events are surfaced as tool-call-v1 DataParts on the working status frames.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable
@@ -99,6 +100,29 @@ def _notify_terminal(outcome: TurnOutcome) -> None:
         cb(outcome)
     except Exception:  # noqa: BLE001 — best-effort, never breaks the turn
         logger.exception("[a2a] terminal hook failed for context %s", outcome.context_id)
+
+
+# A progress hook (ADR 0051) the host can register to observe a turn's realtime
+# frames — fired at turn start (``turn_started``, which carries the task_id) and on
+# each tool start/end with ``(context_id, task_id, frame)``. No-op when unset, so live
+# turns (which already stream over their own SSE) pay nothing; the background-subagents
+# publisher uses it to surface a detached turn's progress on the event bus.
+_ON_PROGRESS: list[Callable[[str, str, dict], None] | None] = [None]
+
+
+def set_progress_hook(hook: Callable[[str, str, dict], None] | None) -> None:
+    """Register (or clear) the per-frame progress hook (ADR 0051)."""
+    _ON_PROGRESS[0] = hook
+
+
+def _notify_progress(context_id: str, task_id: str, frame: dict) -> None:
+    cb = _ON_PROGRESS[0]
+    if cb is None:
+        return
+    try:
+        cb(context_id or "", task_id or "", frame)
+    except Exception:  # noqa: BLE001 — best-effort, never breaks the turn
+        logger.exception("[a2a] progress hook failed for context %s", context_id)
 
 
 def _text_part(text: str) -> Part:
@@ -199,6 +223,9 @@ class ProtoAgentExecutor(AgentExecutor):
                 )
             )
         await updater.start_work()
+        # Realtime: announce the turn (carries the task_id — the handle a host needs to
+        # control or re-attach to this turn) before any work runs (ADR 0051).
+        _notify_progress(context.context_id, context.task_id, {"phase": "turn_started"})
 
         text = context.get_user_input()
         caller_trace = _extract_caller_trace(context)
@@ -308,6 +335,11 @@ class ProtoAgentExecutor(AgentExecutor):
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([part]),
                         )
+                    # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
+                    if isinstance(payload, dict):
+                        _notify_progress(
+                            context.context_id, context.task_id, {"phase": event_type, **payload}
+                        )
 
                 elif event_type == "delta":
                     if isinstance(payload, dict):
@@ -366,6 +398,14 @@ class ProtoAgentExecutor(AgentExecutor):
             await _finalize(accumulated)
             await updater.complete()
             _notify_terminal(_outcome("completed", accumulated))
+
+        except asyncio.CancelledError:
+            # A real CancelTask (ADR 0051): the SDK cancels the producer task, injecting
+            # CancelledError here. Record a terminal outcome so the turn isn't an
+            # observability hole and a canceled background job settles — then re-raise so
+            # the SDK's cancel flow (the `canceled` frame) completes normally.
+            _notify_terminal(_outcome("canceled", accumulated))
+            raise
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
             logger.exception("[a2a] execute crashed for task %s", context.task_id)

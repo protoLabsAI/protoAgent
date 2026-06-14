@@ -139,6 +139,17 @@ def _resolve_aux_model(config, specific: str = "") -> str | None:
     return None
 
 
+def _auto_background_seconds() -> float:
+    """Time budget (seconds) after which a *foreground* ``task`` delegation transparently
+    detaches to the background (ADR 0051). ``BACKGROUND_AUTO_S`` env; 0 (default) = off."""
+    import os
+
+    try:
+        return max(0.0, float(os.environ.get("BACKGROUND_AUTO_S", "0")))
+    except ValueError:
+        return 0.0
+
+
 def _parse_compaction_trigger(spec: str):
     """Parse 'fraction:0.8' / 'tokens:120000' / 'messages:80' → langchain trigger tuple."""
     try:
@@ -442,9 +453,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 duplicate — just continue with other work. Leave False (the
                 default) when you need the result to finish the current turn.
         """
-        if run_in_background and background_mgr is not None:
-            if subagent_type not in SUBAGENT_REGISTRY:
-                return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+        async def _spawn_bg() -> str:
             from observability import tracing
             job_id = await background_mgr.spawn(
                 origin_session=tracing.current_session_id(),
@@ -452,12 +461,43 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 description=description,
                 prompt=prompt,
             )
+            return job_id
+
+        if run_in_background and background_mgr is not None:
+            if subagent_type not in SUBAGENT_REGISTRY:
+                return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+            job_id = await _spawn_bg()
             return (
                 f"Background agent started: {job_id} ({subagent_type}: {description}). "
                 "It is running detached; you will be notified of the result automatically "
                 "on a later turn. Do NOT poll, re-check, or spawn a duplicate for this — "
                 "continue with other work in the meantime."
             )
+
+        # Auto-background (ADR 0051): a foreground delegation that overruns the budget
+        # transparently detaches so it can't freeze the turn. Off unless BACKGROUND_AUTO_S>0.
+        auto_s = _auto_background_seconds()
+        if auto_s > 0 and background_mgr is not None and subagent_type in SUBAGENT_REGISTRY:
+            inline = asyncio.ensure_future(_run_subagent(
+                config=config, tool_map=tool_map, available_subagents=available_subagents,
+                description=description, prompt=prompt, subagent_type=subagent_type,
+                emit_skill=emit_skill, truncate=None, skills_index=skills_index,
+            ))
+            done, _pending = await asyncio.wait({inline}, timeout=auto_s)
+            if inline in done:
+                return inline.result()
+            inline.cancel()
+            try:
+                await inline
+            except BaseException:  # noqa: BLE001 — discard the abandoned inline run
+                pass
+            job_id = await _spawn_bg()
+            return (
+                f"This '{subagent_type}' delegation ran past the {auto_s:.0f}s inline budget, "
+                f"so I moved it to the background as {job_id}. You'll be notified when it "
+                "finishes — continue with other work; do NOT re-spawn it."
+            )
+
         return await _run_subagent(
             config=config,
             tool_map=tool_map,
@@ -530,10 +570,55 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
             parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
         return "\n\n".join(parts)
 
+    # Background-job control tools (ADR 0051) — only when a background manager exists
+    # (so a no-background build doesn't advertise dead controls).
+    bg_tools: list[BaseTool] = []
+    if background_mgr is not None:
+
+        @tool
+        async def task_output(job_id: str, block: bool = True, timeout: float = 30.0) -> str:
+            """Check a background job's status and result (the ``bg-…`` id from
+            ``task(run_in_background=True)``).
+
+            You normally do NOT need this — you're notified automatically when a job
+            finishes. Use it only when you deliberately want to wait for or inspect a
+            specific job now.
+
+            Args:
+                job_id: the ``bg-…`` job id.
+                block: if True (default), wait until the job finishes or ``timeout``
+                    elapses; if False, return the current state immediately.
+                timeout: max seconds to wait when ``block`` is True (capped at 600).
+            """
+            job = background_mgr.store.get(job_id)
+            if job is None:
+                return f"No background job {job_id}."
+            if block and job.status == "running":
+                cap = max(1.0, min(float(timeout or 0), 600.0))
+                waited = 0.0
+                while job.status == "running" and waited < cap:
+                    await asyncio.sleep(1.0)
+                    waited += 1.0
+                    job = background_mgr.store.get(job_id) or job
+            head = f"Job {job_id} ({job.subagent_type}: {job.description}) — {job.status}"
+            if job.status == "running":
+                return head + " (still running)."
+            return f"{head}.\n\n{job.result or '(no output)'}"
+
+        @tool
+        async def stop_task(job_id: str) -> str:
+            """Stop a running background job (the ``bg-…`` id from
+            ``task(run_in_background=True)``) — cancels its detached turn. Use this to
+            kill a job that's stuck, runaway, or no longer needed."""
+            res = await background_mgr.cancel(job_id)
+            return res.get("detail", "Done.")
+
+        bg_tools = [task_output, stop_task]
+
     # Declarative multi-step workflows (ADR 0002) are now an opt-in plugin
     # (plugins/workflows) — its run_workflow/save_workflow tools come in via the
     # plugin tool path, not here. Core no longer ships the workflow engine.
-    tools = [task, task_batch]
+    tools = [task, task_batch, *bg_tools]
     return tools
 
 

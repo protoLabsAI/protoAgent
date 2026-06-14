@@ -323,6 +323,102 @@ def test_fired_prompt_includes_task_and_prompt():
     assert "background" in out.lower()
 
 
+# ── Phase 4 / realtime: a2a_task_id, cancel, progress hook (ADR 0051) ─────────
+
+
+class TestStorePhase4:
+    def test_set_a2a_task_id_only_fills_blank(self, tmp_path):
+        s = _store(tmp_path)
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                       description="d", prompt="p")
+        assert s.get(jid).a2a_task_id == ""
+        s.set_a2a_task_id(jid, "task-1")
+        assert s.get(jid).a2a_task_id == "task-1"
+        s.set_a2a_task_id(jid, "task-2")  # must not clobber
+        assert s.get(jid).a2a_task_id == "task-1"
+
+    def test_canceled_is_terminal_and_drains(self, tmp_path):
+        s = _store(tmp_path)
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                       description="d", prompt="p")
+        assert s.mark_complete(jid, "canceled", "stopped") is True
+        assert s.get(jid).status == "canceled"
+        assert [j.status for j in s.drain_pending("s1")] == ["canceled"]
+
+
+class TestManagerCancel:
+    async def test_cancel_posts_canceltask_and_settles(self, tmp_path, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                               description="d", prompt="p")
+        mgr.store.set_a2a_task_id(jid, "task-xyz")
+        res = await mgr.cancel(jid)
+        assert res["ok"] is True and res["status"] == "canceled"
+        cap = _FakeClient.captured
+        assert cap["json"]["method"] == "CancelTask"
+        assert cap["json"]["params"]["id"] == "task-xyz"
+        assert mgr.store.get(jid).status == "canceled"
+
+    async def test_cancel_without_task_id_marks_canceled(self, tmp_path):
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                               description="d", prompt="p")
+        res = await mgr.cancel(jid)  # no a2a_task_id captured yet
+        assert res["status"] == "canceled"
+        assert mgr.store.get(jid).status == "canceled"
+
+    async def test_cancel_noop_on_terminal_job(self, tmp_path):
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                               description="d", prompt="p")
+        mgr.store.mark_complete(jid, "completed", "done")
+        res = await mgr.cancel(jid)
+        assert res["ok"] is False and res["status"] == "completed"
+
+
+class TestProgressHook:
+    def test_turn_started_records_task_id_no_publish(self, tmp_path, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                               description="d", prompt="p")
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress(f"background:{jid}", "task-42", {"phase": "turn_started"})
+        assert mgr.store.get(jid).a2a_task_id == "task-42"
+        assert published == []  # turn_started records, doesn't publish
+
+    def test_tool_frame_publishes_progress(self, tmp_path, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
+                               description="d", prompt="p")
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress(f"background:{jid}", "task-42",
+                          {"phase": "tool_start", "id": "tc1", "name": "web_search"})
+        assert len(published) == 1
+        topic, data = published[0]
+        assert topic == "background.progress"
+        assert data["job_id"] == jid and data["tool"] == "web_search" and data["phase"] == "tool_start"
+
+    def test_non_background_context_ignored(self, monkeypatch):
+        import server.a2a as a2a
+        published: list = []
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
+        a2a._a2a_progress("some-chat-session", "task-1", {"phase": "tool_start", "name": "x"})
+        assert published == []
+
+
 # ── drain into the spawning chat turn (server/chat.py) ───────────────────────
 
 

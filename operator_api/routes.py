@@ -243,6 +243,19 @@ def register_operator_routes(
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    @app.post("/api/background/{job_id}/cancel")
+    async def _background_cancel(job_id: str):
+        """Stop a running background job (ADR 0051) — cancels its detached A2A turn."""
+        from runtime.state import STATE
+
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is None:
+            return {"ok": False, "detail": "Background jobs are not available."}
+        try:
+            return await mgr.cancel(job_id)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @app.post("/api/subagents/run")
     async def _subagent_run(req: SubagentRunRequest):
         try:

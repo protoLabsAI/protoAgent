@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-STATUSES = ("running", "completed", "failed")
-_TERMINAL = ("completed", "failed")
+STATUSES = ("running", "completed", "failed", "canceled")
+_TERMINAL = ("completed", "failed", "canceled")
 
 
 @dataclass
@@ -35,6 +35,7 @@ class BackgroundJob:
     notified: bool
     created_at: str
     completed_at: str | None
+    a2a_task_id: str = ""  # the detached turn's A2A task id — the handle for stop_task
 
     def to_dict(self) -> dict:
         return {
@@ -48,10 +49,12 @@ class BackgroundJob:
             "notified": self.notified,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
+            "a2a_task_id": self.a2a_task_id,
         }
 
 
 def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
+    keys = row.keys()
     return BackgroundJob(
         id=row["id"],
         agent_name=row["agent_name"],
@@ -64,6 +67,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         notified=bool(row["notified"]),
         created_at=row["created_at"],
         completed_at=row["completed_at"],
+        a2a_task_id=(row["a2a_task_id"] if "a2a_task_id" in keys else "") or "",
     )
 
 
@@ -96,10 +100,15 @@ class BackgroundStore:
                     result         TEXT,
                     notified       INTEGER NOT NULL DEFAULT 0,
                     created_at     TEXT NOT NULL,
-                    completed_at   TEXT
+                    completed_at   TEXT,
+                    a2a_task_id    TEXT
                 )
                 """
             )
+            # Migrate a pre-ADR-0051 DB: add the a2a_task_id column if it's missing.
+            cols = {r[1] for r in db.execute("PRAGMA table_info(background_jobs)").fetchall()}
+            if "a2a_task_id" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN a2a_task_id TEXT")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending "
                 "ON background_jobs(origin_session, status, notified)"
@@ -129,14 +138,31 @@ class BackgroundStore:
             db.execute(
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
-                " status, result, notified, created_at, completed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL)",
+                " status, result, notified, created_at, completed_at, a2a_task_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '')",
                 (job_id, agent_name, origin_session, subagent_type, description, prompt, created),
             )
             db.commit()
         finally:
             db.close()
         return job_id
+
+    def set_a2a_task_id(self, job_id: str, a2a_task_id: str) -> None:
+        """Record the detached turn's A2A task id (its stop/re-attach handle), set once
+        when the background turn announces itself (ADR 0051). Only fills a blank slot so a
+        late frame can't clobber it."""
+        if not a2a_task_id:
+            return
+        db = self._connect()
+        try:
+            db.execute(
+                "UPDATE background_jobs SET a2a_task_id = ? "
+                "WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
+                (a2a_task_id, job_id),
+            )
+            db.commit()
+        finally:
+            db.close()
 
     def mark_complete(
         self,
@@ -174,14 +200,14 @@ class BackgroundStore:
         try:
             rows = db.execute(
                 "SELECT * FROM background_jobs "
-                "WHERE origin_session = ? AND status IN ('completed', 'failed') AND notified = 0 "
-                "ORDER BY completed_at ASC",
+                "WHERE origin_session = ? AND status IN ('completed', 'failed', 'canceled') "
+                "AND notified = 0 ORDER BY completed_at ASC",
                 (origin_session,),
             ).fetchall()
             if rows:
                 db.execute(
-                    "UPDATE background_jobs SET notified = 1 "
-                    "WHERE origin_session = ? AND status IN ('completed', 'failed') AND notified = 0",
+                    "UPDATE background_jobs SET notified = 1 WHERE origin_session = ? "
+                    "AND status IN ('completed', 'failed', 'canceled') AND notified = 0",
                     (origin_session,),
                 )
                 db.commit()

@@ -220,6 +220,7 @@ def agent_name() -> str:
 from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A surface
     _SKILL_SPECS,
     _a2a_card_url,
+    _a2a_progress,
     _a2a_terminal,
     _agent_skills,
     _bearer_configured,
@@ -691,7 +692,7 @@ def _main():
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
     from a2a_impl import auth
-    from a2a_impl.executor import ProtoAgentExecutor, set_terminal_hook
+    from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
     from a2a_impl.stores import (
         build_a2a_stores,
         build_push_sender,
@@ -702,6 +703,8 @@ def _main():
 
     # ADR 0003 / 0006: record telemetry + surface Activity output on terminal.
     set_terminal_hook(_a2a_terminal)
+    # ADR 0051: surface a detached (background) turn's realtime tool frames on the bus.
+    set_progress_hook(_a2a_progress)
 
     # Request-time auth + origin enforcement (a2a-sdk advertises schemes on the
     # card but does not enforce them). Bearer = YAML auth.token / A2A_AUTH_TOKEN;
