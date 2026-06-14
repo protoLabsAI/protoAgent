@@ -100,7 +100,54 @@ public chrome — its data calls are the gated part). The console iframes the pa
 `building-react-plugin-views`. An event under `<id>.*` lights your plugin's rail icon (a notification
 dot) until the user opens it.
 
-## 5. Test it — live, no restart
+## 5. Consume core capabilities (`graph.sdk`)
+A plugin doesn't only *contribute* — it can call **back into the host** through the stable
+`graph.sdk` surface (so core can refactor underneath you). Keep these imports **lazy** (inside
+functions/tools) so your plugin still loads + tests host-free. The surface:
+
+- **Run the model / a subagent** — `run_subagent(...)` (a full tool-using subagent),
+  `complete(prompt)` (a bare LLM completion).
+- **A supervised background engine** — `supervise(work, …)`: run a unit of work back-to-back
+  with a watchdog that re-kicks a crash, restarts a stall, and recovers via `on_crash`
+  (`.start()` / `.stop()` / `.request_stop()` / `.status()`). The deterministic heartbeat for a
+  long-running engine — don't hand-roll task/restart machinery.
+  ```python
+  from graph.sdk import supervise
+  engine = supervise(run_one_window, name="fleet", interval=90,
+                     stall_check=lambda: not busy(), on_crash=recover)
+  engine.start()
+  ```
+- **A tunable control surface** — `Knobs()` + `make_knob_tools(knobs, prefix=…)`: declare typed
+  knobs (clamped, `choices`) + named presets, read live in your engine; auto-generate the
+  `<prefix>_knobs` / `_tune` / `_preset` agent tools.
+  ```python
+  from graph.sdk import Knobs, make_knob_tools
+  KNOBS = Knobs().define("min_margin", 30, lo=0).preset("trade-max", {"min_margin": 20})
+  registry.register_tools(make_knob_tools(KNOBS, prefix="fleet"))
+  ```
+- **A self-driving goal loop (OODA)** — `start_goal_loop(…)`: set a monitor goal verified by
+  your plugin verifier **and** schedule a recurring tick that drives it until the verifier
+  passes — in one call (`stop_goal_loop` to tear down, e.g. from an `on_achieved` hook). Register
+  the verifier + hook in `register()` first; pass `session_id` from your tool's `InjectedState`.
+  ```python
+  from graph.sdk import start_goal_loop
+  start_goal_loop(session_id=sid, goal="reach 1M credits",
+                  verifier="fleet:credits", verifier_args={"min": 1_000_000},
+                  every="30m", prompt="Run the OODA tick and report.")
+  ```
+- **Observability** — `DecisionLog` (an audit trail of what the agent changed, and why),
+  `telemetry(…)` (the standard status/metrics/hints/decisions envelope), `render_html(env)` (a
+  themed panel for your console view).
+  ```python
+  from graph.sdk import DecisionLog, telemetry, render_html
+  LOG = DecisionLog(); LOG.record("tune", "min_margin 30→15", reason="cr/hr falling")
+  return render_html(telemetry(status="running", metrics={"credits": cr}, decisions=LOG))
+  ```
+
+These generalize the patterns the SpaceTraders two-loop fleet proved (its `manage-the-fleet`
+skill is the worked example: a deterministic engine steered by an agentic OODA loop).
+
+## 6. Test it — live, no restart
 You don't need to restart to try a plugin you built. With **plugin-devkit** enabled:
 - `scaffold_plugin(...)` already **enabled** it (the default) — its tools/view are
   live on your **next turn**. Call its `<id>_hello` to confirm.
@@ -141,7 +188,7 @@ From the shell (no agent): `python -m server plugin new "My Plugin" --view --ski
 scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
 scaffolds an ADR-0040 bundle.
 
-## 6. Distribute (optional)
+## 7. Distribute (optional)
 Publish as a git repo; others install by URL:
 `python -m server plugin install <git-url> --ref <tag>` (or the console Plugins
 panel). Install pins a commit SHA in `plugins.lock`; `plugin sync` reproduces it.
