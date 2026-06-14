@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **One-call goal-driven recurring loop (`graph.sdk.start_goal_loop` / `stop_goal_loop`).**
+  Wires the OODA / self-improving pattern — *run a tick every N toward a goal until its
+  verifier passes* — in a single call, instead of a plugin hand-stitching the goal controller
+  (set a monitor goal, ADR 0028/0030) + the scheduler (a recurring prompt, ADR 0003/0053).
+  Sets a monitor goal verified by a plugin verifier and schedules the tick **into the goal's
+  own session** (`context_id`), so it drives the right goal; `every` accepts a 5-field cron or
+  a duration shorthand (`"15m"` / `"2h"` / `"1d"`); rolls the goal back if scheduling fails;
+  `stop_goal_loop` clears the goal + cancels the tick (e.g. from an `on_achieved` hook).
+  Generalizes the wiring the spacetraders `manage-the-fleet` skill described in prose (#1026).
 - **Host-free plugin test harness (`graph/plugins/testkit.py`).** A self-contained
   (stdlib-only) testkit that loads a plugin as a **package** — so a plugin's real engine
   modules (relative imports, module-level `@tool`, lazy `graph.*` host imports) can be
