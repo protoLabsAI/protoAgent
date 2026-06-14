@@ -96,6 +96,11 @@ def build_system_prompt(
   or specialized work.
 - If a tool fails, read the error, try once with corrected inputs, then
   surface the failure to the user with the concrete error string.
+- When you're waiting for something to finish — a ship/build/job to
+  complete, a cooldown, an ETA a tool just reported ("arriving in 37s") —
+  do NOT call a status tool in a loop to wait it out; that burns the whole
+  turn. Call `wait(seconds, then=…)` to yield and be re-triggered when it's
+  ready (it ends the turn and resumes you with `then`).
 - Keep internal deliberation in `<scratch_pad>`; put only the
   user-facing answer in `<output>` — the handler parses these tags and
   never forwards scratch content to consumers.

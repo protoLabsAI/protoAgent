@@ -29,6 +29,11 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     from graph.middleware.tool_call_repair import ToolCallRepairMiddleware
     middleware.append(ToolCallRepairMiddleware())
 
+    # End the turn after the `wait` tool runs (yield-and-resume instead of
+    # busy-polling). No-op on any turn that didn't call `wait`.
+    from graph.middleware.wait_yield import WaitYieldMiddleware
+    middleware.append(WaitYieldMiddleware())
+
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
     # first/outermost so the cache breakpoint lands on the stable system
     # prefix; KnowledgeMiddleware's context is delivered just after it.
