@@ -38,6 +38,9 @@ dependencies = [
   "croniter>=2.0",
   "filelock>=3.12",
   "zeroconf>=0.131",
+  # Document ingestion engine (ADR 0021) — light pure-Python extractors:
+  "pypdf>=4.0",                  # PDF → text
+  "youtube-transcript-api>=1.0", # YouTube captions → text (1.x instance API)
 ]
 
 [project.optional-dependencies]
@@ -79,6 +82,7 @@ packages = [
   "graph",
   "inbox",
   "infra",
+  "ingestion",
   "knowledge",
   "observability",
   "operator_api",
@@ -114,6 +118,7 @@ root_packages = [
   "events",
   "graph",
   "infra",
+  "ingestion",
   "knowledge",
   "observability",
   "operator_api",
@@ -156,7 +161,7 @@ ignore_imports = [
 name = "infra packages do not import server or operator_api"
 type = "forbidden"
 source_modules = [
-  "a2a_impl", "events", "infra", "knowledge", "observability",
+  "a2a_impl", "events", "infra", "ingestion", "knowledge", "observability",
   "runtime", "scheduler", "security", "tools",
 ]
 forbidden_modules = ["server", "operator_api"]

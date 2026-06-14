@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document ingestion engine** (ADR 0021) — add real documents to the knowledge base,
+  not just typed facts. A new core `ingestion/` package turns a source into text and
+  feeds it through `add_document` (chunk → contextual-enrich → embed), so a whole PDF or
+  article becomes per-passage recall. Phase 1 formats (light, pure-Python): plain text,
+  Markdown, HTML, PDF (`pypdf`), web URLs (fetched + readability-stripped via
+  BeautifulSoup), and **YouTube** links (transcript via `youtube-transcript-api`). New
+  `POST /api/knowledge/ingest` accepts a file upload, a URL, or pasted text (extraction +
+  embedding run off the event loop) and returns the created chunk ids. Each extractor
+  degrades cleanly — an optional dep that's missing raises a friendly error, a bad source
+  never 500s. Audio/video (local ASR) is a deliberate Phase 2 (the gateway serves no
+  transcription model).
 - **Contextual enrichment on knowledge ingest** (ADR 0021 — Anthropic's Contextual
   Retrieval). When a document splits into chunks, an aux-LLM one-line context that
   situates each chunk in the *whole* document is prepended before it's embedded and

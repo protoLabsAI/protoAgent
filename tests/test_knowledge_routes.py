@@ -182,3 +182,67 @@ def test_promote_route_unsupported_in_scoped_mode(monkeypatch):
 def test_promote_route_disabled(monkeypatch):
     c = _client(monkeypatch)  # no skills index
     assert c.post("/api/playbooks/1/promote").json() == {"enabled": False, "promoted": False}
+
+
+# ── document ingestion (/api/knowledge/ingest) ────────────────────────────────
+class _IngestKS:
+    """Store double exposing add_document (returns N ids to mimic chunking)."""
+
+    def __init__(self):
+        self.docs = []
+
+    def add_document(self, content, **kw):
+        self.docs.append((content, kw))
+        return [101, 102]  # pretend it split into 2 chunks
+
+
+def test_ingest_text(monkeypatch):
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.post("/api/knowledge/ingest",
+                  data={"text": "a pasted note body", "title": "My Note"}).json()
+    assert body["enabled"] is True
+    assert body["ids"] == [101, 102] and body["chunks"] == 2
+    assert body["source_type"] == "text" and body["title"] == "My Note"
+    content, kw = ks.docs[0]
+    assert content == "a pasted note body" and kw["heading"] == "My Note"
+
+
+def test_ingest_file_upload(monkeypatch):
+    ks = _IngestKS()
+    c = _client(monkeypatch, knowledge=ks)
+    files = {"file": ("notes.md", b"# Heading\n\nsome body text", "text/markdown")}
+    body = c.post("/api/knowledge/ingest", files=files).json()
+    assert body["enabled"] is True and body["source_type"] == "markdown"
+    assert ks.docs[0][1]["source"] == "notes.md"
+
+
+def test_ingest_url(monkeypatch):
+    ks = _IngestKS()
+    # Patch the engine so no network: the route imports extract_url from `ingestion`.
+    import ingestion
+    from ingestion import ExtractResult
+    monkeypatch.setattr(
+        ingestion, "extract_url",
+        lambda u: ExtractResult(text="fetched article body", title="Article", source_type="html"),
+    )
+    c = _client(monkeypatch, knowledge=ks)
+    body = c.post("/api/knowledge/ingest", data={"url": "https://example.com/post"}).json()
+    assert body["enabled"] is True and body["source_type"] == "html"
+    assert ks.docs[0][1]["source"] == "https://example.com/post"
+
+
+def test_ingest_requires_a_source(monkeypatch):
+    c = _client(monkeypatch, knowledge=_IngestKS())
+    assert c.post("/api/knowledge/ingest", data={}).status_code == 400
+
+
+def test_ingest_unsupported_type_returns_415(monkeypatch):
+    c = _client(monkeypatch, knowledge=_IngestKS())
+    files = {"file": ("blob.bin", b"\x00\x01\x02\x03", "application/octet-stream")}
+    assert c.post("/api/knowledge/ingest", files=files).status_code == 415
+
+
+def test_ingest_disabled_when_store_off(monkeypatch):
+    c = _client(monkeypatch)  # no knowledge store
+    assert c.post("/api/knowledge/ingest", data={"text": "x"}).json() == {"enabled": False, "ids": []}
