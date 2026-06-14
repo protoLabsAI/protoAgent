@@ -262,6 +262,84 @@ def register_knowledge_routes(app) -> None:
             "chars": len(result.text),
         }
 
+    @app.post("/api/knowledge/attach")
+    async def _api_chat_attach(
+        file: UploadFile = File(...),
+        session_id: str = Form(...),
+    ):
+        """Extract a chat attachment and TIER it so a big doc never gets dumped
+        into the turn (ADR 0021):
+
+        - text at or under ``knowledge.attach_inline_budget`` → inlined whole
+          (``mode=inline``); the caller prepends ``context`` to its message.
+        - a larger doc → ingested (chunked / contextually enriched / embedded)
+          under a per-session namespace so the user's *question* retrieves the
+          relevant passages, and only a ``lede`` is inlined as an anchor
+          (``mode=indexed``). Cleaned up when the chat session is deleted.
+
+        Returns the ready-to-prepend ``context`` block + a descriptor for the
+        composer chip."""
+        if STATE.knowledge_store is None:
+            return {"enabled": False}
+        from ingestion import MissingDependency, UnsupportedSource, extract_bytes
+        from knowledge import add_document
+
+        sid = (session_id or "").strip()
+        if not sid:
+            return JSONResponse({"detail": "session_id is required"}, status_code=400)
+
+        transcribe = None
+        try:
+            from graph.llm import create_transcribe_fn
+
+            transcribe = create_transcribe_fn(STATE.graph_config) if STATE.graph_config else None
+        except Exception as exc:  # noqa: BLE001 — transcription stays optional
+            log.warning("[knowledge] transcribe fn unavailable: %s", exc)
+
+        name = file.filename or "attachment"
+        try:
+            data = await file.read()
+            result = await asyncio.to_thread(
+                extract_bytes, name, data, file.content_type, transcribe=transcribe)
+        except MissingDependency as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=501)
+        except UnsupportedSource as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=415)
+        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never 500
+            log.warning("[knowledge] attach extraction failed: %s", exc)
+            return JSONResponse({"detail": f"extraction failed: {exc}"}, status_code=400)
+
+        text = result.text
+        budget = int(getattr(STATE.graph_config, "knowledge_attach_inline_budget", 8000) or 8000)
+
+        if len(text) <= budget:
+            context = f"[Attached file: {name}]\n{text}\n[end of {name}]"
+            return {
+                "enabled": True, "mode": "inline", "name": name,
+                "source_type": result.source_type, "chars": len(text),
+                "chunks": 0, "context": context,
+            }
+
+        # Large → index for retrieval (session-scoped, ephemeral) + inline a lede.
+        ids = await asyncio.to_thread(
+            lambda: add_document(
+                STATE.knowledge_store, text,
+                domain="attachment", namespace=f"attach:{sid}",
+                source=name, source_type=result.source_type,
+            )
+        )
+        lede = text[:budget]
+        context = (
+            f"[Attached file: {name} — large ({len(text)} chars), indexed for retrieval. "
+            f"Opening excerpt:]\n{lede}\n"
+            f"[Ask about its contents to retrieve more from {name}.]"
+        )
+        return {
+            "enabled": True, "mode": "indexed", "name": name,
+            "source_type": result.source_type, "chars": len(text),
+            "chunks": len(ids), "context": context,
+        }
+
     @app.put("/api/knowledge/chunks/{chunk_id}")
     async def _api_knowledge_update(chunk_id: int, body: dict | None = None):
         if STATE.knowledge_store is None:

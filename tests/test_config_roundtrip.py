@@ -105,6 +105,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_chunk_min_chars": 200,
     "knowledge_contextual_enrichment": False,
     "knowledge_context_max_doc_chars": 12000,
+    "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
     "max_iterations": 50,
     "max_tokens": 32768,
@@ -225,6 +226,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "org": "",
     },
     "knowledge": {
+        "attach_inline_budget": 8000,
         "chunk_max_chars": 1200,
         "chunk_min_chars": 200,
         "chunk_overlap_chars": 150,
@@ -363,6 +365,7 @@ EMITTED_ATTRS = {
     "knowledge_chunk_min_chars",
     "knowledge_contextual_enrichment",
     "knowledge_context_max_doc_chars",
+    "knowledge_attach_inline_budget",
     # skills.*
     "skills_enabled",
     "skills_db_path",

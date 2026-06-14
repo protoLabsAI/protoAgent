@@ -161,6 +161,11 @@ FIELDS: list[Field] = [
           "whole document before embedding — lifts both semantic and keyword recall (Anthropic's "
           "Contextual Retrieval). Costs one aux call per chunk at ingest (not on the query path). "
           "Off by default.", restart=True),
+    Field("knowledge.attach_inline_budget", "knowledge_attach_inline_budget",
+          "Chat attachment inline budget", "number", "Knowledge",
+          "A file dropped in chat is inlined whole if its text is at or under this many "
+          "characters; a larger doc is indexed for retrieval instead, with only a lede of this "
+          "length inlined — so a big document never gets dumped into the turn.", minimum=1),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",

@@ -14,13 +14,17 @@ HTTP layer over it. ``ui`` (the deployment tier) is passed in because
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from runtime.state import STATE
+
+log = logging.getLogger("protoagent.server")
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import chat
@@ -56,6 +60,14 @@ def register_chat_routes(app, ui: str) -> None:
         operator may be deleting it precisely to get rid of it. The TTL prune
         sweep keeps its own config-driven default (``checkpoint_harvest_enabled``)."""
         chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest)
+        # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
+        # deleted chat leaves nothing indexed behind.
+        store = STATE.knowledge_store
+        if store is not None and hasattr(store, "delete_by_namespace"):
+            try:
+                await asyncio.to_thread(store.delete_by_namespace, f"attach:{session_id}")
+            except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+                log.warning("[chat] attachment cleanup failed for %s: %s", session_id, exc)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     # --- Goal mode API ------------------------------------------------------

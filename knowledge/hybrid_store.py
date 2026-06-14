@@ -239,6 +239,26 @@ class HybridKnowledgeStore(KnowledgeStore):
         finally:
             db.close()
 
+    def delete_by_namespace(self, namespace: str) -> int:
+        """Drop the namespace's chunks AND their vectors (no FK cascade on the
+        side table) so ephemeral chunks leave nothing behind."""
+        if not namespace:
+            return 0
+        db = self._get_db()
+        if db is not None:
+            try:
+                db.execute(
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN "
+                    "(SELECT id FROM chunks WHERE namespace = ?)",
+                    (namespace,),
+                )
+                db.commit()
+            except sqlite3.DatabaseError as exc:
+                log.warning("[knowledge] delete_by_namespace vectors failed: %s", exc)
+            finally:
+                db.close()
+        return super().delete_by_namespace(namespace)
+
     def _vector_search(self, query_vec: list[float], k: int, domain: str | None) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
         db = self._get_db()

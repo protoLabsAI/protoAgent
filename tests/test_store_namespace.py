@@ -59,3 +59,41 @@ def test_namespace_migration_on_preexisting_db(tmp_path):
     rows = {c.content: c.namespace for c in store.list_chunks(limit=10)}
     assert rows["old row"] is None
     assert rows["new row"] == "ns"
+
+
+def test_delete_by_namespace(tmp_path):
+    """delete_by_namespace drops exactly the namespace's chunks (ephemeral chat
+    attachments are cleaned this way), leaving other namespaces + globals."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("attach one", domain="attachment", namespace="attach:s1")
+    store.add_chunk("attach two", domain="attachment", namespace="attach:s1")
+    store.add_chunk("other session", domain="attachment", namespace="attach:s2")
+    store.add_chunk("a global fact", domain="fact")
+
+    removed = store.delete_by_namespace("attach:s1")
+    assert removed == 2
+    remaining = {c.as_dict()["content"] for c in store.list_chunks()}
+    assert "attach one" not in remaining and "attach two" not in remaining
+    assert "other session" in remaining and "a global fact" in remaining
+    assert store.delete_by_namespace("attach:s1") == 0   # idempotent
+    assert store.delete_by_namespace("") == 0            # guard
+
+
+def test_hybrid_delete_by_namespace_drops_vectors(tmp_path):
+    """The hybrid override also clears the side chunk_vectors table (no FK cascade)."""
+    import sqlite3 as _sql
+
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    db = str(tmp_path / "kb.db")
+    store = HybridKnowledgeStore(db, embed_fn=lambda t: [1.0, 0.0])
+    store.add_chunk("attach one", domain="attachment", namespace="attach:s1")
+    store.add_chunk("keep me", domain="fact")
+    conn = _sql.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 2
+    conn.close()
+
+    store.delete_by_namespace("attach:s1")
+    conn = _sql.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 1  # only the kept one
+    conn.close()

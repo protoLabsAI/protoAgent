@@ -418,6 +418,11 @@ class LangGraphConfig:
     # text sent in the context prompt.
     knowledge_contextual_enrichment: bool = False
     knowledge_context_max_doc_chars: int = 12000
+    # Chat attachments (ADR 0021) — a file dropped in chat is extracted, then TIERED
+    # so a big doc never gets dumped into the turn: text at or under this many chars
+    # is inlined whole; a larger doc is ingested (chunked/embedded, session-scoped)
+    # for retrieval and only a lede of this many chars is inlined as an anchor.
+    knowledge_attach_inline_budget: int = 8000
 
     # Conversation checkpointer — persists each chat session's history per
     # thread_id so multi-turn chats survive a server restart. A path → durable
@@ -808,6 +813,8 @@ class LangGraphConfig:
                 "contextual_enrichment", cls.knowledge_contextual_enrichment),
             knowledge_context_max_doc_chars=knowledge.get(
                 "context_max_doc_chars", cls.knowledge_context_max_doc_chars),
+            knowledge_attach_inline_budget=knowledge.get(
+                "attach_inline_budget", cls.knowledge_attach_inline_budget),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),

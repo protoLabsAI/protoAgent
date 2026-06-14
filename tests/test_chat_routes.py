@@ -50,6 +50,28 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     assert calls == [("a2a:s1", False), ("a2a:s2", True)]
 
 
+def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
+    """Deleting a chat drops its session-scoped attachment chunks."""
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    async def _fake_retire(thread_id, *, harvest=None):
+        return None
+
+    ns: list[str] = []
+
+    class _Store:
+        def delete_by_namespace(self, namespace):
+            ns.append(namespace)
+            return 3
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", _Store(), raising=False)
+    assert c.delete("/api/chat/sessions/s1").json()["deleted"] is True
+    assert ns == ["attach:s1"]
+
+
 def test_healthz_ready_and_echoes_ui(monkeypatch):
     c = _client(monkeypatch, graph=object())
     r = c.get("/healthz")

@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Activity thread (via a `now`-priority inbox item, storm-guarded), where the response
   surfaces live in the console's Activity feed. So a backgrounded strategist audit can
   finish and the agent acts on it on its own. On by default; `BACKGROUND_WAKE=0` opts out.
+- **Chat attachments — tiered context (backend)** (ADR 0021). `POST /api/knowledge/attach`
+  extracts a dropped file (the ingestion engine — txt/md/html/pdf, audio/video via STT) and
+  **tiers it so a big document never gets dumped into the turn**: text at or under
+  `knowledge.attach_inline_budget` (default 8000 chars) is inlined whole; a larger doc is
+  ingested (chunked → contextually enriched → embedded) under a per-session namespace
+  (`attach:<session>`) so the user's *question* retrieves only the relevant passages, with
+  just a lede inlined as an anchor. The attachments are **session-scoped + ephemeral** —
+  deleting the chat (`DELETE /api/chat/sessions/{id}`) now drops them via the new
+  `KnowledgeStore.delete_by_namespace` (hybrid clears the side vector table too). The
+  composer UI that drives this is the next PR.
 - **Background subagents** (ADR 0050, Phase 1) — the `task` tool now takes
   `run_in_background: true`. A long, independent delegation (deep research, multi-step
   gathering) runs **detached** instead of blocking the chat turn: the tool returns

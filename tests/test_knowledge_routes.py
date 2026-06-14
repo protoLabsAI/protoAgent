@@ -256,3 +256,52 @@ def test_ingest_audio_without_transcribe_model_returns_501(monkeypatch):
     c = _client(monkeypatch, knowledge=_IngestKS())
     files = {"file": ("clip.mp3", b"\x00\x01audio", "audio/mpeg")}
     assert c.post("/api/knowledge/ingest", files=files).status_code == 501
+
+
+# ── chat attachments (/api/knowledge/attach) — tiered, session-scoped ─────────
+import types as _types  # noqa: E402
+
+
+def _attach_client(monkeypatch, ks, *, budget=20):
+    import runtime.state as rs
+    monkeypatch.setattr(
+        rs.STATE, "graph_config",
+        _types.SimpleNamespace(knowledge_attach_inline_budget=budget),
+        raising=False,
+    )
+    return _client(monkeypatch, knowledge=ks)
+
+
+def test_attach_small_doc_inlines(monkeypatch):
+    ks = _IngestKS()
+    c = _attach_client(monkeypatch, ks, budget=200)
+    files = {"file": ("note.txt", b"a short attached note", "text/plain")}
+    body = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()
+    assert body["mode"] == "inline" and body["chunks"] == 0
+    assert "a short attached note" in body["context"]
+    assert ks.docs == []                       # nothing indexed for a small doc
+
+
+def test_attach_large_doc_indexes_session_scoped(monkeypatch):
+    ks = _IngestKS()
+    c = _attach_client(monkeypatch, ks, budget=20)
+    big = b"word " * 50  # 250 chars > 20-char budget
+    files = {"file": ("big.txt", big, "text/plain")}
+    body = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()
+    assert body["mode"] == "indexed" and body["chunks"] == 2
+    assert "indexed for retrieval" in body["context"]   # lede + retrieval note, not a dump
+    assert len(body["context"]) < 250                    # only the lede inlined, not the whole doc
+    content, kw = ks.docs[0]
+    assert kw["domain"] == "attachment" and kw["namespace"] == "attach:s1"
+
+
+def test_attach_requires_session_id(monkeypatch):
+    c = _attach_client(monkeypatch, _IngestKS())
+    files = {"file": ("note.txt", b"hi", "text/plain")}
+    assert c.post("/api/knowledge/attach", files=files, data={"session_id": "  "}).status_code == 400
+
+
+def test_attach_disabled_when_store_off(monkeypatch):
+    c = _client(monkeypatch)
+    files = {"file": ("note.txt", b"hi", "text/plain")}
+    assert c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json() == {"enabled": False}

@@ -772,3 +772,22 @@ class KnowledgeStore:
             return 0
         finally:
             db.close()
+
+    def delete_by_namespace(self, namespace: str) -> int:
+        """Delete every chunk in ``namespace``. Used to clean up ephemeral,
+        session-scoped chunks (e.g. chat attachments) when the session is
+        retired (ADR 0021). Returns the count removed."""
+        if not namespace:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute("DELETE FROM chunks WHERE namespace = ?", (namespace,))
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] delete_by_namespace failed: %s", exc)
+            return 0
+        finally:
+            db.close()
