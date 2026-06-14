@@ -16,6 +16,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -514,6 +515,63 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
     return extract_output(raw) or raw or "(subagent produced no output)"
 
 
+# --- User-facing skill slash commands (ADR 0052) -----------------------------
+# A chat message like ``/triage <args>`` runs a user-facing skill. Unlike a
+# workflow/subagent command, it does NOT spawn a worker or short-circuit the
+# turn — it REWRITES the message to inject the skill's procedure as a directive
+# and falls through to the normal lead-agent turn, so every streaming / HITL /
+# goal / tool invariant holds unchanged. Workflows and subagents of the same
+# token win (dispatch checks them first).
+
+
+def _slugify_slash(raw: str) -> str:
+    """Lowercase + non-alphanumerics→hyphens slug for a slash token."""
+    return re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
+
+
+def _parse_skill_command(message: str):
+    """Return ``(skill_dict, args)`` if ``message`` is ``/<user-facing-skill> …``
+    (and not ``/goal`` or a workflow/subagent of the same token), else ``None``."""
+    name, rest = _parse_slash_command(message)
+    if not name:
+        return None
+    token = _slugify_slash(name)
+    if not token or token == "goal":
+        return None
+    # Workflow / subagent of the same token win (they're dispatched first).
+    if STATE.workflow_registry is not None and STATE.workflow_registry.get(token) is not None:
+        return None
+    try:
+        from graph.subagents.config import SUBAGENT_REGISTRY
+        if token in SUBAGENT_REGISTRY:
+            return None
+    except Exception:
+        pass
+    reader = getattr(STATE.skills_index, "user_facing_skills", None) if STATE.skills_index else None
+    if reader is None:
+        return None
+    try:
+        skills = reader()
+    except Exception:
+        return None
+    for skill in skills:
+        sk_token = (skill.get("slash") or "").strip().lower() or _slugify_slash(skill.get("name", ""))
+        if sk_token == token:
+            return skill, rest.strip()
+    return None
+
+
+def _skill_directive(skill: dict, args: str) -> str:
+    """Compose the lead-agent directive injecting a user-facing skill's procedure
+    into the turn (ADR 0052). The agent runs the procedure with its full toolset."""
+    name = skill.get("name") or "skill"
+    procedure = (skill.get("prompt_template") or "").strip()
+    directive = f"[Running the '{name}' skill]\n\nFollow this procedure:\n\n{procedure}\n"
+    if args:
+        directive += f"\nInput: {args}\n"
+    return directive
+
+
 async def _chat_langgraph_stream(
     message: str,
     session_id: str,
@@ -629,6 +687,14 @@ async def _chat_langgraph_stream(
                 yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
                 yield ("done", sub_out)
                 return
+
+            # User-facing skill slash command (/<skill> [args]) — does NOT
+            # short-circuit: rewrite the message to inject the skill's procedure
+            # as a directive, then fall through to the normal lead-agent turn so
+            # every streaming / HITL / goal invariant holds (ADR 0052).
+            parsed_skill = _parse_skill_command(message)
+            if parsed_skill is not None:
+                message = _skill_directive(*parsed_skill)
 
             # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
             # external coding agent (proto/codex/claude/…) drives the turn over ACP
@@ -843,6 +909,13 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
             parsed = _parse_workflow_command(message)
             if parsed is not None:
                 return [{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}]
+
+            # User-facing skill slash command (/<skill> [args], ADR 0052) — rewrite
+            # the message to inject the skill's procedure and fall through to the
+            # normal turn (does not short-circuit). Workflows of the same token win.
+            parsed_skill = _parse_skill_command(message)
+            if parsed_skill is not None:
+                message = _skill_directive(*parsed_skill)
 
             # `chat:` namespaces non-streaming sessions in the shared checkpointer,
             # apart from the A2A `a2a:` ones (was `gradio:` — renamed when the Gradio

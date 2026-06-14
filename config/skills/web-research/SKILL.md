@@ -6,6 +6,8 @@ description: >-
   e.g. "what's the latest on X", "find the best approach to Y", "compare
   these three tools". Drives a scope → gather → gap-check → synthesize loop.
 tools: [web_search, fetch_url, memory_recall, memory_ingest, current_time]
+user_facing: true
+slash: research
 ---
 
 # Web Research

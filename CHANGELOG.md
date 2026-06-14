@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The composer's send gate enables on text **or** a ready attachment, matching the DS
   PromptInput (`@protolabsai/ui` bumped to 0.34 for the attachment-aware submit). The user
   bubble still shows just the 📎 attachment line, never a raw dump.
+- **User-facing skills — trigger a skill with a slash command** (ADR 0052) — a SKILL.md can
+  now opt in with `user_facing: true` (plus an optional `slash:` token), which makes it
+  invokable as `/<slash> [args]` right from the chat composer's slash menu — alongside
+  `/<workflow>` and `/<subagent>`. Unlike those, a skill command doesn't spawn a worker: it
+  **injects the skill's procedure as a directive and runs a normal turn on the current
+  thread**, so the lead agent follows the recipe with its full toolset and history intact
+  (every streaming / HITL / goal invariant unchanged). The bundled **`web-research` skill is
+  now `/research`**, and a new **`release-notes` skill (`/release-notes`)** turns a set of
+  merged changes into grouped, audience-ready notes. Precedence on a shared token is
+  `goal` > workflow > subagent > skill. Skills not flagged `user_facing` are unaffected (they
+  keep surfacing only via implicit retrieval-injection). The skills FTS index migrates v3→v4
+  on first boot (backup-and-rebuild from disk + persisted skills — no data loss).
 - **Chat message toolbar — copy, fork, regenerate** (DS message-thread adoption) — the
   chat transcript now uses the design-system `Conversation`/`Message`/`MessageActions`
   components. Each settled assistant reply gets a hover toolbar: **Copy** the answer,

@@ -545,3 +545,47 @@ def test_curator_runs_against_live_index(populated_index) -> None:
     before = len(populated_index.all_skills())
     entry = SkillCurator(index=populated_index, audit_path="/dev/null", dry_run=True).run()
     assert entry["skills_before"] == before
+
+
+# ── User-facing skills (ADR 0052) ──────────────────────────────────────────────
+
+
+def test_user_facing_skills_storage_and_reader(index):
+    """user_facing/slash round-trip through the FTS index; user_facing_skills()
+    returns only the flagged rows with their slash token (ADR 0052)."""
+    import types
+
+    uf = types.SimpleNamespace(
+        name="web-research", description="Research on the web.",
+        prompt_template="plan, search, cite", tools_used=["web_search"],
+        created_at=datetime.now(timezone.utc), source_session_id="s",
+        user_facing=True, slash="research",
+    )
+    plain = _make_artifact(name="background-only", description="not user facing")
+    index.add_skill(uf, source="disk")
+    index.add_skill(plain, source="disk")
+
+    # all_skills carries the flags; only the flagged one is user-facing.
+    by_name = {s["name"]: s for s in index.all_skills()}
+    assert by_name["web-research"]["user_facing"] is True
+    assert by_name["web-research"]["slash"] == "research"
+    assert by_name["background-only"]["user_facing"] is False
+
+    ufs = index.user_facing_skills()
+    assert [s["name"] for s in ufs] == ["web-research"]
+    assert ufs[0]["slash"] == "research"
+
+
+def test_user_facing_slash_falls_back_to_slug(index):
+    """A user-facing skill with no explicit slash stores the slugified name."""
+    import types
+
+    uf = types.SimpleNamespace(
+        name="Big Task", description="d", prompt_template="p", tools_used=[],
+        created_at=datetime.now(timezone.utc), source_session_id="s",
+        user_facing=True, slash="",
+        slash_token=lambda: "big-task",
+    )
+    index.add_skill(uf, source="disk")
+    ufs = index.user_facing_skills()
+    assert ufs and ufs[0]["slash"] == "big-task"

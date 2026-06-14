@@ -102,8 +102,12 @@ scheduler got the same injected-`publish` treatment as the background manager), 
 **orphaned push-configs are swept** — the SDK push store has no timestamp, so instead of a
 TTL the config's lifetime is tied to its task: `sweep_orphaned_push_configs` drops push rows
 whose `task_id` is no longer a live task, run at boot + on the periodic task-prune tick.
-Still open: verifying push actually fires on a terminal turn (the executor enqueues no
-explicit `PushNotificationEvent`).
+Push-on-terminal: **verified working** — the SDK's `PushNotificationEvent` is an alias
+(`Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent`), so the terminal
+`TaskStatusUpdateEvent` from `updater.complete()` satisfies the consumer's
+`isinstance(event, PushNotificationEvent)` trigger and `push_sender.send_notification` fires
+for a registered webhook (on every status/artifact frame, including terminal). No explicit
+`PushNotificationEvent` enqueue needed. Slice 3 is complete.
 
 ## Consequences
 

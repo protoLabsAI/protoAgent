@@ -36,7 +36,8 @@ def _build_match_query(query: str) -> str:
 # v2: added confidence + last_used (consumed by the skill curator).
 # v3: added `source` ('disk' = human-authored SKILL.md, re-seeded each boot;
 #     'emitted' = agent-authored via task(), persisted + curator-managed).
-_SCHEMA_VERSION = 3
+# v4: added user_facing + slash (ADR 0052 — `/<slash>` chat commands).
+_SCHEMA_VERSION = 4
 
 # Columns indexed by FTS5 (order matters for sqlite_master check)
 _FTS_CONTENT_COLUMNS = (
@@ -150,7 +151,9 @@ class SkillsIndex:
                 created_at UNINDEXED,
                 confidence UNINDEXED,
                 last_used UNINDEXED,
-                source UNINDEXED
+                source UNINDEXED,
+                user_facing UNINDEXED,
+                slash UNINDEXED
             );
 
             CREATE TABLE _skills_meta (
@@ -159,7 +162,7 @@ class SkillsIndex:
             );
 
             INSERT INTO _skills_meta (key, version)
-            VALUES ('schema_version', 3);
+            VALUES ('schema_version', 4);
         """)
         conn.commit()
         log.info("[skills] schema created at %s", self._db_path)
@@ -206,17 +209,27 @@ class SkillsIndex:
         # the curator's decay clock starts at emission (bumped on retrieval).
         last_used = created_at
 
+        # User-facing slash trigger (ADR 0052). Stored as '1'/'0' text in the
+        # UNINDEXED column; ``slash`` falls back to the slugified name so the
+        # reader always has a non-empty token.
+        user_facing = "1" if getattr(artifact, "user_facing", False) else "0"
+        slash = getattr(artifact, "slash", "") or ""
+        if user_facing == "1" and not slash and hasattr(artifact, "slash_token"):
+            slash = artifact.slash_token()
+
         conn = self._open_conn()
         try:
             conn.execute(
                 """
                 INSERT INTO skills_fts
                     (name, description, prompt_template, tools_used,
-                     source_session_id, created_at, confidence, last_used, source)
-                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?)
+                     source_session_id, created_at, confidence, last_used, source,
+                     user_facing, slash)
+                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?, ?)
                 """,
                 (name, description, prompt_template, tools_str,
-                 source_session_id, created_at, last_used, source),
+                 source_session_id, created_at, last_used, source,
+                 user_facing, slash),
             )
             conn.commit()
             log.debug("[skills] indexed skill: %s (source=%s)", name, source)
@@ -322,26 +335,51 @@ class SkillsIndex:
             cur = conn.execute(
                 """
                 SELECT rowid AS id, name, description, prompt_template, tools_used,
-                       created_at, confidence, last_used, source
+                       created_at, confidence, last_used, source, user_facing, slash
                 FROM skills_fts
                 """
             )
-            return [
-                {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "description": row["description"],
-                    "prompt_template": row["prompt_template"],
-                    "tools_used": (row["tools_used"] or "").split(),
-                    "created_at": row["created_at"],
-                    "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
-                    "last_used": row["last_used"],
-                    "source": (row["source"] if "source" in row.keys() else "emitted") or "emitted",
-                }
-                for row in cur.fetchall()
-            ]
+            return [self._row_to_dict(row) for row in cur.fetchall()]
         except sqlite3.OperationalError as exc:
             log.debug("[skills] all_skills error (returning empty): %s", exc)
+            return []
+
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row) -> dict:
+        """Map an FTS row to a skill dict (tolerates pre-v4 rows missing the
+        user_facing/slash columns)."""
+        keys = row.keys()
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"],
+            "prompt_template": row["prompt_template"],
+            "tools_used": (row["tools_used"] or "").split(),
+            "created_at": row["created_at"],
+            "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
+            "last_used": row["last_used"],
+            "source": (row["source"] if "source" in keys else "emitted") or "emitted",
+            "user_facing": (row["user_facing"] if "user_facing" in keys else "0") == "1",
+            "slash": (row["slash"] if "slash" in keys else "") or "",
+        }
+
+    def user_facing_skills(self) -> list[dict]:
+        """Return only the skills flagged ``user_facing`` (ADR 0052), each as a
+        dict (same shape as ``all_skills``). These back the `/<slash>` chat
+        commands. Empty on error."""
+        conn = self._open_conn()
+        try:
+            cur = conn.execute(
+                """
+                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                       created_at, confidence, last_used, source, user_facing, slash
+                FROM skills_fts
+                WHERE user_facing = '1'
+                """
+            )
+            return [self._row_to_dict(row) for row in cur.fetchall()]
+        except sqlite3.OperationalError as exc:
+            log.debug("[skills] user_facing_skills error (returning empty): %s", exc)
             return []
 
     def update_confidence(self, skill_id: int, confidence: float) -> None:

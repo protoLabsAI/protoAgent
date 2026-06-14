@@ -12,7 +12,7 @@ def _reset_state(monkeypatch):
     import runtime.state as rs
 
     for field in ("graph_config", "graph", "scheduler", "goal_controller",
-                  "workflow_registry", "inbox_store", "storm_guard"):
+                  "workflow_registry", "inbox_store", "storm_guard", "skills_index"):
         monkeypatch.setattr(rs.STATE, field, None, raising=False)
     yield
 
@@ -58,3 +58,42 @@ def test_chat_commands_lists_workflows_and_subagents(monkeypatch):
     assert "deep-research" in names
     dr = next(c for c in out["commands"] if c["name"] == "deep-research")
     assert dr["usage"] == "/deep-research <topic>"
+
+
+def test_chat_commands_lists_user_facing_skills(monkeypatch):
+    """User-facing skills surface as /<slash> commands; non-user-facing skills
+    and collisions with a workflow/subagent name are skipped (ADR 0052)."""
+    import runtime.state as rs
+
+    class _SkillsIdx:
+        def user_facing_skills(self):
+            return [
+                {"name": "web-research", "description": "Research the web.", "slash": "research"},
+                {"name": "Big Task", "description": "Do a big task.", "slash": ""},
+            ]
+
+    monkeypatch.setattr(rs.STATE, "skills_index", _SkillsIdx(), raising=False)
+    out = ch._operator_chat_commands()
+    by_name = {c["name"]: c for c in out["commands"]}
+    assert by_name["research"]["usage"] == "/research [input]"
+    assert by_name["research"]["description"] == "Research the web."
+    assert "big-task" in by_name  # blank slash → slugified name
+
+
+def test_chat_commands_skill_defers_to_subagent_name(monkeypatch):
+    """A user-facing skill whose token collides with a subagent is dropped —
+    the subagent owns the slash token in dispatch."""
+    import runtime.state as rs
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    collide = next(iter(SUBAGENT_REGISTRY))  # a real subagent name (e.g. researcher)
+
+    class _SkillsIdx:
+        def user_facing_skills(self):
+            return [{"name": collide, "description": "shadow", "slash": collide}]
+
+    monkeypatch.setattr(rs.STATE, "skills_index", _SkillsIdx(), raising=False)
+    out = ch._operator_chat_commands()
+    # The command exists from the subagent, not the skill (skill description dropped).
+    cmd = next(c for c in out["commands"] if c["name"] == collide)
+    assert cmd["description"] != "shadow"

@@ -177,6 +177,7 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     _coerce_tool_output,
     _coerce_tool_value,
     _interrupt_payload,
+    _parse_skill_command,
     _parse_slash_command,
     _parse_subagent_command,
     _parse_workflow_command,
@@ -185,6 +186,7 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     _run_parsed_workflow,
     _run_turn_stream,
     _setup_required_message,
+    _skill_directive,
     chat,
 )
 
