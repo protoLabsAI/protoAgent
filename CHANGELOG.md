@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Background subagent results are delivered back to the chat that started them.**
+  A `task(run_in_background=True)` (ADR 0050) captured its `origin_session` from
+  the tracing contextvar, which reads empty inside a tool body — so the job ran
+  detached with no originating session and its result could never drain back to
+  the spawning chat (the agent was told "you'll be notified" and never was). It
+  now reads the session from injected graph state, so the completion notification
+  lands on the originating conversation's next turn as designed. (Same root cause
+  as the `wait`/`set_goal` fixes; third caller, now closed.)
 - **Non-streaming chat no longer returns a silent empty `200`.** A turn that ends
   at an `ask_human` interrupt, after a `wait` yield, or scratch-only used to give
   `/api/chat` and the OpenAI-compatible `/v1/chat/completions` a blank assistant

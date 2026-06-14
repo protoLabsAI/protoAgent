@@ -4,8 +4,11 @@ Builds the agent graph with middleware, tools, and subagent support.
 Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 """
 
+from typing import Annotated, Any
+
 from langchain.agents import create_agent
 from langchain_core.tools import BaseTool
+from langgraph.prebuilt import InjectedState
 
 from graph.config import LangGraphConfig
 from graph.llm import create_llm
@@ -16,7 +19,7 @@ from graph.middleware.memory import MemoryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
-from tools.lg_tools import get_all_tools
+from tools.lg_tools import _session_id_from, get_all_tools
 
 
 def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None):
@@ -435,6 +438,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
         subagent_type: _SubagentType = "researcher",
         emit_skill: bool = False,
         run_in_background: bool = False,
+        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Delegate a single task to a specialized subagent.
 
@@ -460,9 +464,11 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 default) when you need the result to finish the current turn.
         """
         async def _spawn_bg() -> str:
-            from observability import tracing
+            # Resolve the originating session from injected graph state, not the
+            # tracing contextvar — the contextvar reads empty in a tool body, so
+            # the completion could never drain back to the spawning chat (ADR 0050).
             job_id = await background_mgr.spawn(
-                origin_session=tracing.current_session_id(),
+                origin_session=_session_id_from(state),
                 subagent_type=subagent_type,
                 description=description,
                 prompt=prompt,
