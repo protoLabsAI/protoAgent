@@ -61,6 +61,15 @@
 .composer-wrap {
   position: relative;
 }
+
+/* The DS PromptInput shows focus on the CONTAINER (.pl-prompt:focus-within). Our
+   global textarea:focus-visible outline (theme-base.css) has higher specificity than
+   the DS field's own `outline: none`, so it leaks an inner ring — suppress it here so
+   there's a single (external) focus ring, not two. */
+.pl-prompt__field:focus,
+.pl-prompt__field:focus-visible {
+  outline: none;
+}
 .slash-menu {
   position: absolute;
   left: 12px;
