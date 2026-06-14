@@ -116,6 +116,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "memory_middleware": True,
     "model_name": "protolabs/reasoning",
     "model_provider": "openai",
+    "model_vision": False,
     "operator_allowed_dirs": [],
     "operator_mcp_enabled": False,
     "operator_mcp_tools": [],
@@ -266,6 +267,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "name": "protolabs/reasoning",
         "provider": "openai",
         "temperature": 0.2,
+        "vision": False,
     },
     "network": {
         "bind": "127.0.0.1",
@@ -341,6 +343,7 @@ EMITTED_ATTRS = {
     "api_key",  # redacted -> resolves to ""
     "temperature",
     "max_tokens",
+    "model_vision",
     "max_iterations",
     # subagents.researcher
     "researcher",

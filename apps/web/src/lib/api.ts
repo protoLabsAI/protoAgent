@@ -965,6 +965,7 @@ export const api = {
       onFailed?: (message: string) => void;
       onDone?: () => void;
     } = {},
+    opts: { images?: { b64: string; mime: string; name: string }[] } = {},
   ) {
     // Desktop (WKWebView) can't read a streaming SSE body via fetch (see
     // isDesktopWebview) — the turn would render as a blank assistant bubble. Take
@@ -1018,7 +1019,16 @@ export const api = {
         params: {
           message: {
             role: "ROLE_USER",
-            parts: [{ text: message }],
+            // Native vision: image parts ride as proto-JSON Parts (raw=base64
+            // bytes + mediaType) the executor turns into multimodal content.
+            parts: [
+              { text: message },
+              ...(opts.images || []).map((img) => ({
+                raw: img.b64,
+                mediaType: img.mime,
+                filename: img.name,
+              })),
+            ],
             messageId: rpcId,
             contextId: sessionId,
           },

@@ -194,6 +194,11 @@ class LangGraphConfig:
     temperature: float = 0.2
     max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
     max_iterations: int = 50
+    # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
+    # protolabs/fast, protolabs/smart). The chat composer then sends attached
+    # images as native multimodal parts straight to the model instead of routing
+    # them through the extraction pipeline. Off → images go through the pipeline.
+    model_vision: bool = False
 
     # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
     # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
@@ -730,6 +735,7 @@ class LangGraphConfig:
             api_key=secret_api_key or model.get("api_key", cls.api_key),
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
+            model_vision=model.get("vision", cls.model_vision),
             max_iterations=model.get("max_iterations", cls.max_iterations),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),

@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists are now swept (at boot + on the periodic task-prune tick) — the SDK store has no
   TTL, so stale webhook configs previously persisted forever; their lifetime is now tied to
   the task.
+- **Native vision in chat** — when the active model accepts images (`model.vision`; true for
+  e.g. `protolabs/fast`, `protolabs/smart`, and `protolabs/reasoning`/deepseek-v4), an attached
+  image is sent **straight to the model as a multimodal part** instead of through the extraction
+  pipeline. The composer base64s the image into an A2A image part (proto `raw` + `mediaType`);
+  the executor turns inbound image parts into an `image_url` content block on the `HumanMessage`
+  so the model sees the picture directly. Off by default (`model.vision` Settings toggle);
+  non-vision models keep routing images through the pipeline. Verified end-to-end against the
+  live gateway (deepseek-v4 correctly read a test image).
 - **A2A alignment polish + realtime cost/goal events** (ADR 0051 Slice 3) — fixed a real
   bug: the **delegate A2A client now sends `A2A-Version: 1.0`** (a missing header made a
   strict 1.0 peer reject the call with `-32009`). The agent card now advertises a

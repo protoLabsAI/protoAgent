@@ -195,7 +195,7 @@ def _interrupt_payload(val) -> dict:
     return {"question": (str(val) if val is not None else "Input required.")}
 
 
-async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None):
+async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None, images=None):
     """Run one graph turn over ``astream_events``.
 
     Yields the same ``(kind, payload)`` status/usage frames the A2A handler
@@ -213,13 +213,23 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     from langchain_core.messages import HumanMessage
     from langgraph.types import Command
 
+    # Native vision (ADR 0021): when the model is vision-capable and the turn
+    # carried image parts, the user message is a multimodal content list (text +
+    # image_url blocks) the model sees directly — not piped through extraction.
+    if images and getattr(STATE.graph_config, "model_vision", False):
+        blocks: list[dict] = [{"type": "text", "text": message}] if message else []
+        blocks += [{"type": "image_url", "image_url": {"url": uri}} for _mt, uri in images]
+        human = HumanMessage(content=blocks)
+    else:
+        human = HumanMessage(content=message)
+
     graph_input = (
         Command(resume=resume_value)
         if resume_value is not None
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
         else {
-            "messages": _drain_background_messages(session_id) + [HumanMessage(content=message)],
+            "messages": _drain_background_messages(session_id) + [human],
             "session_id": session_id,
         }
     )
@@ -511,6 +521,7 @@ async def _chat_langgraph_stream(
     caller_trace: dict | None = None,
     resume: bool = False,
     request_metadata: dict | None = None,
+    images: list[tuple[str, str]] | None = None,
 ):
     """Async generator — yields (event_type, payload) tuples from the
     LangGraph run. Consumed by ``executor.ProtoAgentExecutor`` to
@@ -702,6 +713,7 @@ async def _chat_langgraph_stream(
                 async for kind, payload in _run_turn_stream(
                     message, session_id, config,
                     resume_value=(message if resume else None),
+                    images=images,
                 ):
                     if kind == "__raw__":
                         accumulated_raw = payload
