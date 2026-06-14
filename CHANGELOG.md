@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so it drops into any plugin console view without a specific stylesheet). All values escaped.
   Generalizes the spacetraders `_DECISIONS` ring buffer + `st_report` envelope + dashboard
   decision-log panel. Pure stdlib, host-free (#1027).
+- **Runtime knobs + presets control surface (`graph/knobs.py`, `from graph.sdk import Knobs,
+  make_knob_tools`).** A reusable, bounded, reversible control surface an LLM strategist can
+  steer a deterministic plugin engine with: declare typed knobs once (`define`, with `lo`/`hi`
+  clamps + `choices`), read them live in the engine (`get`), and `set` them coerced + clamped
+  + validated + logged; named **presets** apply a curated knob bundle as one move
+  (`apply_preset`, non-cumulative); a change log records every tune/preset. `make_knob_tools`
+  auto-generates the agent-facing `<prefix>_knobs` / `_tune` / `_preset` tools. Pure stdlib
+  (host-free, directly unit-tested). Generalizes the spacetraders `_TUNABLE`/`set_knob`/
+  strategy-preset surface (#1028).
 - **Host-free plugin test harness (`graph/plugins/testkit.py`).** A self-contained
   (stdlib-only) testkit that loads a plugin as a **package** — so a plugin's real engine
   modules (relative imports, module-level `@tool`, lazy `graph.*` host imports) can be

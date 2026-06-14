@@ -31,6 +31,11 @@ from graph.supervisor import Supervisor, supervise  # noqa: F401
 # surface (audit trail + envelope + themed panel). graph/telemetry.py is host-free.
 from graph.telemetry import DecisionLog, render_html, telemetry  # noqa: F401
 
+# Re-export the runtime-knobs + presets control surface, so a plugin writes
+# `from graph.sdk import Knobs, make_knob_tools` for a bounded, reversible set of tunable
+# engine knobs + presets + auto-generated agent tools (graph/knobs.py is host-free).
+from graph.knobs import Knobs, make_knob_tools  # noqa: F401
+
 
 def config() -> Any:
     """The live runtime ``LangGraphConfig``."""
