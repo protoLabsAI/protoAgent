@@ -412,7 +412,7 @@ def _operator_chat_commands() -> dict:
     resolver the chat dispatcher uses (``server.chat.resolve_slash_commands``), so
     the palette can't drift from what actually runs. ``/goal`` (a server-handled
     control command) is surfaced here when goal mode is loaded."""
-    from server.chat import resolve_slash_commands
+    from graph.slash_commands import resolve_slash_commands
 
     commands = []
     if STATE.goal_controller is not None:

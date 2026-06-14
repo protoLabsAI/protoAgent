@@ -16,7 +16,6 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 import asyncio
 import json
 import logging
-import re
 import time
 from typing import Any
 
@@ -537,118 +536,13 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
 # token win (dispatch checks them first).
 
 
-def _slugify_slash(raw: str) -> str:
-    """Lowercase + non-alphanumerics→hyphens slug for a slash token."""
-    return re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
-
-
-# Slash tokens already warned as shadowed (a skill whose token a workflow/subagent
-# claims) — warn once, not on every resolve. Shared by dispatch + the palette.
-_warned_shadowed_skills: set[str] = set()
-
-
-def _find_user_facing_skill(name: str):
-    """The user-facing skill whose slash token matches ``/<name>``, or ``None``.
-    Token = explicit ``slash:`` (lowercased) else a slug of the skill name."""
-    token = _slugify_slash(name)
-    if not token:
-        return None
-    reader = getattr(STATE.skills_index, "user_facing_skills", None) if STATE.skills_index else None
-    if reader is None:
-        return None
-    try:
-        skills = reader()
-    except Exception:
-        return None
-    for skill in skills:
-        sk_token = (skill.get("slash") or "").strip().lower() or _slugify_slash(skill.get("name", ""))
-        if sk_token == token:
-            return skill
-    return None
-
-
-def _slash_kind(name: str) -> str | None:
-    """The kind a ``/<name>`` slash command resolves to — the SINGLE source of
-    precedence shared by the chat dispatcher and the console palette, so they can
-    never disagree about what a token does. Reserved: ``goal``. Precedence:
-    workflow > subagent > user-facing skill. Returns ``None`` for an unknown token.
-    (Workflows/subagents match the bare name; skills match a slug.)"""
-    if not name:
-        return None
-    if name == "goal" or _slugify_slash(name) == "goal":
-        return "goal"
-    if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:
-        return "workflow"
-    try:
-        from graph.subagents.config import SUBAGENT_REGISTRY
-        if name in SUBAGENT_REGISTRY:
-            return "subagent"
-    except Exception:
-        pass
-    if _find_user_facing_skill(name) is not None:
-        return "skill"
-    return None
-
-
-def resolve_slash_commands() -> list[dict]:
-    """Single source of truth for the slash-command inventory — every registered
-    ``/<token>`` with its ``kind`` + display metadata, precedence applied via
-    ``_slash_kind`` (so the palette can't drift from the dispatcher). A skill
-    shadowed by a workflow/subagent is excluded and warned once. ``goal`` is a
-    control command surfaced separately by the caller."""
-    cmds: list[dict] = []
-    seen: set[str] = set()
-
-    def _add(name, kind, description, usage):
-        if not name or name in seen:
-            return
-        seen.add(name)
-        cmds.append({"name": name, "kind": kind, "description": description, "usage": usage})
-
-    if STATE.workflow_registry is not None:
-        for wf in STATE.workflow_registry.list():
-            declared = wf.get("inputs", []) or []
-            req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
-            opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))
-            _add(wf["name"], "workflow",
-                 wf.get("description") or f"Run the {wf['name']} workflow.",
-                 f"/{wf['name']}{req}{opt}")
-
-    try:
-        from graph.subagents.config import SUBAGENT_REGISTRY
-    except Exception:
-        SUBAGENT_REGISTRY = {}
-    for sname, cfg in SUBAGENT_REGISTRY.items():
-        if _slash_kind(sname) != "subagent":  # a workflow of the same name wins
-            continue
-        _add(sname, "subagent",
-             getattr(cfg, "description", "") or f"Run the {sname} subagent.",
-             f"/{sname} <prompt>")
-
-    reader = getattr(STATE.skills_index, "user_facing_skills", None) if STATE.skills_index else None
-    if reader is not None:
-        try:
-            ufs = reader()
-        except Exception:
-            ufs = []
-        for skill in ufs:
-            token = (skill.get("slash") or "").strip().lower() or _slugify_slash(skill.get("name") or "")
-            if not token or token == "goal":
-                continue
-            kind = _slash_kind(token)
-            if kind != "skill":
-                if kind is not None and token not in _warned_shadowed_skills:
-                    _warned_shadowed_skills.add(token)
-                    log.warning(
-                        "[skills] user-facing skill %r is unreachable: /%s is already "
-                        "claimed by a %s (which wins dispatch). Rename the skill's `slash:`.",
-                        skill.get("name") or token, token, kind,
-                    )
-                continue
-            _add(token, "skill",
-                 skill.get("description") or f"Run the {token} skill.",
-                 f"/{token} [input]")
-    return cmds
+# Slash-command precedence + the palette resolver live in graph/slash_commands.py
+# — a neutral module both the dispatcher (here) and the console palette import, so
+# the two can't drift (operator_api may not import server, so it can't live here).
+from graph.slash_commands import (  # noqa: E402
+    find_user_facing_skill as _find_user_facing_skill,
+    slash_kind as _slash_kind,
+)
 
 
 def _parse_skill_command(message: str):
