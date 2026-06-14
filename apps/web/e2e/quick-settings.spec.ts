@@ -14,14 +14,18 @@ test("the topbar gear opens the Settings overlay (the two-home one-stop-shop)", 
   await expect(dialog.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
 });
 
-test("the chat composer model chip edits a field in a dialog and saves", async ({ page }) => {
+test("the chat composer model picker selects a model and saves", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  // The model control lives on the chat composer (the default surface), by the input.
-  await page.getByRole("button", { name: "Model settings" }).click();
-  const dialog = page.getByRole("dialog", { name: "Model" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Primary model")).toBeVisible(); // model.name field
-  await dialog.locator('.setting-row[data-key="model.temperature"] input').fill("0.5");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toBeHidden(); // saved → closes
+  // The model picker lives inline in the DS composer's actions slot (a <select>),
+  // wired to the `model.name` settings field (host-scoped). Selecting saves immediately.
+  const model = page.getByRole("combobox", { name: "Model" });
+  await expect(model).toBeVisible();
+  await expect(model).toHaveValue("protolabs/reasoning"); // current model from the schema
+  const saved = page.waitForRequest(
+    (r) => r.url().endsWith("/api/settings") && r.method() === "POST",
+  );
+  await model.selectOption("protolabs/fast");
+  const body = (await saved).postDataJSON();
+  expect(body.updates["model.name"]).toBe("protolabs/fast");
+  expect(body.layer).toBe("host"); // model.name is host-scoped → saved to the host layer
 });
