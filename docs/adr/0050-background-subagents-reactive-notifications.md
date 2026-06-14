@@ -142,11 +142,20 @@ nudges close that:
    loop); the `task` tool always accepts the arg and degrades to synchronous if the manager
    is disabled.
 
-### Phases 2–4 (planned, not in this ADR's PR)
+### Phase 2 — reactivity / idle-wake (shipped)
 
-- **Phase 2 — reactivity / idle-wake.** Route a completion into an inbox `now` item so the
-  existing inbox→Activity-turn fire wakes the agent autonomously even when the user isn't
-  typing. Publish `background.{started,progress}` on the bus.
+A finished background job now **wakes the agent autonomously**, so it acts on the result
+without waiting for the spawning session's next turn. On completion, `_handle_background_terminal`
+adds a `now`-priority **inbox item** (the existing reactive path, ADR 0003) whose fire runs a
+turn into the **Activity thread** — storm-guarded by the inbox's `StormGuard`. Activity is the
+right home (not the originating chat): the console's chat view is localStorage-driven and won't
+render a backend-initiated turn, but the **Activity feed is server-driven** (it renders the
+`activity.message` bus event), so the autonomous response shows up there live. The wake stimulus
+names the originating session so the agent can reference it. Gated by `BACKGROUND_WAKE` (on by
+default; `=0` opts out, parity with `BACKGROUND_DISABLED`). `background.started` is published on
+spawn (Phase 1); `background.progress` remains a follow-up.
+
+### Phases 3–4 (planned, not in this ADR's PR)
 - **Phase 3 — chat UX.** A live status pill (`⟳ 2 agents running`), a background-jobs panel
   (status / elapsed / stop), a completion toast + unread badge, and a rich live subagent card
   in-transcript. Check `@protolabsai/ui/ai` (Conversation/Message/ToolCall) before hand-rolling.
@@ -164,11 +173,14 @@ nudges close that:
   toolset and a fresh, isolated context (good: no parent-context pollution; capable). Per-job
   tool-allowlist scoping (running the actual `researcher` allowlist) is deferred — the
   `subagent_type` currently contributes a role preamble to the fired prompt, not a tool fence.
-- **The human sees it live; the model learns on the next turn.** If the spawning chat is open,
-  `BackgroundWatch` surfaces the result immediately (step 6). The *model* still only ingests the
-  completion on that session's next turn (step 5) — so if the user never sends another message,
-  the agent itself won't act on the result. Autonomous wake (firing a turn so the agent responds
-  unprompted) is Phase 2.
+- **Three ways a completion surfaces.** (a) The human sees it live in the open spawning chat
+  (`BackgroundWatch`, step 6); (b) the model ingests it on that session's next turn (the drain,
+  step 5); and (c) the agent **wakes and acts on it autonomously** in the Activity thread
+  (Phase 2). (a)+(b) are chat-scoped and human-paced; (c) is the self-driving path that fires
+  even if the user never returns to the chat.
+- **Autonomous wake costs a turn per completion.** Each finished background job fires one
+  Activity turn (storm-guarded). Proportionate — background jobs are deliberate and low-volume —
+  but `BACKGROUND_WAKE=0` disables it for cost-sensitive or non-reactive deployments.
 - **A background turn could itself spawn background turns.** Bounded in practice by focused
   prompts + the prompt contract; a hard depth fence is a later refinement.
 - **Long jobs vs. the self-POST timeout.** `_fire` holds the connection open for the whole turn

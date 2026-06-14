@@ -14,6 +14,7 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 ``__init__`` before its re-export line, so the import is not a cycle.
 """
 
+import asyncio
 import logging
 import os
 
@@ -23,6 +24,69 @@ from runtime.state import STATE
 from server import _event_bus, agent_name
 
 log = logging.getLogger("protoagent.server")
+
+# Holds the fire-and-forget background-wake tasks (ADR 0050 Phase 2) so they aren't
+# GC'd mid-flight; the done callback discards each on completion.
+_BG_WAKE_TASKS: set = set()
+
+
+def _background_wake_enabled() -> bool:
+    """Whether a finished background job should autonomously wake the agent (ADR 0050
+    Phase 2). On by default; ``BACKGROUND_WAKE=0`` opts out (parity with
+    ``BACKGROUND_DISABLED``)."""
+    return os.environ.get("BACKGROUND_WAKE", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _background_wake_text(job) -> str:
+    """The stimulus the agent wakes to when a background job finishes."""
+    result = job.result or ""
+    if len(result) > 4000:
+        result = result[:4000] + "\n\n…[truncated]"
+    where = f" (you spawned it from session {job.origin_session})" if job.origin_session else ""
+    verb = "failed" if job.status == "failed" else "finished"
+    return (
+        f"A background task you delegated has {verb}{where} — decide whether to act on it.\n\n"
+        f"Job: {job.description} [{job.subagent_type}]\n"
+        f"Status: {job.status}\n"
+        f"Result:\n{result}\n\n"
+        "If this calls for follow-up action, take it now. Otherwise acknowledge it briefly "
+        "and stop — don't re-run the task."
+    )
+
+
+async def _background_wake(job) -> bool:
+    """Wake the agent on a completion by adding a now-priority inbox item (ADR 0050
+    Phase 2) — which fires a turn into the Activity thread via the existing inbox→
+    Activity path (storm-guarded). Returns whether the fire was dispatched. The Activity
+    response surfaces live in the console's Activity feed (server-driven, unlike the
+    localStorage chat view)."""
+    if STATE.inbox_store is None:
+        return False
+    from operator_api.console_handlers import _operator_inbox_add
+
+    res = await _operator_inbox_add({
+        "text": _background_wake_text(job),
+        "priority": "now",
+        "source": "background",
+        "dedup_key": f"background-wake:{job.id}",
+    })
+    return bool(res.get("fired"))
+
+
+def _spawn_background_wake(job) -> None:
+    """Schedule the (async) wake fire-and-forget on the running loop. No-op off-loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    async def _go() -> None:
+        try:
+            await _background_wake(job)
+        except Exception:  # noqa: BLE001 — best-effort; never breaks the terminal hook
+            log.exception("[background] wake fire failed for %s", getattr(job, "id", "?"))
+    t = loop.create_task(_go())
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
 
 
 def _bearer_configured() -> bool:
@@ -301,6 +365,11 @@ def _handle_background_terminal(outcome) -> None:
             "result": result_preview,
         },
     )
+    # Autonomous idle-wake (ADR 0050 Phase 2): fire an Activity turn so the agent reacts
+    # to the result on its own, instead of only learning on the spawning session's next
+    # turn. Gated + storm-guarded; needs the full job row for the stimulus.
+    if job is not None and _background_wake_enabled():
+        _spawn_background_wake(job)
 
 
 def _a2a_terminal(outcome) -> None:
