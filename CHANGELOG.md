@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a duration shorthand (`"15m"` / `"2h"` / `"1d"`); rolls the goal back if scheduling fails;
   `stop_goal_loop` clears the goal + cancels the tick (e.g. from an `on_achieved` hook).
   Generalizes the wiring the spacetraders `manage-the-fleet` skill described in prose (#1026).
+- **Plugin telemetry + agent decision-log kit (`graph/telemetry.py`, `from graph.sdk import
+  DecisionLog, telemetry, render_html`).** The observability surface an unattended/agentic
+  plugin needs: `DecisionLog` (a capped audit trail of what the agent changed, and why),
+  `telemetry(...)` (the standard envelope — status / metrics / hints / decisions / sections),
+  and `render_html(...)` (a self-contained, `--pl-*`-token-themed HTML panel — with fallbacks,
+  so it drops into any plugin console view without a specific stylesheet). All values escaped.
+  Generalizes the spacetraders `_DECISIONS` ring buffer + `st_report` envelope + dashboard
+  decision-log panel. Pure stdlib, host-free (#1027).
 - **Host-free plugin test harness (`graph/plugins/testkit.py`).** A self-contained
   (stdlib-only) testkit that loads a plugin as a **package** — so a plugin's real engine
   modules (relative imports, module-level `@tool`, lazy `graph.*` host imports) can be

@@ -26,6 +26,11 @@ from runtime.state import STATE
 # engine instead of hand-rolling task/restart machinery (graph/supervisor.py is host-free).
 from graph.supervisor import Supervisor, supervise  # noqa: F401
 
+# Re-export the telemetry + decision-log kit, so a plugin writes
+# `from graph.sdk import DecisionLog, telemetry, render_html` for a standard observability
+# surface (audit trail + envelope + themed panel). graph/telemetry.py is host-free.
+from graph.telemetry import DecisionLog, render_html, telemetry  # noqa: F401
+
 
 def config() -> Any:
     """The live runtime ``LangGraphConfig``."""
