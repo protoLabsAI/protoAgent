@@ -97,8 +97,13 @@ dep); a new widget is a registry entry + a render fn, no new transport.
   telemetry store → a live cost HUD) and `goal.iteration` (the goal loop's per-continuation
   progress, previously only `goal.achieved`/`failed` were on the bus).
 
-Deferred (noted in `bd-383`): `scheduler.fired` (needs bus injection into the scheduler),
-push-config TTL, and verifying push fires on terminal.
+Slice 3 follow-ups (after the initial PR): **`scheduler.fired`** now fires on the bus (the
+scheduler got the same injected-`publish` treatment as the background manager), and
+**orphaned push-configs are swept** — the SDK push store has no timestamp, so instead of a
+TTL the config's lifetime is tied to its task: `sweep_orphaned_push_configs` drops push rows
+whose `task_id` is no longer a live task, run at boot + on the periodic task-prune tick.
+Still open: verifying push actually fires on a terminal turn (the executor enqueues no
+explicit `PushNotificationEvent`).
 
 ## Consequences
 

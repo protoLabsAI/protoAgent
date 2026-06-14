@@ -33,6 +33,7 @@ class AppState:
     # prune loop can re-run the 24h TTL sweep (it used to run only at boot, so
     # an always-on agent accumulated task rows forever between restarts).
     a2a_task_engine: Any = None
+    a2a_push_engine: Any = None  # push-config store engine — for the orphan sweep (ADR 0051)
     inbox_store: Any = None
     beads_store: Any = None
     storm_guard: Any = None
