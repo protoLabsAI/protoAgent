@@ -1,7 +1,7 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Brain, Database, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Brain, Database, FileUp, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -86,6 +86,122 @@ function ChunkForm({
   );
 }
 
+// Document ingestion (ADR 0021) — extract a file / web URL / YouTube link into
+// the KB, chunked + enriched + embedded server-side. Distinct from ChunkForm
+// (typed facts): this is "bring a whole document in".
+const INGEST_ACCEPT = ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf";
+
+function IngestForm({
+  onDone,
+  onError,
+  onClose,
+}: {
+  onDone: () => void | Promise<void>;
+  onError: (message: string) => void;
+  onClose: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [domain, setDomain] = useState("general");
+  const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const [note, setNote] = useState("");
+
+  async function ingest(form: FormData) {
+    setBusy(true);
+    setNote("");
+    onError("");
+    try {
+      form.set("domain", domain.trim() || "general");
+      const r = await api.ingestKnowledge(form);
+      setNote(`Added ${r.chunks} chunk${r.chunks === 1 ? "" : "s"}${r.title ? ` from “${r.title}”` : ""}.`);
+      setUrl("");
+      await onDone();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function ingestFile(file: File) {
+    const f = new FormData();
+    f.append("file", file);
+    void ingest(f);
+  }
+
+  function ingestUrl() {
+    if (!url.trim()) return;
+    const f = new FormData();
+    f.append("url", url.trim());
+    void ingest(f);
+  }
+
+  return (
+    <div className="knowledge-chunk-form">
+      <div
+        className={`knowledge-ingest-drop${drag ? " is-drag" : ""}${busy ? " is-busy" : ""}`}
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDrag(false);
+          const file = e.dataTransfer.files?.[0];
+          if (file) ingestFile(file);
+        }}
+      >
+        <FileUp size={18} />
+        <span>
+          Drop a file here, or{" "}
+          <label className="knowledge-ingest-pick">
+            browse
+            <input
+              type="file"
+              hidden
+              accept={INGEST_ACCEPT}
+              disabled={busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) ingestFile(file);
+                e.target.value = "";
+              }}
+            />
+          </label>{" "}
+          — txt, md, html, pdf
+        </span>
+      </div>
+      <div className="knowledge-chunk-form-row">
+        <Input
+          type="url"
+          placeholder="…or paste a web / YouTube URL"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") ingestUrl(); }}
+          aria-label="source url"
+          disabled={busy}
+        />
+        <Input
+          type="text"
+          placeholder="domain"
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          aria-label="ingest domain"
+          style={{ maxWidth: 160 }}
+          disabled={busy}
+        />
+      </div>
+      <div className="knowledge-chunk-form-row">
+        <Button type="button" variant="primary" size="sm" disabled={busy || !url.trim()} onClick={ingestUrl}>
+          {busy ? "Importing…" : "Import URL"}
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+          Close
+        </Button>
+        {note ? <span className="knowledge-ingest-note">{note}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 export function KnowledgeStore({ onError }: { onError: (message: string) => void }) {
   const [results, setResults] = useState<KnowledgeChunk[]>([]);
   const [stats, setStats] = useState<Record<string, number>>({});
@@ -94,6 +210,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
   const [query, setQuery] = useState("");
 
   const [adding, setAdding] = useState(false);
+  const [ingesting, setIngesting] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
@@ -166,15 +283,26 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
             {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
             <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
             {enabled ? (
-              <Button
-                icon
-                variant="ghost"
-                type="button"
-                onClick={() => { setEditingId(null); setDraft(EMPTY_DRAFT); setAdding((v) => !v); }}
-                title="Add a knowledge entry"
-              >
-                <Plus size={16} />
-              </Button>
+              <>
+                <Button
+                  icon
+                  variant="ghost"
+                  type="button"
+                  onClick={() => { setEditingId(null); setAdding(false); setIngesting((v) => !v); }}
+                  title="Add a source — file, web URL, or YouTube link"
+                >
+                  <FileUp size={16} />
+                </Button>
+                <Button
+                  icon
+                  variant="ghost"
+                  type="button"
+                  onClick={() => { setEditingId(null); setDraft(EMPTY_DRAFT); setIngesting(false); setAdding((v) => !v); }}
+                  title="Add a knowledge entry"
+                >
+                  <Plus size={16} />
+                </Button>
+              </>
             ) : null}
             <Button icon variant="ghost" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
               <RefreshCw size={16} className={loading ? "spin" : ""} />
@@ -191,6 +319,14 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+
+        {ingesting ? (
+          <IngestForm
+            onDone={() => run(query)}
+            onError={onError}
+            onClose={() => setIngesting(false)}
+          />
+        ) : null}
 
         {adding ? (
           <ChunkForm

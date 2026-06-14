@@ -298,6 +298,30 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+// Multipart sibling of `request` for file uploads (the ingestion engine). Never
+// sets Content-Type — the browser adds the multipart boundary itself — but reuses
+// the same auth + slug routing + 401 handling.
+async function requestForm<T>(path: string, form: FormData, opts: { host?: boolean } = {}): Promise<T> {
+  const headers = applyAuth(new Headers());
+  const response = await fetch(apiUrl(path, { host: opts.host }), {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      detail = payload.detail || detail;
+    } catch {
+      detail = await response.text();
+    }
+    if (response.status === 401) notifyAuthRequired();
+    throw new ApiError(response.status, detail || "request failed");
+  }
+  return (await response.json()) as T;
+}
+
 export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
   return (parts || [])
     .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
@@ -530,6 +554,18 @@ export const api = {
       `/api/knowledge/chunks/${id}`,
       { method: "DELETE" },
     );
+  },
+  // Document ingestion engine — extract a file/URL/YouTube into the KB (chunked,
+  // enriched, embedded). FormData carries `file` OR `url` OR `text`, plus `domain`.
+  ingestKnowledge(form: FormData) {
+    return requestForm<{
+      enabled: boolean;
+      ids: number[];
+      chunks: number;
+      title: string | null;
+      source_type: string;
+      chars: number;
+    }>("/api/knowledge/ingest", form);
   },
 
   deletePlaybook(id: number) {

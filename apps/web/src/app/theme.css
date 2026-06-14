@@ -1546,6 +1546,31 @@ textarea {
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
 
+/* Document ingestion drop-zone (ADR 0021) — file/URL "Add source". */
+.knowledge-ingest-drop {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 12px;
+  border: 1px dashed var(--pl-color-border);
+  border-radius: 8px;
+  background: var(--pl-color-bg-inset);
+  color: var(--fg-muted);
+  font-size: 13px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.knowledge-ingest-drop.is-drag {
+  border-color: var(--accent, #7c8cff);
+  border-style: solid;
+  background: var(--pl-color-bg-raised);
+}
+.knowledge-ingest-drop.is-busy { opacity: 0.6; pointer-events: none; }
+.knowledge-ingest-pick {
+  color: var(--accent, #7c8cff);
+  cursor: pointer;
+  text-decoration: underline;
+  font-weight: 500;
+}
+.knowledge-ingest-note { color: var(--fg-muted); font-size: 12px; align-self: center; }
+
 /* ── Delegates panel (ADR 0025) — moved to src/settings/delegates.css (#832). ── */
 
 /* Plugin-contributed console views (ADR 0026) — optional subnav above, iframe fills. */

@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /api/knowledge/ingest` accepts a file upload, a URL, or pasted text (extraction +
   embedding run off the event loop) and returns the created chunk ids. Each extractor
   degrades cleanly — an optional dep that's missing raises a friendly error, a bad source
-  never 500s. Audio/video (local ASR) is a deliberate Phase 2 (the gateway serves no
-  transcription model).
+  never 500s. The Knowledge console gets an **"Add source"** affordance — drop a file or
+  paste a web/YouTube URL — alongside the existing typed-fact entry. Audio/video (local
+  ASR) is a deliberate Phase 2 (the gateway serves no transcription model).
 - **Contextual enrichment on knowledge ingest** (ADR 0021 — Anthropic's Contextual
   Retrieval). When a document splits into chunks, an aux-LLM one-line context that
   situates each chunk in the *whole* document is prepended before it's embedded and
