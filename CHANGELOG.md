@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-06-14
+
 ### Fixed
 - **Left panel no longer springs back to ~50% when resized smaller.** The DS
   AppShell's single divider made `maxRightWidth` (720) double as a floor on the
