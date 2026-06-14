@@ -221,6 +221,28 @@ def register_operator_routes(
     async def _tools():
         return tools_list()
 
+    @app.get("/api/background")
+    async def _background_jobs(session: str = "", status: str = "", limit: int = 100):
+        """Background subagent jobs (ADR 0050) — read-only list for the console.
+
+        Filters by ``session`` (originating chat session) and/or ``status``
+        (running|completed|failed). Returns ``{"jobs": [...], "enabled": bool}``."""
+        from runtime.state import STATE
+
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is None:
+            return {"jobs": [], "enabled": False}
+        try:
+            jobs = await asyncio.to_thread(
+                mgr.store.list,
+                origin_session=session or None,
+                status=status or None,
+                limit=max(1, min(int(limit), 500)),
+            )
+            return {"jobs": [j.to_dict() for j in jobs], "enabled": True}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @app.post("/api/subagents/run")
     async def _subagent_run(req: SubagentRunRequest):
         try:

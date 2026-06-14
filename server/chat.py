@@ -31,6 +31,51 @@ from runtime.state import STATE
 log = logging.getLogger("protoagent.server")
 
 
+_BG_RESULT_CAP = 6000  # chars of a background result injected into the spawning turn
+
+
+def _drain_background_messages(session_id: str) -> list:
+    """Pull completed background jobs for this session (ADR 0050) and render them as
+    ``<task-notification>`` messages to prepend to the turn's input.
+
+    Drains exactly-once (the store flips ``notified`` atomically), so a completion is
+    announced to the model on the spawning session's next turn and never again. Returns
+    ``[]`` when the manager is absent or nothing is pending — a no-op on a normal turn.
+    """
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None or not session_id:
+        return []
+    try:
+        jobs = mgr.store.drain_pending(session_id)
+    except Exception:  # noqa: BLE001 — never break a turn over the drain
+        log.exception("[background] drain failed for session %s", session_id)
+        return []
+    if not jobs:
+        return []
+    from langchain_core.messages import HumanMessage
+
+    msgs = []
+    for j in jobs:
+        result = j.result or ""
+        if len(result) > _BG_RESULT_CAP:
+            result = result[:_BG_RESULT_CAP] + f"\n\n…[truncated to {_BG_RESULT_CAP} chars]"
+        body = (
+            "<task-notification>\n"
+            "A background agent finished a task you delegated earlier:\n"
+            f"<job-id>{j.id}</job-id>\n"
+            f"<subagent>{j.subagent_type}</subagent>\n"
+            f"<description>{j.description}</description>\n"
+            f"<status>{j.status}</status>\n"
+            "<result>\n"
+            f"{result}\n"
+            "</result>\n"
+            "</task-notification>"
+        )
+        msgs.append(HumanMessage(content=body))
+    log.info("[background] drained %d completion(s) into session %s", len(msgs), session_id)
+    return msgs
+
+
 def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
     """Resolve the checkpointer ``thread_id`` for this turn (#571).
 
@@ -170,7 +215,12 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     graph_input = (
         Command(resume=resume_value)
         if resume_value is not None
-        else {"messages": [HumanMessage(content=message)], "session_id": session_id}
+        # Prepend any completed background-job notifications (ADR 0050) so the model
+        # learns of detached work that finished since this session last ran a turn.
+        else {
+            "messages": _drain_background_messages(session_id) + [HumanMessage(content=message)],
+            "session_id": session_id,
+        }
     )
     from observability import metrics
     from observability import pricing

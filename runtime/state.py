@@ -59,6 +59,7 @@ class AppState:
     plugin_meta: list = field(default_factory=list)
     # Background subsystems + handles.
     scheduler: Any = None
+    background_mgr: Any = None  # ADR 0050 — detached background subagent jobs
     cache_warmer: Any = None
     goal_controller: Any = None
     main_loop: Any = None

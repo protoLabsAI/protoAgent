@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background subagents** (ADR 0050, Phase 1) — the `task` tool now takes
+  `run_in_background: true`. A long, independent delegation (deep research, multi-step
+  gathering) runs **detached** instead of blocking the chat turn: the tool returns
+  immediately with a job id, the work runs as its own A2A turn, and its result is
+  delivered back into the spawning session's **next** turn as a `<task-notification>`
+  (exactly-once) — so the conversation stays live while the work runs, instead of freezing
+  on a single multi-minute tool card. **And if the spawning chat is still open, the result
+  is pushed into it live** — a `system` message + a toast the moment the job finishes
+  (`background.started`/`background.completed` on the event bus), no need to send a message
+  to see it. Jobs are tracked in a durable, instance-scoped registry (`background/jobs.db`),
+  reconciled on restart, and listed by a read-only `GET /api/background`. Disable with
+  `BACKGROUND_DISABLED=1`. (Autonomous idle-wake, a background-jobs panel, and
+  `task_output`/`stop_task` control tools are the planned Phases 2–4.)
+- **Smarter subagent delegation** (ADR 0050 follow-up) — the agent now reaches for its
+  specialized subagents instead of grinding their work inline. The `task` tool's
+  `subagent_type` is a schema **enum** of the live registry (plugin-contributed subagents
+  included), so the model can't pass a name that doesn't exist and sees the full roster; the
+  delegation guidance steers domain work (deep research, strategy, multi-step gathering) to
+  the matching subagent and **defaults heavy/long delegations to the background** so a
+  multi-minute subagent run (e.g. a strategic audit) no longer freezes the chat.
 - **Audio & video ingestion** (ADR 0021, ingestion engine Phase 2) — drop an audio file
   (mp3/wav/m4a/flac/ogg/…) or a video (mp4/mov/mkv/webm/…) into the knowledge base and it's
   transcribed, then chunked + enriched + embedded like any other document. Transcription

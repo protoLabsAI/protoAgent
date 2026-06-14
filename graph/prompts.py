@@ -133,12 +133,21 @@ def _build_projects_section(projects) -> str:
 
 
 def _build_subagent_section() -> str:
-    """Build the subagent delegation instructions."""
+    """Build the subagent delegation instructions.
+
+    The background-delegation guidance is unconditional (not gated on a runtime
+    flag) so this prompt stays a turn-stable cache prefix shared by the live graph,
+    the cache warmer, and the native loop. The ``task`` tool always accepts
+    ``run_in_background``; it degrades to synchronous execution if the background
+    manager is disabled (ADR 0050)."""
     lines = [
         "# Subagent Delegation",
         "",
-        "You can delegate tasks to specialized subagents using the `task` tool.",
-        "Each subagent has focused tools and a domain-specific prompt:",
+        "You can delegate to specialized subagents with the `task` tool. Each has focused",
+        "tools and a domain-specific prompt. **Match the work to the subagent whose",
+        "description fits, and prefer delegating specialized or long-running work to it over",
+        "grinding it out inline in your own turn.** The roster (use the names verbatim as",
+        "`subagent_type`):",
         "",
     ]
 
@@ -150,10 +159,22 @@ def _build_subagent_section() -> str:
 
     lines.extend([
         "**Rules:**",
-        "- Delegate only when parallel work or specialized context helps",
-        "- For simple requests, answer directly without delegation",
-        "- Max 3 concurrent subagent tasks",
-        "- Subagents cannot spawn further subagents",
+        "- Pick the most specialized subagent whose description matches the task. Don't do",
+        "  domain work a subagent is purpose-built for (deep research, strategy/planning,",
+        "  multi-step gathering) inline — delegate it.",
+        "- For simple, quick requests, answer directly without delegation.",
+        "- Run independent delegations concurrently — one `task` call each, or `task_batch`",
+        "  (bounded automatically by the configured concurrency cap).",
+        "- Subagents cannot spawn further subagents.",
+        "",
+        "**Background delegation (`run_in_background=true` on `task`):** default to this for",
+        "any long, independent, or tool/quota-heavy delegation — deep research, a strategic",
+        "audit, anything that will take many turns or lots of web/tool calls. It returns",
+        "immediately with a job id and the result is delivered back to you automatically on a",
+        "later turn, so the conversation stays live instead of freezing on a multi-minute",
+        "delegation. Use foreground (the default) only when you need the result to finish your",
+        "current reply. Once you background a task, do NOT poll it or spawn a duplicate — you",
+        "will be notified when it completes.",
     ])
 
     return "\n".join(lines)

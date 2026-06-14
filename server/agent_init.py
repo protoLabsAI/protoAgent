@@ -223,12 +223,17 @@ def _init_langgraph_agent(headless_setup: bool = False):
         from inbox import StormGuard
         STATE.storm_guard = StormGuard()
 
+    # Background subagent manager (ADR 0050) — must exist before the graph build so
+    # the `task` tool's run_in_background path can reach it.
+    STATE.background_mgr = _build_background_manager(STATE.graph_config)
+
     STATE.graph = create_agent_graph(
         STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
         skills_index=STATE.skills_index, extra_tools=STATE.mcp_tools + STATE.plugin_tools,
         extra_middleware=STATE.plugin_middleware,
         checkpointer=STATE.checkpointer,
         inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
+        background_mgr=STATE.background_mgr,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -766,6 +771,70 @@ def _build_inbox_store(config):
         return None
 
 
+def _build_background_manager(config):
+    """Background subagent manager (ADR 0050). Fires detached jobs as self-POSTed A2A
+    turns, so it derives the invoke URL + auth exactly like ``_build_scheduler`` (so a
+    wizard rename can't break self-invocation). The store path resolves like the other
+    stores (/sandbox → ~/.protoagent fallback), namespaced by agent name. Reconciles any
+    job left ``running`` by a prior crash on startup. Returns ``None`` when disabled or
+    the store can't be built (the ``task`` tool then falls back to synchronous execution)."""
+    if os.environ.get("BACKGROUND_DISABLED", "").lower() in ("1", "true", "yes"):
+        log.info("[background] disabled via BACKGROUND_DISABLED env")
+        return None
+    from background import BackgroundManager, BackgroundStore
+
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", agent_name()) or "agent"
+    configured = scope_leaf(Path("/sandbox/background") / f"{name}.db")
+    try:
+        configured.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(configured.parent, os.W_OK):
+            raise OSError
+        path = str(configured)
+    except OSError:
+        fallback = scope_leaf(Path.home() / ".protoagent" / "background" / f"{name}.db")
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = str(fallback)
+    try:
+        store = BackgroundStore(path)
+    except Exception:
+        log.exception("[background] failed to build store at %s; background disabled", path)
+        return None
+    try:
+        reconciled = store.reconcile_interrupted()
+        if reconciled:
+            log.info("[background] reconciled %d interrupted job(s) on startup", reconciled)
+    except Exception:
+        log.exception("[background] startup reconcile failed")
+
+    invoke_url = os.environ.get(
+        "SCHEDULER_INVOKE_URL", f"http://127.0.0.1:{STATE.active_port}",
+    )
+    bearer = (config.auth_token or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
+    # Match the X-API-Key the A2A handler reads (env-derived name, NOT identity.name) —
+    # see _build_scheduler for the rationale.
+    api_key = os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", "").strip()
+    # The event bus → a still-open spawning chat gets a live ``background.started``
+    # push (completion is published by the terminal hook). Imported lazily to keep
+    # this builder import-cheap; tolerate its absence.
+    try:
+        from server import _event_bus
+        publish = _event_bus.publish
+    except Exception:  # noqa: BLE001
+        publish = None
+    try:
+        return BackgroundManager(
+            agent_name=name,
+            invoke_url=invoke_url,
+            store=store,
+            api_key=api_key,
+            bearer_token=bearer,
+            event_publish=publish,
+        )
+    except Exception:
+        log.exception("[background] manager init failed; background disabled")
+        return None
+
+
 def _build_activity_log(config):
     """Provenance feed store (ADR 0022). Path resolves like the inbox store
     (/sandbox → ~/.protoagent fallback), namespaced by agent name."""
@@ -1125,6 +1194,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 extra_middleware=new_middleware,
                 checkpointer=STATE.checkpointer,
                 inbox_store=new_inbox_store,
+                # The background manager (ADR 0050) survives reloads unchanged — its
+                # store path + self-invoke URL/auth don't depend on reloadable config.
+                background_mgr=STATE.background_mgr,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")

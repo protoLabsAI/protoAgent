@@ -379,7 +379,7 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None, background_mgr=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -387,22 +387,37 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
     propagates because subagents run in the same async context. Subagents are
     given only their allowlisted tools (which never include ``task``/
     ``task_batch``), so delegation depth is naturally bounded to one level.
+
+    ``background_mgr`` (ADR 0050) enables ``run_in_background`` on the ``task``
+    tool — a delegation the agent fires and keeps working past, surfaced back via
+    a completion notification on the spawning session's next turn. ``None``
+    disables it (the param falls back to synchronous execution).
     """
     import asyncio
+    from typing import Literal
 
     from langchain_core.tools import tool
 
     tool_map = {t.name: t for t in all_tools}
-    available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
+    subagent_names = list(SUBAGENT_REGISTRY.keys())
+    available_subagents = ", ".join(subagent_names) or "(none configured)"
     max_concurrency = max(1, config.subagent_max_concurrency)
     truncate = config.subagent_output_truncate
+
+    # Constrain subagent_type to the live registry (plugin-contributed subagents
+    # included — this runs after they're registered) so the model can't pass a name
+    # that doesn't exist. A dynamic Literal renders as a JSON-schema ``enum`` the model
+    # sees in the tool schema; evaluated at def time → captures the current roster,
+    # rebuilt on every graph reload. ``or [...]`` keeps it valid if the registry is bare.
+    _SubagentType = Literal[tuple(subagent_names or ["researcher"])]
 
     @tool
     async def task(
         description: str,
         prompt: str,
-        subagent_type: str = "researcher",
+        subagent_type: _SubagentType = "researcher",
         emit_skill: bool = False,
+        run_in_background: bool = False,
     ) -> str:
         """Delegate a single task to a specialized subagent.
 
@@ -413,12 +428,36 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
         Args:
             description: Short description of what this task will accomplish
             prompt: Detailed instructions for the subagent
-            subagent_type: Which subagent to use (see SUBAGENT_REGISTRY)
+            subagent_type: Which subagent to use — one of the registered roster
+                shown in the system prompt (e.g. researcher, strategist, …)
             emit_skill: When True and the subagent config permits it, capture
                 the workflow as a skill-v1 artifact on successful completion.
                 Defaults to False (opt-in). No artifact is emitted on failure
                 or when the subagent config has allow_skill_emission=False.
+            run_in_background: Set True for long-running, independent work (deep
+                research, multi-step gathering) you don't need to block on. The
+                task runs detached as its own turn and returns IMMEDIATELY with a
+                job id; you will be notified of the result automatically on a
+                later turn. When you set this, do NOT poll, re-check, or spawn a
+                duplicate — just continue with other work. Leave False (the
+                default) when you need the result to finish the current turn.
         """
+        if run_in_background and background_mgr is not None:
+            if subagent_type not in SUBAGENT_REGISTRY:
+                return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+            from observability import tracing
+            job_id = await background_mgr.spawn(
+                origin_session=tracing.current_session_id(),
+                subagent_type=subagent_type,
+                description=description,
+                prompt=prompt,
+            )
+            return (
+                f"Background agent started: {job_id} ({subagent_type}: {description}). "
+                "It is running detached; you will be notified of the result automatically "
+                "on a later turn. Do NOT poll, re-check, or spawn a duplicate for this — "
+                "continue with other work in the meantime."
+            )
         return await _run_subagent(
             config=config,
             tool_map=tool_map,
@@ -509,6 +548,7 @@ def create_agent_graph(
     checkpointer=None,
     inbox_store=None,
     beads_store=None,
+    background_mgr=None,
 ):
     """Create the protoAgent LangGraph agent.
 
@@ -537,7 +577,7 @@ def create_agent_graph(
 
     if include_subagents:
         all_tools.extend(_build_task_tools(
-            config, all_tools, skills_index=skills_index,
+            config, all_tools, skills_index=skills_index, background_mgr=background_mgr,
         ))
 
     # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).

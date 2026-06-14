@@ -259,12 +259,63 @@ def _record_a2a_telemetry(outcome) -> None:
         log.exception("[telemetry] failed to record turn %s", outcome.task_id)
 
 
+def _handle_background_terminal(outcome) -> None:
+    """Settle a finished background subagent job (ADR 0050).
+
+    Marks the store row terminal with the turn's final text and publishes a
+    ``background.completed`` event for the console (the model learns separately, via
+    the drain into the spawning session's next turn). Best-effort."""
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return
+    _ctx = str(getattr(outcome, "context_id", "") or "")
+    job_id = (getattr(outcome, "trigger", "") or "").strip()
+    if not job_id and _ctx.startswith("background:"):
+        job_id = _ctx.split(":", 1)[1]
+    if not job_id:
+        return
+    state = getattr(outcome, "state", "completed")
+    status = "completed" if state == "completed" else "failed"
+    text = extract_output(outcome.text) or outcome.text or ""
+    try:
+        mgr.store.mark_complete(job_id, status, text)
+    except Exception:  # noqa: BLE001
+        log.exception("[background] failed to settle job %s", job_id)
+        return
+    job = None
+    try:
+        job = mgr.store.get(job_id)
+    except Exception:  # noqa: BLE001 — read is best-effort for the event payload
+        pass
+    # Carry a trimmed result so a still-open spawning chat can render the outcome
+    # live without a refetch (the model learns separately, via the next-turn drain).
+    result_preview = text if len(text) <= 2000 else text[:2000] + "\n\n…[truncated]"
+    _event_bus.publish(
+        "background.completed",
+        {
+            "job_id": job_id,
+            "status": status,
+            "subagent_type": getattr(job, "subagent_type", "") if job else "",
+            "description": getattr(job, "description", "") if job else "",
+            "origin_session": getattr(job, "origin_session", "") if job else "",
+            "result": result_preview,
+        },
+    )
+
+
 def _a2a_terminal(outcome) -> None:
     """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
     a ``TurnOutcome`` when a turn reaches a terminal state. Records the per-turn
     telemetry row and surfaces the Activity thread's answer on the event bus.
     Best-effort — never raises into the executor."""
     _record_a2a_telemetry(outcome)
+    # Background subagent turns (ADR 0050) live in a dedicated ``background:<id>``
+    # context, not the Activity thread — settle the job + notify the UI here, before
+    # the Activity early-return below.
+    _ctx = str(getattr(outcome, "context_id", "") or "")
+    if getattr(outcome, "origin", "") == "background" or _ctx.startswith("background:"):
+        _handle_background_terminal(outcome)
+        return
     if outcome.context_id != ACTIVITY_CONTEXT:
         return
     text = extract_output(outcome.text) or outcome.text

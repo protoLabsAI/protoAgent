@@ -63,6 +63,7 @@ import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
+import { BackgroundWatch } from "./BackgroundWatch";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
@@ -655,6 +656,10 @@ export function App() {
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
       <FleetTurnWatch />
+      {/* Background subagents (ADR 0050): when a detached job finishes, push its result
+          live into the spawning chat (a system message + toast) if it's still open —
+          instead of waiting for the next message to surface it. */}
+      <BackgroundWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps
