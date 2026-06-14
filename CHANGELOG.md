@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Left panel no longer springs back to ~50% when resized smaller.** The DS
+  AppShell's single divider made `maxRightWidth` (720) double as a floor on the
+  left column, so on a wide window the left couldn't drag below ~50% and snapped
+  back. Fixed at source in the design system (`@protolabsai/ui` 0.34→0.35: a user
+  drag/keyboard resize now respects only the column mins, so the left shrinks to
+  `minLeftWidth` while `maxRightWidth` still caps default/reopen widths). Console
+  bumped to 0.35; a `layout` e2e guards the left shrinking past the old floor.
+
 ### Added
 - **Opt-in JSON logging (`LOG_FORMAT=json`)** — set it to emit one JSON object
   per log line (`ts`/`level`/`logger`/`message`, plus the exception traceback and

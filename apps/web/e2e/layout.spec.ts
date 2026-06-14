@@ -55,3 +55,26 @@ test("right panel is keyboard-resizable (ADR 0035 S3)", async ({ page }) => {
   // only (protoContent #223); panel collapse/restore is covered by the
   // utility-bar-toggle test above. The handle's job here is resize.
 });
+
+test("left panel shrinks to minLeftWidth, past the old maxRightWidth floor (protoContent #236)", async ({ page }) => {
+  // Regression: the DS divider is zero-sum and the right column was capped at
+  // maxRightWidth (720), which double-acted as a FLOOR on the left — on a wide
+  // span the left couldn't go below span−720 (~50%) and sprang back when dragged
+  // smaller. The DS now lets a user resize shrink the left all the way to
+  // minLeftWidth (host sets 200). Drive it via the keyboard (deterministic; the
+  // handle's ArrowLeft grows the right / shrinks the left, and never collapses).
+  await page.goto("/app/", { waitUntil: "load" });
+  const left = page.locator(".pl-appshell__col--left");
+  await expect(left).toBeVisible();
+  const before = (await left.boundingBox())!.width;
+
+  const handle = page.getByRole("separator", { name: "Resize panels" });
+  await handle.focus();
+  for (let i = 0; i < 60; i++) await page.keyboard.press("ArrowLeft");
+
+  const after = (await left.boundingBox())!.width;
+  await expect(left).toBeVisible();        // shrank, did NOT collapse
+  expect(after).toBeLessThan(before);
+  // Reached ~minLeftWidth(200) — well under the old span−720 floor (~50%).
+  expect(after).toBeLessThan(280);
+});
