@@ -236,35 +236,37 @@ FIELDS: list[Field] = [
     Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
           "Install/remove the boot LaunchAgent.", restart=True),
 
-    # ── Fleet (Host layer, ADR 0047 D8) ──────────────────────────────────────
+    # ── Host box-runtime knobs (Host layer, ADR 0047 D8) ─────────────────────
     # Box-wide runtime knobs promoted out of env/CLI into the Host cascade layer.
     # All scope="host": the box default every co-located agent inherits (file > env
     # > default; the matching PROTOAGENT_* env var stays the fallback). Consumed by
     # the host process — a workspace leaf override is a silent no-op (ADR §5).
-    Field("network.bind", "bind_host", "Bind interface", "string", "Fleet",
+    # Regrouped into Network / Discovery / Keep-warm sections (bd-2zb) so Host config
+    # reads as coherent groups instead of one "Fleet" lump; all map to System below.
+    Field("network.bind", "bind_host", "Bind interface", "string", "Network",
           "Network interface the server listens on. 127.0.0.1 = loopback only (safe "
           "default); 0.0.0.0 = all interfaces (token-gate the A2A endpoint first). An "
           "explicit --host flag still wins. Env fallback: PROTOAGENT_HOST.",
           restart=True, scope="host"),
-    Field("fleet.port_base", "fleet_port_base", "Workspace port base", "number", "Fleet",
+    Field("fleet.port_base", "fleet_port_base", "Workspace port base", "number", "Network",
           "Base TCP port for fleet workspace agents — each gets port_base+1, +2, … "
           "unless given an explicit port.", minimum=1, maximum=65535, restart=True, scope="host"),
     Field("fleet.discovery.port_min", "discovery_port_min", "Discovery scan: min port", "number",
-          "Fleet", "Low end (inclusive) of the port window fleet discovery probes on the "
+          "Discovery", "Low end (inclusive) of the port window fleet discovery probes on the "
           "LAN / tailnet.", minimum=1, maximum=65535, scope="host"),
     Field("fleet.discovery.port_max", "discovery_port_max", "Discovery scan: max port", "number",
-          "Fleet", "High end (inclusive) of the discovery port window.",
+          "Discovery", "High end (inclusive) of the discovery port window.",
           minimum=1, maximum=65535, scope="host"),
-    Field("fleet.discovery.mdns", "discovery_mdns", "mDNS discovery", "bool", "Fleet",
+    Field("fleet.discovery.mdns", "discovery_mdns", "mDNS discovery", "bool", "Discovery",
           "Advertise + browse the _protoagent._tcp mDNS/Bonjour channel so LAN siblings "
           "find each other automatically. Off = no mDNS (tailnet + manual register still "
           "work); useful where multicast is noisy or blocked.", scope="host"),
-    Field("fleet.warm.max", "fleet_max_warm", "Warm-agent cap", "number", "Fleet",
+    Field("fleet.warm.max", "fleet_max_warm", "Warm-agent cap", "number", "Keep-warm",
           "Max fleet agents kept running at once; the least-recently-active beyond this "
           "are spun down (LRU). 0 = unlimited. Env fallback: PROTOAGENT_FLEET_MAX_WARM.",
           minimum=0, scope="host"),
     Field("fleet.warm.grace_seconds", "fleet_warm_grace_seconds", "Warm eviction grace (s)",
-          "number", "Fleet",
+          "number", "Keep-warm",
           "Spare an agent touched within this many seconds from LRU eviction (it may be "
           "mid-turn). 0 = pure LRU. Env fallback: PROTOAGENT_FLEET_WARM_GRACE.",
           minimum=0, scope="host"),
@@ -346,10 +348,13 @@ _SECTION_CATEGORY = {
     "Middleware": "System",
     "Runtime": "System",
     "Telemetry": "System",
-    # Fleet — box-runtime host knobs (ADR 0047 D8). System category so the host-scoped
+    # Host box-runtime knobs (ADR 0047 D8), regrouped (bd-2zb) from one "Fleet" lump
+    # into Network / Discovery / Keep-warm. All System category so the host-scoped
     # fields surface in Settings ▸ Host / App ▸ Host config (which renders the host
     # fields of the Agent+System categories).
-    "Fleet": "System",
+    "Network": "System",
+    "Discovery": "System",
+    "Keep-warm": "System",
     # Discord / Google / other plugin sections → "Plugins" (the default).
 }
 
