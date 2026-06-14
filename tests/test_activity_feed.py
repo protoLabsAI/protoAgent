@@ -44,9 +44,11 @@ def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
     rows = log.recent()
     assert rows and rows[0]["origin"] == "scheduler" and rows[0]["trigger"] == "daily-brief"
     assert rows[0]["text"] == "Overnight: 3 PRs merged."  # scratch_pad stripped via extract_output
-    # The live event carries provenance too.
-    assert published and published[0][0] == "activity.message"
-    assert published[0][1]["origin"] == "scheduler" and published[0][1]["trigger"] == "daily-brief"
+    # The live event carries provenance too. (A terminal turn also publishes a
+    # `turn.usage` event — ADR 0051 — so match the activity.message by topic, not order.)
+    activity = next((d for ev, d in published if ev == "activity.message"), None)
+    assert activity is not None
+    assert activity["origin"] == "scheduler" and activity["trigger"] == "daily-brief"
 
 
 def test_terminal_hook_ignores_non_activity_context(tmp_path, monkeypatch):
