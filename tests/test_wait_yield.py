@@ -72,9 +72,11 @@ class _FakeJob:
 class _FakeScheduler:
     def __init__(self):
         self.added: list[tuple[str, str]] = []
+        self.last_context_id: str | None = "__unset__"
 
-    def add_job(self, prompt, schedule, *, job_id=None, timezone=None):
+    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
         self.added.append((prompt, schedule))
+        self.last_context_id = context_id
         return _FakeJob(schedule)
 
     def list_jobs(self):
@@ -113,3 +115,23 @@ async def test_wait_requires_a_then_instruction():
     out = await _wait_tool(sched).ainvoke({"seconds": 10, "then": "  "})
     assert out.startswith("Error:")
     assert sched.added == []  # nothing scheduled
+
+
+@pytest.mark.asyncio
+async def test_wait_carries_the_origin_session_as_context_id(monkeypatch):
+    # Same-session resume (ADR 0053): the resume is stamped with the current
+    # turn's session so the scheduler fires it back into that chat thread.
+    import observability.tracing as tracing
+    monkeypatch.setattr(tracing, "current_session_id", lambda: "chat-abc")
+    sched = _FakeScheduler()
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
+    assert sched.last_context_id == "chat-abc"
+
+
+@pytest.mark.asyncio
+async def test_wait_without_a_session_leaves_context_id_none(monkeypatch):
+    import observability.tracing as tracing
+    monkeypatch.setattr(tracing, "current_session_id", lambda: "")
+    sched = _FakeScheduler()
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
+    assert sched.last_context_id is None  # → scheduler falls back to Activity

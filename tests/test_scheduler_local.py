@@ -600,3 +600,89 @@ def test_no_timezone_defaults_to_utc(tmp_path):
     assert job.timezone is None
     nf_utc = datetime.fromisoformat(job.next_fire).astimezone(ZoneInfo("UTC"))
     assert nf_utc.hour == 12
+
+
+# ── context_id / same-session resume (ADR 0053) ──────────────────────────────
+
+
+class _CapClient:
+    """Captures the JSON body of the single POST the scheduler fires."""
+
+    posted: dict = {}
+
+    def __init__(self, **_kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return False
+
+    async def post(self, _url, headers=None, json=None):  # noqa: A002
+        _CapClient.posted = json or {}
+
+        class _R:
+            status_code = 200
+            text = "ok"
+
+        return _R()
+
+
+class TestContextId:
+    def test_add_job_round_trips_context_id(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        s.add_job("resume", "2099-01-01T00:00:00+00:00", job_id="j", context_id="chat-abc")
+        assert s.list_jobs()[0].context_id == "chat-abc"
+
+    def test_context_id_defaults_to_none(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        s.add_job("plain", "2099-01-01T00:00:00+00:00", job_id="j")
+        assert s.list_jobs()[0].context_id is None
+
+    def test_migrates_pre_context_id_db(self, tmp_path):
+        # Simulate a store created before the context_id column existed: rebuild
+        # the table with the old shape, then a fresh instance runs the lazy
+        # ALTER-TABLE migration on init.
+        s = _make_scheduler(tmp_path)
+        old_schema = (
+            "DROP TABLE jobs;"
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, "
+            "schedule TEXT NOT NULL, agent_name TEXT NOT NULL, next_fire TEXT NOT NULL, "
+            "last_fire TEXT, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, "
+            "timezone TEXT);"
+        )
+        db = sqlite3.connect(str(s.path))
+        db.executescript(old_schema)
+        db.execute(
+            "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, enabled, created_at) "
+            "VALUES ('old', 'p', '0 9 * * *', 'gina-test', '2099-01-01T00:00:00+00:00', 1, "
+            "'2026-01-01T00:00:00+00:00')"
+        )
+        db.commit()
+        db.close()
+
+        s2 = _make_scheduler(tmp_path)
+        jobs = s2.list_jobs()
+        assert len(jobs) == 1 and jobs[0].context_id is None  # old row → no context
+        s2.add_job("new", "2099-01-02T00:00:00+00:00", job_id="new", context_id="chat-x")
+        got = {j.id: j for j in s2.list_jobs()}
+        assert got["new"].context_id == "chat-x"
+
+    @pytest.mark.asyncio
+    async def test_fire_routes_to_job_context_id(self, tmp_path, monkeypatch):
+        import httpx
+
+        from events import ACTIVITY_CONTEXT
+
+        s = _make_scheduler(tmp_path)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CapClient())
+
+        soon = (datetime.now(UTC) + timedelta(seconds=1)).isoformat()
+        scoped = s.add_job("resume me", soon, job_id="scoped", context_id="chat-abc")
+        assert await s._fire(scoped) is True
+        assert _CapClient.posted["params"]["message"]["contextId"] == "chat-abc"
+
+        plain = s.add_job("plain", soon, job_id="plain")
+        await s._fire(plain)
+        assert _CapClient.posted["params"]["message"]["contextId"] == ACTIVITY_CONTEXT

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WAL-mode SQLite stores (cold stop-and-tar or hot `.backup`), how to restore, and
   what `SIGTERM` does to an in-flight turn (cancelled-but-reconciled; 5s graceful
   drain). (#876)
+- **`wait` resumes in the same conversation** (ADR 0053). When the agent calls
+  `wait` inside a chat, the scheduled resume now fires back into **that chat's
+  thread** instead of the Activity thread — so it wakes up with the conversation
+  history intact and continues where it left off. The originating session is read
+  from the same per-turn contextvar the background-subagent path uses; the
+  scheduler `Job` gained a lazily-migrated `context_id` column (existing schedules
+  keep working). Plain scheduled jobs still land in the Activity thread. (Live UI
+  surfacing of the resumed turn in the chat tab is a tracked follow-up.)
 
 ### Fixed
 - **Background-agent notifications render legibly again.** After the DS

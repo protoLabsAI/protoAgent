@@ -63,21 +63,33 @@ independent of what the model would do next.
 
 ### Where the resume lands
 
-The scheduler fires resumes in the **Activity thread** (`system:activity`), the
-established home for autonomous/long-horizon work — durable and visible in the
-Activity feed. The agent's `then` instruction plus the Activity history carry the
-context forward; a long task becomes a chain of short turns, each ended by `wait`.
+**Same-session resume (added):** `wait` stamps the originating chat session onto
+the job (`Job.context_id`), read from the same `tracing.current_session_id()`
+contextvar the background-subagent path uses — no extra plumbing. The scheduler
+fires into `job.context_id or ACTIVITY_CONTEXT`, so a yield *from a chat* resumes
+in **that chat's thread** (the agent wakes with the conversation history intact),
+while a plain scheduled/Activity-origin job still lands in the durable Activity
+thread. `context_id` is a new, lazily-migrated `jobs` column (existing DBs keep
+working); the workstacean (remote) backend accepts the arg for parity but can't
+target a context, so it stays Activity-routed there.
 
-Resuming in the *originating* chat session instead (carrying the contextId
-through the job) is a deliberate follow-up, not part of this ADR.
+This is **agent-side continuity** (Problem A): the resumed turn runs in the chat's
+checkpointer thread. **UI surfacing** (Problem B) — making that server-fired turn
+*appear live* in the browser chat tab — is separate: the browser only renders
+turns it streamed, so it needs a per-session push (reusing the ADR 0050
+`background.completed` → `BackgroundWatch` pattern). That remains a follow-up
+(tracked in beads); until then the work happens in-thread and surfaces on the
+chat's next interaction.
 
 ## Consequences
 
 - Long-horizon "do X, wait, do Y" tasks no longer burn a turn's recursion budget
   polling; the budget covers actual work.
+- A `wait` issued inside a chat resumes in that same conversation thread — the
+  agent keeps full context across the yield.
 - `wait` is lead-agent-only (gated on the scheduler; subagents run bounded by
   `max_turns` and don't get it).
 - The yield is durable across restart (the resume is a persisted scheduler job).
-- Follow-up: optional same-session resume (thread the originating contextId into
-  the job so the continuation lands in the chat the user is watching, not only
-  the Activity feed).
+- Follow-up: live UI surfacing of the resumed turn in the originating chat tab
+  (per-session push à la ADR 0050), so a watching user sees the continuation
+  arrive rather than only the agent picking it up server-side.
