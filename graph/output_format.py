@@ -210,6 +210,43 @@ def stream_visible_output(raw: str) -> str:
     return after
 
 
+# Reasoning regions for live "thinking" display — the protocol scratch_pad and any
+# provider <think> block. Match open→content (with no nested reasoning tag) → close.
+_REASONING_BLOCK_RE = re.compile(
+    r"(?<!`)<(scratch_pad|think)>([\s\S]*?)</\1>", re.IGNORECASE)
+# A still-open trailing reasoning block (content runs to the end, no close yet).
+_REASONING_OPEN_TAIL_RE = re.compile(
+    r"(?<!`)<(scratch_pad|think)>((?:(?!</?(?:scratch_pad|think)>)[\s\S])*)$", re.IGNORECASE)
+
+
+def stream_visible_reasoning(raw: str) -> str:
+    """The model's reasoning so far — for a live, collapsible "thinking" view.
+
+    The counterpart to :func:`stream_visible_output`, but for the *hidden* side:
+    concatenates every ``<scratch_pad>`` / ``<think>`` block seen so far (so
+    multi-step turns show all their deliberation), plus any still-open trailing
+    block with a partial tag held back. Monotonic as ``raw`` grows, so a caller
+    can stream ``result[already_emitted:]`` each step. Empty until the first
+    reasoning tag opens.
+    """
+    chunks: list[str] = []
+    for m in _REASONING_BLOCK_RE.finditer(raw):
+        body = m.group(2).strip()
+        if body:
+            chunks.append(body)
+    tail = _REASONING_OPEN_TAIL_RE.search(raw)
+    if tail:
+        body = tail.group(2)
+        # Hold back a partial trailing tag ("</scr", a lone "<") so it never flashes.
+        lt = body.rfind("<")
+        if lt != -1 and ">" not in body[lt:]:
+            body = body[:lt]
+        body = body.strip()
+        if body:
+            chunks.append(body)
+    return "\n\n".join(chunks)
+
+
 def extract_confidence(text: str) -> tuple[float | None, str | None]:
     """Parse an optional self-reported ``<confidence>`` (and explanation).
 

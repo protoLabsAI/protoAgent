@@ -20,6 +20,7 @@ from graph.output_format import (
     _strip_reasoning,
     extract_output,
     stream_visible_output,
+    stream_visible_reasoning,
 )
 
 
@@ -236,6 +237,45 @@ def test_stream_visible_orphan_open_streams_content():
 
 def test_stream_visible_closed_output():
     assert stream_visible_output("<output>the answer</output>") == "the answer"
+
+
+# ── stream_visible_reasoning (live "thinking" channel) ───────────────────────
+
+
+def test_stream_reasoning_empty_before_any_tag():
+    assert stream_visible_reasoning("") == ""
+    assert stream_visible_reasoning("no tags yet") == ""
+
+
+def test_stream_reasoning_open_block_streams_content():
+    assert stream_visible_reasoning("<scratch_pad>deciding which tool") == "deciding which tool"
+
+
+def test_stream_reasoning_holds_back_partial_close_tag():
+    # A half-written </scratch_pad> must not flash into the reasoning view.
+    assert stream_visible_reasoning("<scratch_pad>thinking</scratc") == "thinking"
+
+
+def test_stream_reasoning_is_monotonic_prefix():
+    # As raw grows, the result only ever extends — required for delta streaming.
+    steps = [
+        "<scratch_pad>step one",
+        "<scratch_pad>step one and two</scratch_pad><output>ans",
+    ]
+    a = stream_visible_reasoning(steps[0])
+    b = stream_visible_reasoning(steps[1])
+    assert b.startswith(a)
+    assert "step one and two" in b
+
+
+def test_stream_reasoning_concatenates_multiple_blocks():
+    raw = "<scratch_pad>plan A</scratch_pad><output>x</output><scratch_pad>plan B</scratch_pad>"
+    out = stream_visible_reasoning(raw)
+    assert "plan A" in out and "plan B" in out
+
+
+def test_stream_reasoning_includes_provider_think():
+    assert stream_visible_reasoning("<think>provider chain of thought</think>") == "provider chain of thought"
 
 
 def test_stream_visible_holds_back_partial_closing_tag():

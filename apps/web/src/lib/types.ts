@@ -328,6 +328,9 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   toolCalls?: ToolCall[];
+  /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
+   *  above the answer; never part of `content`. */
+  reasoning?: string;
   createdAt?: number;
   status?: "streaming" | "done" | "error";
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be

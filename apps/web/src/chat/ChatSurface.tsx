@@ -1,6 +1,6 @@
 import "./chat.css";
 import { Empty } from "@protolabsai/ui/primitives";
-import { PromptInput } from "@protolabsai/ui/ai";
+import { PromptInput, Reasoning } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
   Loader2,
@@ -486,6 +486,20 @@ function ChatSessionSlot({
             ),
           );
         },
+        onReasoning: (delta) => {
+          // Accumulate the streamed scratch_pad into the assistant message's
+          // collapsible reasoning block (separate from the answer text).
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) =>
+              message.id === assistantId
+                ? { ...message, reasoning: `${message.reasoning ?? ""}${delta}` }
+                : message,
+            ),
+          );
+        },
         onToolCall: (evt) => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
@@ -609,6 +623,13 @@ function ChatSessionSlot({
             <article className={`message message-${message.role}`} key={message.id || `${message.role}-${message.createdAt}`}>
               <div className="message-role">{message.role}</div>
               <div className="message-body">
+                {message.reasoning ? (
+                  // Collapsible "thinking" — open while the model is still reasoning
+                  // (no answer text yet), auto-collapses once the answer starts.
+                  <Reasoning streaming={message.status === "streaming" && !message.content}>
+                    {message.reasoning}
+                  </Reasoning>
+                ) : null}
                 {message.toolCalls && message.toolCalls.length > 0 ? (
                   <ToolCalls calls={message.toolCalls} />
                 ) : null}
@@ -619,7 +640,9 @@ function ChatSessionSlot({
                       // ADR 0050) carry markdown — render it; only the user's own input
                       // stays literal.
                       <Markdown>{message.content}</Markdown>
-                  : message.status === "streaming" && !(message.toolCalls && message.toolCalls.length)
+                  : message.status === "streaming"
+                      && !(message.toolCalls && message.toolCalls.length)
+                      && !message.reasoning
                     ? <Loader2 className="spin" size={15} />
                     : null}
               </div>

@@ -25,6 +25,7 @@ from graph.output_format import (
     extract_output,
     is_dropped_scratch_turn,
     stream_visible_output,
+    stream_visible_reasoning,
 )
 from runtime.state import STATE
 
@@ -227,6 +228,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
 
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
+    reasoned_len = 0  # chars of scratch_pad reasoning already emitted (live thinking)
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
@@ -283,6 +285,12 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                 if len(visible) > streamed_len:
                     yield ("text", visible[streamed_len:])
                     streamed_len = len(visible)
+                # Stream the scratch_pad reasoning on its own channel — a collapsible
+                # "thinking" view in the console (never folded into the answer text).
+                reasoning = stream_visible_reasoning(accumulated_raw)
+                if len(reasoning) > reasoned_len:
+                    yield ("reasoning", reasoning[reasoned_len:])
+                    reasoned_len = len(reasoning)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             # Finalize each tool card with its full args, keyed by the tool_call id.

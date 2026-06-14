@@ -332,6 +332,7 @@ export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
 
 const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
+const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
 
 type RawPart = {
   kind?: string;
@@ -383,6 +384,12 @@ function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
 /** Pull the HITL form/question payload off an input-required frame's parts. */
 export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
   return (dataByMime(parts, HITL_MIME) as HitlPayload) || null;
+}
+
+/** Pull a streamed reasoning ("thinking") delta off a working frame's parts. */
+function reasoningFromParts(parts?: RawPart[]): string | null {
+  const d = dataByMime(parts, REASONING_MIME) as { text?: string } | null;
+  return d?.text || null;
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
@@ -936,6 +943,7 @@ export const api = {
       onTaskId?: (taskId: string) => void;
       onStatus?: (status: string) => void;
       onText?: (text: string, append: boolean) => void;
+      onReasoning?: (delta: string) => void;
       onToolCall?: (evt: ToolEvent) => void;
       onInputRequired?: (payload: HitlPayload) => void;
       // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
@@ -1034,7 +1042,10 @@ export const api = {
         const state = statusUpdate.status?.state || "";
         const parts = statusUpdate.status?.message?.parts;
         const messageText = textFromParts(parts);
-        handlers.onStatus?.(messageText || state);
+        const reasoning = reasoningFromParts(parts);
+        if (reasoning) handlers.onReasoning?.(reasoning);
+        // A reasoning-only frame shouldn't blank the status line to bare "working".
+        if (!reasoning) handlers.onStatus?.(messageText || state);
         const toolEvent = toolEventFromParts(parts);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
         // HITL pause: the turn parked awaiting the operator (0.3 `input-required`

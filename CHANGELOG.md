@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A foreground `task` delegation can also **auto-background** when it overruns a time budget
   (`BACKGROUND_AUTO_S`, off by default), so a long inline subagent stops freezing the turn.
   Canceled turns now record telemetry instead of vanishing.
+- **Reasoning display in chat** — the model's `<scratch_pad>` / provider `<think>` deliberation,
+  previously stripped server-side and never shown, now streams to the console as a **collapsible
+  "thinking" block** above the answer (DS `@protolabsai/ui/ai` `Reasoning`). It rides its own
+  channel — a `reasoning-v1` DataPart on WORKING status frames (`stream_visible_reasoning`
+  incrementally extracts scratch_pad/think; the executor emits it; the frontend accumulates it
+  into `message.reasoning`) — so the **answer artifact is untouched** and plain A2A consumers
+  ignore it. The block is open while the model is thinking and auto-collapses when the answer
+  begins.
 - **Background-jobs console widget** (ADR 0050, Phase 3) — a pill in the utility bar shows a
   spinner + count while background subagents run and an unread dot when they finish; clicking
   it opens a dialog listing each job's status, live elapsed time, and (for finished jobs) its
