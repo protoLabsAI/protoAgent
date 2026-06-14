@@ -30,6 +30,7 @@ import { chatStore, useChatState } from "./chat-store";
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
+import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
 
 function messageId() {
@@ -835,7 +836,7 @@ function ChatSessionSlot({
         }}
         onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
         onDrop={(e) => {
-          const files = Array.from(e.dataTransfer?.files ?? []);
+          const files = filesFromTransfer(e.dataTransfer);
           if (files.length) {
             e.preventDefault();
             files.forEach((f) => void uploadAttachment(f));
@@ -864,12 +865,22 @@ function ChatSessionSlot({
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {
-            // Paste-to-attach (the DS onPaste seam): files on the clipboard become
-            // attachments; plain text paste falls through to the field.
-            const files = Array.from(e.clipboardData?.files ?? []);
+            // Paste-to-attach (the DS onPaste seam). Clipboard files — incl.
+            // IMAGES/screenshots that some browsers expose only via items[] —
+            // become attachments.
+            const files = filesFromTransfer(e.clipboardData);
             if (files.length) {
               e.preventDefault();
               files.forEach((f) => void uploadAttachment(f));
+              return;
+            }
+            // A large text paste becomes a removable attachment pill (routed
+            // through the attach pipeline → tiered inline/indexed) instead of
+            // flooding the field; small pastes fall through to the textarea.
+            const text = e.clipboardData?.getData("text/plain") ?? "";
+            if (isLargePaste(text)) {
+              e.preventDefault();
+              void uploadAttachment(pastedTextFile(text));
             }
           }}
           onAttach={() => fileInputRef.current?.click()}
