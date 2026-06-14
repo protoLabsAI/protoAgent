@@ -48,15 +48,6 @@
   color: var(--fg-secondary);
 }
 
-.composer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-  align-items: center; /* a single-row input sits centered against the Send button */
-}
-
 /* A thin control row UNDER the input (ADR 0048) — holds the model chip (and is the
    home for future per-turn controls). */
 .composer-toolbar {
@@ -109,19 +100,6 @@
 .slash-desc {
   font-size: 11px;
   color: var(--fg-muted);
-}
-
-/* The chat input is a compact fixed height (it doesn't auto-grow) — without this it has no cap
-   and rendered far too tall. .notes-editor keeps its own sizing above. */
-.composer textarea {
-  /* Single-row by default (like a text input); auto-grows with content up to
-     max-height (JS sets the inline height), then scrolls. */
-  height: auto;
-  min-height: 40px;
-  max-height: 200px;
-  line-height: 1.45;
-  resize: none;
-  overflow-y: auto;
 }
 
 /* Delete-chat dialog: the opt-in harvest checkbox (harvest is never automatic). */

@@ -67,6 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrichment, reranking).
 
 ### Changed
+- **Chat composer migrated to the design-system `PromptInput`** (`@protolabsai/ui/ai`, bumped
+  0.30 → 0.33). The hand-rolled `<form>`/`<textarea>` is replaced by the DS composer, driven
+  through the new host-extension seams added upstream (`inputRef`/`onKeyDown`/`overlay`): the
+  slash-command menu renders in the `overlay` slot with the same ↑/↓/Enter/Tab/Esc nav, ⌘/Ctrl
+  +Enter still inserts a newline, and the send button becomes a stop control while streaming.
+  Behavior preserved; the composer now tracks DS chat styling and is ready for file attachments.
 - **Batched embedding on document ingest** (ADR 0021). `add_document` now embeds all of a
   document's chunks in a **single** gateway request instead of one serial `_embed` call per
   chunk — a 26-chunk web article went from 26 embed round-trips to 1. Rows are written before
