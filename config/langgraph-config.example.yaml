@@ -80,6 +80,12 @@ knowledge:
   # chunk_max_chars: 1200      # target ceiling per chunk
   # chunk_overlap_chars: 150   # shared tail between adjacent chunks (boundary safety)
   # chunk_min_chars: 200       # fold a trailing fragment below this into the prior chunk
+  # Contextual Retrieval (ADR 0021, Anthropic) — when a doc splits, prepend a
+  # one-line aux-LLM context situating each chunk in the whole document before
+  # embedding/indexing. Lifts both semantic + keyword recall. Costs one aux call
+  # per chunk at INGEST (not on the query path), so off by default.
+  # contextual_enrichment: false
+  # context_max_doc_chars: 12000   # cap the document text sent in the context prompt
 
 # Session memory loading — prior summaries injected into system prompt
 # by KnowledgeMiddleware when it is active. Persistence via MemoryMiddleware

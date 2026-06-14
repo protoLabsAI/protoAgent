@@ -344,6 +344,8 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             # Same for the chunk-fold floor — max_chars/overlap are settings
             # fields (round-trip via FIELDS); min_chars is config-only.
             "chunk_min_chars": config.knowledge_chunk_min_chars,
+            # contextual_enrichment is a settings field; its doc cap is config-only.
+            "context_max_doc_chars": config.knowledge_context_max_doc_chars,
         },
         "mcp": {
             "enabled": config.mcp_enabled,

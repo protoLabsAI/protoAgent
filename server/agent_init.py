@@ -266,6 +266,19 @@ def _build_knowledge_store(config):
         return None
     try:
         from knowledge import KnowledgeStore
+        # Contextual Retrieval (ADR 0021): build the (doc, chunk) -> context fn
+        # once and pass it to whichever store we construct. Helps FTS5 + vector
+        # alike, so it's wired for both tiers. Off → None (no enrichment cost).
+        context_fn = None
+        if getattr(config, "knowledge_contextual_enrichment", False):
+            try:
+                from graph.llm import create_context_fn
+
+                context_fn = create_context_fn(config)
+                if context_fn is not None:
+                    log.info("[server] knowledge: contextual enrichment on (aux model)")
+            except Exception as exc:  # noqa: BLE001 — enrichment is optional
+                log.warning("[server] context fn init failed: %s; enrichment off", exc)
         # Semantic recall (ADR 0021): when knowledge.embeddings is on, use the
         # HybridKnowledgeStore (FTS5 + vector, fused with RRF) with an embed_fn
         # wired to the gateway. Any failure degrades to keyword-only FTS5 — never
@@ -290,6 +303,7 @@ def _build_knowledge_store(config):
                         chunk_max_chars=config.knowledge_chunk_max_chars,
                         chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
                         chunk_min_chars=config.knowledge_chunk_min_chars,
+                        context_fn=context_fn,
                     )
                 log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
             except Exception as exc:  # noqa: BLE001 — degrade to FTS5, never fail
@@ -300,6 +314,7 @@ def _build_knowledge_store(config):
             chunk_max_chars=config.knowledge_chunk_max_chars,
             chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
             chunk_min_chars=config.knowledge_chunk_min_chars,
+            context_fn=context_fn,
         )
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)

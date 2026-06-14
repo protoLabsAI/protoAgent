@@ -103,9 +103,14 @@ async def harvest_thread(
             return None
         # A summary is document-sized — chunk it so each passage gets its own
         # embedding instead of one diluted whole-summary vector (ADR 0021).
+        # Offloaded: add_document does blocking gateway work per chunk (embed +
+        # optional contextual enrichment) — keep it off the maintenance loop.
+        import asyncio
+
         from knowledge import add_document
 
-        chunk_ids = add_document(
+        chunk_ids = await asyncio.to_thread(
+            add_document,
             knowledge_store,
             summary,
             domain="conversation",

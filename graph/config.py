@@ -405,6 +405,14 @@ class LangGraphConfig:
     knowledge_chunk_max_chars: int = 1200
     knowledge_chunk_overlap_chars: int = 150
     knowledge_chunk_min_chars: int = 200
+    # Contextual Retrieval (ADR 0021, Anthropic) — when a doc splits, prepend a
+    # one-line aux-LLM context situating each chunk in the whole document before
+    # embedding/indexing, so the chunk carries doc-level context (lifts both
+    # semantic + keyword recall). Costs one aux call per chunk at INGEST (not on
+    # the query path), so OFF by default. context_max_doc_chars caps the document
+    # text sent in the context prompt.
+    knowledge_contextual_enrichment: bool = False
+    knowledge_context_max_doc_chars: int = 12000
 
     # Conversation checkpointer — persists each chat session's history per
     # thread_id so multi-turn chats survive a server restart. A path → durable
@@ -790,6 +798,10 @@ class LangGraphConfig:
                 "chunk_overlap_chars", cls.knowledge_chunk_overlap_chars),
             knowledge_chunk_min_chars=knowledge.get(
                 "chunk_min_chars", cls.knowledge_chunk_min_chars),
+            knowledge_contextual_enrichment=knowledge.get(
+                "contextual_enrichment", cls.knowledge_contextual_enrichment),
+            knowledge_context_max_doc_chars=knowledge.get(
+                "context_max_doc_chars", cls.knowledge_context_max_doc_chars),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),

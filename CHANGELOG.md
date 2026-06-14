@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Contextual enrichment on knowledge ingest** (ADR 0021 — Anthropic's Contextual
+  Retrieval). When a document splits into chunks, an aux-LLM one-line context that
+  situates each chunk in the *whole* document is prepended before it's embedded and
+  FTS-indexed — so the chunk's vector and its keyword terms both carry document-level
+  context they'd otherwise lack (lifts semantic **and** BM25 recall). Builds on the new
+  `add_document` chunking: enriches only genuinely multi-chunk docs (a single chunk is
+  the whole doc), costs one aux call per chunk at **ingest** (never on the query path),
+  and degrades to the raw chunk on any gateway hiccup. Off by default — flip
+  `knowledge.contextual_enrichment` (Settings▸Knowledge); the document text sent in the
+  context prompt is capped by `knowledge.context_max_doc_chars`. Harvest ingest is now
+  offloaded to a worker thread so the per-chunk LLM/embed work doesn't block the
+  maintenance loop.
 - **Document chunking on knowledge ingest** (ADR 0021). Large bodies — harvested
   conversation summaries and operator-pasted docs — are now split into coherent,
   overlapping passages before embedding, instead of collapsing into one diluted

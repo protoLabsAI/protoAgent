@@ -34,6 +34,7 @@ import logging
 import os
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -222,6 +223,7 @@ class KnowledgeStore:
         chunk_max_chars: int = 1200,
         chunk_overlap_chars: int = 150,
         chunk_min_chars: int = 200,
+        context_fn: Callable[[str, str], str] | None = None,
     ):
         self.path = _resolve_path(db_path)
         self._fts_available: bool | None = None
@@ -236,6 +238,12 @@ class KnowledgeStore:
         self._chunk_max_chars = max(1, int(chunk_max_chars))
         self._chunk_overlap_chars = max(0, int(chunk_overlap_chars))
         self._chunk_min_chars = max(0, int(chunk_min_chars))
+        # Contextual Retrieval (ADR 0021): an injected ``(doc, chunk) -> context``
+        # callable. When set, ``add_document`` prepends a one-line context to each
+        # chunk of a multi-chunk doc before storing, so the chunk's embedding + FTS
+        # terms carry document-level context. None = off (default). The store stays
+        # LLM-agnostic — it just calls the injected fn.
+        self._context_fn = context_fn
         self._init_db()
 
     # ── connection / schema ─────────────────────────────────────────────────
@@ -378,6 +386,7 @@ class KnowledgeStore:
         max_chars: int | None = None,
         overlap_chars: int | None = None,
         min_chars: int | None = None,
+        enrich: bool | None = None,
     ) -> list[int]:
         """Chunk a document, then store each piece via ``add_chunk``.
 
@@ -388,6 +397,12 @@ class KnowledgeStore:
         (ADR 0021). Each piece funnels through ``add_chunk``, so the
         reasoning-strip guard (and, on a hybrid store, per-piece embedding) all
         still apply.
+
+        When a ``context_fn`` is configured (Contextual Retrieval) and the doc
+        actually splits, a one-line context situating each piece in the whole
+        document is prepended before storage — so the piece's embedding and FTS
+        terms carry document-level context. ``enrich=False`` forces it off for a
+        call; the default follows whether a ``context_fn`` is set.
 
         Content at or under the chunk size is a single ``add_chunk`` — so it's a
         safe drop-in for ``add_chunk`` on any path that might receive a large
@@ -401,10 +416,29 @@ class KnowledgeStore:
             overlap_chars=self._chunk_overlap_chars if overlap_chars is None else overlap_chars,
             min_chars=self._chunk_min_chars if min_chars is None else min_chars,
         )
+        # Enrich only a genuinely multi-chunk doc: a single chunk IS the whole
+        # document, so there's no within-document context to add (and no extra
+        # LLM call for the common small-body case).
+        enriching = (
+            self._context_fn is not None
+            and (enrich if enrich is not None else True)
+            and len(pieces) >= 2
+        )
         ids: list[int] = []
         for piece in pieces:
+            stored = piece
+            if enriching:
+                try:
+                    context = (self._context_fn(content, piece) or "").strip()
+                    if context:
+                        stored = f"{context}\n\n{piece}"
+                except Exception as exc:  # noqa: BLE001 — degrade to raw chunk
+                    # One failure (gateway hiccup) disables enrichment for the
+                    # rest of THIS doc, so an outage doesn't fire N failing calls.
+                    log.warning("[knowledge] context enrichment failed: %s; raw chunks", exc)
+                    enriching = False
             cid = self.add_chunk(
-                piece,
+                stored,
                 domain=domain,
                 heading=heading,
                 source=source,

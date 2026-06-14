@@ -132,3 +132,45 @@ def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | N
         check_embedding_ctx_length=False,
     )
     return embeddings.embed_query
+
+
+# Contextual Retrieval (Anthropic) — situate each chunk in its source document
+# before embedding/indexing, so a chunk's vector + FTS terms carry doc-level
+# context they'd otherwise lack. Improves both semantic and keyword recall.
+_CONTEXT_PROMPT = (
+    "<document>\n{doc}\n</document>\n\n"
+    "Here is a chunk taken from the document above:\n<chunk>\n{chunk}\n</chunk>\n\n"
+    "Give a short, succinct context (one sentence, no preamble) that situates this "
+    "chunk within the overall document, to improve search retrieval of the chunk. "
+    "Answer with ONLY the context sentence."
+)
+
+
+def create_context_fn(
+    config: LangGraphConfig,
+) -> Callable[[str, str], str] | None:
+    """Build a sync ``(document, chunk) -> context sentence`` function, or None.
+
+    Contextual Retrieval (ADR 0021): at ingest, ``add_document`` prepends this
+    one-sentence context to each chunk before storing, so the chunk's embedding
+    AND its FTS terms carry document-level context. Uses the cheap aux model
+    (``routing.aux_model``, else the main model) — classification-grade work.
+    The source document is capped at ``knowledge_context_max_doc_chars`` to bound
+    the prompt. Sync (mirrors ``create_embed_fn``) so the store stays sync;
+    callers run it off the event loop. Errors propagate to the store, which
+    degrades to the raw chunk — enrichment never blocks ingest."""
+    from graph.agent import _resolve_aux_model
+
+    cap = max(1, int(getattr(config, "knowledge_context_max_doc_chars", 12000)))
+    llm = create_llm(config, model_name=_resolve_aux_model(config, ""))
+
+    def _context(document: str, chunk: str) -> str:
+        from langchain_core.messages import HumanMessage
+
+        from graph.output_format import extract_output
+
+        prompt = _CONTEXT_PROMPT.format(doc=(document or "")[:cap], chunk=chunk)
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        return extract_output(str(resp.content)).strip()
+
+    return _context

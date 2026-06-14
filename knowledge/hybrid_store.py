@@ -54,6 +54,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         chunk_max_chars: int = 1200,
         chunk_overlap_chars: int = 150,
         chunk_min_chars: int = 200,
+        context_fn: Callable[[str, str], str] | None = None,
     ):
         super().__init__(
             db_path,
@@ -61,6 +62,7 @@ class HybridKnowledgeStore(KnowledgeStore):
             chunk_max_chars=chunk_max_chars,
             chunk_overlap_chars=chunk_overlap_chars,
             chunk_min_chars=chunk_min_chars,
+            context_fn=context_fn,
         )
         self._embed_fn = embed_fn
         self._vector_k = vector_k

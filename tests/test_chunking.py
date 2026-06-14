@@ -163,6 +163,76 @@ def test_hybrid_add_document_embeds_each_chunk(tmp_path):
     assert n_vecs == len(ids)            # one embedding per chunk, not one for the doc
 
 
+# ── contextual enrichment ────────────────────────────────────────────────────
+
+
+def test_enrichment_prepends_context_to_each_chunk(tmp_path):
+    calls = []
+
+    def ctx(doc, chunk):
+        calls.append((doc, chunk))
+        return f"CTX[{chunk.split()[0]}]"
+
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        context_fn=ctx,
+    )
+    doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
+    ids = store.add_document(doc, domain="conversation", heading="Doc")
+    assert len(ids) >= 3
+    assert len(calls) == len(ids)                 # one enrichment call per chunk
+    # Every call saw the FULL document, and every stored chunk carries its context.
+    assert all(c[0] == doc for c in calls)
+    hits = store.search("CTX", k=10)
+    assert hits and all(h["content"].startswith("CTX[") for h in hits)
+
+
+def test_single_chunk_doc_is_not_enriched(tmp_path):
+    calls = []
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=5000,
+        context_fn=lambda d, c: calls.append(1) or "CTX",
+    )
+    ids = store.add_document("a short single-chunk note", domain="general")
+    assert len(ids) == 1
+    assert calls == []                            # the chunk IS the whole doc — no call
+
+
+def test_enrich_false_disables_enrichment(tmp_path):
+    calls = []
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        context_fn=lambda d, c: calls.append(1) or "CTX",
+    )
+    doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40])
+    ids = store.add_document(doc, enrich=False)
+    assert len(ids) >= 2
+    assert calls == []
+
+
+def test_enrichment_failure_degrades_to_raw_chunks(tmp_path):
+    n = {"calls": 0}
+
+    def boom(doc, chunk):
+        n["calls"] += 1
+        raise RuntimeError("gateway down")
+
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        context_fn=boom,
+    )
+    doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
+    ids = store.add_document(doc)                 # never raises
+    assert len(ids) >= 3
+    # First failure disables enrichment for the rest of the doc — not N failing calls.
+    assert n["calls"] == 1
+    assert not any(h["content"].startswith("CTX") for h in store.search("alpha", k=5))
+
+
 def test_add_document_helper_falls_back_on_chunkless_backend():
     from knowledge import add_document
 

@@ -150,6 +150,12 @@ FIELDS: list[Field] = [
           "number", "Knowledge",
           "Characters shared between adjacent chunks so a span straddling a split is still wholly "
           "present in one chunk. 0 = no overlap.", minimum=0, restart=True),
+    Field("knowledge.contextual_enrichment", "knowledge_contextual_enrichment",
+          "Contextual enrichment", "bool", "Knowledge",
+          "When a document splits, prepend a one-line aux-LLM context situating each chunk in the "
+          "whole document before embedding — lifts both semantic and keyword recall (Anthropic's "
+          "Contextual Retrieval). Costs one aux call per chunk at ingest (not on the query path). "
+          "Off by default.", restart=True),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
