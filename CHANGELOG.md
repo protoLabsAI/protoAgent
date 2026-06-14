@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background subagents wake the agent on completion** (ADR 0050, Phase 2) — when a
+  background job finishes, the agent now **reacts to the result autonomously** instead of
+  only learning on the spawning chat's next message: the completion fires a turn into the
+  Activity thread (via a `now`-priority inbox item, storm-guarded), where the response
+  surfaces live in the console's Activity feed. So a backgrounded strategist audit can
+  finish and the agent acts on it on its own. On by default; `BACKGROUND_WAKE=0` opts out.
 - **Background subagents** (ADR 0050, Phase 1) — the `task` tool now takes
   `run_in_background: true`. A long, independent delegation (deep research, multi-step
   gathering) runs **detached** instead of blocking the chat turn: the tool returns

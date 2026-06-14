@@ -237,6 +237,71 @@ class TestManager:
         assert mgr.store.get(jid).status == "failed"
 
 
+# ── Phase 2: autonomous idle-wake (server/a2a.py) ────────────────────────────
+
+
+class TestPhase2Wake:
+    def _job(self, status="completed"):
+        from background.store import BackgroundJob
+
+        return BackgroundJob(
+            id="bg-abc", agent_name="a", origin_session="sess-X",
+            subagent_type="strategist", description="audit fleet", prompt="p",
+            status=status, result="Tuned buy_buffer to 30k.", notified=False,
+            created_at="t1", completed_at="t2",
+        )
+
+    def test_wake_enabled_default_and_optout(self, monkeypatch):
+        from server.a2a import _background_wake_enabled
+
+        monkeypatch.delenv("BACKGROUND_WAKE", raising=False)
+        assert _background_wake_enabled() is True
+        monkeypatch.setenv("BACKGROUND_WAKE", "0")
+        assert _background_wake_enabled() is False
+        monkeypatch.setenv("BACKGROUND_WAKE", "1")
+        assert _background_wake_enabled() is True
+
+    def test_wake_text_includes_job_and_result(self):
+        from server.a2a import _background_wake_text
+
+        t = _background_wake_text(self._job("completed"))
+        assert "audit fleet" in t and "strategist" in t
+        assert "finished" in t and "sess-X" in t
+        assert "Tuned buy_buffer" in t
+
+    def test_wake_text_failed_verb(self):
+        from server.a2a import _background_wake_text
+
+        assert "failed" in _background_wake_text(self._job("failed"))
+
+    async def test_wake_adds_now_inbox_item(self, monkeypatch):
+        import operator_api.console_handlers as ch
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        monkeypatch.setattr(STATE, "inbox_store", object(), raising=False)
+        captured: dict = {}
+
+        async def fake_add(payload):
+            captured.update(payload)
+            return {"ok": True, "fired": True}
+
+        monkeypatch.setattr(ch, "_operator_inbox_add", fake_add)
+        fired = await a2a._background_wake(self._job())
+        assert fired is True
+        assert captured["priority"] == "now"
+        assert captured["source"] == "background"
+        assert captured["dedup_key"] == "background-wake:bg-abc"
+        assert "audit fleet" in captured["text"]
+
+    async def test_wake_noop_without_inbox(self, monkeypatch):
+        import server.a2a as a2a
+        from runtime.state import STATE
+
+        monkeypatch.setattr(STATE, "inbox_store", None, raising=False)
+        assert await a2a._background_wake(self._job()) is False
+
+
 def test_task_tool_constrains_subagent_type_to_enum():
     """The `task` tool's subagent_type must render as a JSON-schema enum of the live
     registry (ADR 0050 follow-up) so the model can't pass a name that doesn't exist."""
