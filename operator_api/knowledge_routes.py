@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 from runtime.state import STATE
@@ -175,6 +176,80 @@ def register_knowledge_routes(app) -> None:
         if not ids:
             return JSONResponse({"detail": "the store rejected the chunk"}, status_code=400)
         return {"enabled": True, "id": ids[0], "ids": ids}
+
+    @app.post("/api/knowledge/ingest")
+    async def _api_knowledge_ingest(
+        file: UploadFile | None = File(default=None),
+        url: str = Form(default=""),
+        text: str = Form(default=""),
+        title: str = Form(default=""),
+        domain: str = Form(default="general"),
+    ):
+        """Ingest a document (file / URL / pasted text) into the knowledge base.
+
+        The ingestion engine turns the source into text (txt/md/html/pdf, web +
+        YouTube URLs), then ``add_document`` chunks + contextually enriches +
+        embeds it (ADR 0021) — so a whole PDF or article becomes per-passage
+        recall, not one diluted chunk. Multipart so a file upload and the
+        URL/text fields share one endpoint. Extraction + embedding run off the
+        event loop. Returns the created chunk ids."""
+        if STATE.knowledge_store is None:
+            return {"enabled": False, "ids": []}
+        from ingestion import (
+            ExtractResult,
+            MissingDependency,
+            UnsupportedSource,
+            extract_bytes,
+            extract_url,
+        )
+        from knowledge import add_document
+
+        url, text, title = url.strip(), text.strip(), title.strip()
+        source = "console"
+        try:
+            if file is not None:
+                data = await file.read()
+                result = await asyncio.to_thread(
+                    extract_bytes, file.filename or "upload", data, file.content_type)
+                source = file.filename or "upload"
+            elif url:
+                result = await asyncio.to_thread(extract_url, url)
+                source = url
+            elif text:
+                result = ExtractResult(text=text, title=title or None, source_type="text")
+            else:
+                return JSONResponse(
+                    {"detail": "provide a file, url, or text"}, status_code=400)
+        except MissingDependency as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=501)
+        except UnsupportedSource as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=415)
+        except Exception as exc:  # noqa: BLE001 — surface extraction failure, never 500
+            log.warning("[knowledge] ingest extraction failed: %s", exc)
+            return JSONResponse({"detail": f"extraction failed: {exc}"}, status_code=400)
+
+        heading = title or result.title or None
+        ids = await asyncio.to_thread(
+            lambda: add_document(
+                STATE.knowledge_store,
+                result.text,
+                domain=(domain.strip() or "general"),
+                heading=heading,
+                source=source,
+                source_type=result.source_type,
+            )
+        )
+        if not ids:
+            return JSONResponse(
+                {"detail": "nothing ingested (no text after extraction)"}, status_code=400)
+        return {
+            "enabled": True,
+            "ids": ids,
+            "chunks": len(ids),
+            "title": heading,
+            "source_type": result.source_type,
+            "chars": len(result.text),
+        }
 
     @app.put("/api/knowledge/chunks/{chunk_id}")
     async def _api_knowledge_update(chunk_id: int, body: dict | None = None):
