@@ -180,7 +180,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_fire   TEXT,
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
-    timezone    TEXT
+    timezone    TEXT,
+    context_id  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
@@ -254,6 +255,11 @@ class LocalScheduler:
                 db.execute("ALTER TABLE jobs ADD COLUMN timezone TEXT")
             except sqlite3.OperationalError:
                 pass  # column already present
+            # …and before per-job context_id (ADR 0053 same-session resume).
+            try:
+                db.execute("ALTER TABLE jobs ADD COLUMN context_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already present
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -263,7 +269,7 @@ class LocalScheduler:
 
     def add_job(
         self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None,
+        timezone: str | None = None, context_id: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -277,14 +283,17 @@ class LocalScheduler:
             agent_name=self.agent_name,
             next_fire=next_fire,
             timezone=timezone,
+            context_id=context_id,
         )
         db = self._connect()
         try:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                "last_fire, enabled, created_at, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "last_fire, enabled, created_at, timezone, context_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (job.id, job.prompt, job.schedule, job.agent_name,
-                 job.next_fire, job.last_fire, int(job.enabled), job.created_at, job.timezone),
+                 job.next_fire, job.last_fire, int(job.enabled), job.created_at,
+                 job.timezone, job.context_id),
             )
             db.commit()
         except sqlite3.IntegrityError as exc:
@@ -558,11 +567,12 @@ class LocalScheduler:
                     "role": "ROLE_USER",
                     "parts": [{"text": job.prompt}],
                     "messageId": message_id,
-                    # Route into the durable Activity thread (ADR 0003) so the
-                    # fired turn lands somewhere visible/continuable instead of a
-                    # throwaway context. Without this, the agent mints a fresh
-                    # context per fire and the response surfaces nowhere.
-                    "contextId": ACTIVITY_CONTEXT,
+                    # Fire into the job's own context when set (ADR 0053 — the
+                    # `wait` tool stamps the originating chat session so a resume
+                    # continues that conversation's thread), else the durable
+                    # Activity thread (ADR 0003) so a normal scheduled fire lands
+                    # somewhere visible/continuable instead of a throwaway context.
+                    "contextId": job.context_id or ACTIVITY_CONTEXT,
                     # Scheduler bookkeeping for this fire (origin + job id) —
                     # informational; the handler doesn't require these keys.
                     "metadata": {
@@ -607,4 +617,5 @@ def _row_to_job(row: Any) -> Job:
         enabled=bool(row["enabled"]),
         created_at=row["created_at"],
         timezone=row["timezone"] if "timezone" in keys else None,
+        context_id=row["context_id"] if "context_id" in keys else None,
     )

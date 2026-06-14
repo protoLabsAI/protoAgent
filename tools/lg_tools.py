@@ -687,8 +687,16 @@ def _build_scheduler_tools(scheduler) -> list:
             return "Error: `then` is required — describe what to do on resume."
         secs = max(1, int(seconds))
         when = (datetime.now(UTC) + timedelta(seconds=secs)).isoformat()
+        # Resume in the SAME conversation: stamp the originating chat session
+        # (== the turn's A2A contextId) onto the job so the scheduler fires the
+        # resume into this thread, not the Activity thread — the agent wakes up
+        # with the conversation history intact (ADR 0053). Same contextvar the
+        # background-subagent path reads. Empty (e.g. an Activity-origin turn) →
+        # the scheduler falls back to the Activity thread.
+        from observability import tracing
+        ctx = tracing.current_session_id() or None
         try:
-            job = await asyncio.to_thread(scheduler.add_job, then, when)
+            job = await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
         except Exception as exc:  # noqa: BLE001
             return f"Error: couldn't schedule the wake-up: {exc}"
         return (

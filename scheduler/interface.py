@@ -36,6 +36,11 @@ class Job:
     # IANA timezone the cron expression is evaluated in (e.g. "America/Chicago").
     # None = UTC. Ignored for one-shot ISO schedules (those carry their own offset).
     timezone: str | None = None
+    # A2A contextId to fire the job INTO (None → the durable Activity thread, the
+    # default for scheduled work). The `wait` tool sets this to the originating
+    # chat session so a yield-and-resume continues that conversation's thread
+    # rather than landing in Activity (ADR 0053 same-session resume).
+    context_id: str | None = None
     enabled: bool = True
 
     def as_dict(self) -> dict[str, Any]:
@@ -54,13 +59,17 @@ class SchedulerBackend(Protocol):
 
     def add_job(
         self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None,
+        timezone: str | None = None, context_id: str | None = None,
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).
 
         ``timezone`` is an IANA name the cron expression is evaluated in
-        (None = UTC). Raises ``ValueError`` for malformed schedule/timezone."""
+        (None = UTC). Raises ``ValueError`` for malformed schedule/timezone.
+
+        ``context_id`` is the A2A contextId to fire into (None → the durable
+        Activity thread). Used for same-session resume (ADR 0053); backends that
+        can't target a context (remote schedulers) may ignore it."""
         ...
 
     def cancel_job(self, job_id: str) -> bool:

@@ -70,10 +70,14 @@ class WorkstaceanScheduler:
 
     def add_job(
         self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None,
+        timezone: str | None = None, context_id: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
+        # NOTE: same-session resume (ADR 0053 / `context_id`) is a local-backend
+        # feature — Workstacean fires through its own A2A bridge, which targets
+        # the bridge's default context, so we accept the arg for protocol parity
+        # but can't route into the originating chat thread here.
         # Validate the schedule eagerly so a malformed expr fails at
         # tool-call time, not silently inside Workstacean.
         _validate_schedule(schedule)
@@ -115,6 +119,7 @@ class WorkstaceanScheduler:
             agent_name=self.agent_name,
             next_fire=None,  # Workstacean owns the schedule state
             timezone=timezone,
+            context_id=context_id,
         )
 
     def cancel_job(self, job_id: str) -> bool:
