@@ -4,19 +4,18 @@ import { PromptInput, Reasoning } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
   Loader2,
-  SlidersHorizontal,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { QuickSetting } from "../settings/QuickSetting";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import { chatStore, useChatState } from "./chat-store";
 import { ChatComponent } from "./ChatComponent";
+import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { ToolCalls } from "./ToolCalls";
 
@@ -731,6 +730,9 @@ function ChatSessionSlot({
             }
           }}
           onAttach={() => fileInputRef.current?.click()}
+          // The model picker lives in the DS composer's actions slot (ADR 0048 / the
+          // ComposerWithAttachments DS pattern) — replaces the separate chip below.
+          actions={<ComposerModelSelect />}
           attachments={attachments.map((a) => ({
             id: a.id,
             name: a.name,
@@ -776,18 +778,6 @@ function ChatSessionSlot({
             e.target.value = ""; // allow re-picking the same file
           }}
         />
-        {/* Model control, under the input (ADR 0048) — a chip showing the active model
-            alias; click to tune model / temperature / max tokens. Same field + cascade
-            as Settings ▸ Workspace ▸ Settings. */}
-        <div className="composer-toolbar">
-          <QuickSetting
-            keys={["model.name", "model.temperature", "model.max_tokens"]}
-            summaryKey="model.name"
-            title="Model"
-            label="Model settings"
-            icon={<SlidersHorizontal size={14} />}
-          />
-        </div>
       </div>
     </div>
   );
