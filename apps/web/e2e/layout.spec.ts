@@ -39,7 +39,7 @@ test("right panel resizes by dragging its handle and the width persists", async 
   expect(Math.abs(reloaded - after)).toBeLessThan(8);
 });
 
-test("right panel is keyboard-resizable + double-click collapses (ADR 0035 S3)", async ({ page }) => {
+test("right panel is keyboard-resizable (ADR 0035 S3)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const right = page.locator(".pl-appshell__col--right");
   const handle = page.getByRole("separator", { name: "Resize panels" });
@@ -51,7 +51,7 @@ test("right panel is keyboard-resizable + double-click collapses (ADR 0035 S3)",
   const wider = (await right.boundingBox())!.width;
   expect(wider).toBeGreaterThan(before);
 
-  // Double-click the handle collapses the panel (DS AppShell behavior — unmounts it).
-  await handle.dblclick();
-  await expect(right).toHaveCount(0);
+  // Collapse is no longer a handle double-click — the DS made handles grab-and-drag
+  // only (protoContent #223); panel collapse/restore is covered by the
+  // utility-bar-toggle test above. The handle's job here is resize.
 });
