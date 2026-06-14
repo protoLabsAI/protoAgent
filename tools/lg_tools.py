@@ -42,9 +42,11 @@ import ast
 import asyncio
 import operator as _op
 from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from tools.fallbacks import with_fallback
 
@@ -658,7 +660,8 @@ def _build_scheduler_tools(scheduler) -> list:
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     @tool
-    async def wait(seconds: int, then: str) -> str:
+    async def wait(seconds: int, then: str,
+                   state: Annotated[Any, InjectedState] = None) -> str:
         """Pause and resume LATER instead of polling. Use this whenever you are
         waiting for something to finish — a ship to arrive, a build/deploy, a
         cooldown, a countdown a status tool reported ("arriving in 37s"). Do NOT
@@ -667,9 +670,10 @@ def _build_scheduler_tools(scheduler) -> list:
 
         Calling ``wait`` ENDS your turn immediately and schedules a one-shot
         wake-up ``seconds`` from now. When it fires you are re-invoked with
-        ``then`` as your instruction (in your Activity thread), so you act
-        exactly once — when the thing is actually ready. This is the right way to
-        run long-horizon work without spinning.
+        ``then`` as your instruction — back in THIS same conversation, with its
+        history intact (ADR 0053) — so you act exactly once, when the thing is
+        actually ready. This is the right way to run long-horizon work without
+        spinning.
 
         Args:
             seconds: how long to wait, in seconds (e.g. 40). Use the ETA a status
@@ -693,8 +697,10 @@ def _build_scheduler_tools(scheduler) -> list:
         # with the conversation history intact (ADR 0053). Same contextvar the
         # background-subagent path reads. Empty (e.g. an Activity-origin turn) →
         # the scheduler falls back to the Activity thread.
-        from observability import tracing
-        ctx = tracing.current_session_id() or None
+        # Read the originating session from the injected graph state, NOT the
+        # tracing contextvar — the contextvar reads empty in a tool body under
+        # LangGraph, which silently dropped this resume to the Activity thread.
+        ctx = _session_id_from(state) or None
         try:
             job = await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
         except Exception as exc:  # noqa: BLE001
@@ -773,6 +779,25 @@ def _build_beads_tools(beads_store) -> list:
     return [beads_create, beads_list, beads_update, beads_close]
 
 
+def _session_id_from(state: Any) -> str:
+    """Resolve the originating session id from inside a TOOL BODY.
+
+    The graph state (``graph/state.py``) reliably carries ``session_id`` at
+    tool-execution time — every turn's graph input stamps it. The
+    ``tracing.current_session_id()`` contextvar is visible to MIDDLEWARE but NOT
+    to a tool body under LangGraph (the tool runs in a different execution
+    context), so it silently reads empty there — which is why ``wait`` dropped
+    its same-session resume to the Activity thread (ADR 0053) and why ``set_goal``
+    would refuse with "No active session". Prefer the injected state; keep the
+    contextvar only as a fallback for tools invoked outside a graph turn."""
+    from observability import tracing
+
+    sid = ""
+    if isinstance(state, dict):
+        sid = (state.get("session_id") or "").strip()
+    return sid or (tracing.current_session_id() or "")
+
+
 def _build_set_goal_tool():
     """The lead agent sets its OWN standing goal — verified by a plugin verifier
     only (ADR 0028). The agent literally can't open a shell/eval goal here: the
@@ -780,7 +805,8 @@ def _build_set_goal_tool():
 
     @tool
     def set_goal(condition: str, check: str, check_args: dict | None = None,
-                 max_iterations: int | None = None) -> str:
+                 max_iterations: int | None = None,
+                 state: Annotated[Any, InjectedState] = None) -> str:
         """Set a standing goal for THIS session, ground-truthed by a plugin verifier.
 
         You'll be re-invoked toward `condition` until the plugin verifier named by
@@ -789,11 +815,10 @@ def _build_set_goal_tool():
         verifiers are allowed — shell/test/data goals are operator-only via /goal.
         Returns the goal status, or an error if goal mode is off / `check` is unknown.
         """
-        from observability import tracing
         from runtime.state import STATE
         if STATE.goal_controller is None:
             return "Goal mode is not enabled."
-        session_id = tracing.current_session_id()
+        session_id = _session_id_from(state)  # injected graph state, not the contextvar
         if not session_id:
             return "No active session — set_goal can only run during a turn."
         verifier = {"type": "plugin", "check": check, "args": check_args or {}}

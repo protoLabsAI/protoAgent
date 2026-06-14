@@ -8,14 +8,19 @@ for captured message() tool content. Fork-specific state fields
 import operator
 from typing import Annotated, NotRequired
 
-from langgraph.prebuilt.chat_agent_executor import AgentState
+# langchain's create_agent state base (messages + jump_to + structured_response).
+# NOT langgraph's chat_agent_executor.AgentState — that carries a managed
+# `remaining_steps` channel which create_agent rejects in the input schema.
+from langchain.agents import AgentState
 
 
 class ProtoAgentState(AgentState):
     """Base state schema for the protoAgent LangGraph agent.
 
-    Extends AgentState (which provides `messages` with add_messages reducer).
-    Extend this class in your fork to add domain-specific state.
+    Extends create_agent's AgentState (which provides `messages` with the
+    add_messages reducer). Passed as ``state_schema`` to create_agent so these
+    fields are real channels readable by tools via InjectedState. Extend this
+    class in your fork to add domain-specific state.
     """
 
     # Session tracking (A2A / chat session ID)

@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`set_goal` is now actually bound to the agent.** The tool (ADR 0028 — the
+  agent owns a plugin-verified goal) was advertised in the Tools tab / `/api/tools`
+  but never reached the model: `create_agent_graph` called `get_all_tools` without
+  threading `goal_enabled`, so it defaulted off and `set_goal` was silently
+  dropped from the bound toolset (calling it errored `"set_goal is not a valid
+  tool"`). The `/goal` chat control message kept working — it's parsed before the
+  graph — which masked the gap. The agent can now self-set a goal during
+  autonomous/fleet/autopilot runs, not just when a human types `/goal`.
+- **`wait`'s same-session resume now works (ADR 0053).** A `wait` issued in a chat
+  was supposed to resume in *that* chat's thread with history intact, but the
+  resume fired into the Activity thread instead: the tool read the originating
+  session from `tracing.current_session_id()`, which is reliably set for
+  middleware but reads **empty inside a tool body** under LangGraph — so the
+  job's `context_id` was never stamped. Root cause: `create_agent` ran on the
+  default messages-only state, so the declared `ProtoAgentState` (with
+  `session_id`) was never wired in and the per-turn `session_id` was dropped.
+  Fixed by passing `state_schema=ProtoAgentState` to `create_agent` and reading
+  the session from injected graph state (`InjectedState`) in `wait` and `set_goal`,
+  with the contextvar kept only as an off-graph fallback. (Both found by driving a
+  running agent over the API; regression tests now drive a real graph turn rather
+  than monkeypatching the broken function.)
+
 ## [0.40.0] - 2026-06-14
 
 ### Fixed

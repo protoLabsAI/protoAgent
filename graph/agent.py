@@ -14,6 +14,7 @@ from graph.middleware.audit import AuditMiddleware
 from graph.middleware.knowledge import KnowledgeMiddleware
 from graph.middleware.memory import MemoryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
+from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
 from tools.lg_tools import get_all_tools
 
@@ -660,6 +661,13 @@ def create_agent_graph(
 
     all_tools = get_all_tools(
         knowledge_store, scheduler=scheduler, inbox_store=inbox_store, beads_store=beads_store,
+        # Thread the goal flag so the agent-facing set_goal tool (ADR 0028) is
+        # actually BOUND, not just advertised. Without this it defaults False and
+        # set_goal silently never reaches the model (it stayed in /api/tools,
+        # which passes goal_enabled explicitly — a registry-vs-binding split).
+        # Subagent builds deliberately omit it: subagents are bounded by
+        # max_turns and must not self-set goals.
+        goal_enabled=config.goal_enabled,
     )
 
     if extra_tools:
@@ -718,6 +726,13 @@ def create_agent_graph(
         middleware=middleware,
         system_prompt=system_prompt,
         checkpointer=checkpointer,
+        # Wire the declared state schema so session_id (stamped into every turn's
+        # graph input by the chat/A2A layer) is a real channel the tools can read
+        # via InjectedState. Without this, create_agent runs on the default
+        # messages-only state, session_id is silently dropped, and tool bodies
+        # can't recover it (the tracing contextvar is invisible in a tool body) —
+        # which broke wait's same-session resume (ADR 0053) and set_goal.
+        state_schema=ProtoAgentState,
     )
 
     return agent
