@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from background.manager import BackgroundManager, _build_fired_prompt
 from background.store import BackgroundStore
 
