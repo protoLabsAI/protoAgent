@@ -33,6 +33,10 @@ from server import AGENT_NAME_ENV, _event_bus, _resolve_operator_project_root
 
 log = logging.getLogger("protoagent.server")
 
+# Slash tokens we've already warned are shadowed (bd-2zh) — warn once per token,
+# not on every /api/chat/commands request.
+_warned_shadowed_skills: set[str] = set()
+
 
 def _operator_allowed_dirs() -> list[str]:
     # The repo root is always operable (it's the default project);
@@ -444,7 +448,22 @@ def _operator_chat_commands() -> dict:
             if not token:
                 import re
                 token = re.sub(r"[^a-z0-9]+", "-", (skill.get("name") or "").lower()).strip("-")
-            if not token or token == "goal" or token in taken:
+            if not token or token == "goal":
+                continue
+            if token in taken:
+                # A workflow/subagent of the same token wins dispatch, so this
+                # user-facing skill is unreachable (bd-2zh — web-research's
+                # `slash: research` was shadowed by the deep-research workflow).
+                # Warn once per token so a shipped-but-shadowed skill is visible
+                # instead of silently dropped; the fix is to rename its `slash:`.
+                if token not in _warned_shadowed_skills:
+                    _warned_shadowed_skills.add(token)
+                    log.warning(
+                        "[skills] user-facing skill %r is unreachable: its slash token /%s "
+                        "is already claimed by a workflow/subagent (which wins dispatch). "
+                        "Rename the skill's `slash:` to expose it.",
+                        skill.get("name") or token, token,
+                    )
                 continue
             taken.add(token)
             commands.append({

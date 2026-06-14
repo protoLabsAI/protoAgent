@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Non-streaming chat no longer returns a silent empty `200`.** A turn that ends
+  at an `ask_human` interrupt, after a `wait` yield, or scratch-only used to give
+  `/api/chat` and the OpenAI-compatible `/v1/chat/completions` a blank assistant
+  message — the streaming/A2A path handled all three but `_chat_langgraph` never
+  got the same hardening. It now surfaces the `ask_human` question, runs the
+  dropped-scratch kicker retry, and falls back to the last tool result (e.g. a
+  `wait` "Yielding…" confirmation) so callers always get a signal. The two
+  interrupt-detection sites are now one shared helper so they can't drift again.
+- **First-party `web-research` skill is reachable again.** Its slash token was
+  `research`, which collides with the deep-research *workflow* — workflows win
+  dispatch and hide the skill from the command palette, so a shipped user-facing
+  skill could never be invoked. Renamed to `/web-research`; the command builder
+  now logs a one-time warning when any user-facing skill's slash token is shadowed
+  by a workflow/subagent, so this can't happen silently again.
 - **`set_goal` is now actually bound to the agent.** The tool (ADR 0028 — the
   agent owns a plugin-verified goal) was advertised in the Tools tab / `/api/tools`
   but never reached the model: `create_agent_graph` called `get_all_tools` without

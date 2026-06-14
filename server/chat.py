@@ -196,6 +196,35 @@ def _interrupt_payload(val) -> dict:
     return {"question": (str(val) if val is not None else "Input required.")}
 
 
+async def _pending_interrupt_value(config: dict):
+    """Return the value of a pending LangGraph interrupt (ask_human / HITL) for
+    this thread, or ``None``. Both chat paths read the same snapshot to detect a
+    turn that paused for human input instead of producing a final answer."""
+    try:
+        snapshot = await STATE.graph.aget_state(config)
+    except Exception:
+        return None
+    pending = list(getattr(snapshot, "interrupts", None) or [])
+    if not pending:
+        for t in getattr(snapshot, "tasks", ()) or ():
+            pending.extend(getattr(t, "interrupts", ()) or ())
+    if not pending:
+        return None
+    return getattr(pending[0], "value", pending[0])
+
+
+def _last_tool_text(result) -> str:
+    """The last tool result's text in a turn — the fallback when a turn produced
+    no assistant text (e.g. a ``wait`` yield, whose 'Yielding…' confirmation is a
+    ToolMessage, not an AIMessage)."""
+    from langchain_core.messages import ToolMessage
+
+    for msg in reversed((result or {}).get("messages", [])):
+        if isinstance(msg, ToolMessage) and msg.content:
+            return msg.content if isinstance(msg.content, str) else str(msg.content)
+    return ""
+
+
 async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None, images=None):
     """Run one graph turn over ``astream_events``.
 
@@ -374,17 +403,9 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A
     # layer parks the task as input-required. Resume later with resume_value.
-    try:
-        snapshot = await STATE.graph.aget_state(config)
-        pending = list(getattr(snapshot, "interrupts", None) or [])
-        if not pending:
-            for t in getattr(snapshot, "tasks", ()) or ():
-                pending.extend(getattr(t, "interrupts", ()) or ())
-    except Exception:
-        pending = []
-    if pending:
-        val = getattr(pending[0], "value", pending[0])
-        yield ("input_required", _interrupt_payload(val))
+    interrupt_val = await _pending_interrupt_value(config)
+    if interrupt_val is not None:
+        yield ("input_required", _interrupt_payload(interrupt_val))
         return
 
     yield ("__raw__", accumulated_raw)
@@ -940,7 +961,42 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                     {"messages": [HumanMessage(content=message)], "session_id": session_id},
                     config=config,
                 )
-            response = extract_output(_last_ai(result))
+            raw = _last_ai(result)
+            response = extract_output(raw)
+
+            # Robustness parity with the streaming path (bd-2qy): a turn can end
+            # with no assistant text — at an ask_human interrupt, after a `wait`
+            # yield, or on a scratch-only turn. Returning "" gives /api/chat +
+            # OpenAI-compat callers a silent empty 200; surface something useful.
+            if not response:
+                interrupt_val = await _pending_interrupt_value(config)
+                if interrupt_val is not None:
+                    # ask_human / HITL — the graph paused for input. There's no
+                    # task to park on this non-streaming surface, so echo the
+                    # prompt; the caller answers with a follow-up message, which
+                    # continues the thread (the checkpointer kept the history).
+                    payload = _interrupt_payload(interrupt_val)
+                    question = (
+                        payload.get("question") or payload.get("title")
+                        or "The agent needs input to continue."
+                    )
+                    return [{"role": "assistant", "content": f"🙋 **Input needed:** {question}"}]
+
+                # Dropped scratch-only turn (no <output>, no tool call): re-prompt
+                # once with the kicker, matching _chat_langgraph_stream.
+                if is_dropped_scratch_turn(raw):
+                    log.warning("[chat] dropped scratch-only turn (session=%s) — kicker retry", session_id)
+                    with goal_turn(goal_active):
+                        result = await STATE.graph.ainvoke(
+                            {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)], "session_id": session_id},
+                            config=config,
+                        )
+                    response = extract_output(_last_ai(result))
+
+            # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
+            # to the last tool result so the caller gets a signal, not a blank.
+            if not response:
+                response = _last_tool_text(result) or "_(The agent ended the turn without a textual reply.)_"
 
             # Goal mode: verify after the agent stops; re-invoke with a
             # continuation prompt until met / exhausted / unachievable.
