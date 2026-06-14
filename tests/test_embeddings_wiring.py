@@ -13,7 +13,12 @@ import graph.agent  # noqa: F401 — bind graph.agent.create_llm to the REAL fn 
 #   capture the fake create_llm permanently and leak into later middleware-wiring tests.
 import server
 from graph.config import LangGraphConfig
-from graph.llm import create_context_fn, create_embed_fn, create_transcribe_fn
+from graph.llm import (
+    create_context_fn,
+    create_embed_batch_fn,
+    create_embed_fn,
+    create_transcribe_fn,
+)
 
 
 def _cfg(tmp_path, *, embeddings: bool, model: str = "nomic-embed-text") -> LangGraphConfig:
@@ -38,6 +43,20 @@ def test_create_embed_fn_callable_with_model():
     cfg.api_base, cfg.api_key = "http://gateway.test/v1", "k"
     fn = create_embed_fn(cfg)
     assert callable(fn)
+
+
+def test_create_embed_batch_fn():
+    cfg = LangGraphConfig()
+    cfg.api_base, cfg.api_key = "http://gateway.test/v1", "k"
+    assert callable(create_embed_batch_fn(cfg))   # OpenAIEmbeddings.embed_documents
+    cfg.embed_model = ""
+    assert create_embed_batch_fn(cfg) is None
+
+
+def test_hybrid_store_gets_a_batch_embedder(tmp_path):
+    store = server._build_knowledge_store(_cfg(tmp_path, embeddings=True))
+    assert type(store).__name__ == "HybridKnowledgeStore"
+    assert store._embed_batch_fn is not None       # batched ingest wired in
 
 
 def test_create_embed_fn_sends_raw_strings(monkeypatch):

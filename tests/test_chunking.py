@@ -163,6 +163,99 @@ def test_hybrid_add_document_embeds_each_chunk(tmp_path):
     assert n_vecs == len(ids)            # one embedding per chunk, not one for the doc
 
 
+def _bow_factory():
+    vocab = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+
+    def bow(text: str) -> list[float]:
+        t = text.lower()
+        return [1.0 if w in t else 0.0 for w in vocab]
+
+    return bow
+
+
+def _multi_chunk_doc() -> str:
+    return "\n\n".join([
+        "alpha section. " + "padding word " * 12,
+        "bravo section. " + "padding word " * 12,
+        "charlie section. " + "padding word " * 12,
+    ])
+
+
+def test_add_document_batches_embeddings_into_one_call(tmp_path):
+    """The batched path: N chunks → ONE embed_batch call, zero per-chunk embeds,
+    and every chunk still gets its vector."""
+    import sqlite3
+
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    bow = _bow_factory()
+    calls = {"batch": 0, "single": 0}
+
+    def single(text):
+        calls["single"] += 1
+        return bow(text)
+
+    def batch(texts):
+        calls["batch"] += 1
+        return [bow(t) for t in texts]
+
+    db = str(tmp_path / "kb.db")
+    store = HybridKnowledgeStore(db, embed_fn=single, embed_batch_fn=batch,
+                                 chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0)
+    ids = store.add_document(_multi_chunk_doc(), domain="conversation", heading="Doc")
+    assert len(ids) >= 3
+    assert calls["batch"] == 1 and calls["single"] == 0   # one batched call, no per-chunk
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == len(ids)
+    conn.close()
+    # And the batched vectors are actually usable for retrieval.
+    assert store.search("bravo", k=3)
+
+
+def test_add_document_single_chunk_skips_batch(tmp_path):
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    bow = _bow_factory()
+    calls = {"batch": 0, "single": 0}
+
+    def single(text):
+        calls["single"] += 1
+        return bow(text)
+
+    def batch(texts):
+        calls["batch"] += 1
+        return [bow(t) for t in texts]
+
+    store = HybridKnowledgeStore(str(tmp_path / "kb.db"), embed_fn=single,
+                                 embed_batch_fn=batch, chunk_max_chars=5000)
+    ids = store.add_document("a short single-chunk note", domain="general")
+    assert len(ids) == 1
+    assert calls["batch"] == 0 and calls["single"] == 1   # single chunk → per-chunk embed
+
+
+def test_add_document_batch_failure_keeps_fts_rows(tmp_path):
+    """A batched-embed failure still stores the chunks (FTS5-searchable) and trips
+    the breaker — never loses the document."""
+    import sqlite3
+
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    bow = _bow_factory()
+    db = str(tmp_path / "kb.db")
+    store = HybridKnowledgeStore(
+        db, embed_fn=bow,
+        embed_batch_fn=lambda ts: (_ for _ in ()).throw(RuntimeError("gateway down")),
+        breaker_threshold=1, chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+    )
+    ids = store.add_document(_multi_chunk_doc(), domain="conversation", heading="Doc")
+    assert len(ids) >= 3                       # rows written despite the embed failure
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 0  # no vectors
+    conn.close()
+    assert store._breaker_open()               # breaker tripped
+    assert store.search("bravo")               # still searchable via FTS5
+
+
 # ── contextual enrichment ────────────────────────────────────────────────────
 
 

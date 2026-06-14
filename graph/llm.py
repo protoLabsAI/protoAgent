@@ -107,20 +107,14 @@ def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> Cha
     return ChatOpenAI(**kwargs)
 
 
-def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | None:
-    """Build a sync ``text -> vector`` function against the same gateway, or None.
-
-    Routes ``knowledge.embed_model`` through the OpenAI-compatible LiteLLM
-    gateway (ADR 0021), so semantic search reuses the model infra we already
-    have. Returns ``None`` when no embed model is configured — callers fall back
-    to FTS5. Runtime embedding outages are handled by the
-    ``HybridKnowledgeStore`` circuit breaker, not here.
-    """
+def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
+    """The shared OpenAIEmbeddings client for ``knowledge.embed_model`` against
+    the gateway (ADR 0021), or None when no embed model is configured."""
     model = (getattr(config, "embed_model", "") or "").strip()
     if not model:
         return None
     api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
-    embeddings = OpenAIEmbeddings(
+    return OpenAIEmbeddings(
         base_url=config.api_base,
         api_key=api_key,
         model=model,
@@ -131,7 +125,27 @@ def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | N
         # be a valid string"). Off = the gateway tokenizes — the portable choice.
         check_embedding_ctx_length=False,
     )
-    return embeddings.embed_query
+
+
+def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | None:
+    """Build a sync ``text -> vector`` function against the same gateway, or None.
+
+    Used for query embedding and per-chunk fallback. Returns ``None`` when no
+    embed model is configured — callers fall back to FTS5. Runtime embedding
+    outages are handled by the ``HybridKnowledgeStore`` circuit breaker.
+    """
+    emb = _build_embeddings(config)
+    return emb.embed_query if emb is not None else None
+
+
+def create_embed_batch_fn(
+    config: LangGraphConfig,
+) -> Callable[[list[str]], list[list[float]]] | None:
+    """Build a sync ``texts -> vectors`` function (one gateway request for the
+    whole list), or None. Used by ``add_document`` to embed all of a document's
+    chunks in a single round-trip instead of N serial calls (ADR 0021)."""
+    emb = _build_embeddings(config)
+    return emb.embed_documents if emb is not None else None
 
 
 # Transcription timeout — STT of a long clip is slow (cold model load + minutes

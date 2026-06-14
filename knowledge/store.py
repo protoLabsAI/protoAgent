@@ -408,6 +408,38 @@ class KnowledgeStore:
         safe drop-in for ``add_chunk`` on any path that might receive a large
         body. Returns the created row ids (a failed piece is skipped, never
         aborts the rest)."""
+        texts = self._chunk_and_enrich(
+            content, max_chars=max_chars, overlap_chars=overlap_chars,
+            min_chars=min_chars, enrich=enrich,
+        )
+        ids: list[int] = []
+        for text in texts:
+            cid = self.add_chunk(
+                text,
+                domain=domain,
+                heading=heading,
+                source=source,
+                source_type=source_type,
+                finding_type=finding_type,
+                namespace=namespace,
+            )
+            if cid is not None:
+                ids.append(cid)
+        return ids
+
+    def _chunk_and_enrich(
+        self,
+        content: str,
+        *,
+        max_chars: int | None = None,
+        overlap_chars: int | None = None,
+        min_chars: int | None = None,
+        enrich: bool | None = None,
+    ) -> list[str]:
+        """Split a document into chunks and prepend per-chunk Contextual
+        Retrieval context (when a ``context_fn`` is set and the doc actually
+        splits). Returns the final texts to store/embed — shared by the base
+        ``add_document`` and the hybrid store's batched-embedding override."""
         from knowledge.chunking import chunk_text
 
         pieces = chunk_text(
@@ -424,7 +456,7 @@ class KnowledgeStore:
             and (enrich if enrich is not None else True)
             and len(pieces) >= 2
         )
-        ids: list[int] = []
+        out: list[str] = []
         for piece in pieces:
             stored = piece
             if enriching:
@@ -437,18 +469,8 @@ class KnowledgeStore:
                     # rest of THIS doc, so an outage doesn't fire N failing calls.
                     log.warning("[knowledge] context enrichment failed: %s; raw chunks", exc)
                     enriching = False
-            cid = self.add_chunk(
-                stored,
-                domain=domain,
-                heading=heading,
-                source=source,
-                source_type=source_type,
-                finding_type=finding_type,
-                namespace=namespace,
-            )
-            if cid is not None:
-                ids.append(cid)
-        return ids
+            out.append(stored)
+        return out
 
     # ── reads ───────────────────────────────────────────────────────────────
 

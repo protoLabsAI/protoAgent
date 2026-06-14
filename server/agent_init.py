@@ -285,7 +285,7 @@ def _build_knowledge_store(config):
         # KB-less — and the store's circuit breaker handles runtime outages.
         if getattr(config, "knowledge_embeddings", False):
             try:
-                from graph.llm import create_embed_fn
+                from graph.llm import create_embed_batch_fn, create_embed_fn
                 from knowledge.hybrid_store import HybridKnowledgeStore
 
                 embed_fn = create_embed_fn(config)
@@ -294,6 +294,7 @@ def _build_knowledge_store(config):
                     return HybridKnowledgeStore(
                         db_path=config.knowledge_db_path,
                         embed_fn=embed_fn,
+                        embed_batch_fn=create_embed_batch_fn(config),
                         vector_k=config.knowledge_vector_k,
                         rrf_k=config.knowledge_rrf_k,
                         min_score=config.knowledge_min_score,

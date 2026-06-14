@@ -45,6 +45,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         db_path=None,
         *,
         embed_fn: EmbedFn | None = None,
+        embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
         vector_k: int = 20,
         rrf_k: int = 60,
         min_score: float = 0.0,
@@ -65,6 +66,10 @@ class HybridKnowledgeStore(KnowledgeStore):
             context_fn=context_fn,
         )
         self._embed_fn = embed_fn
+        # Optional batched embedder (texts -> vectors in one request). When set,
+        # add_document embeds a whole document's chunks in a single round-trip
+        # instead of N serial _embed calls.
+        self._embed_batch_fn = embed_batch_fn
         self._vector_k = vector_k
         self._rrf_k = rrf_k
         # Relevance floor: drop fused hits whose RRF score is below this. 0 keeps
@@ -121,6 +126,21 @@ class HybridKnowledgeStore(KnowledgeStore):
             self._record_embed_failure()
             return None
 
+    def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
+        """Embed a list of texts in one call (shares the circuit breaker with
+        ``_embed``). Returns None — caller degrades to FTS5 — when batching is
+        unavailable, the breaker is open, or the request fails."""
+        if self._embed_batch_fn is None or self._breaker_open():
+            return None
+        try:
+            vecs = self._embed_batch_fn(texts)
+            self._record_embed_success()
+            return [[float(x) for x in v] for v in vecs]
+        except Exception as exc:  # noqa: BLE001 - breaker by design
+            log.warning("[knowledge] embed_batch_fn failed: %s", exc)
+            self._record_embed_failure()
+            return None
+
     # ── vector storage ──────────────────────────────────────────────────────────
 
     def _ensure_vectors_table(self) -> None:
@@ -159,6 +179,65 @@ class HybridKnowledgeStore(KnowledgeStore):
                 finally:
                     db.close()
         return chunk_id
+
+    def add_document(self, content: str, domain: str = "general", heading=None, **kw) -> list[int]:
+        """Chunk + enrich, then embed ALL of the document's chunks in ONE batched
+        request instead of N serial ``_embed`` calls (ADR 0021).
+
+        Falls back to the base per-chunk path (each piece embedded via
+        ``add_chunk``) when there's nothing to batch — a single chunk, no batched
+        embedder, embeddings off, or the breaker open. Rows are always written
+        first, so an embed failure still leaves FTS5-searchable chunks."""
+        # Pull the chunk-knob + enrich kwargs out for _chunk_and_enrich; the rest
+        # (domain/heading/source/…) are chunk-write kwargs.
+        prep_kw = {k: kw.pop(k) for k in ("max_chars", "overlap_chars", "min_chars", "enrich")
+                   if k in kw}
+        texts = self._chunk_and_enrich(content, **prep_kw)
+        batchable = (
+            len(texts) > 1
+            and self._embed_fn is not None
+            and self._embed_batch_fn is not None
+            and not self._breaker_open()
+        )
+        if not batchable:
+            # Base path: per-chunk add_chunk (single embed each, or FTS-only).
+            ids: list[int] = []
+            for text in texts:
+                cid = self.add_chunk(text, domain, heading, **kw)
+                if cid is not None:
+                    ids.append(cid)
+            return ids
+
+        # Batched path: write rows WITHOUT per-chunk embed (the BASE add_chunk),
+        # then one embed call for the whole document, then bulk-store the vectors.
+        rows: list[tuple[int, str]] = []
+        for text in texts:
+            cid = KnowledgeStore.add_chunk(self, text, domain, heading, **kw)
+            if cid is not None:
+                # Embed heading+content so vector search sees what FTS5 sees.
+                rows.append((cid, (heading + "\n" if heading else "") + text))
+        if not rows:
+            return []
+        vecs = self._embed_batch([t for _, t in rows])
+        if vecs is not None and len(vecs) == len(rows):
+            self._store_vectors([(cid, v) for (cid, _), v in zip(rows, vecs)])
+        return [cid for cid, _ in rows]
+
+    def _store_vectors(self, pairs: list[tuple[int, list[float]]]) -> None:
+        """Bulk-insert chunk vectors in one transaction."""
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.executemany(
+                "INSERT OR REPLACE INTO chunk_vectors (chunk_id, vec) VALUES (?, ?)",
+                [(cid, json.dumps(v)) for cid, v in pairs],
+            )
+            db.commit()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] batch store vectors failed: %s", exc)
+        finally:
+            db.close()
 
     def _vector_search(self, query_vec: list[float], k: int, domain: str | None) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
