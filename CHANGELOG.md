@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A2A alignment polish + realtime cost/goal events** (ADR 0051 Slice 3) — fixed a real
+  bug: the **delegate A2A client now sends `A2A-Version: 1.0`** (a missing header made a
+  strict 1.0 peer reject the call with `-32009`). The agent card now advertises a
+  `documentation_url` + `icon_url`. Two new event-bus topics expose more realtime info:
+  **`turn.usage`** (per-turn cost/tokens, for a live spend HUD) and **`goal.iteration`**
+  (the self-driving goal loop's per-continuation progress, not just achieved/failed).
 - **Renderable chat components over A2A** (ADR 0051 Slice 2) — the agent can render
   structured data as a real inline widget instead of a markdown blob, via a new
   `show_component(component, props)` tool. It rides a typed `component-v1` DataPart on the A2A

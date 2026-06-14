@@ -82,11 +82,23 @@ first registry: **`table`** (columns/rows), **`keyvalue`** (label/value items), 
 (steps with done/active/todo state). Chart was deliberately skipped (would add a charting
 dep); a new widget is a registry entry + a render fn, no new transport.
 
-### Slice 3 — alignment polish
+### Slice 3 — alignment polish (shipped)
 
-Correct the cancel/resubscribe docstrings (+ memory); card polish; cheap realtime bus wins
-(`scheduler.fired`, `goal.iteration`, `turn.usage`); audit that every outbound protoAgent
-client sends `A2A-Version: 1.0` (a missing header defaults to `0.3` → `-32009`).
+- **Outbound `A2A-Version` fix (real bug).** The delegate A2A client (`plugins/delegates/
+  adapters.py` `_rpc`) omitted the header → a strict 1.0 peer rejects it `-32009`. Now sends
+  `A2A-Version: 1.0`, matching the scheduler/inbox/background self-POSTs.
+- **Cancel/resubscribe docstring correction.** `ProtoAgentExecutor`'s docstring claimed cancel
+  is mark-only — corrected to reflect that `CancelTask` truly cancels the coroutine and that
+  live `SubscribeToTask` exists (the audit finding; memory updated too).
+- **Agent-card polish.** `documentation_url` + `icon_url` set on the served card
+  (`build_agent_card` doesn't, but the 1.0 proto has them); overridable via
+  `a2a.documentation_url` / `a2a.icon_url`.
+- **Cheap realtime bus wins.** `turn.usage` (per-turn cost/tokens, independent of the SQL
+  telemetry store → a live cost HUD) and `goal.iteration` (the goal loop's per-continuation
+  progress, previously only `goal.achieved`/`failed` were on the bus).
+
+Deferred (noted in `bd-383`): `scheduler.fired` (needs bus injection into the scheduler),
+push-config TTL, and verifying push fires on terminal.
 
 ## Consequences
 

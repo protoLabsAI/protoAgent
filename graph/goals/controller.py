@@ -209,6 +209,21 @@ class GoalController:
                                 evidence=result.evidence)
 
         self._store.set(state)
+        # Realtime goal-loop progress (ADR 0051 Slice 3) — only goal.achieved/failed were
+        # on the bus; surface each continuation too so a console can show the loop working.
+        # Best-effort, same channel as the terminal events.
+        try:
+            from graph.plugins.host import HOST
+            if HOST.publish:
+                HOST.publish("goal.iteration", {
+                    "session_id": getattr(state, "session_id", "") or "",
+                    "condition": getattr(state, "condition", "") or "",
+                    "iteration": state.iteration,
+                    "max_iterations": state.max_iterations,
+                    "reason": result.reason,
+                })
+        except Exception:  # noqa: BLE001 — a bus hiccup must never break the goal loop
+            pass
         return Decision(
             action="continue",
             state=state,

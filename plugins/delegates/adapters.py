@@ -171,7 +171,10 @@ class A2aAdapter(Adapter):
         blocked = policy.check_url(d.url)
         if blocked:
             raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
-        headers = {"Content-Type": "application/json"}
+        # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
+        # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
+        # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
+        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         if d.auth_token:
             headers["Authorization"] = (
                 f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token

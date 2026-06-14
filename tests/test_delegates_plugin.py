@@ -174,6 +174,26 @@ async def test_a2a_dispatch_inline_reply(monkeypatch):
     assert await ADAPTERS["a2a"].dispatch(d, "q") == "hi from peer"
 
 
+async def test_a2a_dispatch_sends_version_header(monkeypatch):
+    """ADR 0051 Slice 3 — the delegate A2A client MUST send A2A-Version: 1.0, else a
+    strict 1.0 peer rejects the call with -32009."""
+    import httpx
+
+    captured: dict = {}
+
+    class _CapClient(_FakeClient):
+        async def post(self, url, **kw):
+            captured["headers"] = kw.get("headers") or {}
+            return _FakeResp({"result": {"artifacts": [{"parts": [{"kind": "text", "text": "ok"}]}]}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CapClient(None))
+    from security import policy
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    await ADAPTERS["a2a"].dispatch(d, "q")
+    assert captured["headers"].get("A2A-Version") == "1.0"
+
+
 async def test_acp_dispatch_reuses_client(monkeypatch):
     import plugins.coding_agent as CA
 

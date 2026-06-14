@@ -265,7 +265,7 @@ def _build_agent_card_proto():
 
     cfg = STATE.graph_config
     description = (getattr(cfg, "a2a_description", "") or "").strip() or _DEFAULT_CARD_DESCRIPTION
-    return pa.build_agent_card(
+    card = pa.build_agent_card(
         name=agent_name(),
         description=description,
         url=_a2a_card_url(),
@@ -273,6 +273,19 @@ def _build_agent_card_proto():
         skills=_agent_skills(),
         bearer=_bearer_configured(),
     )
+    # Card polish (ADR 0051 Slice 3) — build_agent_card doesn't set these, but the
+    # 1.0 proto AgentCard has them: a docs link + an icon for consumers/registries.
+    # Overridable via a2a.documentation_url / a2a.icon_url config; default to the
+    # public docs + the served brand mark.
+    doc_url = (getattr(cfg, "a2a_documentation_url", "") or "").strip() or "https://protolabsai.github.io/protoAgent/"
+    icon_url = (getattr(cfg, "a2a_icon_url", "") or "").strip()
+    try:
+        card.documentation_url = doc_url
+        if icon_url:
+            card.icon_url = icon_url
+    except Exception:  # noqa: BLE001 — card polish is best-effort, never break the card
+        pass
+    return card
 
 
 def _record_a2a_telemetry(outcome) -> None:
@@ -285,6 +298,23 @@ def _record_a2a_telemetry(outcome) -> None:
         from observability import metrics
         metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
     except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
+        pass
+
+    # Realtime cost/usage on the bus (ADR 0051 Slice 3) — a per-turn HUD can show live
+    # spend without polling the telemetry store. Independent of the SQL store.
+    try:
+        _u = outcome.usage or {}
+        _event_bus.publish("turn.usage", {
+            "task_id": getattr(outcome, "task_id", "") or "",
+            "context_id": getattr(outcome, "context_id", "") or "",
+            "state": getattr(outcome, "state", "") or "",
+            "model": outcome.models[0] if getattr(outcome, "models", None) else "",
+            "input_tokens": int(_u.get("input_tokens", 0) or 0),
+            "output_tokens": int(_u.get("output_tokens", 0) or 0),
+            "cost_usd": round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6),
+            "duration_ms": int(getattr(outcome, "duration_ms", 0) or 0),
+        })
+    except Exception:  # noqa: BLE001 — best-effort
         pass
 
     store = STATE.telemetry_store

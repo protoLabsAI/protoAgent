@@ -177,8 +177,11 @@ class ProtoAgentExecutor(AgentExecutor):
     """Bridges protoAgent's LangGraph stream onto the A2A event queue.
 
     A single ``execute`` call runs one turn end-to-end (or to a HITL pause).
-    ``cancel`` simply marks the task canceled — the framework cancels the
-    in-flight ``execute`` coroutine, and the LangGraph stream unwinds.
+    ``cancel`` genuinely stops the turn: the a2a-sdk cancels the producer task,
+    injecting ``CancelledError`` into this coroutine — which the execute loop catches
+    to record a ``canceled`` outcome before re-raising, and the LangGraph stream
+    unwinds. (A live ``SubscribeToTask`` re-attach also exists in this SDK; polling
+    ``GetTask`` is only the *cross-restart* ceiling.)
     """
 
     def __init__(
