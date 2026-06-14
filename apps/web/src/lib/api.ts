@@ -576,6 +576,22 @@ export const api = {
     }>("/api/knowledge/ingest", form);
   },
 
+  // Chat attachment — extract + TIER a dropped file (FormData: `file` + `session_id`).
+  // Returns a ready-to-prepend `context` block (full text for small docs, a lede +
+  // retrieval note for large docs indexed under the session) so a big doc never
+  // gets dumped into the turn.
+  attachToChat(form: FormData) {
+    return requestForm<{
+      enabled: boolean;
+      mode?: "inline" | "indexed";
+      name?: string;
+      source_type?: string;
+      chars?: number;
+      chunks?: number;
+      context?: string;
+    }>("/api/knowledge/attach", form);
+  },
+
   deletePlaybook(id: number) {
     return request<{ enabled: boolean; deleted: boolean; error?: string }>(
       `/api/playbooks/${id}`,

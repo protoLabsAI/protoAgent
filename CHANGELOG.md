@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result rendered as markdown. Hydrates from `GET /api/background` and tracks live off the
   `background.{started,completed}` events. (A live per-tool progress card in the transcript is
   a follow-up — it needs a `background.progress` channel.)
+- **Chat file upload (composer UI).** The chat composer can now take attachments — an attach
+  button (DS `PromptInput`), **paste-to-attach**, and **drag-and-drop** — across txt/md/html/
+  pdf and audio/video. Each file is uploaded to the tiered attach endpoint on pick; small docs
+  are inlined into the message and large docs are indexed for retrieval (a big document is
+  never dumped into the turn). The attachment context is prepended to what the *model* receives
+  while the chat bubble shows only the typed text + a 📎 file list. Files are session-scoped and
+  cleaned up when the chat is deleted.
 - **Background subagents wake the agent on completion** (ADR 0050, Phase 2) — when a
   background job finishes, the agent now **reacts to the result autonomously** instead of
   only learning on the spawning chat's next message: the completion fires a turn into the

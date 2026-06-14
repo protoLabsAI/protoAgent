@@ -23,6 +23,18 @@ function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// A file being attached to the next message. Uploaded to /api/knowledge/attach on
+// pick; `context` is the backend's ready-to-prepend block (full text or lede).
+type PendingAttachment = {
+  id: string;
+  name: string;
+  kind: "file" | "image";
+  status: "uploading" | "ready" | "error";
+  context?: string;
+  mode?: "inline" | "indexed";
+  error?: string;
+};
+
 // Append an actionable pointer when a turn fails on something the operator can
 // fix in the UI — chiefly model auth (a bad/blank API key 401s). Keeps the raw
 // gateway detail (it's specific, e.g. "expected to start with 'sk-'") but tells
@@ -173,6 +185,36 @@ function ChatSessionSlot({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
+  // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
+  // the backend tiers it (inline small / index large) and returns a `context`
+  // block we prepend to the SENT message (not the visible bubble) on send.
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  async function uploadAttachment(file: File) {
+    const id = messageId();
+    const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
+    setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("session_id", sessionId);
+      const r = await api.attachToChat(form);
+      if (!r.enabled || !r.context) throw new Error("attachment not accepted");
+      setAttachments((a) =>
+        a.map((x) => (x.id === id ? { ...x, status: "ready", context: r.context, mode: r.mode } : x)),
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
+      onError(`Couldn't attach ${file.name}: ${msg}`);
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((a) => a.filter((x) => x.id !== id));
+  }
+
   // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
   // fetched once; the dropdown is active while typing "/name" (before a space).
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -320,9 +362,20 @@ function ChatSessionSlot({
 
   async function send() {
     if (!session || !canSend) return;
-    const content = draft.trim();
+    const text = draft.trim();
     setDraft("");
-    void runTurn(content);
+    const ready = attachments.filter((a) => a.status === "ready" && a.context);
+    if (ready.length === 0) {
+      void runTurn(text);
+      return;
+    }
+    // The model gets the attachment context blocks prepended; the user bubble
+    // shows only the typed text + a 📎 list (never the raw doc dump).
+    const sent = [...ready.map((a) => a.context as string), text].join("\n\n").trim();
+    const names = ready.map((a) => a.name).join(", ");
+    const display = text ? `${text}\n\n📎 ${names}` : `📎 ${names}`;
+    setAttachments([]);
+    void runTurn(display, { sendAs: sent });
   }
 
   // Resume a paused (input-required) turn: submitting the HITL form/question
@@ -338,8 +391,11 @@ function ChatSessionSlot({
     void runTurn(typeof response === "string" ? response : JSON.stringify(response), { hidden: silent });
   }
 
-  async function runTurn(content: string, opts: { hidden?: boolean } = {}) {
+  async function runTurn(content: string, opts: { hidden?: boolean; sendAs?: string } = {}) {
     if (!session || !content) return;
+    // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
+    // is what the user bubble shows.
+    const sent = opts.sendAs ?? content;
     const userMessage: ChatMessage = {
       id: messageId(),
       role: "user",
@@ -371,7 +427,7 @@ function ChatSessionSlot({
     abortRef.current = controller;
 
     try {
-      await api.streamChat(userMessage.content, session.id, {
+      await api.streamChat(sent, session.id, {
         signal: controller.signal,
         onTaskId: (id) => {
           setTaskId(id);
@@ -593,6 +649,14 @@ function ChatSessionSlot({
           e.preventDefault(); // keep focus from leaving the field
           textareaRef.current?.focus();
         }}
+        onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
+        onDrop={(e) => {
+          const files = Array.from(e.dataTransfer?.files ?? []);
+          if (files.length) {
+            e.preventDefault();
+            files.forEach((f) => void uploadAttachment(f));
+          }
+        }}
       >
         {status === "streaming" && statusMessage ? (
           <div className="composer-status">
@@ -615,6 +679,27 @@ function ChatSessionSlot({
           placeholder="Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
+          onPaste={(e) => {
+            // Paste-to-attach (the DS onPaste seam): files on the clipboard become
+            // attachments; plain text paste falls through to the field.
+            const files = Array.from(e.clipboardData?.files ?? []);
+            if (files.length) {
+              e.preventDefault();
+              files.forEach((f) => void uploadAttachment(f));
+            }
+          }}
+          onAttach={() => fileInputRef.current?.click()}
+          attachments={attachments.map((a) => ({
+            id: a.id,
+            name: a.name,
+            kind: a.kind,
+            size:
+              a.status === "uploading" ? "uploading…"
+              : a.status === "error" ? "failed"
+              : a.mode === "indexed" ? "indexed for retrieval"
+              : undefined,
+          }))}
+          onRemoveAttachment={removeAttachment}
           overlay={slashActive ? (
             <div className="slash-menu" role="listbox">
               {slashMatches.map((cmd, index) => (
@@ -633,6 +718,21 @@ function ChatSessionSlot({
               ))}
             </div>
           ) : null}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          accept={
+            ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
+            ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.mp4,.mov,.mkv,.webm,.avi,.m4v"
+          }
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            files.forEach((f) => void uploadAttachment(f));
+            e.target.value = ""; // allow re-picking the same file
+          }}
         />
         {/* Model control, under the input (ADR 0048) — a chip showing the active model
             alias; click to tune model / temperature / max tokens. Same field + cascade
