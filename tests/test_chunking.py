@@ -279,6 +279,33 @@ def test_enrichment_prepends_context_to_each_chunk(tmp_path):
     assert all(c[0] == doc for c in calls)
     hits = store.search("CTX", k=10)
     assert hits and all(h["content"].startswith("CTX[") for h in hits)
+    # Order-correctness across the parallel fan-out: each chunk gets ITS OWN
+    # context, not a thread-shuffled mismatch.
+    alpha = next(h for h in hits if "alpha" in h["content"])
+    assert alpha["content"].startswith("CTX[alpha]")
+
+
+def test_enrichment_parallel_partial_failure_degrades_only_that_chunk(tmp_path):
+    """A per-chunk failure in the parallel batch degrades just that chunk to raw;
+    the rest still get context (the probe chunk succeeded, so enrichment is on)."""
+    def ctx(doc, chunk):
+        if "bravo" in chunk:
+            raise RuntimeError("one flaky chunk")
+        return f"CTX[{chunk.split()[0]}]"
+
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        context_fn=ctx,
+    )
+    doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
+    store.add_document(doc)
+    hits = store.search("alpha bravo charlie w", k=10)
+    by = {h["id"]: h["content"] for h in hits}
+    bravo = next(c for c in by.values() if "bravo" in c)
+    others = [c for c in by.values() if "alpha" in c or "charlie" in c]
+    assert not bravo.startswith("CTX[")           # the flaky chunk is raw
+    assert others and all(c.startswith("CTX[") for c in others)  # the rest enriched
 
 
 def test_single_chunk_doc_is_not_enriched(tmp_path):

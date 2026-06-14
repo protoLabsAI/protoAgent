@@ -44,6 +44,11 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "/sandbox/knowledge/agent.db"
 
+# Bounded concurrency for per-chunk contextual enrichment on ingest — the calls
+# are independent aux-LLM requests, so we fan them out, but cap the burst on the
+# gateway. Tune up for a faster gateway / down to be gentler.
+_ENRICH_MAX_WORKERS = 8
+
 # Fallback reasoning-stripper used if graph.output_format isn't importable (the
 # store must never hard-depend on the graph package). Mirrors its scratch_pad /
 # think / orphan-open rules.
@@ -456,21 +461,42 @@ class KnowledgeStore:
             and (enrich if enrich is not None else True)
             and len(pieces) >= 2
         )
-        out: list[str] = []
-        for piece in pieces:
-            stored = piece
-            if enriching:
-                try:
-                    context = (self._context_fn(content, piece) or "").strip()
-                    if context:
-                        stored = f"{context}\n\n{piece}"
-                except Exception as exc:  # noqa: BLE001 — degrade to raw chunk
-                    # One failure (gateway hiccup) disables enrichment for the
-                    # rest of THIS doc, so an outage doesn't fire N failing calls.
-                    log.warning("[knowledge] context enrichment failed: %s; raw chunks", exc)
-                    enriching = False
-            out.append(stored)
-        return out
+        if not enriching:
+            return list(pieces)
+        contexts = self._enrich_contexts(content, pieces)
+        return [f"{ctx}\n\n{piece}" if ctx else piece for piece, ctx in zip(pieces, contexts)]
+
+    def _enrich_contexts(self, content: str, pieces: list[str]) -> list[str]:
+        """Generate the per-chunk Contextual Retrieval context strings.
+
+        Probe with the FIRST chunk serially: a failure there means the gateway
+        is down, so disable enrichment for the whole doc (raw chunks) rather than
+        firing N concurrent failing calls. If the probe succeeds, the remaining
+        chunks are enriched CONCURRENTLY (independent calls; bounded pool) — these
+        aux-LLM calls dominate ingest latency when run serially. A per-chunk
+        failure in the parallel batch degrades just that chunk to raw."""
+        try:
+            first = (self._context_fn(content, pieces[0]) or "").strip()
+        except Exception as exc:  # noqa: BLE001 — gateway down → no enrichment for the doc
+            log.warning("[knowledge] context enrichment failed: %s; raw chunks", exc)
+            return [""] * len(pieces)
+
+        rest = pieces[1:]
+        if not rest:
+            return [first]
+
+        def _one(piece: str) -> str:
+            try:
+                return (self._context_fn(content, piece) or "").strip()
+            except Exception as exc:  # noqa: BLE001 — degrade just this chunk to raw
+                log.warning("[knowledge] context enrichment failed for a chunk: %s", exc)
+                return ""
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(_ENRICH_MAX_WORKERS, len(rest))) as pool:
+            rest_contexts = list(pool.map(_one, rest))  # order preserved
+        return [first, *rest_contexts]
 
     # ── reads ───────────────────────────────────────────────────────────────
 
