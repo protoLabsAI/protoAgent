@@ -557,9 +557,12 @@ function ChatSessionSlot({
                   <ToolCalls calls={message.toolCalls} />
                 ) : null}
                 {message.content
-                  ? message.role === "assistant"
-                    ? <Markdown>{message.content}</Markdown>
-                    : message.content
+                  ? message.role === "user"
+                    ? message.content
+                    : // assistant + system (e.g. background-completion notifications,
+                      // ADR 0050) carry markdown — render it; only the user's own input
+                      // stays literal.
+                      <Markdown>{message.content}</Markdown>
                   : message.status === "streaming" && !(message.toolCalls && message.toolCalls.length)
                     ? <Loader2 className="spin" size={15} />
                     : null}
