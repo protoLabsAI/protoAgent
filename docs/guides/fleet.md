@@ -124,11 +124,13 @@ one keeps its background work (schedules, an in-flight loop) going while you're 
 ## The unified console — every agent in one UI
 
 *(Shipped — ADR 0042 slices 2–5.)* The **hub** (any running agent) serves one console and
-reverse-proxies each agent window's chat / A2A / SSE to that agent's backend, keyed by the
-**URL slug** (`/app/agent/<id>/`) — so every window targets its own agent: switch in place
-from the topbar, or open two agents in two windows at once. Per-agent chat, theme and
-layout follow the slug; a stopped agent **resumes from its checkpoint** when you navigate
-to it; "+ New agent" runs the archetype picker. Settings → Agents is the fleet manager
+reverse-proxies each agent window's chat / A2A / SSE / WebSockets to that agent's backend,
+keyed by the **URL slug** (`/app/agent/<id>/`) — so every window targets its own agent:
+switch in place from the topbar, or open two agents in two windows at once. Per-agent chat,
+theme and layout follow the slug; a stopped agent **resumes from its checkpoint** when you
+navigate to it; "+ New agent" runs the archetype picker. A plugin view served by a member
+that opens a **WebSocket** (e.g. `agent_browser`'s live viewport) works through the hub too:
+the slug proxy forwards WS upgrades, not just HTTP/SSE ([#883](https://github.com/protoLabsAI/protoAgent/issues/883), shipped v0.35.0). Settings → Agents is the fleet manager
 (create / start / stop / rename / remove), and **Discover** finds other protoAgents on the
 box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI).
 

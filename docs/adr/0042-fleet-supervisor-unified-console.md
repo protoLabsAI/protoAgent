@@ -74,6 +74,13 @@ plugin views) to the active agent's loopback backend, streaming SSE through unbu
 **Auth**: agents bind loopback and trust a shared hub token (the hub injects it); the
 browser only ever talks to the hub (same-origin), so no per-agent CORS/token sprawl.
 
+> **Amendment (v0.35.0, #883/#900):** the slug proxy also forwards **WebSocket upgrades**,
+> not just HTTP/SSE. The original proxy stripped `Upgrade`/`Connection`, so a member's
+> plugin view that opened a live WS (e.g. `agent_browser`'s viewport) loaded over HTTP but
+> its socket showed "Disconnected" behind the hub. `proxy.forward_ws` resolves the slug →
+> member, opens a client WS (carrying the bearer + subprotocols), and pumps frames both
+> ways — so WS plugin views traverse the hub like HTTP does.
+
 ### D. Session continuity (≈ free)
 Each agent's checkpoints/goals/memory are already `instance.id`-scoped (ADR 0004/0041) —
 so switching back loads that agent's thread, and it survives stop→restart (resume from
