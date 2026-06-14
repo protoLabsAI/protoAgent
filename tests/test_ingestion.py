@@ -11,6 +11,7 @@ import pytest
 
 from ingestion import (
     ExtractionError,
+    MissingDependency,
     UnsupportedSource,
     extract_bytes,
     extract_url,
@@ -163,3 +164,75 @@ def test_extract_url_youtube(monkeypatch):
 def test_extract_url_empty_raises():
     with pytest.raises(UnsupportedSource):
         extract_url("   ")
+
+
+# ── audio / video (gateway STT, injected transcribe + ffmpeg) ─────────────────
+
+
+def test_extract_bytes_audio_transcribes():
+    seen = {}
+
+    def transcribe(data, name):
+        seen["name"] = name
+        return "spoken words from the clip"
+
+    r = extract_bytes("talk.mp3", b"\x00fake-audio", transcribe=transcribe)
+    assert r.source_type == "audio" and r.text == "spoken words from the clip"
+    assert seen["name"] == "talk.mp3"
+
+
+def test_extract_bytes_audio_by_content_type():
+    r = extract_bytes("blob", b"\x00", content_type="audio/mpeg",
+                      transcribe=lambda d, n: "heard it")
+    assert r.source_type == "audio" and r.text == "heard it"
+
+
+def test_extract_bytes_audio_without_transcribe_raises():
+    with pytest.raises(MissingDependency):
+        extract_bytes("a.mp3", b"\x00audio")
+
+
+def test_extract_bytes_video_extracts_audio_then_transcribes(monkeypatch):
+    monkeypatch.setattr(engine, "_audio_from_video", lambda data, suffix: b"AUDIO-TRACK")
+    seen = {}
+
+    def transcribe(data, name):
+        seen["data"], seen["name"] = data, name
+        return "the talk narration"
+
+    r = extract_bytes("keynote.mp4", b"\x00video-bytes", transcribe=transcribe)
+    assert r.source_type == "video" and r.text == "the talk narration"
+    assert seen["data"] == b"AUDIO-TRACK" and seen["name"].endswith(".mp3")
+
+
+def test_extract_url_audio(monkeypatch):
+    r = extract_url(
+        "https://example.com/podcast/ep1.mp3",
+        fetch=lambda u: (b"\x00audio", "audio/mpeg"),
+        transcribe=lambda data, name: "episode transcript",
+    )
+    assert r.source_type == "audio" and r.text == "episode transcript"
+
+
+def test_audio_from_video_invokes_ffmpeg(monkeypatch):
+    import shutil
+    import subprocess
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg")
+
+    def fake_run(cmd, **kw):
+        with open(cmd[-1], "wb") as f:  # ffmpeg's output path is the last arg
+            f.write(b"MP3-BYTES")
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert engine._audio_from_video(b"video-bytes", ".mp4") == b"MP3-BYTES"
+
+
+def test_audio_from_video_missing_ffmpeg(monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(MissingDependency):
+        engine._audio_from_video(b"x", ".mp4")

@@ -187,12 +187,12 @@ def register_knowledge_routes(app) -> None:
     ):
         """Ingest a document (file / URL / pasted text) into the knowledge base.
 
-        The ingestion engine turns the source into text (txt/md/html/pdf, web +
-        YouTube URLs), then ``add_document`` chunks + contextually enriches +
-        embeds it (ADR 0021) — so a whole PDF or article becomes per-passage
-        recall, not one diluted chunk. Multipart so a file upload and the
-        URL/text fields share one endpoint. Extraction + embedding run off the
-        event loop. Returns the created chunk ids."""
+        The ingestion engine turns the source into text (txt/md/html/pdf, audio +
+        video via gateway STT, web + YouTube URLs), then ``add_document`` chunks +
+        contextually enriches + embeds it (ADR 0021) — so a whole PDF, article, or
+        recording becomes per-passage recall, not one diluted chunk. Multipart so
+        a file upload and the URL/text fields share one endpoint. Extraction +
+        embedding run off the event loop. Returns the created chunk ids."""
         if STATE.knowledge_store is None:
             return {"enabled": False, "ids": []}
         from ingestion import (
@@ -204,16 +204,27 @@ def register_knowledge_routes(app) -> None:
         )
         from knowledge import add_document
 
+        # Gateway STT for audio/video (None if no transcribe_model configured →
+        # audio/video raise a clean "not configured" error, text/pdf unaffected).
+        transcribe = None
+        try:
+            from graph.llm import create_transcribe_fn
+
+            transcribe = create_transcribe_fn(STATE.graph_config) if STATE.graph_config else None
+        except Exception as exc:  # noqa: BLE001 — transcription stays optional
+            log.warning("[knowledge] transcribe fn unavailable: %s", exc)
+
         url, text, title = url.strip(), text.strip(), title.strip()
         source = "console"
         try:
             if file is not None:
                 data = await file.read()
                 result = await asyncio.to_thread(
-                    extract_bytes, file.filename or "upload", data, file.content_type)
+                    extract_bytes, file.filename or "upload", data, file.content_type,
+                    transcribe=transcribe)
                 source = file.filename or "upload"
             elif url:
-                result = await asyncio.to_thread(extract_url, url)
+                result = await asyncio.to_thread(extract_url, url, transcribe=transcribe)
                 source = url
             elif text:
                 result = ExtractResult(text=text, title=title or None, source_type="text")

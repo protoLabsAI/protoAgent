@@ -89,7 +89,10 @@ function ChunkForm({
 // Document ingestion (ADR 0021) — extract a file / web URL / YouTube link into
 // the KB, chunked + enriched + embedded server-side. Distinct from ChunkForm
 // (typed facts): this is "bring a whole document in".
-const INGEST_ACCEPT = ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf";
+const INGEST_ACCEPT =
+  ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
+  ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac," +
+  ".mp4,.mov,.mkv,.webm,.avi,.m4v";
 
 function IngestForm({
   onDone,
@@ -166,7 +169,7 @@ function IngestForm({
               }}
             />
           </label>{" "}
-          — txt, md, html, pdf
+          — txt, md, html, pdf, audio &amp; video
         </span>
       </div>
       <div className="knowledge-chunk-form-row">
@@ -289,7 +292,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
                   variant="ghost"
                   type="button"
                   onClick={() => { setEditingId(null); setAdding(false); setIngesting((v) => !v); }}
-                  title="Add a source — file, web URL, or YouTube link"
+                  title="Add a source — file (text/pdf/audio/video), web URL, or YouTube link"
                 >
                   <FileUp size={16} />
                 </Button>

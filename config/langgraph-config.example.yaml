@@ -68,6 +68,10 @@ knowledge:
   # The embedding model your gateway serves (NOT the chat model). Default is the
   # protoLabs gateway's; forks on another gateway set theirs (check GET /v1/models).
   embed_model: qwen3-embedding
+  # Speech-to-text model for audio/video ingestion — the gateway's OpenAI-compatible
+  # /audio/transcriptions alias (e.g. whisper-1). Blank disables audio/video import.
+  # Video needs ffmpeg on the host to extract the audio track.
+  transcribe_model: whisper-1
   # Extract durable facts from a conversation on retirement (aux model) and
   # consolidate them into the store. Rides the harvest pass (ADR 0021).
   facts: true

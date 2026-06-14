@@ -224,7 +224,7 @@ def test_ingest_url(monkeypatch):
     from ingestion import ExtractResult
     monkeypatch.setattr(
         ingestion, "extract_url",
-        lambda u: ExtractResult(text="fetched article body", title="Article", source_type="html"),
+        lambda u, **kw: ExtractResult(text="fetched article body", title="Article", source_type="html"),
     )
     c = _client(monkeypatch, knowledge=ks)
     body = c.post("/api/knowledge/ingest", data={"url": "https://example.com/post"}).json()
@@ -246,3 +246,13 @@ def test_ingest_unsupported_type_returns_415(monkeypatch):
 def test_ingest_disabled_when_store_off(monkeypatch):
     c = _client(monkeypatch)  # no knowledge store
     assert c.post("/api/knowledge/ingest", data={"text": "x"}).json() == {"enabled": False, "ids": []}
+
+
+def test_ingest_audio_without_transcribe_model_returns_501(monkeypatch):
+    """Audio upload with no transcribe model configured (graph_config=None →
+    transcribe fn None) → the engine's MissingDependency maps to 501."""
+    import runtime.state as rs
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    c = _client(monkeypatch, knowledge=_IngestKS())
+    files = {"file": ("clip.mp3", b"\x00\x01audio", "audio/mpeg")}
+    assert c.post("/api/knowledge/ingest", files=files).status_code == 501

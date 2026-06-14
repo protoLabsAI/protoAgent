@@ -371,6 +371,11 @@ class LangGraphConfig:
     # their gateway has (check GET /v1/models). A wrong/absent model degrades to
     # keyword search via the store's circuit breaker — never KB-less.
     embed_model: str = "qwen3-embedding"
+    # Speech-to-text model for audio/video ingestion (ADR 0021) — the gateway's
+    # OpenAI-compatible /audio/transcriptions alias (e.g. whisper-1). Audio is sent
+    # as-is; video has its audio track pulled by ffmpeg first. Blank disables
+    # audio/video ingestion (they error with a clear message).
+    transcribe_model: str = "whisper-1"
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
     # with RRF). On by default — semantic recall finds paraphrases keyword search
@@ -781,6 +786,7 @@ class LangGraphConfig:
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
+            transcribe_model=knowledge.get("transcribe_model", cls.transcribe_model),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),

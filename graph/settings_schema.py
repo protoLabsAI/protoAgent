@@ -126,6 +126,11 @@ FIELDS: list[Field] = [
           "the models your gateway serves — a wrong alias silently degrades recall to "
           "keyword-only. Falls back to a free-text field if the gateway can't be listed.",
           options_source="models"),
+    Field("knowledge.transcribe_model", "transcribe_model", "Transcription model", "string",
+          "Knowledge",
+          "Gateway speech-to-text model for audio/video ingestion (e.g. whisper-1), via the "
+          "OpenAI-compatible /audio/transcriptions endpoint. Blank disables audio/video import. "
+          "Video needs ffmpeg on the host to extract the audio track.", restart=True),
     Field("knowledge.recall_preview_chars", "knowledge_recall_preview_chars", "Recall preview length",
           "number", "Knowledge",
           "How many characters of each recalled chunk the model sees. Bigger carries more "

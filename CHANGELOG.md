@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Audio & video ingestion** (ADR 0021, ingestion engine Phase 2) — drop an audio file
+  (mp3/wav/m4a/flac/ogg/…) or a video (mp4/mov/mkv/webm/…) into the knowledge base and it's
+  transcribed, then chunked + enriched + embedded like any other document. Transcription
+  rides the gateway's OpenAI-compatible `/audio/transcriptions` endpoint
+  (`knowledge.transcribe_model`, e.g. `whisper-1`) — same gateway + key as chat/embeddings,
+  no local ASR model. Video has its audio track pulled by `ffmpeg` (a host binary) first;
+  a missing `ffmpeg`, or a blank `transcribe_model`, returns a clear error rather than
+  failing silently. Direct audio/video URLs work too. The console "Add source" drop-zone
+  now accepts these formats.
 - **Document ingestion engine** (ADR 0021) — add real documents to the knowledge base,
   not just typed facts. A new core `ingestion/` package turns a source into text and
   feeds it through `add_document` (chunk → contextual-enrich → embed), so a whole PDF or

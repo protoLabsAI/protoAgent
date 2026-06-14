@@ -13,7 +13,7 @@ import graph.agent  # noqa: F401 — bind graph.agent.create_llm to the REAL fn 
 #   capture the fake create_llm permanently and leak into later middleware-wiring tests.
 import server
 from graph.config import LangGraphConfig
-from graph.llm import create_context_fn, create_embed_fn
+from graph.llm import create_context_fn, create_embed_fn, create_transcribe_fn
 
 
 def _cfg(tmp_path, *, embeddings: bool, model: str = "nomic-embed-text") -> LangGraphConfig:
@@ -129,3 +129,50 @@ def test_store_wires_context_fn_when_enrichment_on(tmp_path, monkeypatch):
 def test_store_no_context_fn_when_enrichment_off(tmp_path):
     store = server._build_knowledge_store(_cfg(tmp_path, embeddings=False))
     assert store._context_fn is None
+
+
+# ── transcription (gateway STT for audio/video ingestion) ─────────────────────
+
+
+def test_create_transcribe_fn_none_without_model():
+    cfg = LangGraphConfig()
+    cfg.transcribe_model = ""
+    assert create_transcribe_fn(cfg) is None
+
+
+def test_create_transcribe_fn_posts_audio_to_gateway(monkeypatch):
+    import httpx
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"text": "  hello from whisper  "}
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, data=None, files=None):
+            captured.update(url=url, headers=headers, data=data, files=files)
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    cfg = LangGraphConfig()
+    cfg.api_base, cfg.api_key, cfg.transcribe_model = "http://gw.test/v1", "k", "whisper-1"
+    fn = create_transcribe_fn(cfg)
+    out = fn(b"audio-bytes", "clip.mp3")
+    assert out == "hello from whisper"                     # stripped
+    assert captured["url"] == "http://gw.test/v1/audio/transcriptions"
+    assert captured["data"] == {"model": "whisper-1"}
+    assert captured["files"]["file"][0] == "clip.mp3"
+    assert captured["headers"]["Authorization"] == "Bearer k"

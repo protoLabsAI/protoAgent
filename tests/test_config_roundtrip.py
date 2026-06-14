@@ -60,6 +60,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "discovery_port_min": 7860,
     "egress_allowed_hosts": [],
     "embed_model": "qwen3-embedding",
+    "transcribe_model": "whisper-1",
     "enforcement_disallowed_tools": [],
     "enforcement_enabled": False,
     "enforcement_rate_limits": {},
@@ -239,6 +240,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "recall_preview_chars": 1000,
         "rrf_k": 60,
         "top_k": 5,
+        "transcribe_model": "whisper-1",
         "vector_k": 20,
     },
     "mcp": {
@@ -348,6 +350,7 @@ EMITTED_ATTRS = {
     # knowledge.*
     "knowledge_db_path",
     "embed_model",
+    "transcribe_model",
     "knowledge_top_k",
     "knowledge_vector_k",
     "knowledge_rrf_k",

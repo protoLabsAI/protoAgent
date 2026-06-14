@@ -15,10 +15,14 @@ from urllib.parse import parse_qs, urlparse
 
 log = logging.getLogger(__name__)
 
-# A page fetched from the web shouldn't be allowed to be unbounded.
-_MAX_FETCH_BYTES = 25 * 1024 * 1024  # 25 MB
-_FETCH_TIMEOUT_S = 30.0
+# A page fetched from the web shouldn't be allowed to be unbounded. Generous —
+# media (audio/video) URLs are larger than HTML; the operator route is trusted.
+_MAX_FETCH_BYTES = 100 * 1024 * 1024  # 100 MB
+_FETCH_TIMEOUT_S = 60.0
 _FETCH_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
+# ffmpeg audio-extraction (video → audio) is bounded so a pathological file can't
+# wedge an ingest thread.
+_FFMPEG_TIMEOUT_S = 600.0
 
 
 class IngestionError(Exception):
@@ -52,9 +56,16 @@ _TEXT_EXTS = {".txt", ".text", ".log", ".rst", ".csv", ".tsv"}
 _MD_EXTS = {".md", ".markdown", ".mdown", ".mkd", ".mdx"}
 _HTML_EXTS = {".html", ".htm", ".xhtml"}
 _PDF_EXTS = {".pdf"}
+# Audio → transcribed directly via the gateway STT endpoint.
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac",
+               ".wma", ".aiff", ".aif"}
+# Video → audio track extracted with ffmpeg, then transcribed.
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg", ".wmv"}
 
-SUPPORTED_EXTENSIONS = sorted(_TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS)
-SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF files, and web/YouTube URLs"
+SUPPORTED_EXTENSIONS = sorted(
+    _TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
+SUPPORTED_DESCRIPTION = (
+    "text, Markdown, HTML, PDF, audio + video files, and web/YouTube URLs")
 
 
 # ── decoding / parsing helpers (pure) ────────────────────────────────────────
@@ -203,12 +214,77 @@ def _youtube_transcript(video_id: str) -> str:
     return " ".join(p for p in parts if p)
 
 
+def _audio_from_video(data: bytes, suffix: str) -> bytes:
+    """Extract a video's audio track to MP3 with ffmpeg, for transcription.
+
+    ffmpeg is a system binary (not a pip dep); a missing one is a friendly
+    MissingDependency, not a crash."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    if not shutil.which("ffmpeg"):
+        raise MissingDependency(
+            "video ingestion needs ffmpeg on PATH (brew install ffmpeg / apt install ffmpeg)")
+    src = tempfile.NamedTemporaryFile(suffix=suffix or ".mp4", delete=False)
+    out_path = src.name + ".mp3"
+    try:
+        src.write(data)
+        src.flush()
+        src.close()
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", src.name, "-vn", "-acodec", "libmp3lame", "-q:a", "4", out_path],
+            check=True, capture_output=True, timeout=_FFMPEG_TIMEOUT_S,
+        )
+        with open(out_path, "rb") as f:
+            return f.read()
+    except subprocess.CalledProcessError as exc:
+        tail = (exc.stderr or b"").decode("utf-8", "replace")[-400:]
+        raise ExtractionError(f"ffmpeg could not extract audio: {tail}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ExtractionError("ffmpeg timed out extracting audio") from exc
+    finally:
+        for p in (src.name, out_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def _transcribe_media(data: bytes, filename: str, transcribe, *, video: bool) -> str:
+    """Turn audio/video bytes into text via the injected transcribe fn (gateway
+    STT). Video is run through ffmpeg first to pull the audio track."""
+    if transcribe is None:
+        raise MissingDependency(
+            "audio/video ingestion needs a transcription model — set "
+            "knowledge.transcribe_model and a gateway that serves it (e.g. whisper-1)")
+    audio, name = data, filename
+    if video:
+        audio = _audio_from_video(data, Path(filename or "").suffix or ".mp4")
+        name = (Path(filename or "audio").stem or "audio") + ".mp3"
+    try:
+        text = transcribe(audio, name)
+    except IngestionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — gateway/transport error → clean failure
+        raise ExtractionError(f"transcription failed: {exc}") from exc
+    return text or ""
+
+
 # ── public entry points ──────────────────────────────────────────────────────
 
 
-def extract_bytes(filename: str, data: bytes, content_type: str | None = None) -> ExtractResult:
+def extract_bytes(
+    filename: str,
+    data: bytes,
+    content_type: str | None = None,
+    *,
+    transcribe=None,
+) -> ExtractResult:
     """Extract text from an uploaded file's bytes, dispatched by extension then
-    content-type. ``filename`` provides the extension + a default title."""
+    content-type. ``filename`` provides the extension + a default title.
+    ``transcribe`` (bytes, filename) -> text powers audio/video (gateway STT)."""
     ext = Path(filename or "").suffix.lower()
     ct = (content_type or "").split(";")[0].strip().lower()
     title = (Path(filename).stem if filename else None) or None
@@ -219,6 +295,10 @@ def extract_bytes(filename: str, data: bytes, content_type: str | None = None) -
         text, source_type = html_to_text(data), "html"
     elif ext in _MD_EXTS:
         text, source_type = _decode(data), "markdown"
+    elif ext in _AUDIO_EXTS or ct.startswith("audio/"):
+        text, source_type = _transcribe_media(data, filename, transcribe, video=False), "audio"
+    elif ext in _VIDEO_EXTS or ct.startswith("video/"):
+        text, source_type = _transcribe_media(data, filename, transcribe, video=True), "video"
     elif ext in _TEXT_EXTS or ct.startswith("text/"):
         text, source_type = _decode(data), "text"
     elif not ext and not ct and _looks_textual(data):
@@ -233,9 +313,10 @@ def extract_bytes(filename: str, data: bytes, content_type: str | None = None) -
                          meta={"filename": filename})
 
 
-def extract_url(url: str, *, fetch=None) -> ExtractResult:
+def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
     """Extract text from a web URL. YouTube links resolve to their transcript;
-    everything else is fetched and dispatched by content-type (HTML/PDF/text).
+    everything else is fetched and dispatched by content-type (HTML/PDF/text/
+    audio/video). Audio/video URLs are transcribed via the gateway STT fn.
 
     ``fetch`` is an injection seam for tests: a callable ``(url) -> (bytes,
     content_type)``. Defaults to an httpx GET (bounded size + timeout)."""
@@ -253,9 +334,16 @@ def extract_url(url: str, *, fetch=None) -> ExtractResult:
 
     data, ct = (fetch or _http_fetch)(url)
     ct = (ct or "").split(";")[0].strip().lower()
+    url_ext = Path(urlparse(url).path).suffix.lower()
 
-    if "pdf" in ct or url.lower().endswith(".pdf"):
+    if "pdf" in ct or url_ext in _PDF_EXTS:
         text, source_type, title = _extract_pdf(data), "pdf", url
+    elif ct.startswith("audio/") or url_ext in _AUDIO_EXTS:
+        name = _media_filename(url, url_ext, ".mp3")
+        text, source_type, title = _transcribe_media(data, name, transcribe, video=False), "audio", url
+    elif ct.startswith("video/") or url_ext in _VIDEO_EXTS:
+        name = _media_filename(url, url_ext, ".mp4")
+        text, source_type, title = _transcribe_media(data, name, transcribe, video=True), "video", url
     elif "html" in ct or not ct:
         text = html_to_text(data)
         title = html_title(data) or url
@@ -269,6 +357,15 @@ def extract_url(url: str, *, fetch=None) -> ExtractResult:
         raise ExtractionError(f"no extractable text at {url}")
     return ExtractResult(text=text, title=title, source_type=source_type,
                          meta={"url": url, "content_type": ct})
+
+
+def _media_filename(url: str, url_ext: str, default_ext: str) -> str:
+    """A filename WITH an extension for a media URL — so ffmpeg/STT see the
+    format. Uses the URL's basename when it has one, else ``media<ext>``."""
+    name = Path(urlparse(url).path).name
+    if name and Path(name).suffix:
+        return name
+    return f"media{url_ext or default_ext}"
 
 
 def _http_fetch(url: str) -> tuple[bytes, str]:

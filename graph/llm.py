@@ -134,6 +134,48 @@ def create_embed_fn(config: LangGraphConfig) -> Callable[[str], list[float]] | N
     return embeddings.embed_query
 
 
+# Transcription timeout — STT of a long clip is slow (cold model load + minutes
+# of audio); generous but bounded so a hung gateway can't wedge an ingest thread.
+_TRANSCRIBE_TIMEOUT_S = 600.0
+
+
+def create_transcribe_fn(
+    config: LangGraphConfig,
+) -> Callable[[bytes, str], str] | None:
+    """Build a sync ``(audio_bytes, filename) -> transcript`` function, or None.
+
+    Posts to the gateway's OpenAI-compatible ``/audio/transcriptions`` endpoint
+    (ADR 0021) using ``knowledge.transcribe_model`` (e.g. ``whisper-1``) — so
+    audio/video ingestion reuses the same gateway + key as chat/embeddings, no
+    local ASR model. Raw httpx (not the OpenAI SDK) to send the allowlisted
+    User-Agent the gateway's WAF requires. Returns ``None`` when no transcribe
+    model is configured; transport/parse errors propagate to the ingestion
+    engine, which maps them to a clean extraction failure."""
+    model = (getattr(config, "transcribe_model", "") or "").strip()
+    if not model:
+        return None
+    api_base = (config.api_base or "").rstrip("/")
+    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+
+    def _transcribe(data: bytes, filename: str) -> str:
+        import httpx
+
+        headers = {"User-Agent": _GATEWAY_UA}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        with httpx.Client(timeout=_TRANSCRIBE_TIMEOUT_S) as client:
+            resp = client.post(
+                f"{api_base}/audio/transcriptions",
+                headers=headers,
+                data={"model": model},
+                files={"file": (filename or "audio.mp3", data)},
+            )
+            resp.raise_for_status()
+            return (resp.json().get("text") or "").strip()
+
+    return _transcribe
+
+
 # Contextual Retrieval (Anthropic) — situate each chunk in its source document
 # before embedding/indexing, so a chunk's vector + FTS terms carry doc-level
 # context they'd otherwise lack. Improves both semantic and keyword recall.
