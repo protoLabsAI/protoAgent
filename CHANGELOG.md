@@ -122,6 +122,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list (`acp:copilot` → `copilot --acp`), matching the Settings runtime options.
 
 ### Fixed
+- **Chat composer focus polish.** The migrated DS composer showed a double focus ring (the
+  app's global `textarea:focus-visible` outline leaked through the DS field's own reset by
+  specificity) — now suppressed so only the container's single focus ring shows. Clicking
+  anywhere in the prompt box (its padding or button bar, not just the textarea) now focuses
+  the input.
 - **Embedding circuit breaker clears on a passing connection test.** After repeated embed
   auth failures (e.g. an expired gateway key) the breaker latches open for
   `embed_breaker_cooldown_s` and serves keyword-only FTS5. Fixing the key via Settings

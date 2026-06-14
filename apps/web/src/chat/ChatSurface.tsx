@@ -578,7 +578,19 @@ function ChatSessionSlot({
         />
       )}
 
-      <div className="composer-wrap">
+      <div
+        className="composer-wrap"
+        onMouseDown={(e) => {
+          // Click anywhere in the prompt box (its padding / button bar) focuses the
+          // field — not just the textarea. Skip when the click is outside the box or
+          // on an interactive child (send/stop button, slash item, the field itself).
+          const target = e.target as HTMLElement;
+          if (!target.closest(".pl-prompt")) return;
+          if (target.closest("button, a, textarea, input, select, label, [role='option']")) return;
+          e.preventDefault(); // keep focus from leaving the field
+          textareaRef.current?.focus();
+        }}
+      >
         {status === "streaming" && statusMessage ? (
           <div className="composer-status">
             <Loader2 className="spin" size={12} />
