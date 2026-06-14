@@ -7,7 +7,9 @@ description: >-
   these three tools". Drives a scope → gather → gap-check → synthesize loop.
 tools: [web_search, fetch_url, memory_recall, memory_ingest, current_time]
 user_facing: true
-slash: research
+# `web-research`, not `research`: the deep-research workflow already owns
+# /research and wins dispatch, which would shadow this skill (bd-2zh).
+slash: web-research
 ---
 
 # Web Research
