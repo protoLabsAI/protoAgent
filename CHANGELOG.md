@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Background-agent notifications render legibly again.** After the DS
+  message-thread adoption, `role:"system"` chat messages — which in practice are
+  background-agent completion reports (ADR 0050): a lede plus a full markdown body
+  with tables/lists — were picking up the design-system's *terse one-line system*
+  styling (centered text in a 100px-rounded pill), turning a report into an
+  unreadable rounded blob. They now render as a left-aligned, readable inset card
+  with a subtle left accent (still visually distinct as system/automation output).
+
 ### Added
 - **`wait` tool — yield instead of busy-polling** (ADR 0053). When the agent is
   waiting for something to finish (a ship to arrive, a build, a cooldown, an ETA a

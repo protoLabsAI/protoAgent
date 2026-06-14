@@ -45,6 +45,30 @@
   word-break: break-word;
 }
 
+/* Our only `role:"system"` chat messages are background-agent completion
+   notifications (ADR 0050) — full markdown reports (a lede + tables/lists), not
+   a one-line notice. The DS styles system messages as a terse CENTERED 100px
+   pill, which turns a report into an unreadable rounded blob. Override to a
+   left-aligned, readable inset card (a left accent marks it as system/automation)
+   so the report renders like assistant content but stays visually distinct. */
+/* Anchored under .chat-session-slot so it outranks the DS rule (same class
+   specificity) regardless of stylesheet import order. */
+.chat-session-slot .pl-message--system .pl-message__content {
+  display: block;
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--pl-color-fg);
+  background: var(--pl-color-bg-inset);
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-left: 3px solid var(--pl-color-border-strong);
+  border-radius: var(--pl-radius);
+  padding: 12px 16px;
+}
+/* The lede ("✅ Background agent finished — …") is the first markdown line; keep
+   the report's own margins tidy inside the card. */
+.chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
+.chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
+
 /* Subtle live status above the composer while streaming (was a header pill). */
 .composer-status {
   display: flex;
