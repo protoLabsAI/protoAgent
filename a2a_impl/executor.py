@@ -52,6 +52,10 @@ logger = logging.getLogger(__name__)
 # with the same ``data_part`` wire primitive as the fleet extensions, so it
 # rides the 1.0 envelope identically — it's just not on the shared card.
 HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
+# Streamed scratch_pad reasoning ("thinking") — carried on WORKING status frames as
+# a DataPart, distinct from the answer artifact, so the console can show a
+# collapsible reasoning view. Plain consumers ignore it.
+REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -356,6 +360,16 @@ class ProtoAgentExecutor(AgentExecutor):
                             message=updater.new_agent_message(
                                 [_data_part_proto(payload, COMPONENT_MIME)]
                             ),
+                        )
+
+                elif event_type == "reasoning":
+                    # Live "thinking" — a reasoning DataPart on a WORKING frame,
+                    # separate from the answer artifact (plain consumers ignore it).
+                    if payload:
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message(
+                                [_data_part_proto({"text": str(payload)}, REASONING_MIME)]),
                         )
 
                 elif event_type == "delta":
