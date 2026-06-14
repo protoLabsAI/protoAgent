@@ -108,6 +108,87 @@
   color: var(--accent, #7c8cff);
 }
 
+/* Background subagents (ADR 0050 Phase 3) — UtilityBar pill + jobs dialog. */
+.bg-jobs-pill {
+  position: relative;
+}
+.bg-jobs-unread {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent, #7c8cff);
+}
+.bg-jobs-empty {
+  color: var(--fg-secondary);
+  font-size: 13px;
+}
+.bg-jobs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+.bg-jobs-row {
+  border: 1px solid var(--border, #2a2a31);
+  border-radius: 8px;
+  background: var(--bg-elevated, #16161b);
+}
+.bg-jobs-rowhead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.bg-jobs-rowhead:disabled {
+  cursor: default;
+}
+.bg-jobs-rowhead:not(:disabled):hover {
+  background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
+}
+.bg-jobs-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.bg-jobs-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.bg-jobs-title {
+  font-size: 13px;
+  line-height: 1.35;
+}
+.bg-jobs-sub {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  text-transform: capitalize;
+}
+.bg-jobs-ok {
+  color: var(--accent, #7c8cff);
+}
+.bg-jobs-fail {
+  color: var(--pl-color-status-error, #e5484d);
+}
+.bg-jobs-result {
+  padding: 4px 12px 12px 33px;
+  font-size: 13px;
+  border-top: 1px solid var(--border, #2a2a31);
+}
+
 .topbar {
   display: flex;
   align-items: center;

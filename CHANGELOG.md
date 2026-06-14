@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Background-jobs console widget** (ADR 0050, Phase 3) — a pill in the utility bar shows a
+  spinner + count while background subagents run and an unread dot when they finish; clicking
+  it opens a dialog listing each job's status, live elapsed time, and (for finished jobs) its
+  result rendered as markdown. Hydrates from `GET /api/background` and tracks live off the
+  `background.{started,completed}` events. (A live per-tool progress card in the transcript is
+  a follow-up — it needs a `background.progress` channel.)
 - **Background subagents wake the agent on completion** (ADR 0050, Phase 2) — when a
   background job finishes, the agent now **reacts to the result autonomously** instead of
   only learning on the spawning chat's next message: the completion fires a turn into the

@@ -64,6 +64,7 @@ import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } fro
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { BackgroundWatch } from "./BackgroundWatch";
+import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
@@ -877,6 +878,8 @@ export function App() {
             }
             end={
               <>
+                {/* Background subagents (ADR 0050 Phase 3) — live pill + jobs dialog. */}
+                <BackgroundJobs />
                 <button
                   type="button"
                   className={`util-btn ${leftCollapsed ? "is-off" : ""}`}

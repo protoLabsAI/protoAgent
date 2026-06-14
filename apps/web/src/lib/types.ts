@@ -310,6 +310,19 @@ export type ToolEvent = {
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
 };
 
+// A background subagent job (ADR 0050) as returned by GET /api/background and
+// carried (partially) on the background.{started,completed} bus events.
+export type BackgroundJobDTO = {
+  id: string;
+  status: "running" | "completed" | "failed";
+  subagent_type: string;
+  description: string;
+  origin_session?: string;
+  result?: string;
+  created_at?: string;
+  completed_at?: string;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";

@@ -155,10 +155,23 @@ names the originating session so the agent can reference it. Gated by `BACKGROUN
 default; `=0` opts out, parity with `BACKGROUND_DISABLED`). `background.started` is published on
 spawn (Phase 1); `background.progress` remains a follow-up.
 
-### Phases 3–4 (planned, not in this ADR's PR)
-- **Phase 3 — chat UX.** A live status pill (`⟳ 2 agents running`), a background-jobs panel
-  (status / elapsed / stop), a completion toast + unread badge, and a rich live subagent card
-  in-transcript. Check `@protolabsai/ui/ai` (Conversation/Message/ToolCall) before hand-rolling.
+### Phase 3 — chat UX (shipped, except the live progress card)
+
+A `BackgroundJobs` widget in the console's `UtilityBar`: a **pill** that shows a spinner +
+running count while jobs are in flight and an **unread dot** when jobs finish, and a
+**dialog** listing each job (status icon, subagent + description, live elapsed, and the
+result rendered as markdown for finished jobs — expandable). It hydrates from
+`GET /api/background`, then tracks live off the `background.{started,completed}` bus events;
+opening the dialog clears the unread count. Completion toasts already shipped in Phase 1
+(`BackgroundWatch`). Read-only — stop/kill is Phase 4.
+
+**Deferred:** the *rich live subagent card in-transcript* (a per-tool progress feed like
+protocli's `AgentExecutionDisplay`). It needs a `background.progress` channel — background
+jobs run as detached A2A turns whose tool-by-tool frames aren't surfaced to the bus today.
+That progress channel + card is a follow-up. (`@protolabsai/ui/ai`'s ToolCall component is
+the thing to check first when it lands.)
+
+### Phase 4 (planned, not in this ADR's PR)
 - **Phase 4 — control + the runaway fix.** `task_output(id, block, timeout)` and `stop_task(id)`
   tools (cc-2.18's TaskOutput/TaskStop), and foreground→auto-background on a time budget so a
   long synchronous delegation transparently detaches and becomes killable — the direct cure for

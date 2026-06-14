@@ -2,6 +2,7 @@ import type {
   ActivityHistory,
   AgentConfig,
   Archetype,
+  BackgroundJobDTO,
   BeadsIssue,
   ChatMessage,
   ConfigPayload,
@@ -499,6 +500,13 @@ export const api = {
   // changes on every switch and would wrongly wipe the chat view each time.
   hostRuntimeStatus() {
     return request<RuntimeStatus>("/api/runtime/status", { host: true });
+  },
+
+  // Background subagent jobs (ADR 0050) — the focused agent's registry. Read-only;
+  // the UtilityBar pill + jobs dialog hydrate from this, then track live via the
+  // `background.{started,completed}` bus events.
+  background() {
+    return request<{ enabled: boolean; jobs: BackgroundJobDTO[] }>("/api/background");
   },
 
   telemetrySummary(since?: string) {
