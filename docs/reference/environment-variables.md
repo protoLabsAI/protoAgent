@@ -141,8 +141,9 @@ If both keys are unset, tracing is disabled and every helper in `tracing.py` bec
 | Variable | Default | What |
 |---|---|---|
 | `LOG_LEVEL` | `INFO` | Python logging level. Valid: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `LOG_FORMAT` | `text` | Set to `json` to emit one JSON object per log line (keys: `ts`, `level`, `logger`, `message`, plus `exc`/`exc_type` on errors and any `extra=` fields) — parse-stable for aggregators (Loki, CloudWatch, Datadog). Anything else keeps the human-readable format. Same level + stderr stream either way. |
 
-The template explicitly calls `logging.basicConfig(level=INFO)` — without this, Python's default WARNING would hide `logger.info(...)` lines like "webhook delivered", making A2A issues invisible in container logs.
+The template configures logging at startup (`observability/logging_config.py`) — without an explicit level, Python's default WARNING would hide `logger.info(...)` lines like "webhook delivered", making A2A issues invisible in container logs.
 
 ## Streaming / origin verification
 

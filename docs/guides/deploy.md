@@ -108,6 +108,66 @@ From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `min
 
 Releases are **manual / on-demand** — merging a PR does **not** cut a release. See the [Releasing runbook](/guides/releasing) for the changelog protocol + the branch ruleset.
 
+## Operations
+
+### Backup & restore
+
+All durable state lives under one **data dir** — `/sandbox` in a container,
+`~/.protoagent` otherwise. It holds the SQLite conversation checkpoints
+(`checkpoints.db`), the knowledge store (`knowledge/`), the audit log
+(`audit/audit.jsonl`), scheduler jobs (`scheduler/<agent>/jobs.db`), and the
+inbox / activity / telemetry / background stores.
+
+> The sample compose above persists only `audit` and `knowledge`. Because
+> Watchtower **recreates** the container on every image update, anything not on a
+> mounted volume is lost — conversation history, scheduled jobs, the inbox. For a
+> durable deployment, mount the whole data dir (e.g. `data:/sandbox`) so every
+> store survives a recreate; the backup below then snapshots all of it.
+
+The SQLite stores run in **WAL mode**, so a naive `tar` of a live file can copy a
+torn page (a write in flight) or miss the `-wal` / `-shm` sidecars — producing a
+backup that won't open. Two safe options:
+
+**Cold (simplest, always consistent)** — stop the agent, archive, restart:
+
+```bash
+docker compose stop my-agent          # or Ctrl-C / systemctl stop
+tar czf protoagent-$(date +%F).tgz -C /sandbox .   # ~/.protoagent for a non-container run
+docker compose start my-agent
+```
+
+**Hot (no downtime)** — take a consistent snapshot of each live DB with SQLite's
+online backup, then archive the snapshots:
+
+```bash
+sqlite3 /sandbox/checkpoints.db ".backup '/tmp/backup/checkpoints.db'"
+# repeat for knowledge/*.db and scheduler/<agent>/jobs.db, then tar /tmp/backup + audit/
+```
+
+**Restore** — stop the agent, replace the data dir from the archive, restart:
+
+```bash
+docker compose stop my-agent
+tar xzf protoagent-2026-06-14.tgz -C /sandbox
+docker compose start my-agent
+```
+
+### Shutdown semantics
+
+On `SIGTERM` (`docker stop`, `systemctl stop`) or `SIGINT` (Ctrl-C) the server
+runs its FastAPI shutdown hooks — spinning down fleet members, stopping the
+scheduler, and withdrawing mDNS — then uvicorn drains in-flight connections.
+The graceful drain is **bounded to 5s** (`timeout_graceful_shutdown=5`) so the
+long-lived SSE streams the console holds (chat, runtime status) don't block
+shutdown forever; past that they're force-closed.
+
+A turn **in progress** when the signal arrives is cancelled and its work is lost.
+This is acceptable by design: the A2A task store is durable, so a client that
+reconnects reconciles the interrupted task via `tasks/get` and can resubmit. If
+your turns routinely run longer than the drain window and you want them to finish,
+raise the container's stop grace period (Compose `stop_grace_period`, or
+`docker stop -t <seconds>`) — it defaults to 10s before `SIGKILL`.
+
 ## Related
 
 - [Fork the template](/guides/fork-the-template) — the earlier steps that set up the rest
