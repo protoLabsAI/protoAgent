@@ -39,9 +39,7 @@ def test_shadowed_user_facing_skill_is_skipped_and_warned(monkeypatch, caplog):
                 {"name": "gather", "slash": "gather", "description": "reachable"},
             ]
 
-    import importlib
-
-    sc = importlib.import_module("server.chat")  # the module (server.chat re-exports the chat fn)
+    import graph.slash_commands as sc
 
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "workflow_registry", _WFReg(), raising=False)
