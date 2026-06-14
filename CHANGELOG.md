@@ -73,7 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the embed, so a batch failure still leaves FTS5-searchable chunks (and trips the same
   circuit breaker); single-chunk docs, embeddings-off, or an open breaker fall back to the
   per-chunk path. New `create_embed_batch_fn` + `HybridKnowledgeStore(embed_batch_fn=…)`.
-  (Contextual enrichment's per-chunk aux call is still serial — a separate follow-up.)
+- **Parallel contextual enrichment on ingest** (ADR 0021). The per-chunk enrichment aux-LLM
+  calls — the dominant ingest cost for a large enriched doc — now run **concurrently** (bounded
+  pool) instead of serially. The first chunk is probed serially so a gateway outage still
+  disables enrichment after one call (no N concurrent failing requests); a per-chunk failure in
+  the parallel batch degrades just that chunk to raw. Order is preserved. Together with batched
+  embedding, a multi-chunk document's ingest is now a single embed request + a concurrent burst
+  of enrich calls rather than 2N serial round-trips.
 - **Semantic recall tuned + made tunable** (RAG bake-off findings from internal research).
   `knowledge.top_k` raised 5 → 10 and the recall preview 240 → 1000 chars (more
   answer-bearing context in-prompt at no retrieval cost). The hybrid-store knobs are now
