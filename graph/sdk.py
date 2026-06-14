@@ -20,6 +20,11 @@ from typing import Any
 
 from runtime.state import STATE
 
+# Re-export the supervised background-task helper as part of the consumption surface, so a
+# plugin writes `from graph.sdk import supervise` for a self-perpetuating, watchdog-backed
+# engine instead of hand-rolling task/restart machinery (graph/supervisor.py is host-free).
+from graph.supervisor import Supervisor, supervise  # noqa: F401
+
 
 def config() -> Any:
     """The live runtime ``LangGraphConfig``."""

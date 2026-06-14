@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, so new and standalone plugins get deep-module testing out of the box. Closes the gap
   hit building the spacetraders plugin, where `fleet.py`/`tools.py` couldn't be tested
   without extracting all logic into dependency-free modules (#1024).
+- **Supervised background-task helper (`graph/supervisor.py`, `from graph.sdk import supervise`).**
+  A reusable, watchdog-backed lifecycle for a plugin's long-running background engine: run a
+  unit of work back-to-back, and a watchdog that **re-kicks** a crash, **restarts** a stall
+  (frozen `progress` + a confirming `stall_check`), and **recovers** a known fault via an
+  `on_crash` hook — so the loop survives unattended. The plugin supplies only the work + the
+  predicates; the Supervisor owns create/cancel/re-kick/restart/heartbeat and a `status()`
+  dict. Pure asyncio (host-free, directly unit-tested). Generalizes the ~150 lines of
+  task/watchdog machinery the spacetraders fleet engine hand-rolled (#1025).
 
 ### Fixed
 - **The Tools tab shows exactly what the agent can call.** `/api/tools` re-derived
