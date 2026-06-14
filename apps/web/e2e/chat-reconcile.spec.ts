@@ -33,7 +33,7 @@ test("a stuck 'streaming' message reconciles to the server's completed answer on
 
   // On mount the reconcile fires: tasks/get → completed → finalize. The answer
   // from the server's artifact appears, and the message is no longer streaming.
-  await expect(page.locator(".message-assistant")).toContainText("RECONCILED ANSWER");
+  await expect(page.locator(".pl-message--assistant")).toContainText("RECONCILED ANSWER");
   // No longer spinning — the streaming loader is gone once finalized.
-  await expect(page.locator(".message-assistant .spin")).toHaveCount(0);
+  await expect(page.locator(".pl-message--assistant .spin")).toHaveCount(0);
 });

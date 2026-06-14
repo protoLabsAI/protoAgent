@@ -38,6 +38,13 @@
   display: none;
 }
 
+/* Literal user input inside the DS Message bubble — preserve newlines/wrapping
+   (assistant markdown reflows on its own). */
+.chat-user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Subtle live status above the composer while streaming (was a header pill). */
 .composer-status {
   display: flex;

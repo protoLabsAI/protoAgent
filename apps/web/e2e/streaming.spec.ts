@@ -12,7 +12,7 @@ test("assistant answer streams in and reconciles to the final text", async ({ pa
   await composer.fill("STREAM the answer");
   await composer.press("Enter");
 
-  const answer = page.locator(".message-assistant .markdown");
+  const answer = page.locator(".pl-message--assistant .markdown");
   // Partial text appears before the full answer (append:true delta).
   await expect(answer).toContainText("Testing");
   // Final reconciled text — concatenated cleanly, not duplicated.

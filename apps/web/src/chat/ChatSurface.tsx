@@ -1,9 +1,20 @@
 import "./chat.css";
 import { Empty } from "@protolabsai/ui/primitives";
-import { PromptInput, Reasoning } from "@protolabsai/ui/ai";
+import {
+  Conversation,
+  Message,
+  MessageAction,
+  MessageActions,
+  PromptInput,
+  Reasoning,
+} from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
+  Check,
+  Copy,
+  GitBranch,
   Loader2,
+  RotateCcw,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -201,7 +212,8 @@ function ChatSessionSlot({
   const [taskId, setTaskId] = useState("");
   const [hitl, setHitl] = useState<HitlPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  // Transient "copied ✓" feedback on a message's copy action.
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -338,11 +350,6 @@ function ChatSessionSlot({
   }
 
   useEffect(() => {
-    if (!visible) return;
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [session?.messages, visible]);
-
-  useEffect(() => {
     return () => {
       abortRef.current?.abort();
     };
@@ -404,6 +411,11 @@ function ChatSessionSlot({
   }, [sessionId]);
 
   const messages = session?.messages || [];
+  // Regenerate is offered only on the most recent assistant reply.
+  const lastAssistantId = useMemo(
+    () => [...messages].reverse().find((m) => m.role === "assistant")?.id,
+    [messages],
+  );
 
   const canSend = useMemo(() => Boolean(draft.trim()) && status !== "streaming", [draft, status]);
 
@@ -427,6 +439,46 @@ function ChatSessionSlot({
     const display = text ? `${text}\n\n📎 ${names}` : `📎 ${names}`;
     setAttachments([]);
     void runTurn(display, { sendAs: sent, images });
+  }
+
+  function copyMessage(message: ChatMessage) {
+    void navigator.clipboard?.writeText(message.content || "");
+    setCopiedId(message.id ?? null);
+    window.setTimeout(() => setCopiedId((id) => (id === message.id ? null : id)), 1500);
+  }
+
+  // Regenerate an assistant reply: drop it (and anything after) from the thread,
+  // then re-run the user message that prompted it via the `hidden` path — no
+  // duplicate user bubble, just a fresh streaming assistant. Only offered on the
+  // last assistant message when idle.
+  function regenerate(assistantId?: string) {
+    if (!assistantId || !session || status === "streaming") return;
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!snap) return;
+    const i = snap.messages.findIndex((m) => m.id === assistantId);
+    if (i < 0) return;
+    const user = [...snap.messages.slice(0, i)].reverse().find((m) => m.role === "user");
+    if (!user) return;
+    chatStore.updateMessages(session.id, snap.messages.slice(0, i));
+    void runTurn(user.content, { hidden: true });
+  }
+
+  // Fork the conversation at a message: open a NEW tab/session seeded with the
+  // history up to and including that message, leaving the original untouched.
+  // Continue the branch from there.
+  function forkAtMessage(message: ChatMessage) {
+    if (!session) return;
+    const i = session.messages.findIndex((m) => m.id === message.id);
+    if (i < 0) return;
+    const seed = session.messages.slice(0, i + 1).map((m) => ({
+      ...m,
+      // a forked-from message is settled history in the new branch
+      status: m.status === "streaming" ? "done" : m.status,
+    }));
+    const created = chatStore.createSession(); // becomes the current + active tab
+    chatStore.updateMessages(created.id, seed);
+    const baseTitle = session.title && session.title !== "New chat" ? session.title : "Chat";
+    chatStore.renameSession(created.id, `${baseTitle} (fork)`);
   }
 
   // Resume a paused (input-required) turn: submitting the HITL form/question
@@ -468,11 +520,16 @@ function ChatSessionSlot({
 
     setDraft("");
     setStatusMessage("submitted");
-    // `hidden` (an approval resume) sends `content` to the server but omits the user
-    // bubble — the agent still receives the approve/deny, the chat just doesn't show it.
+    // Build off the live store snapshot, not the render-closure `messages` — a
+    // regenerate trims the thread in the store then calls runTurn in the same tick
+    // (before a re-render), so the closure copy would be stale.
+    const base =
+      chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? messages;
+    // `hidden` (an approval resume, or a regenerate) sends `content` to the server but
+    // omits the user bubble — the agent still receives it, the chat just doesn't show it.
     chatStore.updateMessages(
       session.id,
-      opts.hidden ? [...messages, assistant] : [...messages, userMessage, assistant],
+      opts.hidden ? [...base, assistant] : [...base, userMessage, assistant],
     );
     chatStore.setSessionStatus(session.id, "streaming");
     onError("");
@@ -683,45 +740,69 @@ function ChatSessionSlot({
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <div className="message-list" ref={listRef}>
+      <Conversation>
         {messages.length === 0 ? (
           <Empty icon={<TerminalSquare />} description="No messages in this session." />
         ) : (
           messages.map((message) => (
-            <article className={`message message-${message.role}`} key={message.id || `${message.role}-${message.createdAt}`}>
-              <div className="message-role">{message.role}</div>
-              <div className="message-body">
-                {message.reasoning ? (
-                  // Collapsible "thinking" — open while the model is still reasoning
-                  // (no answer text yet), auto-collapses once the answer starts.
-                  <Reasoning streaming={message.status === "streaming" && !message.content}>
-                    {message.reasoning}
-                  </Reasoning>
-                ) : null}
-                {message.toolCalls && message.toolCalls.length > 0 ? (
-                  <ToolCalls calls={message.toolCalls} />
-                ) : null}
-                {message.content
-                  ? message.role === "user"
-                    ? message.content
-                    : // assistant + system (e.g. background-completion notifications,
-                      // ADR 0050) carry markdown — render it; only the user's own input
-                      // stays literal.
-                      <Markdown>{message.content}</Markdown>
-                  : message.status === "streaming"
-                      && !(message.toolCalls && message.toolCalls.length)
-                      && !(message.components && message.components.length)
-                      && !message.reasoning
-                    ? <Loader2 className="spin" size={15} />
-                    : null}
-                {message.components && message.components.length > 0
-                  ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
+            <Message
+              key={message.id || `${message.role}-${message.createdAt}`}
+              role={message.role}
+              streaming={message.status === "streaming"}
+            >
+              {message.reasoning ? (
+                // Collapsible "thinking" — open while the model is still reasoning
+                // (no answer text yet), auto-collapses once the answer starts.
+                <Reasoning streaming={message.status === "streaming" && !message.content}>
+                  {message.reasoning}
+                </Reasoning>
+              ) : null}
+              {message.toolCalls && message.toolCalls.length > 0 ? (
+                <ToolCalls calls={message.toolCalls} />
+              ) : null}
+              {message.content
+                ? message.role === "user"
+                  ? // Literal user input — preserve newlines (markdown reflows assistant text).
+                    <span className="chat-user-text">{message.content}</span>
+                  : // assistant + system (e.g. background-completion notifications,
+                    // ADR 0050) carry markdown — render it; only the user's own input
+                    // stays literal.
+                    <Markdown>{message.content}</Markdown>
+                : message.status === "streaming"
+                    && !(message.toolCalls && message.toolCalls.length)
+                    && !(message.components && message.components.length)
+                    && !message.reasoning
+                  ? <Loader2 className="spin" size={15} />
                   : null}
-              </div>
-            </article>
+              {message.components && message.components.length > 0
+                ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
+                : null}
+              {message.role === "assistant" && message.status !== "streaming" && message.content ? (
+                <MessageActions>
+                  <MessageAction
+                    label={copiedId === message.id ? "Copied" : "Copy"}
+                    icon={copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                    onClick={() => copyMessage(message)}
+                  />
+                  <MessageAction
+                    label="Fork from here"
+                    icon={<GitBranch size={14} />}
+                    onClick={() => forkAtMessage(message)}
+                  />
+                  {message.id === lastAssistantId ? (
+                    <MessageAction
+                      label="Regenerate"
+                      icon={<RotateCcw size={14} />}
+                      disabled={status === "streaming"}
+                      onClick={() => regenerate(message.id)}
+                    />
+                  ) : null}
+                </MessageActions>
+              ) : null}
+            </Message>
           ))
         )}
-      </div>
+      </Conversation>
 
       {hitl && (
         <HitlForm

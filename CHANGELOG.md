@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Chat message toolbar — copy, fork, regenerate** (DS message-thread adoption) — the
+  chat transcript now uses the design-system `Conversation`/`Message`/`MessageActions`
+  components. Each settled assistant reply gets a hover toolbar: **Copy** the answer,
+  **Fork from here** (opens a new chat tab seeded with the history up to that message —
+  the original is untouched, so you can branch a conversation), and **Regenerate** (re-runs
+  the last turn in place, no duplicate user bubble). `Conversation` brings smart auto-scroll
+  (stays pinned while streaming, but won't yank you down while you read back; a jump-to-latest
+  button appears when scrolled up), replacing the hand-rolled message list. The streaming and
+  self-heal invariants (#613/#615) are unchanged — this is a render-layer swap.
 - **`scheduler.fired` event + orphaned push-config sweep** (ADR 0051 Slice 3 follow-ups) —
   a scheduled job dispatching now publishes `scheduler.fired` on the event bus (live
   visibility into cron/one-shot fires). And push-notification configs whose task no longer

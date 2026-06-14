@@ -598,27 +598,9 @@ select:disabled {
   outline-offset: -2px;
 }
 
-.message-list {
-  padding: 12px;
-}
-
-.message {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.message:first-child {
-  padding-top: 0;
-}
-
-.message-body {
-  min-width: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
+/* The chat thread now uses the DS Conversation/Message components (bd-1rn) —
+   the old hand-rolled `.message*` bubble rules were removed. Generic list scroll
+   (`.message-list, .issue-list, …`) stays above for the other surfaces. */
 
 /* Tool-call cards + per-tool renderers — moved to src/chat/tool-calls.css (#832). */
 

@@ -23,11 +23,11 @@ test("Enter sends; Ctrl+Enter inserts a newline", async ({ page }) => {
   await composer.fill("line one");
   await composer.press("Control+Enter"); // newline, not send
   await expect(composer).toHaveValue("line one\n");
-  await expect(page.locator(".message-user")).toHaveCount(0);
+  await expect(page.locator(".pl-message--user")).toHaveCount(0);
 
   await composer.fill("hello there"); // plain Enter sends
   await composer.press("Enter");
-  await expect(page.locator(".message-user")).toHaveText(/hello there/);
+  await expect(page.locator(".pl-message--user")).toHaveText(/hello there/);
 });
 
 test("tool-call card is collapsed by default and renders structured components", async ({ page }) => {
@@ -68,7 +68,7 @@ test("expanded state is sticky and the assistant answer renders as markdown", as
   await send(page, "MARKDOWN: summarize");
 
   // Final answer renders through the markdown pipeline.
-  const md = page.locator(".message-assistant .markdown");
+  const md = page.locator(".pl-message--assistant .markdown");
   await expect(md.locator("h2")).toHaveText("Summary");
   await expect(md.locator("strong")).toHaveText("key");
   await expect(md.locator("li")).toHaveCount(2);
@@ -84,7 +84,7 @@ test("long tool values do not overflow the chat horizontally", async ({ page }) 
   await expect(card.locator(".pl-toolcard__body")).toBeVisible();
 
   const metrics = await page.evaluate(() => {
-    const body = document.querySelector(".message-assistant .message-body");
+    const body = document.querySelector(".pl-message--assistant .pl-message__content");
     return {
       docScroll: document.documentElement.scrollWidth,
       win: window.innerWidth,
