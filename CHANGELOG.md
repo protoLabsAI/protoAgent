@@ -160,6 +160,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrichment, reranking).
 
 ### Changed
+- **Host config settings regrouped** (ADR 0047 D8 follow-up, bd-2zb) — the box-runtime host
+  knobs that were lumped under one "Fleet" section now read as three coherent groups in
+  Settings ▸ Host / App ▸ Host config: **Network** (bind interface + workspace port base),
+  **Discovery** (mDNS + the discovery port window), and **Keep-warm** (warm-agent cap +
+  eviction grace). Grouping only — same fields, same host cascade, same save path.
 - **Chat composer migrated to the design-system `PromptInput`** (`@protolabsai/ui/ai`, bumped
   0.30 → 0.33). The hand-rolled `<form>`/`<textarea>` is replaced by the DS composer, driven
   through the new host-extension seams added upstream (`inputRef`/`onKeyDown`/`overlay`): the
