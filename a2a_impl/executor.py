@@ -240,6 +240,7 @@ class ProtoAgentExecutor(AgentExecutor):
         _notify_progress(context.context_id, context.task_id, {"phase": "turn_started"})
 
         text = context.get_user_input()
+        images = _extract_image_parts(context)
         caller_trace = _extract_caller_trace(context)
 
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
@@ -330,7 +331,7 @@ class ProtoAgentExecutor(AgentExecutor):
         try:
             async for event_type, payload in self._stream_factory(
                 text, context.context_id, resume=resume, caller_trace=caller_trace,
-                request_metadata=_md,
+                request_metadata=_md, images=images,
             ):
                 if event_type == "text":
                     accumulated += payload
@@ -492,6 +493,30 @@ def _extract_caller_trace(context: RequestContext) -> dict:
     """The ``a2a.trace`` metadata (Langfuse cross-trace propagation), or {}."""
     trace = _request_metadata(context).get("a2a.trace")
     return trace if isinstance(trace, dict) else {}
+
+
+def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
+    """Vision image parts off the inbound message → ``[(media_type, data_uri)]``.
+
+    A part with an ``image/*`` media_type carries either inline bytes (proto
+    ``raw``, base64-encoded into a ``data:`` URI) or a ``url`` (already a
+    ``data:``/``http`` URL). Empty when there are none — so non-vision turns and
+    text-only consumers pay nothing. The turn handler only forwards these to the
+    model when the active model is vision-capable."""
+    import base64
+
+    out: list[tuple[str, str]] = []
+    msg = getattr(context, "message", None)
+    for p in (getattr(msg, "parts", None) or []):
+        mt = (getattr(p, "media_type", "") or "").lower()
+        if not mt.startswith("image/"):
+            continue
+        raw = getattr(p, "raw", b"") or b""
+        if raw:
+            out.append((mt, f"data:{mt};base64,{base64.b64encode(bytes(raw)).decode()}"))
+        elif getattr(p, "url", ""):
+            out.append((mt, p.url))
+    return out
 
 
 def _extract_skill_hint(context: RequestContext) -> str:

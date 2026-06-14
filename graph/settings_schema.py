@@ -66,6 +66,10 @@ FIELDS: list[Field] = [
     Field("model.temperature", "temperature", "Temperature", "number", "Model",
           minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model", minimum=1),
+    Field("model.vision", "model_vision", "Vision (native images)", "bool", "Model",
+          "Turn on when the primary model accepts images (e.g. protolabs/fast, protolabs/smart). "
+          "Chat then sends attached images straight to the model as native multimodal parts "
+          "instead of through the extraction pipeline.", restart=True),
     Field("model.max_iterations", "max_iterations", "Max tool iterations", "number", "Model",
           "Hard cap on the agent loop per turn.", minimum=1),
 

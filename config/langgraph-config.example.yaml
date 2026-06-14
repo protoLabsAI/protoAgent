@@ -18,6 +18,10 @@ model:
   temperature: 0.2
   max_tokens: 32768  # 32k — required headroom for the Qwen models we run
   max_iterations: 50
+  # Native image input — set true when `name` is a vision model (protolabs/fast,
+  # protolabs/smart, protolabs/reasoning/deepseek-v4). Chat then sends attached
+  # images straight to the model instead of through the extraction pipeline.
+  vision: false
   request_timeout: 120   # per-call timeout (s) on the model client — bounds a hung/slow gateway
   max_retries: 2         # transient-error retries inside the client
   # Advanced sampling — all optional; omit to use the gateway / model-card

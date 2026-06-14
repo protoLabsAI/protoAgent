@@ -8,8 +8,10 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../lib/api";
+import { runtimeStatusQuery } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
@@ -24,6 +26,21 @@ function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Read a File to bare base64 (no `data:…;base64,` prefix) — the proto Part `raw`
+// (bytes) field for a native-vision image.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const s = String(reader.result || "");
+      const comma = s.indexOf(",");
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    reader.onerror = () => reject(reader.error || new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // A file being attached to the next message. Uploaded to /api/knowledge/attach on
 // pick; `context` is the backend's ready-to-prepend block (full text or lede).
 type PendingAttachment = {
@@ -34,6 +51,11 @@ type PendingAttachment = {
   context?: string;
   mode?: "inline" | "indexed";
   error?: string;
+  // Native-vision images skip the pipeline: their base64 + mime ride the turn as
+  // a multimodal A2A part straight to the model (no `context`).
+  native?: boolean;
+  b64?: string;
+  mime?: string;
 };
 
 // Append an actionable pointer when a turn fails on something the operator can
@@ -191,11 +213,36 @@ function ChatSessionSlot({
   // block we prepend to the SENT message (not the visible bubble) on send.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Native vision: when the active model accepts images, attached images go
+  // straight to the model as multimodal parts; otherwise they take the pipeline.
+  const { data: runtime } = useQuery(runtimeStatusQuery());
+  const visionModel = Boolean(runtime?.model?.vision);
 
   async function uploadAttachment(file: File) {
     const id = messageId();
     const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
     setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
+
+    // Native vision: a vision model sees the image directly — base64 it and send
+    // it as a multimodal part, no pipeline round-trip.
+    if (kind === "image" && visionModel) {
+      try {
+        const b64 = await fileToBase64(file);
+        setAttachments((a) =>
+          a.map((x) =>
+            x.id === id
+              ? { ...x, status: "ready", native: true, b64, mime: file.type || "image/png", mode: "inline" }
+              : x,
+          ),
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
+        onError(`Couldn't read ${file.name}: ${msg}`);
+      }
+      return;
+    }
+
     try {
       const form = new FormData();
       form.append("file", file);
@@ -365,18 +412,22 @@ function ChatSessionSlot({
     if (!session || !canSend) return;
     const text = draft.trim();
     setDraft("");
-    const ready = attachments.filter((a) => a.status === "ready" && a.context);
-    if (ready.length === 0) {
+    // Native-vision images ride the turn as multimodal parts; pipeline attachments
+    // contribute a prepended context block.
+    const nativeImgs = attachments.filter((a) => a.status === "ready" && a.native && a.b64);
+    const piped = attachments.filter((a) => a.status === "ready" && a.context);
+    if (nativeImgs.length === 0 && piped.length === 0) {
       void runTurn(text);
       return;
     }
-    // The model gets the attachment context blocks prepended; the user bubble
-    // shows only the typed text + a 📎 list (never the raw doc dump).
-    const sent = [...ready.map((a) => a.context as string), text].join("\n\n").trim();
-    const names = ready.map((a) => a.name).join(", ");
+    const images = nativeImgs.map((a) => ({ b64: a.b64 as string, mime: a.mime || "image/png", name: a.name }));
+    // The model gets the pipeline context prepended + the images natively; the
+    // user bubble shows only the typed text + a 📎 list (never a raw doc/data dump).
+    const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
+    const names = [...piped, ...nativeImgs].map((a) => a.name).join(", ");
     const display = text ? `${text}\n\n📎 ${names}` : `📎 ${names}`;
     setAttachments([]);
-    void runTurn(display, { sendAs: sent });
+    void runTurn(display, { sendAs: sent, images });
   }
 
   // Resume a paused (input-required) turn: submitting the HITL form/question
@@ -392,7 +443,10 @@ function ChatSessionSlot({
     void runTurn(typeof response === "string" ? response : JSON.stringify(response), { hidden: silent });
   }
 
-  async function runTurn(content: string, opts: { hidden?: boolean; sendAs?: string } = {}) {
+  async function runTurn(
+    content: string,
+    opts: { hidden?: boolean; sendAs?: string; images?: { b64: string; mime: string; name: string }[] } = {},
+  ) {
     if (!session || !content) return;
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
@@ -584,7 +638,7 @@ function ChatSessionSlot({
             }),
           );
         },
-      });
+      }, { images: opts.images });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
     } catch (exc) {
@@ -768,6 +822,7 @@ function ChatSessionSlot({
           hidden
           accept={
             ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
+            ".png,.jpg,.jpeg,.gif,.webp,.bmp," +
             ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.mp4,.mov,.mkv,.webm,.avi,.m4v"
           }
           onChange={(e) => {

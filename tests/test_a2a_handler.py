@@ -576,3 +576,31 @@ async def test_allowed_origin_passes():
             "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
             "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}}})
     assert r.status_code == 200
+
+
+# ── native vision: inbound image part extraction ──────────────────────────────
+def test_extract_image_parts_inline_and_url():
+    import base64
+    import types as _t
+
+    from a2a_impl.executor import _extract_image_parts
+
+    img = b"\x89PNG-fake-bytes"
+    parts = [
+        _t.SimpleNamespace(media_type="", raw=b"", url=""),                     # text → skip
+        _t.SimpleNamespace(media_type="image/png", raw=img, url=""),            # inline image
+        _t.SimpleNamespace(media_type="image/jpeg", raw=b"", url="https://x/y.jpg"),  # url image
+        _t.SimpleNamespace(media_type="application/pdf", raw=b"x", url=""),     # non-image → skip
+    ]
+    ctx = _t.SimpleNamespace(message=_t.SimpleNamespace(parts=parts))
+    out = _extract_image_parts(ctx)
+    assert len(out) == 2
+    assert out[0] == ("image/png", f"data:image/png;base64,{base64.b64encode(img).decode()}")
+    assert out[1] == ("image/jpeg", "https://x/y.jpg")
+
+
+def test_extract_image_parts_empty_when_no_message():
+    import types as _t
+
+    from a2a_impl.executor import _extract_image_parts
+    assert _extract_image_parts(_t.SimpleNamespace(message=None)) == []

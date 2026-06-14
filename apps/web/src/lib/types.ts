@@ -16,6 +16,9 @@ export type RuntimeStatus = {
     temperature: number | null;
     max_tokens: number | null;
     max_iterations: number | null;
+    /** Model accepts native image input (model.vision) — chat sends attached
+     *  images straight to the model instead of through the extraction pipeline. */
+    vision?: boolean;
   };
   identity: null | {
     name: string;

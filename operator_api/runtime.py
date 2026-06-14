@@ -86,6 +86,7 @@ def build_runtime_status(
             "temperature": getattr(config, "temperature", None),
             "max_tokens": getattr(config, "max_tokens", None),
             "max_iterations": getattr(config, "max_iterations", None),
+            "vision": bool(getattr(config, "model_vision", False)),
         },
         "identity": {
             "name": getattr(config, "identity_name", ""),
