@@ -75,12 +75,19 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
         tools = meta["metadata"].get("tools")
     tools_used = [str(t) for t in tools] if isinstance(tools, (list, tuple)) else []
 
+    # User-facing slash trigger (ADR 0052): `user_facing: true` + optional `slash:`
+    # token make the skill invokable as `/<slash>` in chat. Accept a few truthy spellings.
+    user_facing = str(meta.get("user_facing", "")).strip().lower() in ("true", "1", "yes", "on")
+    slash = str(meta.get("slash", "")).strip()
+
     return SkillV1Artifact(
         name=name,
         description=description,
         prompt_template=body.strip(),
         tools_used=tools_used,
         source_session_id=f"skill-md:{path.parent.name}",
+        user_facing=user_facing,
+        slash=slash,
     )
 
 

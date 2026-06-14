@@ -58,3 +58,26 @@ def test_layered_dedup_best_match_wins(tmp_path):
     hits = [r for r in idx.load_skills("apples", k=10) if r.name == "dup_skill"]
     assert len(hits) == 1  # de-duped across tiers, single best-scoring record
     idx.close()
+
+
+def _uf_art(name, desc, slash):
+    return types.SimpleNamespace(name=name, description=desc, prompt_template="do " + name,
+                                 tools_used=(), source_session_id="",
+                                 user_facing=True, slash=slash)
+
+
+def test_layered_user_facing_union_private_wins(tmp_path):
+    """user_facing_skills() unions both tiers, de-duped by slash token (ADR 0052);
+    a private skill sharing a token overrides the commons one."""
+    private, commons = _idx(tmp_path)
+    commons.add_skill(_uf_art("research", "commons research", "research"))
+    commons.add_skill(_uf_art("triage", "commons triage", "triage"))
+    private.add_skill(_uf_art("research", "private research override", "research"))
+    idx = LayeredSkillsIndex(private, commons)
+
+    ufs = {s["slash"]: s for s in idx.user_facing_skills()}
+    assert set(ufs) == {"research", "triage"}                  # union, de-duped
+    assert ufs["research"]["description"] == "private research override"
+    assert ufs["research"]["tier"] == "private"                # private wins
+    assert ufs["triage"]["tier"] == "commons"
+    idx.close()

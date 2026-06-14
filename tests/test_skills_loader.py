@@ -138,3 +138,37 @@ def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
     assert out is not None
     assert "<learned_skills>" in out["context"]
     assert "web-research" in out["context"]
+
+
+# ── User-facing skills (ADR 0052) ──────────────────────────────────────────────
+
+
+def test_parse_user_facing_and_slash(tmp_path: Path) -> None:
+    """`user_facing: true` + `slash:` are parsed onto the artifact (ADR 0052)."""
+    p = _write_skill(
+        tmp_path, "web-research",
+        "name: web-research\ndescription: Research on the web.\n"
+        "user_facing: true\nslash: research",
+        "Plan, search, cite.",
+    )
+    art = parse_skill_md(p)
+    assert art is not None
+    assert art.user_facing is True
+    assert art.slash == "research"
+    assert art.slash_token() == "research"
+
+
+def test_user_facing_defaults_off_and_slug_fallback(tmp_path: Path) -> None:
+    """Absent `user_facing` → off; an explicit-but-blank slash slugs the name."""
+    plain = _write_skill(tmp_path, "plain", "name: plain\ndescription: A plain skill.")
+    art = parse_skill_md(plain)
+    assert art is not None and art.user_facing is False
+
+    uf = _write_skill(
+        tmp_path, "Big Task",
+        "name: Big Task\ndescription: A user-facing skill.\nuser_facing: yes",
+        "do it",
+    )
+    art2 = parse_skill_md(uf)
+    assert art2 is not None and art2.user_facing is True
+    assert art2.slash == "" and art2.slash_token() == "big-task"

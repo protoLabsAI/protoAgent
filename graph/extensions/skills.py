@@ -56,6 +56,13 @@ class SkillV1Artifact:
         default_factory=lambda: datetime.now(timezone.utc)
     )
     source_session_id: str = ""
+    # User-facing skills (ADR 0052): when True, the skill is offered as a `/<slash>`
+    # command in the chat composer and runs its procedure on demand (in addition to the
+    # implicit retrieval-injection every skill gets). ``slash`` is the trigger token
+    # (whitespace-free); blank → derived from ``name``. Off by default — only
+    # deliberately-authored skills become directly invokable.
+    user_facing: bool = False
+    slash: str = ""
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -64,6 +71,14 @@ class SkillV1Artifact:
             raise TypeError("SkillV1Artifact.tools_used must be a list")
         if not isinstance(self.created_at, datetime):
             raise TypeError("SkillV1Artifact.created_at must be a datetime")
+
+    def slash_token(self) -> str:
+        """The whitespace-free `/<token>` trigger — explicit ``slash`` or a slug of
+        ``name`` (lowercased, non-alphanumerics → hyphens)."""
+        import re
+
+        raw = (self.slash or self.name or "").strip().lower()
+        return re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dict."""
@@ -74,6 +89,8 @@ class SkillV1Artifact:
             "tools_used": list(self.tools_used),
             "created_at": self.created_at.isoformat(),
             "source_session_id": self.source_session_id,
+            "user_facing": self.user_facing,
+            "slash": self.slash,
         }
 
     def to_datapart(self) -> dict:

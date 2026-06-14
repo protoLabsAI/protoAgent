@@ -59,6 +59,19 @@ class LayeredSkillsIndex:
         return ([{**s, "tier": "private"} for s in self._private.all_skills()]
                 + [{**s, "tier": "commons"} for s in self._commons.all_skills()])
 
+    def user_facing_skills(self) -> list[dict]:
+        """User-facing skills (ADR 0052) from both tiers, de-duped by slash token
+        (private wins). Backs the `/<slash>` chat commands."""
+        merged: dict[str, dict] = {}
+        for tier, backend in (("commons", self._commons), ("private", self._private)):
+            reader = getattr(backend, "user_facing_skills", None)
+            if reader is None:
+                continue
+            for s in reader():
+                token = (s.get("slash") or s.get("name") or "").strip().lower()
+                merged[token] = {**s, "tier": tier}  # private listed last → wins
+        return list(merged.values())
+
     def promote(self, name: str) -> bool:
         """Copy a private skill (by name) into the commons. Returns False if no
         private skill by that name exists. Curated, explicit — the commons is trusted."""
@@ -71,6 +84,8 @@ class LayeredSkillsIndex:
             prompt_template=match.get("prompt_template", ""),
             tools_used=tuple(match.get("tools_used") or ()),
             source_session_id=match.get("source_session_id", ""),
+            user_facing=bool(match.get("user_facing", False)),
+            slash=match.get("slash", "") or "",
         )
         self._commons.add_skill(artifact, source="promoted")
         log.info("[skills] promoted %r to the commons", name)

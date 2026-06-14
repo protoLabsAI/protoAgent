@@ -415,6 +415,7 @@ def _operator_chat_commands() -> dict:
             })
     # Each registered subagent is runnable as /<name> <prompt> (ADR 0020),
     # unless a workflow already claims the name (workflow wins in dispatch).
+    taken: set[str] = set(wf_names)
     try:
         from graph.subagents.config import SUBAGENT_REGISTRY
     except Exception:
@@ -422,9 +423,33 @@ def _operator_chat_commands() -> dict:
     for name, cfg in SUBAGENT_REGISTRY.items():
         if name in wf_names:
             continue
+        taken.add(name)
         commands.append({
             "name": name,
             "description": getattr(cfg, "description", "") or f"Run the {name} subagent.",
             "usage": f"/{name} <prompt>",
         })
+    # User-facing skills are runnable as /<slash> [args] (ADR 0052). A skill
+    # whose token collides with a workflow/subagent name is skipped (those win
+    # in dispatch); the slash token is the explicit `slash:` or a slug of the name.
+    skills_index = STATE.skills_index
+    reader = getattr(skills_index, "user_facing_skills", None) if skills_index else None
+    if reader is not None:
+        try:
+            ufs = reader()
+        except Exception:
+            ufs = []
+        for skill in ufs:
+            token = (skill.get("slash") or "").strip().lower()
+            if not token:
+                import re
+                token = re.sub(r"[^a-z0-9]+", "-", (skill.get("name") or "").lower()).strip("-")
+            if not token or token == "goal" or token in taken:
+                continue
+            taken.add(token)
+            commands.append({
+                "name": token,
+                "description": skill.get("description") or f"Run the {token} skill.",
+                "usage": f"/{token} [input]",
+            })
     return {"commands": commands}
