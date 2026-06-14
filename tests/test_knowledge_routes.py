@@ -68,7 +68,9 @@ def test_chunk_add(monkeypatch):
     ks = _CrudKS()
     c = _client(monkeypatch, knowledge=ks)
     body = c.post("/api/knowledge/chunks", json={"content": "fact", "domain": "ops", "heading": "H"}).json()
-    assert body == {"enabled": True, "id": 7}
+    # A backend with only add_chunk (the ADR 0031 surface, no add_document) gets
+    # the un-chunked fallback: one write, id echoed in both `id` and `ids`.
+    assert body == {"enabled": True, "id": 7, "ids": [7]}
     content, domain, kwargs = ks.added[0]
     assert (content, domain) == ("fact", "ops")
     # heading/source ride kwargs ONLY — the protocol guarantees nothing else positionally

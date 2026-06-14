@@ -101,13 +101,22 @@ async def harvest_thread(
         summary = await summarizer(transcript, config)
         if not summary.strip():
             return None
-        chunk_id = knowledge_store.add_chunk(
+        # A summary is document-sized — chunk it so each passage gets its own
+        # embedding instead of one diluted whole-summary vector (ADR 0021).
+        from knowledge import add_document
+
+        chunk_ids = add_document(
+            knowledge_store,
             summary,
             domain="conversation",
             heading=f"Conversation summary ({thread_id})",
             namespace=namespace,
         )
-        log.info("[harvest] summarized thread %s into knowledge (chunk %s)", thread_id, chunk_id)
+        chunk_id = chunk_ids[0] if chunk_ids else None
+        log.info(
+            "[harvest] summarized thread %s into knowledge (%d chunk(s), first %s)",
+            thread_id, len(chunk_ids), chunk_id,
+        )
 
         # Semantic facts — the second half of the session-end pass (ADR 0021).
         if getattr(config, "knowledge_facts", False):

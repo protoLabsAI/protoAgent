@@ -1,0 +1,184 @@
+"""Tests for knowledge ingest chunking (ADR 0021).
+
+Pure ``chunk_text`` behavior + an ``add_document`` integration over a real
+SQLite store (chunks are individually searchable).
+"""
+
+from __future__ import annotations
+
+from knowledge.chunking import chunk_text
+from knowledge.store import KnowledgeStore
+
+
+# ── chunk_text: pure behavior ────────────────────────────────────────────────
+
+
+def test_empty_and_whitespace_return_empty():
+    assert chunk_text("") == []
+    assert chunk_text("   \n\n  ") == []
+
+
+def test_short_text_is_one_unchanged_chunk():
+    text = "A single short fact about the system."
+    assert chunk_text(text, max_chars=1200) == [text]
+
+
+def test_text_at_limit_not_split():
+    text = "x" * 100
+    assert chunk_text(text, max_chars=100) == [text]
+
+
+def test_long_text_splits_into_multiple_chunks():
+    paras = [f"Paragraph {i} " + "word " * 30 for i in range(10)]
+    text = "\n\n".join(paras)
+    chunks = chunk_text(text, max_chars=300, overlap_chars=0, min_chars=0)
+    assert len(chunks) > 1
+    # No chunk meaningfully exceeds the ceiling (a folded tail may add up to
+    # min_chars, which is 0 here).
+    assert all(len(c) <= 300 for c in chunks)
+
+
+def test_no_content_lost():
+    paras = [f"Distinct{i} alpha beta gamma delta epsilon" for i in range(12)]
+    text = "\n\n".join(paras)
+    chunks = chunk_text(text, max_chars=120, overlap_chars=0, min_chars=0)
+    joined = " ".join(chunks)
+    for i in range(12):
+        assert f"Distinct{i}" in joined
+
+
+def test_overlap_shares_a_boundary_tail():
+    paras = [f"Para{i} " + "lorem ipsum dolor sit amet " * 4 for i in range(8)]
+    text = "\n\n".join(paras)
+    no_ov = chunk_text(text, max_chars=300, overlap_chars=0, min_chars=0)
+    ov = chunk_text(text, max_chars=300, overlap_chars=80, min_chars=0)
+    # Overlap re-includes prior context, so the same content needs >= as many
+    # chunks and the total character count is larger than the no-overlap split.
+    assert sum(len(c) for c in ov) > sum(len(c) for c in no_ov)
+    # Some trailing words of an earlier chunk reappear in the next one.
+    shared = False
+    for a, b in zip(ov, ov[1:]):
+        tail_words = a.split()[-3:]
+        if tail_words and " ".join(tail_words) in b:
+            shared = True
+            break
+    assert shared
+
+
+def test_oversized_single_token_is_hard_windowed():
+    blob = "A" * 1000  # no whitespace anywhere
+    chunks = chunk_text(blob, max_chars=200, overlap_chars=0, min_chars=0)
+    assert len(chunks) >= 5
+    assert all(len(c) <= 200 for c in chunks)
+    assert "".join(chunks) == blob
+
+
+def test_tiny_trailing_fragment_folds_back():
+    body = "\n\n".join("sentence number %d here we go again" % i for i in range(20))
+    text = body + "\n\ntiny"
+    folded = chunk_text(text, max_chars=200, overlap_chars=0, min_chars=50)
+    unfolded = chunk_text(text, max_chars=200, overlap_chars=0, min_chars=0)
+    # The "tiny" tail is below the 50-char floor, so folding yields fewer chunks
+    # and no chunk is just the fragment.
+    assert len(folded) <= len(unfolded)
+    assert "tiny" not in {c.strip() for c in folded}
+    assert any("tiny" in c for c in folded)
+
+
+def test_deterministic():
+    text = "\n\n".join(f"Block {i} " + "alpha beta " * 20 for i in range(15))
+    assert chunk_text(text, max_chars=250) == chunk_text(text, max_chars=250)
+
+
+def test_prefers_paragraph_boundaries():
+    a = "First paragraph. " * 10
+    b = "Second paragraph. " * 10
+    chunks = chunk_text((a + "\n\n" + b).strip(), max_chars=len(a) + 20,
+                        overlap_chars=0, min_chars=0)
+    # Each paragraph fits its own chunk → the split lands on the blank line.
+    assert len(chunks) == 2
+    assert chunks[0].startswith("First")
+    assert chunks[1].startswith("Second")
+
+
+# ── add_document: integration over a real store ──────────────────────────────
+
+
+def _long_doc() -> str:
+    return "\n\n".join(
+        f"Topic {i}: the quick brown fox jumps over the lazy dog number {i}. "
+        "It was the best of times, it was the worst of times, repeated for bulk."
+        for i in range(20)
+    )
+
+
+def test_add_document_splits_and_is_searchable(tmp_path):
+    store = KnowledgeStore(
+        db_path=str(tmp_path / "agent.db"),
+        chunk_max_chars=300,
+        chunk_overlap_chars=40,
+        chunk_min_chars=50,
+    )
+    ids = store.add_document(_long_doc(), domain="conversation", heading="Doc")
+    assert len(ids) > 1                       # genuinely chunked
+    assert store.stats().get("total") == len(ids)
+    # A query for a passage that lived deep in the doc finds its own chunk.
+    hits = store.search("Topic 17 quick brown fox", k=3)
+    assert hits
+    assert any("Topic 17" in h["content"] for h in hits)
+
+
+def test_add_document_short_body_is_single_chunk(tmp_path):
+    store = KnowledgeStore(db_path=str(tmp_path / "agent.db"), chunk_max_chars=1200)
+    ids = store.add_document("a short note", domain="general")
+    assert len(ids) == 1
+
+
+def test_hybrid_add_document_embeds_each_chunk(tmp_path):
+    """The actual win: add_document on a hybrid store creates one vector per
+    chunk, so each passage is independently retrievable by similarity."""
+    import sqlite3
+
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    vocab = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+
+    def bow(text: str) -> list[float]:
+        t = text.lower()
+        return [1.0 if w in t else 0.0 for w in vocab]
+
+    db = str(tmp_path / "kb.db")
+    store = HybridKnowledgeStore(db, embed_fn=bow, chunk_max_chars=120,
+                                 chunk_overlap_chars=0, chunk_min_chars=0)
+    doc = "\n\n".join([
+        "alpha section. " + "padding word " * 12,
+        "bravo section. " + "padding word " * 12,
+        "charlie section. " + "padding word " * 12,
+    ])
+    ids = store.add_document(doc, domain="conversation", heading="Doc")
+    assert len(ids) >= 3
+    conn = sqlite3.connect(db)
+    n_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0]
+    conn.close()
+    assert n_vecs == len(ids)            # one embedding per chunk, not one for the doc
+
+
+def test_add_document_helper_falls_back_on_chunkless_backend():
+    from knowledge import add_document
+
+    class OnlyAddChunk:
+        def __init__(self):
+            self.calls = []
+
+        def add_chunk(self, content, domain="general", **kw):
+            self.calls.append((content, domain, kw))
+            return len(self.calls)
+
+    backend = OnlyAddChunk()
+    ids = add_document(backend, "x" * 5000, domain="conversation",
+                       heading="H", max_chars=200)
+    # No add_document on the backend → one un-chunked add_chunk, chunk-only
+    # kwargs stripped (add_chunk never sees max_chars).
+    assert ids == [1]
+    assert len(backend.calls) == 1
+    assert "max_chars" not in backend.calls[0][2]

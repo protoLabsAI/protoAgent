@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document chunking on knowledge ingest** (ADR 0021). Large bodies — harvested
+  conversation summaries and operator-pasted docs — are now split into coherent,
+  overlapping passages before embedding, instead of collapsing into one diluted
+  whole-document vector. Each passage gets its own embedding, so semantic recall can
+  land on the span that actually answers a query. Splitting is hierarchical
+  (paragraph → sentence → whitespace → hard window) so chunks end on natural
+  boundaries; short content (facts/notes) passes through unchanged. New
+  `KnowledgeStore.add_document()` funnels each piece through `add_chunk` (the
+  reasoning-strip guard + per-piece embedding still apply); a plugin backend that
+  only implements the ADR 0031 surface degrades to a single un-chunked write. Tunable
+  via `knowledge.chunk_max_chars` / `knowledge.chunk_overlap_chars` (Settings▸Knowledge)
+  and `knowledge.chunk_min_chars` (config). Measurable with the retrieval eval harness.
 - **Retrieval-quality eval harness** (`evals/retrieval.py` + `evals/retrieval_gold.yaml`).
   Measures the knowledge store's retrieval in isolation — recall@k / hit-rate@k / MRR /
   nDCG@k over a labelled gold set, split by query mode (keyword vs paraphrase) — which

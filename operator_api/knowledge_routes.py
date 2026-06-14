@@ -157,20 +157,24 @@ def register_knowledge_routes(app) -> None:
         content = str(body.get("content", "")).strip()
         if not content:
             return JSONResponse({"detail": "content is required"}, status_code=400)
-        chunk_id = await asyncio.to_thread(
-            lambda: STATE.knowledge_store.add_chunk(
+        # add_document chunks a large paste into per-passage embeddings (ADR 0021)
+        # and is a no-op split for a short fact; degrades to one add_chunk on a
+        # plugin backend that only implements the ADR 0031 surface.
+        from knowledge import add_document
+
+        ids = await asyncio.to_thread(
+            lambda: add_document(
+                STATE.knowledge_store,
                 content,
-                str(body.get("domain", "") or "general"),
-                # kwargs only beyond (content, domain) — the ADR 0031 protocol
-                # guarantees nothing else positionally.
+                domain=str(body.get("domain", "") or "general"),
                 heading=(str(body.get("heading", "")).strip() or None),
                 source="console",
                 source_type="operator",
             )
         )
-        if chunk_id is None:
+        if not ids:
             return JSONResponse({"detail": "the store rejected the chunk"}, status_code=400)
-        return {"enabled": True, "id": chunk_id}
+        return {"enabled": True, "id": ids[0], "ids": ids}
 
     @app.put("/api/knowledge/chunks/{chunk_id}")
     async def _api_knowledge_update(chunk_id: int, body: dict | None = None):

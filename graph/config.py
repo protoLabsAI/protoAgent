@@ -395,6 +395,16 @@ class LangGraphConfig:
     knowledge_recall_preview_chars: int = 1000
     knowledge_embed_breaker_threshold: int = 2
     knowledge_embed_breaker_cooldown_s: float = 300.0
+    # Document chunking on ingest (ADR 0021) — large bodies (conversation
+    # summaries, pasted docs) are split before embedding so each passage gets
+    # its own vector instead of one diluted whole-doc embedding. Applied by
+    # add_document (harvest + operator paste); facts/notes stay atomic.
+    #   chunk_max_chars     — target ceiling per chunk (content ≤ this isn't split).
+    #   chunk_overlap_chars — shared tail between adjacent chunks (boundary safety).
+    #   chunk_min_chars     — a trailing fragment below this folds into the prior chunk.
+    knowledge_chunk_max_chars: int = 1200
+    knowledge_chunk_overlap_chars: int = 150
+    knowledge_chunk_min_chars: int = 200
 
     # Conversation checkpointer — persists each chat session's history per
     # thread_id so multi-turn chats survive a server restart. A path → durable
@@ -774,6 +784,12 @@ class LangGraphConfig:
                 "embed_breaker_threshold", cls.knowledge_embed_breaker_threshold),
             knowledge_embed_breaker_cooldown_s=knowledge.get(
                 "embed_breaker_cooldown_s", cls.knowledge_embed_breaker_cooldown_s),
+            knowledge_chunk_max_chars=knowledge.get(
+                "chunk_max_chars", cls.knowledge_chunk_max_chars),
+            knowledge_chunk_overlap_chars=knowledge.get(
+                "chunk_overlap_chars", cls.knowledge_chunk_overlap_chars),
+            knowledge_chunk_min_chars=knowledge.get(
+                "chunk_min_chars", cls.knowledge_chunk_min_chars),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),

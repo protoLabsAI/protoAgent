@@ -287,6 +287,9 @@ def _build_knowledge_store(config):
                         breaker_threshold=config.knowledge_embed_breaker_threshold,
                         breaker_cooldown_s=config.knowledge_embed_breaker_cooldown_s,
                         preview_chars=config.knowledge_recall_preview_chars,
+                        chunk_max_chars=config.knowledge_chunk_max_chars,
+                        chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
+                        chunk_min_chars=config.knowledge_chunk_min_chars,
                     )
                 log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
             except Exception as exc:  # noqa: BLE001 — degrade to FTS5, never fail
@@ -294,6 +297,9 @@ def _build_knowledge_store(config):
         return KnowledgeStore(
             db_path=config.knowledge_db_path,
             preview_chars=config.knowledge_recall_preview_chars,
+            chunk_max_chars=config.knowledge_chunk_max_chars,
+            chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
+            chunk_min_chars=config.knowledge_chunk_min_chars,
         )
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)

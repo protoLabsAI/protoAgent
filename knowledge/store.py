@@ -214,13 +214,28 @@ class KnowledgeStore:
     your own embedding layer.
     """
 
-    def __init__(self, db_path: str | Path | None = None, *, preview_chars: int = 1000):
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+        *,
+        preview_chars: int = 1000,
+        chunk_max_chars: int = 1200,
+        chunk_overlap_chars: int = 150,
+        chunk_min_chars: int = 200,
+    ):
         self.path = _resolve_path(db_path)
         self._fts_available: bool | None = None
         # How much of each hit's `heading: content` is returned as the `preview`
         # the model sees on recall. Bumped from a hardcoded 240 (RAG bake-off:
         # bigger previews carry more answer-bearing context at no retrieval cost).
         self._preview_chars = max(1, int(preview_chars))
+        # Document chunking defaults for ``add_document`` (ADR 0021) — a large
+        # ingest (conversation summary, pasted doc) is split into coherent,
+        # overlapping pieces so each gets its own embedding instead of one
+        # diluted vector. Per-call args override these.
+        self._chunk_max_chars = max(1, int(chunk_max_chars))
+        self._chunk_overlap_chars = max(0, int(chunk_overlap_chars))
+        self._chunk_min_chars = max(0, int(chunk_min_chars))
         self._init_db()
 
     # ── connection / schema ─────────────────────────────────────────────────
@@ -349,6 +364,57 @@ class KnowledgeStore:
             finding_type=finding_type,
             namespace=namespace,
         )
+
+    def add_document(
+        self,
+        content: str,
+        domain: str = "general",
+        heading: str | None = None,
+        *,
+        source: str | None = None,
+        source_type: str | None = None,
+        finding_type: str | None = None,
+        namespace: str | None = None,
+        max_chars: int | None = None,
+        overlap_chars: int | None = None,
+        min_chars: int | None = None,
+    ) -> list[int]:
+        """Chunk a document, then store each piece via ``add_chunk``.
+
+        For genuinely document-sized ingest (conversation summaries, pasted
+        docs) — splitting into coherent, overlapping pieces means each gets its
+        own embedding rather than one diluted vector for the whole thing, so
+        semantic recall can land on the passage that actually answers a query
+        (ADR 0021). Each piece funnels through ``add_chunk``, so the
+        reasoning-strip guard (and, on a hybrid store, per-piece embedding) all
+        still apply.
+
+        Content at or under the chunk size is a single ``add_chunk`` — so it's a
+        safe drop-in for ``add_chunk`` on any path that might receive a large
+        body. Returns the created row ids (a failed piece is skipped, never
+        aborts the rest)."""
+        from knowledge.chunking import chunk_text
+
+        pieces = chunk_text(
+            content,
+            max_chars=self._chunk_max_chars if max_chars is None else max_chars,
+            overlap_chars=self._chunk_overlap_chars if overlap_chars is None else overlap_chars,
+            min_chars=self._chunk_min_chars if min_chars is None else min_chars,
+        )
+        ids: list[int] = []
+        for piece in pieces:
+            cid = self.add_chunk(
+                piece,
+                domain=domain,
+                heading=heading,
+                source=source,
+                source_type=source_type,
+                finding_type=finding_type,
+                namespace=namespace,
+            )
+            if cid is not None:
+                ids.append(cid)
+        return ids
 
     # ── reads ───────────────────────────────────────────────────────────────
 

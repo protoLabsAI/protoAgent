@@ -51,8 +51,17 @@ class HybridKnowledgeStore(KnowledgeStore):
         breaker_threshold: int = 2,
         breaker_cooldown_s: float = 300.0,
         preview_chars: int = 1000,
+        chunk_max_chars: int = 1200,
+        chunk_overlap_chars: int = 150,
+        chunk_min_chars: int = 200,
     ):
-        super().__init__(db_path, preview_chars=preview_chars)
+        super().__init__(
+            db_path,
+            preview_chars=preview_chars,
+            chunk_max_chars=chunk_max_chars,
+            chunk_overlap_chars=chunk_overlap_chars,
+            chunk_min_chars=chunk_min_chars,
+        )
         self._embed_fn = embed_fn
         self._vector_k = vector_k
         self._rrf_k = rrf_k

@@ -140,6 +140,16 @@ FIELDS: list[Field] = [
           "Drop fused hits below this score; 0 keeps all. A floor stops off-topic turns from "
           "injecting weak chunks — RRF scores aren't normalized, so tune empirically.",
           minimum=0, restart=True),
+    Field("knowledge.chunk_max_chars", "knowledge_chunk_max_chars", "Ingest chunk size", "number",
+          "Knowledge",
+          "Large ingests (conversation summaries, pasted docs) are split into pieces at most "
+          "this many characters before embedding, so each passage gets its own vector. Smaller = "
+          "more precise recall, more rows. Content under this size isn't split.",
+          minimum=1, restart=True),
+    Field("knowledge.chunk_overlap_chars", "knowledge_chunk_overlap_chars", "Ingest chunk overlap",
+          "number", "Knowledge",
+          "Characters shared between adjacent chunks so a span straddling a split is still wholly "
+          "present in one chunk. 0 = no overlap.", minimum=0, restart=True),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
     Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
           "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",

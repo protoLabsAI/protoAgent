@@ -72,6 +72,14 @@ knowledge:
   # consolidate them into the store. Rides the harvest pass (ADR 0021).
   facts: true
   top_k: 5
+  # Document chunking on ingest (ADR 0021) — large bodies (conversation
+  # summaries, pasted docs) are split into overlapping passages BEFORE
+  # embedding, so each passage gets its own vector instead of one diluted
+  # whole-doc embedding. Content under chunk_max_chars (facts/notes) isn't
+  # split. Defaults shown; omit to use them.
+  # chunk_max_chars: 1200      # target ceiling per chunk
+  # chunk_overlap_chars: 150   # shared tail between adjacent chunks (boundary safety)
+  # chunk_min_chars: 200       # fold a trailing fragment below this into the prior chunk
 
 # Session memory loading — prior summaries injected into system prompt
 # by KnowledgeMiddleware when it is active. Persistence via MemoryMiddleware

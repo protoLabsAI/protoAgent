@@ -341,6 +341,9 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
             # so emit them here for round-trip completeness.
             "embed_breaker_threshold": config.knowledge_embed_breaker_threshold,
             "embed_breaker_cooldown_s": config.knowledge_embed_breaker_cooldown_s,
+            # Same for the chunk-fold floor — max_chars/overlap are settings
+            # fields (round-trip via FIELDS); min_chars is config-only.
+            "chunk_min_chars": config.knowledge_chunk_min_chars,
         },
         "mcp": {
             "enabled": config.mcp_enabled,
