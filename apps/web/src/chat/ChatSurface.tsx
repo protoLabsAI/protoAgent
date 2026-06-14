@@ -417,7 +417,15 @@ function ChatSessionSlot({
     [messages],
   );
 
-  const canSend = useMemo(() => Boolean(draft.trim()) && status !== "streaming", [draft, status]);
+  // Sendable with text OR at least one ready attachment (file-only send, e.g.
+  // "describe this image" with no caption). Matches the DS PromptInput gate,
+  // which also enables submit when attachments are present (@protolabsai/ui ≥ 0.34).
+  const canSend = useMemo(
+    () =>
+      (Boolean(draft.trim()) || attachments.some((a) => a.status === "ready")) &&
+      status !== "streaming",
+    [draft, attachments, status],
+  );
 
   async function send() {
     if (!session || !canSend) return;

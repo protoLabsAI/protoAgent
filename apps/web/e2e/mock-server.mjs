@@ -323,6 +323,17 @@ const server = createServer(async (req, res) => {
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }
+    if (pathname === "/api/knowledge/attach" && req.method === "POST") {
+      // Chat attachment upload (#1002) — multipart, so DON'T JSON-parse the body.
+      // Drain it, then return the small-file "inline" tier with a context block.
+      req.resume();
+      await new Promise((r) => req.on("end", r));
+      return sendJson(res, {
+        enabled: true,
+        mode: "inline",
+        context: "[attachment notes.txt]\nhello from the attached file",
+      });
+    }
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
     const body = await readBody(req);
     const fleet = fleetFor(req);

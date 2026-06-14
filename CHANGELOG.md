@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **File-only chat send** — you can now send a message with an attachment and no typed
+  text (attach an image or doc and hit send with an empty field — e.g. "describe this").
+  The composer's send gate enables on text **or** a ready attachment, matching the DS
+  PromptInput (`@protolabsai/ui` bumped to 0.34 for the attachment-aware submit). The user
+  bubble still shows just the 📎 attachment line, never a raw dump.
 - **Chat message toolbar — copy, fork, regenerate** (DS message-thread adoption) — the
   chat transcript now uses the design-system `Conversation`/`Message`/`MessageActions`
   components. Each settled assistant reply gets a hover toolbar: **Copy** the answer,
