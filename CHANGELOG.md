@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Host-free plugin test harness (`graph/plugins/testkit.py`).** A self-contained
+  (stdlib-only) testkit that loads a plugin as a **package** — so a plugin's real engine
+  modules (relative imports, module-level `@tool`, lazy `graph.*` host imports) can be
+  unit-tested with no protoAgent running, not just `register()`. `load_plugin()` mirrors
+  the runtime loader's `protoagent_plugin_<id>` convention; `install_host_stubs()` registers
+  stand-ins for absent host modules (`graph.*` / `knowledge.*`) that are monkeypatchable and
+  raise-loud-if-unpatched; `FakeRegistry` captures contributions. `scaffold_plugin(with_tests=True)`
+  now **vendors** the testkit (`tests/_plugin_testkit.py`, verbatim) + a conftest that uses
+  it, so new and standalone plugins get deep-module testing out of the box. Closes the gap
+  hit building the spacetraders plugin, where `fleet.py`/`tools.py` couldn't be tested
+  without extracting all logic into dependency-free modules (#1024).
+
 ### Fixed
 - **The Tools tab shows exactly what the agent can call.** `/api/tools` re-derived
   its inventory from `get_all_tools` (the shared lead+subagent base) + plugins +

@@ -67,6 +67,7 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
     pdir = tmp_path / "shippable-one"
     for rel in (
         "tests/conftest.py",
+        "tests/_plugin_testkit.py",
         "tests/test_shippable_one.py",
         ".github/workflows/ci.yml",
         "requirements-dev.txt",
@@ -74,6 +75,11 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
     ):
         assert (pdir / rel).exists(), rel
     assert "tests/" in res.made
+    # the vendored testkit is a VERBATIM copy of the canonical source (single source of truth)
+    from pathlib import Path as _P
+
+    canonical = (_P(scaffold.__file__).with_name("testkit.py")).read_text()
+    assert (pdir / "tests" / "_plugin_testkit.py").read_text() == canonical
     # the generated test file is valid Python
     compile((pdir / "tests" / "test_shippable_one.py").read_text(), "t.py", "exec")
     # manifest ↔ pyproject versions agree (the coherence a release should hold)
@@ -82,6 +88,20 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
     # ci.yml is valid YAML with a test job
     ci = yaml.safe_load((pdir / ".github" / "workflows" / "ci.yml").read_text())
     assert "test" in ci["jobs"]
+
+
+def test_scaffolded_suite_passes_end_to_end(tmp_path):
+    """The generated suite is GREEN out of the box — run pytest on the scaffolded plugin in
+    a subprocess (cwd = the plugin, where ``graph`` is absent, so the vendored testkit's
+    host stubs are exercised for real, the standalone-plugin path)."""
+    import subprocess
+    import sys
+
+    scaffold.scaffold_plugin("Green Birth", with_tests=True, target_dir=str(tmp_path))
+    pdir = tmp_path / "green-birth"
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q"],
+                          cwd=str(pdir), capture_output=True, text=True)
+    assert proc.returncode == 0, f"scaffolded suite failed:\n{proc.stdout}\n{proc.stderr}"
 
 
 def test_scaffold_comms_plugin(tmp_path):

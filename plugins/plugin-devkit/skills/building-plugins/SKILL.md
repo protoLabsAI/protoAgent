@@ -115,10 +115,27 @@ You don't need to restart to try a plugin you built. With **plugin-devkit** enab
 
 For a **standalone-repo** plugin (its own git repo, not bundled in protoAgent), pass
 `with_tests=True` (`scaffold_plugin`) / `--tests` (the CLI) to also get a **host-free
-test suite + CI + requirements-dev + pyproject** so the repo is green from birth: the
-suite imports the plugin with no host (lazy host imports + a fake registry) and `ruff`
-+ `pytest` run in GitHub Actions. Keep host-only imports (`fastapi`, `graph.*`) inside
-`register()` so the suite needs only `requirements-dev.txt`.
+test suite + CI + requirements-dev + pyproject** so the repo is green from birth, and
+`ruff` + `pytest` run in GitHub Actions.
+
+The suite ships a **vendored testkit** (`tests/_plugin_testkit.py`, a verbatim copy of
+`graph/plugins/testkit.py`) so it depends on no running host. The testkit loads the plugin
+as a **package**, so you can unit-test the REAL engine modules — relative imports and all —
+not just `register()`:
+
+```python
+def test_engine(plugin):            # `plugin` = the loaded package (conftest fixture)
+    import importlib
+    engine = importlib.import_module(plugin.__name__ + ".engine")
+    assert engine.classify([...]) == ...
+```
+
+`install_host_stubs()` (run in the conftest) registers stand-ins for `graph.*` / `knowledge.*`
+so a module that imports the host loads with no host present — monkeypatch a seam to assert
+its behaviour. So you no longer have to extract logic into dependency-free modules just to
+test it; keeping host-only imports lazy is still good practice but no longer a hard
+requirement. In-repo (bundled) plugins import the same testkit directly:
+`from graph.plugins.testkit import load_plugin, install_host_stubs, FakeRegistry`.
 
 From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill --tests`
 scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`

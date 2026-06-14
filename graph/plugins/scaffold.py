@@ -109,63 +109,50 @@ output: "{{{{steps.do.output}}}}"
 # standalone-repo plugin is green from birth. Written verbatim unless noted.
 _CONFTEST_STUB = '''"""Test bootstrap — load the plugin host-free (no protoAgent running).
 
-Executing __init__.py is safe: the host-only imports (fastapi, graph.*) are lazy
-(inside register()), so the suite needs only requirements-dev.txt.
+Uses the vendored testkit (``_plugin_testkit.py`` — a verbatim copy of protoAgent's
+``graph/plugins/testkit.py``, dropped here so the suite has zero protoAgent dependency).
+It loads the plugin as a PACKAGE, so your tests can import and exercise the REAL sibling
+modules — relative imports and all — not just ``register()``:
+
+    def test_engine(plugin):
+        import importlib
+        engine = importlib.import_module(plugin.__name__ + ".engine")  # a deep module
+        assert engine.classify([...]) == ...
+
+``install_host_stubs()`` (run at import below) registers stand-ins for the host-only
+modules (``graph.*`` / ``knowledge.*``) so a plugin module that imports them loads with no
+host; monkeypatch a seam to assert its behaviour. To refresh the vendored copy after a
+protoAgent upgrade, re-run ``scaffold_plugin`` or recopy ``graph/plugins/testkit.py``.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so `import _plugin_testkit` resolves
+
+from _plugin_testkit import FakeRegistry, install_host_stubs, load_plugin  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ID = "{id}"
+
+install_host_stubs()  # before any plugin module imports the host
 
 
 @pytest.fixture
 def plugin():
-    spec = importlib.util.spec_from_file_location("plugin_under_test", ROOT / "__init__.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-class _Registry:
-    """A fake registry — records what register() contributes, with no host."""
-
-    def __init__(self):
-        self.config = {}
-        self.tools, self.routers, self.surfaces, self.subagents, self.skill_dirs = [], [], [], [], []
-
-    def register_tool(self, t):
-        self.tools.append(t)
-
-    def register_tools(self, ts):
-        self.tools.extend(ts)
-
-    def register_router(self, router, prefix=""):
-        self.routers.append(prefix)
-
-    def register_surface(self, start, stop=None, name=None):
-        self.surfaces.append(name)
-
-    def register_subagent(self, cfg):
-        self.subagents.append(cfg)
-
-    def register_skill_dir(self, path):
-        self.skill_dirs.append(path)
-
-    def emit(self, *a, **k):
-        pass
-
-    def on(self, *a, **k):
-        pass
+    """The plugin loaded as a package — ``register()`` runs and ``from <pkg> import x``
+    works, so you can unit-test deep engine modules, not just registration."""
+    return load_plugin(ROOT, PLUGIN_ID)
 
 
 @pytest.fixture
 def registry():
-    return _Registry()
+    """A fake registry that records what ``register()`` contributes (assert against it)."""
+    return FakeRegistry()
 '''
 
 # .format(id=, name=) — no other literal braces.
@@ -447,10 +434,16 @@ def scaffold_plugin(
 
 
 def _write_test_harness(target: Path, *, pid: str, id_us: str, name: str) -> None:
-    """Write the host-free test suite + CI + dev deps + pyproject (with_tests)."""
+    """Write the host-free test suite + CI + dev deps + pyproject (with_tests).
+
+    Vendors ``graph/plugins/testkit.py`` verbatim as ``tests/_plugin_testkit.py`` (single
+    source of truth — stdlib-only, so the standalone repo needs no protoAgent dependency),
+    and a conftest that uses it to load the plugin as a package."""
     tdir = target / "tests"
     tdir.mkdir()
-    (tdir / "conftest.py").write_text(_CONFTEST_STUB)
+    testkit_src = (Path(__file__).with_name("testkit.py")).read_text()
+    (tdir / "_plugin_testkit.py").write_text(testkit_src)
+    (tdir / "conftest.py").write_text(_CONFTEST_STUB.format(id=pid))
     (tdir / f"test_{id_us}.py").write_text(_TEST_STUB.format(id=pid, name=name))
     gh = target / ".github" / "workflows"
     gh.mkdir(parents=True)
