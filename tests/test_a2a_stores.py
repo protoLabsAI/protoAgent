@@ -26,6 +26,7 @@ from a2a_impl.stores import (
     make_sqlite_engine,
     reconcile_interrupted_tasks,
     sweep_expired_tasks,
+    sweep_orphaned_push_configs,
 )
 from a2a.server.tasks import DatabaseTaskStore
 
@@ -132,6 +133,34 @@ async def test_task_ttl_sweep_evicts_old_rows(tmp_path):
     assert await store.get("stale", ctx) is None
     assert await store.get("fresh", ctx) is not None
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_orphaned_push_config_sweep(tmp_path):
+    """sweep_orphaned_push_configs drops push configs whose task is gone (ADR 0051),
+    keeps configs for live tasks."""
+    from a2a.types import a2a_pb2
+
+    ctx = _ctx()
+    task_engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    task_store = DatabaseTaskStore(task_engine)
+    await task_store.initialize()
+    await task_store.save(a2a_pb2.Task(id="live", context_id="c"), ctx)
+
+    push_store, push_engine = await _fresh_push_store(str(tmp_path / "a2a-push.db"))
+    for tid in ("live", "gone"):
+        await push_store.set_info(
+            tid,
+            TaskPushNotificationConfig(task_id=tid, id="cfg", url="https://8.8.8.8/hook", token="t"),
+            ctx,
+        )
+
+    swept = await sweep_orphaned_push_configs(task_engine, push_engine)
+    assert swept == 1
+    assert await push_store.get_info("gone", ctx) == []
+    assert len(await push_store.get_info("live", ctx)) == 1
+    await task_engine.dispose()
+    await push_engine.dispose()
 
 
 # ── (a2) restart reconciliation: interrupted tasks fail, not linger (#486) ───────

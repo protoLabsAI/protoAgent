@@ -35,7 +35,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import delete, update
+from sqlalchemy import bindparam, delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -307,6 +307,43 @@ async def sweep_expired_tasks(
         return result.rowcount or 0
 
 
+async def sweep_orphaned_push_configs(
+    task_engine: AsyncEngine, push_engine: AsyncEngine
+) -> int:
+    """Delete push-notification configs whose task no longer exists (ADR 0051 Slice 3).
+
+    The SDK push-config store has no timestamp/TTL knob, so a registered webhook config
+    persists forever — even after its task is TTL-swept (``sweep_expired_tasks``). Tie the
+    config's lifetime to the task: read the live task ids, then drop push rows whose
+    ``task_id`` isn't among them. Task + push live in separate SQLite files, so this is a
+    two-step read-then-delete (no cross-DB join). Best-effort + SDK-table-tolerant: a
+    no-op (returns 0) if the push table is absent or renamed by an SDK upgrade.
+    Returns the rows deleted."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    tsm = async_sessionmaker(task_engine, expire_on_commit=False)
+    async with tsm() as s:
+        live = {r[0] for r in (await s.execute(select(TaskModel.id))).all()}
+
+    psm = async_sessionmaker(push_engine, expire_on_commit=False)
+    async with psm() as s:
+        try:
+            rows = (await s.execute(
+                text("SELECT DISTINCT task_id FROM push_notification_configs")
+            )).all()
+        except Exception:  # noqa: BLE001 — table absent/renamed (SDK change): no-op
+            return 0
+        orphans = [r[0] for r in rows if r[0] not in live]
+        if not orphans:
+            return 0
+        stmt = text(
+            "DELETE FROM push_notification_configs WHERE task_id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        res = await s.execute(stmt, {"ids": orphans})
+        await s.commit()
+        return res.rowcount or len(orphans)
+
+
 # Non-terminal states a restart leaves dead: a queued (``submitted``) or
 # mid-flight (``working``) task can never progress once its LangGraph runner is
 # gone. We deliberately do NOT touch ``input_required`` / ``auth_required`` —
@@ -392,3 +429,9 @@ async def initialize_a2a_stores(
             log.info("[a2a] swept %d expired task record(s) (24h TTL)", n)
     except Exception:
         log.exception("[a2a] task TTL sweep failed; continuing")
+    try:
+        p = await sweep_orphaned_push_configs(task_store.engine, push_store.engine)
+        if p:
+            log.info("[a2a] swept %d orphaned push-config(s) (ADR 0051)", p)
+    except Exception:
+        log.exception("[a2a] push-config sweep failed; continuing")

@@ -736,6 +736,7 @@ def _main():
     # running on an always-on agent (boot-only before — rows grew unbounded
     # between restarts).
     STATE.a2a_task_engine = task_store.engine
+    STATE.a2a_push_engine = push_config_store.engine  # for the orphan push-config sweep (ADR 0051)
     log.info("[a2a] durable stores ready (tasks=%s, push=%s)", task_db, push_db)
 
     async def _structured_finalizer(skill_id: str, final_text: str):

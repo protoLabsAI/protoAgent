@@ -299,6 +299,45 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     assert msg["metadata"]["origin"] == "scheduler"
 
 
+async def test_fire_publishes_scheduler_fired_event(tmp_path, monkeypatch):
+    """A dispatched job publishes `scheduler.fired` on the bus (ADR 0051)."""
+    events: list = []
+    s = LocalScheduler(
+        agent_name="gina-test", invoke_url="http://127.0.0.1:7870",
+        api_key="k", bearer_token="b", db_dir=tmp_path,
+        event_publish=lambda topic, data: events.append((topic, data)),
+    )
+    past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    s.add_job("nightly audit", past, job_id="firetest")
+
+    class _FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    class _FakeClient:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def post(self, *_a, **_kw):
+            return _FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    await s.start()
+    await asyncio.sleep(1.5)
+    await s.stop()
+
+    fired = [d for (t, d) in events if t == "scheduler.fired"]
+    assert fired and fired[0]["job_id"] == "firetest"
+    assert fired[0]["prompt"] == "nightly audit"
+
+
 @pytest.mark.asyncio
 async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):
     """A 5xx HTTP response from /a2a must NOT delete the job.

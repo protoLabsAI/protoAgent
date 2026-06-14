@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scheduler.fired` event + orphaned push-config sweep** (ADR 0051 Slice 3 follow-ups) —
+  a scheduled job dispatching now publishes `scheduler.fired` on the event bus (live
+  visibility into cron/one-shot fires). And push-notification configs whose task no longer
+  exists are now swept (at boot + on the periodic task-prune tick) — the SDK store has no
+  TTL, so stale webhook configs previously persisted forever; their lifetime is now tied to
+  the task.
 - **A2A alignment polish + realtime cost/goal events** (ADR 0051 Slice 3) — fixed a real
   bug: the **delegate A2A client now sends `A2A-Version: 1.0`** (a missing header made a
   strict 1.0 peer reject the call with `-32009`). The agent card now advertises a

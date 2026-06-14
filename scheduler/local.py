@@ -207,11 +207,15 @@ class LocalScheduler:
         api_key: str | None = None,
         bearer_token: str | None = None,
         db_dir: str | Path | None = None,
+        event_publish=None,
     ):
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
         self._api_key = api_key or ""
         self._bearer = bearer_token or ""
+        # (topic, data) -> None — the server's event bus, so a console sees a
+        # ``scheduler.fired`` event when a cron/one-shot job dispatches (ADR 0051). Optional.
+        self._publish = event_publish
         self.path = _resolve_db_path(db_dir, agent_name)
         self._task: asyncio.Task | None = None
         self._stopping = False
@@ -531,6 +535,18 @@ class LocalScheduler:
             headers["Authorization"] = f"Bearer {self._bearer}"
         if self._api_key:
             headers["X-API-Key"] = self._api_key
+
+        # Realtime: announce the dispatch on the bus (ADR 0051) so a console shows the
+        # scheduled job firing — before the POST, which blocks for the whole turn.
+        if self._publish is not None:
+            try:
+                self._publish("scheduler.fired", {
+                    "job_id": job.id,
+                    "schedule": job.schedule,
+                    "prompt": (job.prompt or "")[:200],
+                })
+            except Exception:  # noqa: BLE001 — the event is best-effort
+                log.exception("[scheduler] fired-event publish failed for %s", job.id)
 
         message_id = str(uuid.uuid4())
         body = {

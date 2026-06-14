@@ -683,6 +683,14 @@ async def _checkpoint_prune_loop() -> None:
                 swept = await sweep_expired_tasks(STATE.a2a_task_engine)
                 if swept:
                     log.info("[a2a-task-prune] removed %d expired task record(s) (24h TTL)", swept)
+                # Drop push-notification configs orphaned by the task sweep (ADR 0051).
+                if STATE.a2a_push_engine is not None:
+                    from a2a_impl.stores import sweep_orphaned_push_configs
+                    orphaned = await sweep_orphaned_push_configs(
+                        STATE.a2a_task_engine, STATE.a2a_push_engine
+                    )
+                    if orphaned:
+                        log.info("[a2a-task-prune] removed %d orphaned push-config(s)", orphaned)
             except Exception:
                 log.exception("[a2a-task-prune] sweep failed")
         # Tick at the checkpoint interval if set, else hourly (so telemetry pruning
@@ -1041,11 +1049,17 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         # break self-invocation auth.
         api_key_env = f"{AGENT_NAME_ENV.upper()}_API_KEY"
         api_key = os.environ.get(api_key_env, "").strip()
+        try:
+            from server import _event_bus
+            publish = _event_bus.publish
+        except Exception:  # noqa: BLE001
+            publish = None
         return LocalScheduler(
             agent_name=name,
             invoke_url=invoke_url,
             api_key=api_key,
             bearer_token=bearer,
+            event_publish=publish,  # scheduler.fired on the bus (ADR 0051)
         )
     except Exception as exc:
         log.warning(
