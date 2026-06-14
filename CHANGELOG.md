@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Renderable chat components over A2A** (ADR 0051 Slice 2) — the agent can render
+  structured data as a real inline widget instead of a markdown blob, via a new
+  `show_component(component, props)` tool. It rides a typed `component-v1` DataPart on the A2A
+  envelope (same contract as tool-call/HITL parts) and renders through a curated, data-only
+  registry — **table**, **key-value/status**, and **timeline** — safe without a sandbox
+  (free-form generated UI still uses the artifact iframe path). New widgets are a registry
+  entry, not new transport.
 - **Background jobs: realtime progress + stop/inspect controls** (ADR 0051) — a detached
   background subagent's tool-by-tool progress now streams to the console: the jobs dialog
   shows a live `⊷ web_search ✓ fetch_url …` feed per running job (a new executor progress

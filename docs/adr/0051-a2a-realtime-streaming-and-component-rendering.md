@@ -67,11 +67,20 @@ Expose the realtime stream of any turn through a small **executor progress/lifec
 
 ### Slice 2 — component rendering (generative-UI path A)
 
-A typed **`application/vnd.protolabs.component-v1+json`** DataPart `{component, props}` (e.g.
-`table`/`chart`/`timeline`/`status`), emitted over the A2A envelope like any other DataPart,
-decoded by a new `componentFromParts`, and rendered inline in chat by a **curated registry**
-of data-only widgets (no code execution → safe without a sandbox). Free-form generated UI
-stays on the ADR 0038 sandboxed-iframe path (the `artifact` plugin).
+Shipped. A typed **`application/vnd.protolabs.component-v1+json`** DataPart `{component, props}`,
+emitted over the A2A envelope like any other DataPart, decoded by `componentFromParts`, and
+rendered inline in chat by a **curated registry** of data-only widgets (no code execution →
+safe without a sandbox). Free-form generated UI stays on the ADR 0038 sandboxed-iframe path
+(the `artifact` plugin).
+
+The agent calls a **`show_component(component, props, title?)`** tool; its return carries the
+payload past the LangGraph stream behind a sentinel (`graph/components.py`), which
+`server/chat.py` lifts into a `("component", …)` frame on `on_tool_end` (stripping the
+sentinel from the tool card), and the executor emits as the DataPart — the same relay as the
+realtime hooks, reusing the `tool-call-v1`/`hitl-v1` decode+render pipeline. Widgets in the
+first registry: **`table`** (columns/rows), **`keyvalue`** (label/value items), **`timeline`**
+(steps with done/active/todo state). Chart was deliberately skipped (would add a charting
+dep); a new widget is a registry entry + a render fn, no new transport.
 
 ### Slice 3 — alignment polish
 
