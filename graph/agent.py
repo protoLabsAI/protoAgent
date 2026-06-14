@@ -741,6 +741,12 @@ def create_agent_graph(
         state_schema=ProtoAgentState,
     )
 
+    # Single source of truth for "what tools the model has". Stamp the final
+    # assembled set on the compiled graph so the Tools tab (/api/tools) and any
+    # other consumer read exactly what's BOUND, instead of re-deriving the list
+    # and drifting from it (set_goal advertised-but-unbound bd-2aa; task /
+    # filesystem / execute_code under-reported bd-67j).
+    agent.bound_tools = list(all_tools)
     return agent
 
 

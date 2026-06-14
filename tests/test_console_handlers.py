@@ -52,6 +52,9 @@ def test_chat_commands_lists_workflows_and_subagents(monkeypatch):
     class _Reg:
         def list(self):
             return [{"name": "deep-research", "description": "d", "inputs": [{"name": "topic", "required": True}]}]
+
+        def get(self, name):
+            return next((w for w in self.list() if w["name"] == name), None)
     monkeypatch.setattr(rs.STATE, "workflow_registry", _Reg(), raising=False)
     out = ch._operator_chat_commands()
     names = [c["name"] for c in out["commands"]]

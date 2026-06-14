@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The Tools tab shows exactly what the agent can call.** `/api/tools` re-derived
+  its inventory from `get_all_tools` (the shared lead+subagent base) + plugins +
+  mcp, a *separate* assembly from what `create_agent_graph` actually binds — so it
+  drifted both ways: it advertised `set_goal` while the model couldn't call it
+  (bd-2aa) and it hid `task`/`task_batch`, the filesystem tools, `execute_code`,
+  and the deferred search tool that the model *can* call (bd-67j). Now
+  `create_agent_graph` stamps its final tool set on the compiled graph and the
+  Tools tab reads that — one source of truth, no drift in either direction.
+- **Slash-command palette can't drift from the dispatcher.** The chat dispatcher
+  and the `/api/chat/commands` palette each encoded the `workflow > subagent >
+  skill` precedence (and the shadowed-skill rule) separately. Both now resolve
+  through one shared `_slash_kind` / `resolve_slash_commands` in `server.chat`, so
+  what the palette lists always matches what actually runs.
 - **Background subagent results are delivered back to the chat that started them.**
   A `task(run_in_background=True)` (ADR 0050) captured its `origin_session` from
   the tracing contextvar, which reads empty inside a tool body — so the job ran

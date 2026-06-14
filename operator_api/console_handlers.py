@@ -33,10 +33,6 @@ from server import AGENT_NAME_ENV, _event_bus, _resolve_operator_project_root
 
 log = logging.getLogger("protoagent.server")
 
-# Slash tokens we've already warned are shadowed (bd-2zh) — warn once per token,
-# not on every /api/chat/commands request.
-_warned_shadowed_skills: set[str] = set()
-
 
 def _operator_allowed_dirs() -> list[str]:
     # The repo root is always operable (it's the default project);
@@ -134,23 +130,41 @@ def _tool_category(name: str, source: str) -> str:
 
 def _operator_tools_list():
     """Live tool inventory for the Tools tab — name, one-line description, source
-    (core/plugin/mcp), and a subsystem category for grouping. Best-effort; degrades
-    to an empty list pre-setup."""
-    cfg = STATE.graph_config
+    (core/plugin/mcp), and a subsystem category for grouping.
+
+    Reads the tools ACTUALLY BOUND to the compiled graph (``graph.bound_tools``,
+    stamped by ``create_agent_graph``) so the Tools tab can't drift from what the
+    model can really call — it covers task/task_batch, filesystem, execute_code,
+    and the deferred search tool, not just the shared ``get_all_tools`` base
+    (bd-2aa / bd-67j). Falls back to re-deriving the base pre-setup, before the
+    graph exists."""
     out: list[dict] = []
     seen: set[str] = set()
+    # Source is derived by cross-referencing the plugin/mcp tool name sets;
+    # everything else bound to the graph is core.
+    plugin_names = {getattr(t, "name", None) for t in (getattr(STATE, "plugin_tools", None) or [])}
+    mcp_names = {getattr(t, "name", None) for t in (getattr(STATE, "mcp_tools", None) or [])}
 
-    def add(tool, source):
+    def add(tool, source=None):
         name = getattr(tool, "name", None)
         if not name or name in seen:
             return
         seen.add(name)
+        src = source or ("plugin" if name in plugin_names else "mcp" if name in mcp_names else "core")
         desc = (getattr(tool, "description", "") or "").strip().split("\n")[0]
         out.append({
-            "name": name, "description": desc, "source": source,
-            "category": _tool_category(name, source),
+            "name": name, "description": desc, "source": src,
+            "category": _tool_category(name, src),
         })
 
+    bound = getattr(STATE.graph, "bound_tools", None)
+    if bound is not None:
+        for t in bound:
+            add(t)
+        return {"tools": out, "count": len(out)}
+
+    # Pre-setup fallback (no compiled graph yet): re-derive the shared base.
+    cfg = STATE.graph_config
     try:
         from tools.lg_tools import get_all_tools
 
@@ -394,81 +408,19 @@ async def _operator_inbox_deliver(item_id: int) -> dict:
 def _operator_chat_commands() -> dict:
     """Slash commands the chat understands — drives the composer autocomplete.
 
-    Currently just `/goal` (when goal mode is loaded). Register a new
-    server-handled control command here and the console picks it up.
-    """
+    The workflow/subagent/skill inventory + precedence comes from the SAME
+    resolver the chat dispatcher uses (``server.chat.resolve_slash_commands``), so
+    the palette can't drift from what actually runs. ``/goal`` (a server-handled
+    control command) is surfaced here when goal mode is loaded."""
+    from server.chat import resolve_slash_commands
+
     commands = []
     if STATE.goal_controller is not None:
         commands.append({
             "name": "goal",
+            "kind": "control",
             "description": "Set, check, or clear a self-driving goal for this chat session.",
             "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
         })
-    # Each registered workflow is runnable as /<name> (ADR 0002).
-    wf_names: set[str] = set()
-    if STATE.workflow_registry is not None:
-        for wf in STATE.workflow_registry.list():
-            wf_names.add(wf["name"])
-            declared = wf.get("inputs", []) or []
-            req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
-            opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))
-            commands.append({
-                "name": wf["name"],
-                "description": wf.get("description") or f"Run the {wf['name']} workflow.",
-                "usage": f"/{wf['name']}{req}{opt}",
-            })
-    # Each registered subagent is runnable as /<name> <prompt> (ADR 0020),
-    # unless a workflow already claims the name (workflow wins in dispatch).
-    taken: set[str] = set(wf_names)
-    try:
-        from graph.subagents.config import SUBAGENT_REGISTRY
-    except Exception:
-        SUBAGENT_REGISTRY = {}
-    for name, cfg in SUBAGENT_REGISTRY.items():
-        if name in wf_names:
-            continue
-        taken.add(name)
-        commands.append({
-            "name": name,
-            "description": getattr(cfg, "description", "") or f"Run the {name} subagent.",
-            "usage": f"/{name} <prompt>",
-        })
-    # User-facing skills are runnable as /<slash> [args] (ADR 0052). A skill
-    # whose token collides with a workflow/subagent name is skipped (those win
-    # in dispatch); the slash token is the explicit `slash:` or a slug of the name.
-    skills_index = STATE.skills_index
-    reader = getattr(skills_index, "user_facing_skills", None) if skills_index else None
-    if reader is not None:
-        try:
-            ufs = reader()
-        except Exception:
-            ufs = []
-        for skill in ufs:
-            token = (skill.get("slash") or "").strip().lower()
-            if not token:
-                import re
-                token = re.sub(r"[^a-z0-9]+", "-", (skill.get("name") or "").lower()).strip("-")
-            if not token or token == "goal":
-                continue
-            if token in taken:
-                # A workflow/subagent of the same token wins dispatch, so this
-                # user-facing skill is unreachable (bd-2zh — web-research's
-                # `slash: research` was shadowed by the deep-research workflow).
-                # Warn once per token so a shipped-but-shadowed skill is visible
-                # instead of silently dropped; the fix is to rename its `slash:`.
-                if token not in _warned_shadowed_skills:
-                    _warned_shadowed_skills.add(token)
-                    log.warning(
-                        "[skills] user-facing skill %r is unreachable: its slash token /%s "
-                        "is already claimed by a workflow/subagent (which wins dispatch). "
-                        "Rename the skill's `slash:` to expose it.",
-                        skill.get("name") or token, token,
-                    )
-                continue
-            taken.add(token)
-            commands.append({
-                "name": token,
-                "description": skill.get("description") or f"Run the {token} skill.",
-                "usage": f"/{token} [input]",
-            })
+    commands.extend(resolve_slash_commands())
     return {"commands": commands}

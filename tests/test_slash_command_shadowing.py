@@ -29,6 +29,9 @@ def test_shadowed_user_facing_skill_is_skipped_and_warned(monkeypatch, caplog):
         def list(self):
             return [{"name": "research", "description": "deep research", "inputs": []}]
 
+        def get(self, name):
+            return next((w for w in self.list() if w["name"] == name), None)
+
     class _SkillsIdx:
         def user_facing_skills(self):
             return [
@@ -36,10 +39,14 @@ def test_shadowed_user_facing_skill_is_skipped_and_warned(monkeypatch, caplog):
                 {"name": "gather", "slash": "gather", "description": "reachable"},
             ]
 
+    import importlib
+
+    sc = importlib.import_module("server.chat")  # the module (server.chat re-exports the chat fn)
+
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "workflow_registry", _WFReg(), raising=False)
     monkeypatch.setattr(rs.STATE, "skills_index", _SkillsIdx(), raising=False)
-    ch._warned_shadowed_skills.clear()
+    sc._warned_shadowed_skills.clear()
 
     with caplog.at_level("WARNING"):
         cmds = ch._operator_chat_commands()["commands"]
