@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Paste images + large text as attachments** — pasting an image (a screenshot, even when
+  the browser exposes it only via clipboard `items`) now adds it as an attachment, and
+  pasting text over a threshold (~1500 chars or ~20 lines) becomes a removable attachment
+  pill — routed through the same tiering as a dropped file (inline / RAG-indexed) — instead
+  of flooding the input field. Short pastes still go straight into the field. Drag-drop uses
+  the same image-aware collection.
 - **File-only chat send** — you can now send a message with an attachment and no typed
   text (attach an image or doc and hit send with an empty field — e.g. "describe this").
   The composer's send gate enables on text **or** a ready attachment, matching the DS
