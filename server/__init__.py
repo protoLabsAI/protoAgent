@@ -58,33 +58,18 @@ if TYPE_CHECKING:
 # Root-level log config. Python's default is WARNING, which silently filters
 # every `logger.info(...)` call — including "webhook delivered" lines from
 # the A2A push sender, making the A2A/webhook path invisible in docker logs.
-# LOG_LEVEL env var lets operators tune without a code change.
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+# LOG_LEVEL tunes verbosity; LOG_FORMAT=json swaps the human format for JSON
+# lines an aggregator can parse without a grok pattern (both keep the historic
+# stderr stream). See observability/logging_config.py.
+from observability.logging_config import configure_logging
+
+configure_logging()
 log = logging.getLogger("protoagent.server")
 
 
 # ---------------------------------------------------------------------------
 # Agent setup
 # ---------------------------------------------------------------------------
-
-                         # mounted ONCE at init; not hot-reloaded.
-                         # — started in the startup hook, stopped on shutdown.
-                       # Read by the autostart installer so the LaunchAgent reboots
-                       # on the same port the operator launched with, not the default.
-                       # Constructed at init, started on FastAPI startup, stopped
-                       # on shutdown. Lifecycle is hooked in _main() so the
-                       # polling coroutine doesn't leak on server reload.
-                       # lifecycle as STATE.scheduler; keeps the prompt cache warm.
-                         # control messages and runs the goal-completion loop.
-                         # A config reload's heavy graph compile is offloaded to a
-                         # worker thread so it no longer freezes the loop; the
-                         # scheduler/Discord restart that follows still has to run
-                         # ON the loop, so the worker thread schedules it here via
-                         # run_coroutine_threadsafe instead of get_running_loop()
-                         # (which would silently no-op in the thread — the trap).
 
 _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
                          # lifetime singleton; producers publish, /api/events

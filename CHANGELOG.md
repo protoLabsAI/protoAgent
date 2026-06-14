@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Opt-in JSON logging (`LOG_FORMAT=json`)** — set it to emit one JSON object
+  per log line (`ts`/`level`/`logger`/`message`, plus the exception traceback and
+  any `extra=` fields) so aggregators (Loki, CloudWatch, Datadog) can index logs
+  without a grok pattern. Default keeps the human-readable stdlib format; level
+  (`LOG_LEVEL`) and the stderr stream are unchanged either way. (#876)
+- **Deploy guide: backup/restore + shutdown semantics.** `docs/guides/deploy.md`
+  gains an Operations section — how to back up the data dir without corrupting the
+  WAL-mode SQLite stores (cold stop-and-tar or hot `.backup`), how to restore, and
+  what `SIGTERM` does to an in-flight turn (cancelled-but-reconciled; 5s graceful
+  drain). (#876)
+
 ### Fixed
 - **Background-agent notifications render legibly again.** After the DS
   message-thread adoption, `role:"system"` chat messages — which in practice are
