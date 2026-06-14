@@ -93,15 +93,26 @@ def test_disabled_still_delivers_context_but_no_cache():
 
 
 def test_config_wires_middleware():
+    from langchain.agents.middleware import AgentMiddleware
+
     from graph.config import LangGraphConfig
     from graph.agent import _build_middleware
     mw = _build_middleware(LangGraphConfig(), knowledge_store=None)
     names = [m.__class__.__name__ for m in mw]
     # ToolCallRepairMiddleware runs first — heal a dangling-tool_call history before
-    # anything else touches it; PromptCacheMiddleware stays the outermost *model*
-    # wrapper (repair only has before_model hooks, so the cache breakpoint is intact).
+    # anything else touches it. WaitYieldMiddleware sits alongside it (both are
+    # before_model-only gates that never wrap the model call).
     assert names[0] == "ToolCallRepairMiddleware"
-    assert names[1] == "PromptCacheMiddleware"
+    assert "WaitYieldMiddleware" in names
+    # PromptCacheMiddleware stays the outermost *model* wrapper — the first
+    # middleware that actually wraps the model call — so the cache breakpoint lands
+    # on the stable system prefix. (before_model-only gates ahead of it don't wrap.)
+    wrappers = [
+        m.__class__.__name__
+        for m in mw
+        if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call
+    ]
+    assert wrappers and wrappers[0] == "PromptCacheMiddleware"
 
 
 @pytest.mark.asyncio

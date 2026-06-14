@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`wait` tool — yield instead of busy-polling** (ADR 0053). When the agent is
+  waiting for something to finish (a ship to arrive, a build, a cooldown, an ETA a
+  tool reported), it can call `wait(seconds, then=…)` to **end the turn** and be
+  re-triggered later by the scheduler with `then` as its instruction — instead of
+  calling a status tool in a loop, which burned the entire 200-step recursion
+  budget in one turn (the cause of the `GRAPH_RECURSION_LIMIT` crash some
+  long-running tasks hit). A new `WaitYieldMiddleware` makes the turn end
+  deterministically once `wait` runs; it's a no-op on every turn that didn't call
+  `wait`. Lead-agent-only (needs the scheduler). Resumes run in the durable
+  Activity thread, so long-horizon "do X, wait, do Y" work proceeds without
+  spinning.
 - **Paste images + large text as attachments** — pasting an image (a screenshot, even when
   the browser exposes it only via clipboard `items`) now adds it as an attachment, and
   pasting text over a threshold (~1500 chars or ~20 lines) becomes a removable attachment

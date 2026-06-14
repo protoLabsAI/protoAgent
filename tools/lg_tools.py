@@ -41,7 +41,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import operator as _op
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.tools import tool
@@ -657,7 +657,46 @@ def _build_scheduler_tools(scheduler) -> list:
             return f"Error: scheduler cancel_job failed: {exc}"
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
-    return [schedule_task, list_schedules, cancel_schedule]
+    @tool
+    async def wait(seconds: int, then: str) -> str:
+        """Pause and resume LATER instead of polling. Use this whenever you are
+        waiting for something to finish — a ship to arrive, a build/deploy, a
+        cooldown, a countdown a status tool reported ("arriving in 37s"). Do NOT
+        call a status tool over and over to wait it out; that burns the entire
+        turn in one go.
+
+        Calling ``wait`` ENDS your turn immediately and schedules a one-shot
+        wake-up ``seconds`` from now. When it fires you are re-invoked with
+        ``then`` as your instruction (in your Activity thread), so you act
+        exactly once — when the thing is actually ready. This is the right way to
+        run long-horizon work without spinning.
+
+        Args:
+            seconds: how long to wait, in seconds (e.g. 40). Use the ETA a status
+                tool gave you and round up a little. Minimum 1.
+            then: the self-contained instruction to run on resume — e.g. "Dock
+                NOVAHAUL-5 at X1-UC87-K93, sell the ore, then accept the next
+                contract." This is your only context when you wake, so be
+                specific about what to do and which entities are involved.
+
+        Returns a confirmation with the resume time. For an absolute time or a
+        recurring schedule use ``schedule_task`` instead — ``wait`` is for
+        "yield for a bit, then pick this back up".
+        """
+        if not (then or "").strip():
+            return "Error: `then` is required — describe what to do on resume."
+        secs = max(1, int(seconds))
+        when = (datetime.now(UTC) + timedelta(seconds=secs)).isoformat()
+        try:
+            job = await asyncio.to_thread(scheduler.add_job, then, when)
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: couldn't schedule the wake-up: {exc}"
+        return (
+            f"Yielding for {secs}s — turn ending now. You'll be re-invoked at "
+            f"{job.next_fire or when} to: {then}"
+        )
+
+    return [schedule_task, list_schedules, cancel_schedule, wait]
 
 
 # ── registry ─────────────────────────────────────────────────────────────────
