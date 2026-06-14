@@ -12,6 +12,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
+
 from background.manager import BackgroundManager, _build_fired_prompt
 from background.store import BackgroundStore
 
@@ -467,3 +471,57 @@ class TestDrainIntoChat:
         body = _drain_background_messages("sess-Y")[0].content
         assert "truncated to" in body
         assert len(body) < _BG_RESULT_CAP + 2000
+
+
+# ── the `task` tool captures the spawning session (bd-3v0) ────────────────────
+# A chat-originated `task(run_in_background=True)` must stamp the turn's
+# session_id as origin_session, or the completion can never drain back to the
+# spawning chat (server.chat._drain_background_messages matches origin_session).
+# Regression for the contextvar-empty-in-tool-body class — origin_session was
+# read from tracing.current_session_id(), which is empty in a tool body; it now
+# comes from injected graph state. Drives a REAL graph so a monkeypatch can't
+# mask it.
+
+class _ToolFake(GenericFakeChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+class _RecordingBG:
+    def __init__(self):
+        self.seen_origin = "__unset__"
+
+    async def spawn(self, *, origin_session, subagent_type, description, prompt):
+        self.seen_origin = origin_session
+        return "bg-test-1"
+
+
+@pytest.mark.asyncio
+async def test_background_task_stamps_the_turn_session_as_origin(monkeypatch):
+    from unittest.mock import patch
+
+    from langchain_core.messages import HumanMessage
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from graph.config import LangGraphConfig
+
+    task_call = AIMessage(
+        content="",
+        tool_calls=[{"name": "task", "args": {
+            "description": "deep dive", "prompt": "go research",
+            "subagent_type": "researcher", "run_in_background": True},
+            "id": "c1", "type": "tool_call"}],
+    )
+    fake = _ToolFake(messages=iter([task_call, AIMessage(content="started, carrying on")]))
+    bg = _RecordingBG()
+    with patch("graph.agent.create_llm", lambda *a, **k: fake):
+        from graph.agent import create_agent_graph
+        graph = create_agent_graph(
+            LangGraphConfig(), include_subagents=True, background_mgr=bg,
+            checkpointer=MemorySaver(),
+        )
+    await graph.ainvoke(
+        {"messages": [HumanMessage("kick off background research")], "session_id": "sess-BG"},
+        config={"configurable": {"thread_id": "t1"}},
+    )
+    assert bg.seen_origin == "sess-BG"
