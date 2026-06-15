@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-06-15
+
 ### Added
 - **Knowledge search returns the RRF relevance score.** `/api/knowledge/search`
   results (on a hybrid store) now carry a `score` — the RRF fused relevance used
