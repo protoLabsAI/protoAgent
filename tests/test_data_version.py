@@ -7,15 +7,12 @@ in server.agent_init.
 from __future__ import annotations
 
 import json
-import logging
-from pathlib import Path
 
 from infra import paths
 
 
 def _mock_data_home(tmp_path):
     """Return a monkeypatch callable that makes data_home() return tmp_path."""
-    real = paths.data_home
 
     def _mock():
         return tmp_path
