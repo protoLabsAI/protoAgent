@@ -135,3 +135,29 @@ async def evict_client(spec: dict) -> bool:
     except Exception:  # noqa: BLE001 — teardown is best-effort
         log.warning("[coding_agent/%s] close during evict failed", spec.get("name"), exc_info=True)
     return True
+
+
+async def forget_session(spec: dict) -> bool:
+    """Forget the persisted ACP session for ``spec`` — evict the live client AND
+    delete its saved session id — so the NEXT dispatch starts a fresh ``session/new``
+    instead of ``session/load``-resuming the old thread.
+
+    The persisted session (``#970``) lets a dispatch *reattach* a prior thread,
+    which is right when the same ``workdir`` keeps its contents across calls. But a
+    caller that **recreates the workdir fresh per attempt** (the project_board loop's
+    disposable git worktree) wants the opposite: a resumed thread would carry memory
+    of a diff the wiped tree no longer has, so the coder thinks it's already done
+    (→ no diff) or edits against stale assumptions. Calling this first keeps the
+    coder's memory in step with the (empty) tree. Returns True if anything was
+    cleared; idempotent.
+    """
+    evicted = await evict_client(spec)
+    removed = False
+    try:
+        _session_id_path(spec).unlink()
+        removed = True
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.warning("[coding_agent/%s] could not delete persisted session", spec.get("name"), exc_info=True)
+    return evicted or removed

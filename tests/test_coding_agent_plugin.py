@@ -359,6 +359,25 @@ async def test_session_new_persists_id_for_reattach(fake_agent, tmp_path):
     assert data["cwd"] == str(tmp_path)
 
 
+async def test_forget_session_deletes_persisted_id(tmp_path, monkeypatch):
+    """forget_session deletes the persisted session-id file (and evicts the client)
+    so the next dispatch starts a fresh session/new instead of session/load-resuming
+    the old thread — fresh-both for callers that recreate the workdir per attempt."""
+    import plugins.coding_agent as ca
+
+    sess = tmp_path / "sess.json"
+    sess.write_text('{"sessionId": "s1"}', encoding="utf-8")
+    monkeypatch.setattr(ca, "_session_id_path", lambda spec: sess)
+    spec = {
+        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": str(tmp_path),
+        "env": None, "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+    }
+    assert await ca.forget_session(spec) is True
+    assert not sess.exists()
+    # idempotent: nothing left to clear → False
+    assert await ca.forget_session(spec) is False
+
+
 async def test_persisted_id_ignored_when_agent_lacks_loadsession(fake_agent, tmp_path):
     """A persisted id must NOT trigger session/load if the agent doesn't advertise
     loadSession — the client falls back to a fresh session/new and overwrites it."""
