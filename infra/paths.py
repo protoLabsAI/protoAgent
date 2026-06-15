@@ -158,6 +158,60 @@ def unscoped_warning() -> str | None:
     )
 
 
+# ── data-dir version marker (migration anchor) ──────────────────────────────
+
+DATA_VERSION: int = 1
+
+
+def data_version() -> int:
+    """Read ``.data-version`` from ``data_home()``, return the ``data_version`` int,
+    or 0 if absent/malformed. Best-effort (never raises)."""
+    import json
+
+    try:
+        f = data_home() / ".data-version"
+        if f.exists():
+            return json.loads(f.read_text()).get("data_version", 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def stamp_data_version(version: int | None = None) -> int:
+    """Write ``.data-version`` with ``atomic_write()``. Returns the version written.
+    Best-effort."""
+    import json
+
+    v = version if version is not None else DATA_VERSION
+    try:
+        f = data_home() / ".data-version"
+        atomic_write(f, json.dumps({"data_version": v}))
+        return v
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def check_data_version() -> str | None:
+    """Compare on-disk vs ``DATA_VERSION``; stamp if absent/older; return a warning
+    string if on-disk is newer; else None. Best-effort."""
+    try:
+        on_disk = data_version()
+        if on_disk == 0:
+            stamp_data_version(DATA_VERSION)
+            return None
+        if on_disk < DATA_VERSION:
+            stamp_data_version(DATA_VERSION)
+            return None
+        if on_disk > DATA_VERSION:
+            return (
+                f"data-dir version mismatch: on-disk v{on_disk} > running v{DATA_VERSION}; "
+                f"downgrade is unsupported"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def scope_leaf(path: str | Path) -> Path:
     """Insert the instance id as the parent dir of ``path``'s leaf when set.
 

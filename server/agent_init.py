@@ -89,6 +89,12 @@ def _init_langgraph_agent(headless_setup: bool = False):
     if _unscoped:
         log.warning("[instance] %s", _unscoped)
 
+    # Data-dir version check (migration anchor): stamp or warn before any store opens.
+    from infra.paths import check_data_version
+    _dv_warn = check_data_version()
+    if _dv_warn:
+        log.warning("[data-version] %s", _dv_warn)
+
     # Seed the untracked live config from the .example template on first run.
     # CONFIG_YAML_PATH honors PROTOAGENT_CONFIG_DIR (the desktop sidecar points
     # it at per-user app-data), so load through it rather than a fixed path.
