@@ -64,6 +64,7 @@ import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } fro
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { BackgroundWatch } from "./BackgroundWatch";
+import { ChatResumeWatch } from "./ChatResumeWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
 import { AuthGate } from "./AuthGate";
@@ -661,6 +662,9 @@ export function App() {
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}
       <BackgroundWatch />
+      {/* wait/scheduled resumes (ADR 0053, bd-k02): a server-fired resume turn lands in
+          the chat thread; surface it live in the open tab instead of on next interaction. */}
+      <ChatResumeWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps
