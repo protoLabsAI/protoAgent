@@ -331,12 +331,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         ordered = ordered[:k]
         results: list[dict] = []
         for cid in ordered:
-            if cid in by_id:
-                results.append(by_id[cid])
-            else:
-                hydrated = self._hydrate_chunk(cid)
-                if hydrated is not None:
-                    results.append(hydrated)
+            item = by_id.get(cid) or self._hydrate_chunk(cid)
+            if item is not None:
+                item["score"] = round(scores[cid], 6)  # RRF fused relevance (#1043)
+                results.append(item)
         return results
 
     def _hydrate_chunk(self, chunk_id: int) -> dict | None:

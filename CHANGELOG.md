@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Knowledge search returns the RRF relevance score.** `/api/knowledge/search`
+  results (on a hybrid store) now carry a `score` — the RRF fused relevance used
+  to rank them — so consumers can show or threshold relevance instead of getting
+  bare ordered rows. Null on the plain-FTS store / `list_chunks` (unranked). (#1043)
+
 ### Fixed
 - **Inbox: a fired `now` item is now marked delivered.** A now-priority inbox
   item (e.g. an ADR 0050 background-completion notification) fires an Activity

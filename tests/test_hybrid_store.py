@@ -48,6 +48,17 @@ def test_hybrid_returns_relevant_chunk(tmp_path):
     assert any("calculator" in r["content"] for r in results)
 
 
+def test_hybrid_results_carry_an_rrf_score(tmp_path):
+    # #1043: a hybrid result exposes its RRF fused score, descending by rank.
+    store = HybridKnowledgeStore(_db(tmp_path), embed_fn=_bow_embed)
+    store.add_chunk("use the calculator for math", domain="general")
+    store.add_chunk("tomorrow's weather forecast", domain="general")
+    results = store.search("math calculator", k=2)
+    scores = [r.get("score") for r in results]
+    assert all(isinstance(s, float) for s in scores)  # every hit scored
+    assert scores == sorted(scores, reverse=True)      # ranked high→low
+
+
 def test_vector_only_hit_is_hydrated(tmp_path):
     """A chunk FTS5 can't match (no shared tokens) still surfaces via the
     vector ranking, and is hydrated into a full result dict."""
