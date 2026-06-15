@@ -41,7 +41,10 @@ def _operator_allowed_dirs() -> list[str]:
     roots = [_resolve_operator_project_root()]
     if STATE.graph_config is not None:
         roots.extend(getattr(STATE.graph_config, "operator_allowed_dirs", []) or [])
-    return roots
+    # Dedup (first-seen wins) — the project root is now commonly folded
+    # into operator_allowed_dirs by the setup wizard, so duplicates are
+    # frequent (bd-a7f).
+    return list(dict.fromkeys(roots))
 
 
 def _operator_runtime_status():

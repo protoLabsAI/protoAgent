@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import server
 from graph.config import LangGraphConfig
+from operator_api.console_handlers import _operator_allowed_dirs
 
 
 def test_operator_project_dir_loads_from_dict():
@@ -49,3 +50,48 @@ def test_resolver_blank_config_uses_default(monkeypatch):
     import os
 
     assert os.path.isdir(server._resolve_operator_project_root())
+
+
+def test_allowed_dirs_deduplicates_project_root(tmp_path, monkeypatch):
+    """bd-a7f: project root in operator_allowed_dirs should appear only once."""
+    monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    project = str(tmp_path.resolve())
+    monkeypatch.setattr(
+        server.STATE, "graph_config",
+        SimpleNamespace(
+            operator_project_dir=project,
+            operator_allowed_dirs=[project, "/other/dir"],
+        ),
+    )
+    dirs = _operator_allowed_dirs()
+    assert dirs == [project, "/other/dir"]
+
+
+def test_allowed_dirs_preserves_order_on_dedup(tmp_path, monkeypatch):
+    """bd-a7f: first-seen order is preserved when deduping."""
+    monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    project = str(tmp_path.resolve())
+    monkeypatch.setattr(
+        server.STATE, "graph_config",
+        SimpleNamespace(
+            operator_project_dir=project,
+            operator_allowed_dirs=["/alpha", project, "/beta", project],
+        ),
+    )
+    dirs = _operator_allowed_dirs()
+    assert dirs == [project, "/alpha", "/beta"]
+
+
+def test_allowed_dirs_unchanged_without_duplicates(tmp_path, monkeypatch):
+    """bd-a7f: no-duplicate lists pass through unchanged."""
+    monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    project = str(tmp_path.resolve())
+    monkeypatch.setattr(
+        server.STATE, "graph_config",
+        SimpleNamespace(
+            operator_project_dir=project,
+            operator_allowed_dirs=["/alpha", "/beta"],
+        ),
+    )
+    dirs = _operator_allowed_dirs()
+    assert dirs == [project, "/alpha", "/beta"]
