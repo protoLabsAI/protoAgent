@@ -1,5 +1,33 @@
 [
   {
+    "version": "v0.41.0",
+    "date": "2026-06-15",
+    "changes": [
+      "Knowledge search returns the RRF relevance score.",
+      "wait resumes now appear live in the chat tab.",
+      "Inbox: a fired now item is now marked delivered.",
+      "The fallback-models setting picks from the gateway list.",
+      "Scheduler startup catch-up no longer logs scary tracebacks.",
+      "The scheduler retries the jobs.db owner-lock instead of giving up.",
+      "**set_goal rejects an unknown verifier instead of creating an unsatisfiable",
+      "Settings model fields offer the gateway's model list.",
+      "The settings schema is cached client-side.",
+      "Per-tab model selection.",
+      "One-call goal-driven recurring loop (graph.sdk.start_goal_loop / stop_goal_loop).",
+      "**Plugin telemetry + agent decision-log kit (graph/telemetry.py, `from graph.sdk import",
+      "**Runtime knobs + presets control surface (graph/knobs.py, `from graph.sdk import Knobs,",
+      "Host-free plugin test harness (graph/plugins/testkit.py).",
+      "Supervised background-task helper (graph/supervisor.py, from graph.sdk import supervise).",
+      "The Tools tab shows exactly what the agent can call.",
+      "Slash-command palette can't drift from the dispatcher.",
+      "Background subagent results are delivered back to the chat that started them.",
+      "Non-streaming chat no longer returns a silent empty 200.",
+      "First-party web-research skill is reachable again.",
+      "set_goal is now actually bound to the agent.",
+      "wait's same-session resume now works."
+    ]
+  },
+  {
     "version": "v0.40.0",
     "date": "2026-06-14",
     "changes": [
