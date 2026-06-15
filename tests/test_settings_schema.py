@@ -28,6 +28,11 @@ def test_schema_groups_and_values():
     # The model select is populated from the probed options.
     model = next(f for f in fields if f["key"] == "model.name")
     assert model["type"] == "select" and model["options"] == ["a", "b"]
+    # The free-text model fields ALSO carry the gateway list (as datalist
+    # suggestions) — they stay `string` (blank/any alias allowed), not `select`.
+    for key in ("routing.aux_model", "knowledge.transcribe_model"):
+        f = next(f for f in fields if f["key"] == key)
+        assert f["type"] == "string" and f["options"] == ["a", "b"]
 
 
 def test_groups_carry_category_in_taxonomy_order():

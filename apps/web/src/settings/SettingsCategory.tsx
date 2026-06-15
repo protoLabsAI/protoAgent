@@ -506,6 +506,32 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
       />
     );
   }
+  // A free-text string field that carries gateway-sourced options (e.g.
+  // routing.aux_model, knowledge.transcribe_model) renders as a combobox: type
+  // any alias OR pick from the gateway's models. Unlike `select`, blank/arbitrary
+  // values stay valid (these fields aren't membership-checked), so a datalist of
+  // suggestions is the right control.
+  if (field.options.length) {
+    const listId = `${id}-models`;
+    return (
+      <>
+        <input
+          id={id}
+          className="setting-input"
+          type="text"
+          list={listId}
+          placeholder="type or pick a model"
+          value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <datalist id={listId}>
+          {field.options.map((opt) => (
+            <option key={opt} value={opt} />
+          ))}
+        </datalist>
+      </>
+    );
+  }
   return (
     <Input
       id={id}

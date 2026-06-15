@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Settings model fields offer the gateway's model list.** The auxiliary model
+  (`routing.aux_model`) and transcription model (`knowledge.transcribe_model`)
+  were free-text boxes; they now render as comboboxes backed by the gateway's
+  live model list (a datalist of suggestions), matching the primary-model picker —
+  while staying free-text so a blank value or an alias the gateway doesn't list
+  still works. (`model.name` and `knowledge.embed_model` already used the list.)
+
+### Changed
+- **The settings schema is cached client-side.** `GET /api/settings/schema` does a
+  gateway round-trip server-side (it embeds the live model list for the pickers)
+  and is read by both the Settings surface and every chat tab's composer model
+  picker — so it now has a 5-minute React Query `staleTime` instead of refetching
+  (and re-hitting the gateway) on every mount/focus. A settings save still
+  invalidates it, so values stay fresh on change.
 - **Per-tab model selection.** Each chat tab can now talk to its own model,
   overriding the globally configured one. The composer's model dropdown is now a
   per-tab control (sourced from the gateway's live model list) — "Default" uses
