@@ -335,7 +335,17 @@ async def run_manual_subagent(
     allowlist names a plugin tool (e.g. a finance ``backtest_strategy``) sees
     "not a valid tool" and silently degrades. Mirrors the lead graph's tool set.
     """
-    all_tools = get_all_tools(knowledge_store, scheduler=scheduler)
+    # Mirror the lead graph's tool set so a subagent run OUTSIDE the lead's
+    # `task` tool (slash `/distill`, scheduled `/dream`, the console fan-out) sees
+    # the same tools — otherwise allowlisted names like `beads_create` (distill's
+    # propose path) silently degrade. inbox/beads come from STATE (not threaded
+    # through every caller); goal mode from config.
+    from runtime.state import STATE
+    all_tools = get_all_tools(
+        knowledge_store, scheduler=scheduler,
+        inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
+        goal_enabled=getattr(config, "goal_enabled", False),
+    )
     if extra_tools:
         all_tools = all_tools + list(extra_tools)
     tool_map = {t.name: t for t in all_tools}

@@ -522,7 +522,9 @@ def _build_memory_tools(knowledge_store) -> list:
             if c.heading:
                 head += f" {c.heading}:"
             preview = (c.content or "")[:200]
-            lines.append(f"{c.created_at} {head} {preview}")
+            # Lead with the chunk id so a caller (e.g. the `dream` consolidation
+            # pass) can target a stale/superseded fact with `forget_memory`.
+            lines.append(f"#{c.id} {c.created_at} {head} {preview}")
         return "\n".join(lines)
 
     @tool
@@ -538,7 +540,28 @@ def _build_memory_tools(knowledge_store) -> list:
             lines.append(f"  {k}: {v}")
         return "\n".join(lines)
 
-    return [memory_ingest, memory_recall, memory_list, memory_stats]
+    @tool
+    async def forget_memory(chunk_id: int, reason: str = "") -> str:
+        """Delete ONE long-term-memory chunk by id (the `#<id>` shown by
+        memory_list). The consolidation/forgetting half of a `/dream` pass: use
+        it to remove a fact that is stale, superseded, or a duplicate — ideally
+        after `memory_ingest`-ing the corrected/merged version first.
+
+        Targeted and deliberate by design: it deletes exactly the one id you
+        pass (no bulk/wildcard delete), so review with memory_list and forget
+        only what you're sure is no longer worth keeping. `reason` is for your
+        own audit trail. Returns whether a chunk was removed.
+        """
+        try:
+            cid = int(chunk_id)
+        except (TypeError, ValueError):
+            return f"Error: chunk_id must be an integer (got {chunk_id!r})."
+        removed = knowledge_store.delete_by_id(cid)
+        if not removed:
+            return f"No memory chunk #{cid} found — nothing deleted."
+        return f"Forgot memory chunk #{cid}." + (f" ({reason})" if reason else "")
+
+    return [memory_ingest, memory_recall, memory_list, memory_stats, forget_memory]
 
 
 # ── scheduler tools ──────────────────────────────────────────────────────────
@@ -838,6 +861,142 @@ def _build_set_goal_tool():
     return set_goal
 
 
+def _build_curation_tools():
+    """Read-mostly tools for the memory/skill curation subagents (`dream` /
+    `distill`, ADR 0054). They read from STATE at call time (the ``set_goal``
+    pattern) so ``get_all_tools`` needs no new wiring, and they are deliberately
+    scoped: two read-only surfaces over what the agent has actually been doing
+    (``recent_activity``, ``list_skills``) plus one *additive-only* writer
+    (``save_skill``). There is no raw-SQL / shell escape hatch — the whole class
+    of "the consolidation agent rewrote the trajectory DB" risk simply can't
+    happen here, unlike a bash-driven distill."""
+
+    @tool
+    def recent_activity(limit: int = 30, window_hours: int = 168) -> str:
+        """Read-only digest of what the agent has recently DONE — for spotting
+        repeated workflows or durable facts worth consolidating.
+
+        Combines the Activity feed (recent assistant turns: time · origin ·
+        trigger · text) with a telemetry rollup (turn/tool/cost volume, per
+        model) over the last ``window_hours`` (default 7 days). Use this as the
+        primary evidence source for `/dream` and `/distill`. Purely read-only —
+        it never modifies anything.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from runtime.state import STATE
+
+        lim = max(1, min(int(limit or 30), 200))
+        out: list[str] = []
+
+        ts = STATE.telemetry_store
+        if ts is not None:
+            try:
+                since = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(window_hours or 168)))).isoformat()
+                s = ts.summary(since_iso=since)
+                out.append(
+                    f"## Telemetry (last {window_hours}h): {s.get('turns', 0)} turns, "
+                    f"{s.get('tool_calls', 0)} tool calls, {s.get('llm_calls', 0)} LLM calls, "
+                    f"${s.get('cost_usd', 0.0):.4f}, success {s.get('success_rate', 0.0):.0%}"
+                )
+                by_model = s.get("by_model") or []
+                if by_model:
+                    out.append("By model: " + "; ".join(
+                        f"{m.get('model') or '?'} ×{m.get('turns', 0)} (${m.get('cost_usd', 0.0):.4f})"
+                        for m in by_model[:8]
+                    ))
+            except Exception as exc:  # noqa: BLE001
+                out.append(f"(telemetry rollup unavailable: {exc})")
+
+        al = STATE.activity_log
+        if al is not None:
+            rows = al.recent(limit=lim)
+            if rows:
+                out.append(f"\n## Recent activity ({len(rows)} most recent turns):")
+                for r in rows:
+                    text = " ".join((r.get("text") or "").split())
+                    if len(text) > 240:
+                        text = text[:239] + "…"
+                    tag = "/".join(p for p in (r.get("origin"), r.get("trigger")) if p)
+                    out.append(f"- [{r.get('created_at', '')[:19]}] ({tag or 'operator'}) {text}")
+        if not out:
+            return ("No activity or telemetry is available yet — nothing to consolidate or "
+                    "distill. Report this and stop.")
+        return "\n".join(out)
+
+    @tool
+    def list_skills() -> str:
+        """List every skill already in the index (name · source · confidence ·
+        description) so a distill/dream pass reuses or extends instead of
+        duplicating. Read-only.
+        """
+        from runtime.state import STATE
+
+        idx = STATE.skills_index
+        if idx is None:
+            return "Skills index is not available."
+        skills = idx.all_skills()
+        if not skills:
+            return "No skills are indexed yet."
+        skills.sort(key=lambda s: (s.get("source") or "", -(s.get("confidence") or 0.0)))
+        lines = [f"{len(skills)} skill(s) indexed:"]
+        for s in skills:
+            desc = " ".join((s.get("description") or "").split())
+            if len(desc) > 120:
+                desc = desc[:119] + "…"
+            conf = s.get("confidence")
+            conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "?"
+            lines.append(f"- {s.get('name')} [{s.get('source') or '?'} · conf {conf_s}] — {desc}")
+        return "\n".join(lines)
+
+    @tool
+    def save_skill(name: str, description: str, body: str, tools: list[str] | None = None,
+                   state: Annotated[Any, InjectedState] = None) -> str:
+        """Create a NEW reusable skill (a procedure/playbook the agent will be
+        offered for matching tasks). ADDITIVE-ONLY — refuses if a skill with that
+        name already exists (it never overwrites; to revise an existing skill,
+        propose it for review instead). Use this only for high-confidence,
+        clearly-missing workflows during a `/distill` pass.
+
+        `name` is a short label, `description` a focused one-liner (what it does /
+        when to use it), `body` the procedure prompt, `tools` the tool names it
+        relies on. Saved as a curator-managed skill (confidence decays if it goes
+        unused), so a mistaken capture self-cleans rather than accumulating.
+        """
+        from runtime.state import STATE
+
+        idx = STATE.skills_index
+        if idx is None:
+            return "Skills index is not available — cannot save."
+        name = (name or "").strip()
+        if not name:
+            return "Error: skill name is required."
+        if not (description or "").strip():
+            return "Error: a one-line description is required (it's how the skill is matched)."
+        existing = {(s.get("name") or "").strip().lower() for s in idx.all_skills()}
+        if name.lower() in existing:
+            return (f"A skill named {name!r} already exists — refusing to overwrite "
+                    "(additive-only). Pick a distinct name, or propose extending the "
+                    "existing one for review instead of auto-creating.")
+        from graph.extensions.skills import SkillV1Artifact
+
+        try:
+            art = SkillV1Artifact(
+                name=name,
+                description=description.strip(),
+                prompt_template=body or "",
+                tools_used=list(tools or []),
+                source_session_id=_session_id_from(state),
+            )
+        except (ValueError, TypeError) as exc:
+            return f"Error building skill: {exc}"
+        idx.add_skill(art, source="distilled")
+        return (f"Created skill {name!r} (source=distilled, confidence 1.0). It'll be "
+                "retrieval-injected for matching tasks and curator-managed.")
+
+    return [recent_activity, list_skills, save_skill]
+
+
 def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
                   beads_store=None, goal_enabled=False):
     """Return every LangChain tool the lead agent + subagents can use.
@@ -881,6 +1040,10 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
         tools.extend(_build_beads_tools(beads_store))
     if goal_enabled:
         tools.append(_build_set_goal_tool())  # ADR 0028 — agent owns a plugin-verified goal
+    # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
+    # + skill inventory + additive-only skill creation). Self-gate on STATE at call
+    # time; present in the full set so the subagent allowlists can pick them up.
+    tools.extend(_build_curation_tools())
     # Fork denylist (config ``tools.disabled``): drop named core tools without
     # editing this function. Applied last so it covers every branch above.
     if _disabled_tools:

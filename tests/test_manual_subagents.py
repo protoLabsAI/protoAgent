@@ -16,7 +16,7 @@ async def test_run_manual_subagent_reuses_private_runner(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_mod,
         "get_all_tools",
-        lambda _store, scheduler=None: [SimpleNamespace(name="current_time")],
+        lambda _store=None, scheduler=None, **_kw: [SimpleNamespace(name="current_time")],
     )
 
     async def fake_run(**kwargs):
@@ -57,7 +57,7 @@ async def test_run_manual_subagent_merges_extra_tools(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_mod,
         "get_all_tools",
-        lambda _store, scheduler=None: [SimpleNamespace(name="current_time")],
+        lambda _store=None, scheduler=None, **_kw: [SimpleNamespace(name="current_time")],
     )
 
     async def fake_run(**kwargs):

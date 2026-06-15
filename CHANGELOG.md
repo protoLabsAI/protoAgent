@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`dream` & `distill` — scheduled self-curation subagents (ADR 0054).** Two new
+  subagents the agent can run on demand (`/dream`, `/distill`) or on a cadence via
+  the existing scheduler (`schedule_task "/dream"` — no new scheduling code).
+  `dream` runs a memory-consolidation pass: it folds durable, verified facts into
+  long-term memory **and prunes** the stale, superseded, and duplicate ones (the
+  other half of consolidation). `distill` mines recent activity for repeated
+  manual workflows and packages them as reusable skills with a **hybrid** policy —
+  auto-create only the high-confidence, clearly-missing ones; propose the rest as
+  beads for review. Both run on scoped, mostly read-only tools — **no shell, no
+  raw SQL** — so the consolidation pass can't corrupt anything. New tools:
+  `recent_activity` (read-only digest of the Activity feed + telemetry rollup),
+  `list_skills` (read-only skill inventory), `save_skill` (additive-only — refuses
+  to overwrite; saved as a curator-managed `distilled` skill), and `forget_memory`
+  (delete one memory chunk by id). `memory_list` now leads each row with its
+  `#<id>` so a fact can be targeted for pruning. Inspired by MiMo-Code's
+  dream/distill commands, adapted to protoAgent's stores + native scheduler.
+
+### Fixed
+- **Out-of-graph subagent runs now see the lead's full tool set.** A subagent run
+  outside the lead's `task` tool (slash `/<subagent>`, a scheduled turn, the
+  console fan-out) built its tools without `inbox_store`/`beads_store`, so an
+  allowlisted name like a subagent's `beads_create` silently degraded to "not a
+  valid tool". The runner now mirrors the lead graph's set (stores from `STATE`,
+  goal mode from config); a test asserts every subagent allowlist resolves.
+
 ## [0.41.0] - 2026-06-15
 
 ### Added
