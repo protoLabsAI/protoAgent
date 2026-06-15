@@ -11,7 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The fallback-models setting picks from the gateway list.**
+  `routing.fallback_models` was a plain newline textarea; it now renders as a list
+  of model comboboxes (one row per model + a blank row to add), each backed by the
+  gateway's live model list — so you order fallbacks by picking real aliases (or
+  typing any). Completes the settings-model-picker pass (`model.name`,
+  `aux_model`, `transcribe_model`, and now `fallback_models` all use the gateway).
+
 ### Fixed
+- **Scheduler startup catch-up no longer logs scary tracebacks.** When the
+  scheduler's catch-up fires an overdue job before Uvicorn is accepting
+  connections, the POST to the agent's own `/a2a` is refused — an expected,
+  self-healing condition (the poll loop retries next tick). It now logs a concise
+  "agent not reachable yet; will retry" at INFO instead of an ERROR
+  `fire exception` traceback.
 - **The scheduler retries the jobs.db owner-lock instead of giving up.** If the
   owner-lock was briefly held when the scheduler started — common on a
   restart/redeploy where the previous process freed the port but is still

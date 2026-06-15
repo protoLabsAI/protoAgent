@@ -277,6 +277,39 @@ async def test_start_retries_owner_lock_then_polls(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fire_defers_quietly_when_agent_not_reachable(tmp_path, monkeypatch, caplog):
+    """bd-3vp: a connection error to our own /a2a (Uvicorn not accepting yet during
+    startup catch-up) is an expected, self-healing condition — _fire returns False
+    and logs concisely, not a scary 'fire exception' traceback."""
+    import httpx
+
+    s = _make_scheduler(tmp_path)
+    job = s.add_job("X", (datetime.now(UTC) - timedelta(seconds=1)).isoformat(), job_id="jx")
+
+    class _Refused:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        async def post(self, *_a, **_kw):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Refused)
+
+    with caplog.at_level("INFO"):
+        ok = await s._fire(job)
+    assert ok is False
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "deferring fire" in msgs
+    assert "fire exception" not in msgs  # no error-level traceback for a not-ready server
+
+
+@pytest.mark.asyncio
 async def test_due_job_fires(tmp_path, monkeypatch):
     """End-to-end: an ISO job in the past gets picked up and POSTs to /a2a."""
     s = _make_scheduler(tmp_path)

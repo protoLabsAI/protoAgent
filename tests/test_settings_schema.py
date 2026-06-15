@@ -33,6 +33,9 @@ def test_schema_groups_and_values():
     for key in ("routing.aux_model", "knowledge.transcribe_model"):
         f = next(f for f in fields if f["key"] == key)
         assert f["type"] == "string" and f["options"] == ["a", "b"]
+    # The fallback list carries the gateway options too (rendered as combobox rows).
+    fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
+    assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
 
 
 def test_groups_carry_category_in_taxonomy_order():

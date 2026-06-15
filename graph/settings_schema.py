@@ -78,7 +78,8 @@ FIELDS: list[Field] = [
           "Cheap/fast alias for summarization, goal-verification, and subagents. "
           "Blank = use the main model.", options_source="models", scope="host"),
     Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
-          "Routing", "Retried in order when the primary model errors.", scope="host"),
+          "Routing", "Retried in order when the primary model errors.",
+          options_source="models", scope="host"),
 
     # ── Context compaction ───────────────────────────────────────────────────
     Field("compaction.enabled", "compaction_enabled", "Enable compaction", "bool", "Compaction",

@@ -625,6 +625,16 @@ class LocalScheduler:
                 return False
             log.info("[scheduler] fired job %s", job.id)
             return True
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            # The agent's own HTTP server isn't accepting connections yet — common
+            # when the scheduler's startup catch-up runs before Uvicorn finishes
+            # binding. Expected and self-healing (the poll loop retries next tick),
+            # so log concisely instead of a scary ERROR traceback (bd-3vp).
+            log.info(
+                "[scheduler] deferring fire for job %s — agent not reachable yet (%s); will retry",
+                job.id, type(exc).__name__,
+            )
+            return False
         except Exception:  # noqa: BLE001
             log.exception("[scheduler] fire exception for job %s", job.id)
             return False

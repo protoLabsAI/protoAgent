@@ -467,6 +467,38 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
       </Select>
     );
   }
+  // A string_list backed by gateway options (e.g. routing.fallback_models)
+  // renders as a list of datalist comboboxes — one per value plus a trailing
+  // blank row to add — so you pick models from the gateway (or type any alias),
+  // ordered. Clearing a row removes it.
+  if (field.type === "string_list" && field.options.length) {
+    const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+    const listId = `${id}-models`;
+    const update = (i: number, v: string) => {
+      const next = items.slice();
+      if (v) next[i] = v;
+      else next.splice(i, 1);
+      onChange(next);
+    };
+    return (
+      <div id={id} className="setting-list" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        {[...items, ""].map((item, i) => (
+          <input
+            key={i}
+            className="setting-input"
+            type="text"
+            list={listId}
+            value={item}
+            placeholder={i === items.length ? "add a model…" : ""}
+            onChange={(e) => update(i, e.target.value)}
+          />
+        ))}
+        <datalist id={listId}>
+          {field.options.map((opt) => <option key={opt} value={opt} />)}
+        </datalist>
+      </div>
+    );
+  }
   if (field.type === "string_list") {
     const text = Array.isArray(value) ? value.join("\n") : "";
     return (
