@@ -117,6 +117,10 @@ export type InstalledPlugin = {
   installed_at?: string;
   by?: string;
   present: boolean;
+  // false = on disk but not in plugins.lock (a local/dev copy) — no source_url/SHA,
+  // so it can't be update-checked or re-synced. Disk is the source of truth, so it's
+  // still listed (and enabled/loaded normally); it just isn't update-tracked.
+  tracked?: boolean;
   enabled: boolean;
   manifest?: {
     name: string;
