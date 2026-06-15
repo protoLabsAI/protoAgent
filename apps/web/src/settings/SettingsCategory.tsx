@@ -284,9 +284,9 @@ export function SettingsCategory({
 
         {/* Each field group is a collapsible accordion (DS 0.29) so a dense category
             (the Workspace home's panels run long) can be tidied to the few sections
-            you're editing. Open by default — collapsing is the operator's tool, not a
-            hidden-by-default trap. A dirty-count badge rides the title so a collapsed
-            group still announces it has unsaved edits. */}
+            you're editing. Collapsed by default — the operator expands groups as
+            needed. A dirty-count badge rides the title so a collapsed group still
+            announces it has unsaved edits. */}
         <Accordion className="settings-groups">
         {groups.map((group) => {
           const visibleFields = group.fields.filter(isVisible);   // #963
@@ -294,7 +294,6 @@ export function SettingsCategory({
           return (
           <AccordionItem
             key={group.section}
-            defaultOpen
             title={
               <span className="settings-group-head">
                 {group.section}
