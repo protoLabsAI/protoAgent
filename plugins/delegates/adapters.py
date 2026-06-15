@@ -393,6 +393,15 @@ class AcpAdapter(Adapter):
         from plugins.coding_agent import evict_client
         return await evict_client(self._spec(d))
 
+    async def forget_session(self, d: Delegate) -> bool:
+        """Forget this delegate's persisted ACP session so the next ``dispatch``
+        starts a fresh ``session/new`` (vs reattaching the prior thread). For a
+        caller that recreates ``workdir`` fresh per call (a disposable worktree), a
+        resumed session's memory would reference a diff the wiped tree no longer has.
+        See ``coding_agent.forget_session``. Idempotent."""
+        from plugins.coding_agent import forget_session
+        return await forget_session(self._spec(d))
+
     async def probe(self, d: Delegate) -> dict:
         import os
         import shutil

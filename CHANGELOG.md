@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ACP `forget_session` — start a coder fresh when its workdir was recreated.** A
+  persisted ACP session (#970) lets a dispatch *reattach* a prior thread — right when
+  the workdir keeps its contents across calls, wrong when the caller **recreates the
+  workdir fresh per attempt** (the project-board loop's disposable git worktree): a
+  resumed thread carries memory of a diff the wiped tree no longer has, so the coder
+  thinks it's already done (→ no diff) or edits against stale assumptions.
+  `coding_agent.forget_session(spec)` (+ `AcpAdapter.forget_session(delegate)`) evicts
+  the client and deletes the persisted session id so the next dispatch is a clean
+  `session/new` — keeping the coder's memory in step with the (empty) tree.
 - **`dream` & `distill` — scheduled self-curation subagents (ADR 0054).** Two new
   subagents the agent can run on demand (`/dream`, `/distill`) or on a cadence via
   the existing scheduler (`schedule_task "/dream"` — no new scheduling code).
