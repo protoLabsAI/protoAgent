@@ -387,6 +387,15 @@ async def _operator_inbox_add(payload: dict) -> dict:
         "source": item.get("source") or "", "text": item["text"],
     })
     fired = await _fire_activity_from_inbox(item) if item["priority"] == "now" else False
+    if fired:
+        # A now-item that fired has been delivered to the agent (its Activity turn
+        # ran) — mark it delivered so it doesn't linger as pending and get
+        # re-surfaced by the next check_inbox (bd-jus). A FAILED fire stays pending
+        # so check_inbox remains the fallback delivery path for it.
+        try:
+            STATE.inbox_store.mark_delivered([item["id"]])
+        except Exception:  # noqa: BLE001 — best-effort; a missed mark just re-surfaces
+            log.warning("[inbox] could not mark fired now-item %s delivered", item.get("id"))
     return {"ok": True, "item": item, "fired": fired}
 
 
