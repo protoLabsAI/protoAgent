@@ -79,7 +79,7 @@ class GoalController:
             return "Goal cleared." if existed else "No active goal to clear."
 
         # /goal {json}  or  /goal <free text>  → set
-        spec, condition, max_iters, no_progress, mode = self._parse_set(rest)
+        spec, condition, max_iters, no_progress, mode, fresh_context = self._parse_set(rest)
         if condition is None:
             return ("Could not parse goal. Use `/goal <text>` or "
                     '`/goal {"condition": "...", "verifier": {"type": "command", '
@@ -89,6 +89,7 @@ class GoalController:
             condition=condition,
             verifier=spec,
             mode=mode,  # "drive" (default) | "monitor" (ADR 0030)
+            fresh_context=fresh_context,
             max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress,  # per-goal patience (ADR 0030 D4); None → config
         )
@@ -126,22 +127,23 @@ class GoalController:
         return (True, f"Goal set. {state.status_line()}")
 
     def _parse_set(self, rest: str):
-        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None, mode)."""
+        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None, mode, fresh_context)."""
         if rest.lstrip().startswith("{"):
             try:
                 data = json.loads(rest)
             except json.JSONDecodeError:
-                return ({}, None, None, None, "drive")
+                return ({}, None, None, None, "drive", False)
             condition = data.get("condition")
             if not condition:
-                return ({}, None, None, None, "drive")
+                return ({}, None, None, None, "drive", False)
             verifier = data.get("verifier") or {"type": "llm"}
             if "type" not in verifier:
                 verifier["type"] = "llm"
             mode = "monitor" if data.get("mode") == "monitor" else "drive"
-            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), mode)
+            fresh_context = bool(data.get("fresh_context", False))
+            return (verifier, condition, data.get("max_iterations"), data.get("no_progress_limit"), mode, fresh_context)
         # plain text → fuzzy goal judged by the llm verifier
-        return ({"type": "llm"}, rest, None, None, "drive")
+        return ({"type": "llm"}, rest, None, None, "drive", False)
 
     # --- evaluation --------------------------------------------------------
 
@@ -188,7 +190,11 @@ class GoalController:
         # 3. Not met — refresh checklist, track progress, decide continue vs stop.
         plan = _GOAL_PLAN_RE.search(last_text or "")
         if plan:
-            state.checklist = plan.group(1).strip()
+            plan_text = plan.group(1).strip()
+            if state.fresh_context:
+                self._store.write_plan(state.session_id, plan_text)
+            else:
+                state.checklist = plan_text
 
         signature_unchanged = (
             result.reason == state.last_reason and result.evidence == state.last_evidence
@@ -304,6 +310,23 @@ class GoalController:
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 
     def _continuation(self, state: GoalState, result) -> str:
+        if state.fresh_context:
+            plan = self._store.read_plan(state.session_id) or "(no plan yet — create one)"
+            evidence = (result.evidence or "").strip()
+            evidence_block = f"Evidence:\n{evidence}\n" if evidence else ""
+            vtype = state.verifier.get("type", "llm")
+            return (
+                f"[goal continuation {state.iteration}/{state.max_iterations} — fresh context]\n"
+                f"Goal: {state.condition}\n"
+                f"Verifier ({vtype}) last result: {result.reason}\n"
+                + (evidence_block + "\n" if evidence_block else "\n") +
+                f"Plan from last iteration:\n{plan}\n\n"
+                f"Take ONE concrete step toward the goal. Read the plan — it records what's "
+                f"been tried, what's next, and what failed. Update your running checklist "
+                f"inside <goal_plan>...</goal_plan> at the end of your turn (it will be "
+                f"persisted for the next iteration). If you determine the goal is impossible "
+                f'or out of scope, emit <goal_unachievable reason="..."/> and stop.'
+            )
         evidence = (result.evidence or "").strip()
         evidence_block = f"\nEvidence:\n{evidence}\n" if evidence else "\n"
         plan_block = state.checklist.strip() or "(no plan yet — create one)"

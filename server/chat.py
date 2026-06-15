@@ -850,9 +850,23 @@ async def _chat_langgraph_stream(
                     yield ("tool_start", f"🎯 {decision.note}")
                     if decision.action == "done":
                         break
+                    # For fresh-context goals, create a scoped thread so the checkpointer
+                    # starts clean — no accumulated transcript from prior iterations.
+                    goal_state = decision.state
+                    if goal_state and goal_state.fresh_context:
+                        base_tid = _resolve_thread_id(request_metadata, session_id)
+                        cont_config = {
+                            "configurable": {
+                                "thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"
+                            },
+                            "recursion_limit": 200,
+                        }
+                    else:
+                        cont_config = config  # same-session (existing behavior)
+
                     cont_raw = ""
                     with goal_turn():
-                        async for kind, payload in _run_turn_stream(decision.message, session_id, config, model=_model):
+                        async for kind, payload in _run_turn_stream(decision.message, session_id, cont_config, model=_model):
                             if kind == "__raw__":
                                 cont_raw = payload
                             else:
@@ -1000,10 +1014,22 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     note = decision.note
                     if decision.action == "done":
                         break
+                    # For fresh-context goals, create a scoped thread so the checkpointer
+                    # starts clean — no accumulated transcript from prior iterations.
+                    goal_state = decision.state
+                    if goal_state and goal_state.fresh_context:
+                        cont_config = {
+                            "configurable": {
+                                "thread_id": f"chat:{session_id}:goal-iter-{goal_state.iteration}"
+                            },
+                        }
+                    else:
+                        cont_config = config
+
                     with goal_turn():
                         result = await STATE.graph.ainvoke(
                             {"messages": [HumanMessage(content=decision.message)], "session_id": session_id, **_model_extra},
-                            config=config,
+                            config=cont_config,
                         )
                     nxt = extract_output(_last_ai(result))
                     if nxt:

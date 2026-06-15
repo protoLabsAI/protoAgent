@@ -63,6 +63,40 @@ class GoalStore:
     def _path(self, session_id: str) -> Path:
         return self._base / f"{_safe_name(session_id)}.json"
 
+    def _plan_path(self, session_id: str) -> Path:
+        return self._base / f"{_safe_name(session_id)}.plan.md"
+
+    def read_plan(self, session_id: str) -> str:
+        """Read the durable plan artifact for a session (Ralph's fix_plan.md equivalent).
+        Returns "" when absent — a fresh goal starts with no plan."""
+        path = self._plan_path(session_id)
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+        except OSError as exc:
+            log.warning("[goal] failed to read plan %s: %s", path, exc)
+            return ""
+
+    def write_plan(self, session_id: str, content: str) -> None:
+        """Write (create/overwrite) the durable plan artifact."""
+        path = self._plan_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write mirroring GoalStore.set()
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.rename(tmp_path, path)
+        except OSError as exc:
+            log.warning("[goal] failed to write plan %s: %s", path, exc)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     def get(self, session_id: str) -> GoalState | None:
         path = self._path(session_id)
         if not path.exists():
