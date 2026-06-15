@@ -22,6 +22,18 @@ async function tab(page, name) {
   await page.locator(".pl-sidenav").getByRole("tab", { name, exact: true }).click();
 }
 
+// Field groups are collapsed by default (the operator expands as needed) — open
+// every group so the fields under them are visible/interactable in a test. Waits
+// for the suspense load, then toggles only the still-collapsed triggers.
+async function expandAllGroups(page) {
+  await expect(page.locator(".pl-accordion__trigger").first()).toBeVisible();
+  const triggers = page.locator(".pl-accordion__trigger");
+  for (let i = 0; i < (await triggers.count()); i++) {
+    const t = triggers.nth(i);
+    if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
+  }
+}
+
 test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) => {
   await openSettings(page);
   // The two scope homes (ADR 0048) — the segmented toggle pinned atop the SideNav.
@@ -67,6 +79,7 @@ test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({
   // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
+  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
   await expect(aux).toHaveValue("protolabs/fast");
   const key = page.locator('.setting-row[data-key="model.api_key"] input');
@@ -78,6 +91,7 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Settings", exact: true }).click();
+  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/turbo");
@@ -91,6 +105,7 @@ test("a restart-flagged System field shows the restart banner", async ({ page })
   await tab(page, "Workspace");
   await tab(page, "System");
   await expect(page.locator(".settings-banner")).toHaveCount(0);
+  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] input[type="checkbox"]').check();
   await expect(page.locator(".settings-banner")).toContainText("restart");
 });
@@ -102,7 +117,7 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Settings", exact: true }).click();
-  await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
+  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   // model.name inherits from the host layer.
   await expect(
     page.locator('.setting-row[data-key="model.name"] .setting-inheritance'),
@@ -126,6 +141,7 @@ test("Host config edits the host-scoped subset and saves to the host layer", asy
   await openSettings(page);
   await tab(page, "Host config"); // Host / App is the default home
   await expect(page.locator(".settings-banner").first()).toContainText("box-shared");
+  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   // Only host-scoped fields appear — model.name (host) is here; the agent-scoped
   // model.api_key + routing.fallback_models are NOT.
   await expect(page.locator('.setting-row[data-key="model.name"]')).toBeVisible();
