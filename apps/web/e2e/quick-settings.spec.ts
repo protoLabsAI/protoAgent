@@ -14,18 +14,22 @@ test("the topbar gear opens the Settings overlay (the two-home one-stop-shop)", 
   await expect(dialog.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
 });
 
-test("the chat composer model picker selects a model and saves", async ({ page }) => {
+test("the chat composer model picker overrides the model per-tab (no global save)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  // The model picker lives inline in the DS composer's actions slot (a <select>),
-  // wired to the `model.name` settings field (host-scoped). Selecting saves immediately.
-  const model = page.getByRole("combobox", { name: "Model" });
+  // The composer's inline model picker is a PER-TAB override (not a global settings
+  // write). It defaults to "Default" (the configured model) and offers the gateway's
+  // models; picking one stores it on the chat session and is sent with each turn.
+  const model = page.getByRole("combobox", { name: "Model for this chat" });
   await expect(model).toBeVisible();
-  await expect(model).toHaveValue("protolabs/reasoning"); // current model from the schema
-  const saved = page.waitForRequest(
-    (r) => r.url().endsWith("/api/settings") && r.method() === "POST",
-  );
-  await model.selectOption("protolabs/fast");
-  const body = (await saved).postDataJSON();
-  expect(body.updates["model.name"]).toBe("protolabs/fast");
-  expect(body.layer).toBe("host"); // model.name is host-scoped → saved to the host layer
+  await expect(model).toHaveValue(""); // "" → Default (the configured global model)
+
+  // Picking a model must NOT POST /api/settings (that would change it globally).
+  let settingsWrite = false;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/settings") && r.method() === "POST") settingsWrite = true;
+  });
+  await model.selectOption("protolabs/fast"); // throws if the gateway option is absent
+  await expect(model).toHaveValue("protolabs/fast");
+  await page.waitForTimeout(300);
+  expect(settingsWrite).toBe(false);
 });
