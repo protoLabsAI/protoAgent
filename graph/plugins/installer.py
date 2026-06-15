@@ -384,11 +384,51 @@ def install_deps(plugin_id: str) -> list[str]:
 
 
 def list_installed() -> list[dict]:
-    """Lock entries, annotated with whether the code is present on disk."""
-    out = []
+    """Inventory of installed plugins — **disk is the source of truth**.
+
+    Enumerates every plugin actually present in the live plugins dir (the SAME dir
+    the loader discovers, so "installed" == "loadable") and overlays its
+    ``plugins.lock`` provenance:
+
+    * on disk **and** in the lock → ``tracked: True`` — source + SHA known, so it can
+      be update-checked (``check_updates``) and re-synced.
+    * on disk, **no** lock entry → ``tracked: False`` — a hand-placed local/dev copy
+      (gitignored ``config/plugins/<id>``). Surfaced, not hidden: an enabled plugin
+      that was never `install()`-ed used to be invisible here while running fine,
+      because this only ever read the lock.
+    * in the lock but **missing** from disk → ``present: False`` — fresh checkout or
+      deleted code; ``sync`` refetches it at its pinned SHA.
+    """
     root = live_plugins_dir()
-    for e in _read_lock()["plugins"]:
-        out.append({**e, "present": (root / e["id"]).exists()})
+    lock_by_id = {e["id"]: e for e in _read_lock()["plugins"] if e.get("id")}
+    out: list[dict] = []
+    on_disk: set[str] = set()
+
+    if root.exists():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            manifest = load_manifest(child)
+            if manifest is None:
+                continue  # a dir without a manifest isn't a plugin (mirror the loader)
+            pid = manifest.id
+            on_disk.add(pid)
+            locked = lock_by_id.get(pid)
+            if locked is not None:
+                out.append({**locked, "present": True, "tracked": True})
+            else:
+                out.append({
+                    "id": pid, "source_url": "", "requested_ref": "",
+                    "resolved_sha": "", "installed_at": "", "by": "local",
+                    "present": True, "tracked": False,
+                })
+
+    # Locked but gone from disk — keep visible so the UI can offer `sync`.
+    for pid, locked in lock_by_id.items():
+        if pid not in on_disk:
+            out.append({**locked, "present": False, "tracked": True})
+
+    out.sort(key=lambda e: e.get("id", ""))
     return out
 
 

@@ -234,14 +234,22 @@ function PluginRow({
 }) {
   const m = p.manifest;
   const caps = m?.capabilities && Object.keys(m.capabilities).length ? m.capabilities : null;
+  // Disk is the source of truth, so a plugin can be on disk (loaded fine) without a
+  // plugins.lock entry — a hand-placed local/dev copy. It has no source_url/SHA and
+  // can't be update-checked or synced; show it plainly rather than a broken row.
+  const local = p.tracked === false;
   return (
     <li className="plugin-row">
       <div className="plugin-row-main">
         <div className="plugin-row-title">
           <strong>{m?.name || p.id}</strong>
           {m?.version ? <span className="plugin-ver">v{m.version}</span> : null}
-          <PluginFreshness update={update} />
-          {update?.behind ? (
+          {local ? (
+            <span className="plugin-state" title="On disk but not in plugins.lock — a local copy. Not update-tracked.">local</span>
+          ) : (
+            <PluginFreshness update={update} />
+          )}
+          {!local && update?.behind ? (
             <Button
               type="button"
               variant="ghost"
@@ -258,8 +266,14 @@ function PluginRow({
         </div>
         {m?.description ? <p className="plugin-desc">{m.description}</p> : null}
         <p className="plugin-meta">
-          <span title={p.source_url}>{p.source_url}</span> · <code>{p.resolved_sha.slice(0, 10)}</code>
-          {p.requested_ref ? ` · ${p.requested_ref}` : ""}
+          {local ? (
+            <span title="installed by copying into config/plugins — not from a git URL">local install · not in plugins.lock</span>
+          ) : (
+            <>
+              <span title={p.source_url}>{p.source_url}</span> · <code>{p.resolved_sha.slice(0, 10)}</code>
+              {p.requested_ref ? ` · ${p.requested_ref}` : ""}
+            </>
+          )}
         </p>
         {/* review surface: what this plugin can do (ADR 0027 D5) */}
         {(m?.views?.length || m?.requires_pip?.length || m?.requires_env?.length || m?.secrets?.length || caps) ? (

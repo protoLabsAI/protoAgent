@@ -141,8 +141,12 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print("(no git-installed plugins)")
                 return 0
             for e in rows:
-                mark = "" if e.get("present") else "  [MISSING — run `plugin sync`]"
-                print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}{mark}")
+                if not e.get("present"):
+                    print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}  [MISSING — run `plugin sync`]")
+                elif not e.get("tracked", True):
+                    print(f"  {e['id']:20} {'local':10}  (on disk, not in plugins.lock — not update-tracked)")
+                else:
+                    print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}")
             return 0
         if args.cmd == "uninstall":
             rep = installer.uninstall(args.id, purge=args.purge)

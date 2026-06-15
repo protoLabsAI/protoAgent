@@ -116,6 +116,34 @@ def test_sync_recolones_missing_from_lock(env):
     assert (installer.live_plugins_dir() / "demo_ext").exists()
 
 
+def test_list_installed_surfaces_untracked_local_copy(env):
+    # Disk is the source of truth: a plugin dir hand-placed into the live plugins
+    # dir (a gitignored local/dev copy) is NOT in plugins.lock, but it loads — so it
+    # must still be listed, marked tracked:False, not hidden.
+    installed = _make_plugin_repo(env)
+    installer.install(str(installed))  # tracked: on disk + in the lock
+
+    local = installer.live_plugins_dir() / "local_ext"
+    local.mkdir(parents=True)
+    (local / "protoagent.plugin.yaml").write_text(
+        "id: local_ext\nname: Local Ext\nversion: 0.1.0\ndescription: a local copy\n"
+    )
+
+    rows = {r["id"]: r for r in installer.list_installed()}
+    assert set(rows) == {"demo_ext", "local_ext"}
+    assert rows["demo_ext"]["tracked"] is True and rows["demo_ext"]["present"] is True
+    assert rows["local_ext"]["tracked"] is False and rows["local_ext"]["present"] is True
+    assert rows["local_ext"]["source_url"] == "" and rows["local_ext"]["resolved_sha"] == ""
+
+
+def test_list_installed_ignores_non_plugin_dirs(env):
+    # A stray dir without a manifest isn't a plugin (mirror the loader) — not listed.
+    stray = installer.live_plugins_dir() / "not_a_plugin"
+    stray.mkdir(parents=True)
+    (stray / "README.md").write_text("nope")
+    assert installer.list_installed() == []
+
+
 def test_source_allowlist_blocks_offlist(env):
     repo = _make_plugin_repo(env)
     with pytest.raises(installer.InstallError, match="not on plugins.sources.allow"):
