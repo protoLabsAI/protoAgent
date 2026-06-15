@@ -821,6 +821,14 @@ def _build_set_goal_tool():
         session_id = _session_id_from(state)  # injected graph state, not the contextvar
         if not session_id:
             return "No active session — set_goal can only run during a turn."
+        # Reject an unknown verifier up front. Otherwise the goal is created but can
+        # never pass — it just spins to the iteration cap, flagged 'unachievable'
+        # (the live failure mode). List the registered ones so the agent can choose.
+        from graph.goals.verifiers import plugin_verifier_names
+        known = plugin_verifier_names()
+        if check not in known:
+            avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
+            return f"Error: unknown plugin verifier {check!r}. Available verifiers: {avail}."
         verifier = {"type": "plugin", "check": check, "args": check_args or {}}
         _ok, msg = STATE.goal_controller.set_goal_safe(
             session_id, condition, verifier, max_iterations,

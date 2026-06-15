@@ -9,6 +9,12 @@ from runtime.state import STATE
 from tools.lg_tools import _build_set_goal_tool, get_all_tools
 
 
+def _register_verifiers(monkeypatch, *names):
+    """Register plugin verifiers so set_goal_safe's name check accepts them (the
+    registry is empty in unit tests). Only the keys matter for validation."""
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {n: object() for n in names})
+
+
 def test_get_all_tools_gates_set_goal_on_goal_enabled():
     on = {t.name for t in get_all_tools(goal_enabled=True)}
     off = {t.name for t in get_all_tools(goal_enabled=False)}
@@ -59,6 +65,7 @@ def test_set_goal_reads_session_from_injected_state(monkeypatch, tmp_path):
     ctrl = GoalController(None, GoalStore(base_dir=str(tmp_path)))
     monkeypatch.setattr(STATE, "goal_controller", ctrl)
     monkeypatch.setattr(tracing, "current_session_id", lambda: "")  # contextvar empty
+    _register_verifiers(monkeypatch, "spacetraders:credits")
     out = _build_set_goal_tool().invoke(
         {"condition": "reach 1M", "check": "spacetraders:credits",
          "check_args": {"min": 1_000_000}, "state": {"session_id": "s-injected"}}
@@ -84,6 +91,7 @@ def test_set_goal_sets_a_plugin_verified_goal(monkeypatch, tmp_path):
     ctrl = GoalController(None, GoalStore(base_dir=str(tmp_path)))
     monkeypatch.setattr(STATE, "goal_controller", ctrl)
     monkeypatch.setattr(tracing, "current_session_id", lambda: "s1")
+    _register_verifiers(monkeypatch, "spacetraders:credits")
     out = _build_set_goal_tool().invoke(
         {"condition": "reach 1M", "check": "spacetraders:credits", "check_args": {"min": 1_000_000}}
     )
@@ -91,3 +99,17 @@ def test_set_goal_sets_a_plugin_verified_goal(monkeypatch, tmp_path):
     g = ctrl.active_goal("s1")
     assert g is not None
     assert g.verifier == {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1_000_000}}
+
+
+def test_set_goal_rejects_an_unknown_verifier(monkeypatch, tmp_path):
+    # An unregistered verifier must be rejected up front — otherwise set_goal
+    # creates a goal that can never pass and spins to the iteration cap (the
+    # 'unknown plugin verifier' / unachievable loop found on the live agent).
+    ctrl = GoalController(None, GoalStore(base_dir=str(tmp_path)))
+    monkeypatch.setattr(STATE, "goal_controller", ctrl)
+    monkeypatch.setattr(tracing, "current_session_id", lambda: "s1")
+    _register_verifiers(monkeypatch, "spacetraders:credits")  # 'manual' is NOT registered
+    out = _build_set_goal_tool().invoke({"condition": "reply DONE", "check": "manual"})
+    assert "unknown plugin verifier" in out.lower()
+    assert "spacetraders:credits" in out  # lists what IS available
+    assert ctrl.active_goal("s1") is None  # no unsatisfiable goal created

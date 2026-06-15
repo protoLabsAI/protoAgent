@@ -228,6 +228,12 @@ def set_plugin_verifiers(mapping: dict | None) -> None:
     _PLUGIN_VERIFIERS = dict(mapping or {})
 
 
+def plugin_verifier_names() -> list[str]:
+    """Registered plugin-verifier names (``<plugin-id>:<name>``), sorted. Lets the
+    set_goal tool reject an unknown verifier before creating an unsatisfiable goal."""
+    return sorted(_PLUGIN_VERIFIERS)
+
+
 async def _verify_plugin(spec: dict, ctx: VerifyContext) -> VerifyResult:
     """Dispatch a ``{"type":"plugin","check":"<id>:<name>","args":{…}}`` goal to a
     plugin-registered verifier. ``args`` are declarative data the verifier validates."""

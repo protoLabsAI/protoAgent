@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`set_goal` rejects an unknown verifier instead of creating an unsatisfiable
+  goal.** The tool only checked the verifier *type*, so a non-existent `check`
+  (e.g. `"manual"`) created a goal that could never pass — it spun toward the
+  iteration cap and ended `unachievable`. It now validates `check` against the
+  registered plugin verifiers up front and lists the available ones, so the agent
+  picks a real verifier. (Found driving the live agent.)
+
 ### Added
 - **Settings model fields offer the gateway's model list.** The auxiliary model
   (`routing.aux_model`) and transcription model (`knowledge.transcribe_model`)
