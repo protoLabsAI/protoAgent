@@ -440,6 +440,29 @@ def _handle_background_terminal(outcome) -> None:
         _spawn_background_wake(job)
 
 
+def _surface_resumed_chat_turn(outcome) -> None:
+    """Surface a scheduler-fired turn (a ``wait`` resume / scheduled task, ADR 0053)
+    that landed in a CHAT session — not the Activity thread — on the event bus so an
+    open chat tab shows the resumed turn LIVE (bd-k02). The browser only renders
+    turns it streamed, so a server-fired resume is otherwise invisible until the
+    next interaction. Mirrors the ADR 0050 background path. Only scheduler-origin
+    turns qualify; an operator/A2A chat turn the browser already streamed does not."""
+    if getattr(outcome, "origin", "") != "scheduler":
+        return
+    text = extract_output(outcome.text) or outcome.text
+    if not text.strip():
+        return
+    _event_bus.publish(
+        "chat.resumed",
+        {
+            "session_id": str(getattr(outcome, "context_id", "") or ""),
+            "text": text,
+            "task_id": getattr(outcome, "task_id", "") or "",
+            "trigger": getattr(outcome, "trigger", "") or "",
+        },
+    )
+
+
 def _a2a_terminal(outcome) -> None:
     """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
     a ``TurnOutcome`` when a turn reaches a terminal state. Records the per-turn
@@ -454,6 +477,7 @@ def _a2a_terminal(outcome) -> None:
         _handle_background_terminal(outcome)
         return
     if outcome.context_id != ACTIVITY_CONTEXT:
+        _surface_resumed_chat_turn(outcome)
         return
     text = extract_output(outcome.text) or outcome.text
     if not text.strip():

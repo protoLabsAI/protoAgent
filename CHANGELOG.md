@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results (on a hybrid store) now carry a `score` — the RRF fused relevance used
   to rank them — so consumers can show or threshold relevance instead of getting
   bare ordered rows. Null on the plain-FTS store / `list_chunks` (unranked). (#1043)
+- **`wait` resumes now appear live in the chat tab (ADR 0053 Slice 2).** When a
+  `wait` (or scheduled task) resumes server-side, the scheduler fires a fresh turn
+  into the originating chat thread — but the browser only renders turns it
+  streamed, so the resumed turn was invisible until the next message. The terminal
+  hook now pushes a `chat.resumed` event for a scheduler-fired turn that lands in a
+  chat session, and a `ChatResumeWatch` appends the resumed answer to that tab live
+  (display-only; the backend still owns history). Closes bd-k02.
 
 ### Fixed
 - **Inbox: a fired `now` item is now marked delivered.** A now-priority inbox
