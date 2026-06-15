@@ -10,8 +10,9 @@ def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id):
-        return chat_reply or [{"role": "assistant", "content": f"echo:{message}"}]
+    async def _fake_chat(message, session_id, *, model=None):
+        suffix = f"@{model}" if model else ""
+        return chat_reply or [{"role": "assistant", "content": f"echo:{message}{suffix}"}]
 
     monkeypatch.setattr(cr, "chat", _fake_chat)
     monkeypatch.setattr(cr, "agent_name", lambda: "protoagent")
@@ -27,6 +28,28 @@ def test_api_chat_joins_assistant_parts(monkeypatch):
     c = _client(monkeypatch)
     body = c.post("/api/chat", json={"message": "hi"}).json()
     assert body["response"] == "echo:hi"
+
+
+def test_api_chat_threads_per_tab_model(monkeypatch):
+    c = _client(monkeypatch)
+    body = c.post("/api/chat", json={"message": "hi", "model": "protolabs/fast"}).json()
+    assert body["response"] == "echo:hi@protolabs/fast"  # model reached chat()
+
+
+def test_openai_completion_honors_model_override(monkeypatch):
+    c = _client(monkeypatch)
+    # A real (non-agent) model id is forwarded as a per-request override.
+    comp = c.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "yo"}], "model": "protolabs/fast"},
+    ).json()
+    assert comp["choices"][0]["message"]["content"] == "echo:yo@protolabs/fast"
+    # The agent's own advertised id means "use the configured default" (no override).
+    comp2 = c.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "yo"}], "model": "protoagent"},
+    ).json()
+    assert comp2["choices"][0]["message"]["content"] == "echo:yo"
 
 
 def test_delete_session_harvest_is_opt_in(monkeypatch):

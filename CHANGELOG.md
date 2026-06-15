@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Per-tab model selection.** Each chat tab can now talk to its own model,
+  overriding the globally configured one. The composer's model dropdown is now a
+  per-tab control (sourced from the gateway's live model list) — "Default" uses
+  the configured model; any other choice is stored on that chat session and sent
+  with every turn. Backend: the chosen model rides the turn as `state["model"]`
+  and a new `ModelOverrideMiddleware` swaps the lead model for that turn (clients
+  built via `create_llm` and cached per model), so sibling tabs stay on their own
+  models. Wired through `/a2a` (message metadata), `/api/chat` (a `model` field),
+  and the OpenAI-compatible `/v1/chat/completions` (honors the request's `model`
+  unless it's the agent's own advertised id). The cost-v1 DataPart already reports
+  the model that actually ran, so per-tab routing is visible per turn.
 - **One-call goal-driven recurring loop (`graph.sdk.start_goal_loop` / `stop_goal_loop`).**
   Wires the OODA / self-improving pattern — *run a tick every N toward a goal until its
   verifier passes* — in a single call, instead of a plugin hand-stitching the goal controller

@@ -104,15 +104,16 @@ def test_config_wires_middleware():
     # before_model-only gates that never wrap the model call).
     assert names[0] == "ToolCallRepairMiddleware"
     assert "WaitYieldMiddleware" in names
-    # PromptCacheMiddleware stays the outermost *model* wrapper — the first
-    # middleware that actually wraps the model call — so the cache breakpoint lands
-    # on the stable system prefix. (before_model-only gates ahead of it don't wrap.)
+    # ModelOverrideMiddleware is the outermost *model* wrapper — it swaps the
+    # per-tab model FIRST, so PromptCacheMiddleware (the next wrapper) sees the
+    # ACTUAL model when deciding whether to cache. ModelOverride doesn't touch the
+    # system message, so the cache breakpoint still lands on the stable prefix.
     wrappers = [
         m.__class__.__name__
         for m in mw
         if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call
     ]
-    assert wrappers and wrappers[0] == "PromptCacheMiddleware"
+    assert wrappers[:2] == ["ModelOverrideMiddleware", "PromptCacheMiddleware"]
 
 
 @pytest.mark.asyncio

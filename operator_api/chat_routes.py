@@ -33,6 +33,7 @@ from server.chat import chat
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "api-default"
+    model: str | None = None  # per-tab model override; None → configured default
 
 
 def register_chat_routes(app, ui: str) -> None:
@@ -45,7 +46,7 @@ def register_chat_routes(app, ui: str) -> None:
     # --- Chat API -----------------------------------------------------------
     @app.post("/api/chat")
     async def _api_chat(req: ChatRequest):
-        result = await chat(req.message, req.session_id)
+        result = await chat(req.message, req.session_id, model=req.model)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result}
 
@@ -120,7 +121,14 @@ def register_chat_routes(app, ui: str) -> None:
         session_id = f"openai-compat-{int(time.time())}"
         stream = req.get("stream", False)
 
-        result = await chat(prompt, session_id)
+        # Honor the OpenAI `model` field as a per-request override — unless it's
+        # this agent's own advertised id (the default model from /v1/models), in
+        # which case use the configured default. Lets an OpenAI client target a
+        # specific gateway model.
+        req_model = (req.get("model") or "").strip()
+        model = req_model if req_model and req_model != agent_name() else None
+
+        result = await chat(prompt, session_id, model=model)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         content = "\n\n".join(parts)
         created = int(time.time())

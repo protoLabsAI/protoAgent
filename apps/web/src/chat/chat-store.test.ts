@@ -172,6 +172,17 @@ describe("persist debouncing", () => {
     expect(setItem).toHaveBeenCalledTimes(1);
   });
 
+  it("setSessionModel sets a per-tab model and clears it on empty", async () => {
+    const { chatStore } = await freshStore();
+    const sessionId = chatStore.getSnapshot().currentSessionId!;
+    const modelOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.model;
+
+    chatStore.setSessionModel(sessionId, "protolabs/fast");
+    expect(modelOf()).toBe("protolabs/fast");
+    chatStore.setSessionModel(sessionId, ""); // clear → back to the configured default
+    expect(modelOf()).toBeUndefined();
+  });
+
   it("flushes pending state on pagehide/beforeunload, and only when dirty", async () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;

@@ -135,18 +135,19 @@ def _setup_required_message() -> list[dict[str, Any]]:
 # Chat backend — called by the A2A handler + OpenAI-compat endpoint
 # ---------------------------------------------------------------------------
 
-async def chat(message: str, session_id: str) -> list[dict[str, Any]]:
+async def chat(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
 
     This is the non-streaming entry point used by the console + the OpenAI-compat
     endpoint. The A2A handler uses ``_chat_langgraph_stream`` instead to
     capture tool events and emit the cost-v1 DataPart on the terminal
-    artifact.
+    artifact. ``model`` overrides the lead model for this turn (per-tab / per
+    OpenAI request); unset → the configured default.
     """
     if STATE.graph is None:
         return _setup_required_message()
-    return await _chat_langgraph(message, session_id)
+    return await _chat_langgraph(message, session_id, model=model)
 
 
 # Cap tool input/output previews so a single frame stays small on the wire.
@@ -224,7 +225,7 @@ def _last_tool_text(result) -> str:
     return ""
 
 
-async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None, images=None):
+async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None, images=None, model=None):
     """Run one graph turn over ``astream_events``.
 
     Yields the same ``(kind, payload)`` status/usage frames the A2A handler
@@ -260,6 +261,9 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         else {
             "messages": _drain_background_messages(session_id) + [human],
             "session_id": session_id,
+            # Per-tab model override (ModelOverrideMiddleware reads it); omit the
+            # key when unset so the configured default applies.
+            **({"model": model} if model else {}),
         }
     )
     from observability import metrics
@@ -759,6 +763,12 @@ async def _chat_langgraph_stream(
                 "recursion_limit": 200,
             }
 
+            # Per-tab model override (the console puts the tab's chosen model in
+            # the A2A request metadata). Threaded into every turn this stream runs
+            # — initial, kicker, goal continuation — so the whole conversation
+            # stays on the tab's model. Unset → the configured default.
+            _model = ((request_metadata or {}).get("model") or "").strip() or None
+
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn (and the
             # kicker retry below), matching the continuation turns.
@@ -776,7 +786,7 @@ async def _chat_langgraph_stream(
                 async for kind, payload in _run_turn_stream(
                     message, session_id, config,
                     resume_value=(message if resume else None),
-                    images=images,
+                    images=images, model=_model,
                 ):
                     if kind == "__raw__":
                         accumulated_raw = payload
@@ -809,7 +819,7 @@ async def _chat_langgraph_stream(
                 yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
                 retry_raw = ""
                 with goal_turn(goal_active):
-                    async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config):
+                    async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config, model=_model):
                         if kind == "__raw__":
                             retry_raw = payload
                         else:
@@ -842,7 +852,7 @@ async def _chat_langgraph_stream(
                         break
                     cont_raw = ""
                     with goal_turn():
-                        async for kind, payload in _run_turn_stream(decision.message, session_id, config):
+                        async for kind, payload in _run_turn_stream(decision.message, session_id, config, model=_model):
                             if kind == "__raw__":
                                 cont_raw = payload
                             else:
@@ -883,12 +893,15 @@ async def _chat_langgraph_stream(
             tracing.flush()
 
 
-async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]:
+async def _chat_langgraph(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
+
+    # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
+    _model_extra = {"model": model} if (model or "").strip() else {}
 
     async with tracing.trace_session(
         session_id=session_id,
@@ -934,7 +947,7 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
             )
             with goal_turn(goal_active):
                 result = await STATE.graph.ainvoke(
-                    {"messages": [HumanMessage(content=message)], "session_id": session_id},
+                    {"messages": [HumanMessage(content=message)], "session_id": session_id, **_model_extra},
                     config=config,
                 )
             raw = _last_ai(result)
@@ -964,7 +977,7 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                     log.warning("[chat] dropped scratch-only turn (session=%s) — kicker retry", session_id)
                     with goal_turn(goal_active):
                         result = await STATE.graph.ainvoke(
-                            {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)], "session_id": session_id},
+                            {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)], "session_id": session_id, **_model_extra},
                             config=config,
                         )
                     response = extract_output(_last_ai(result))
@@ -989,7 +1002,7 @@ async def _chat_langgraph(message: str, session_id: str) -> list[dict[str, Any]]
                         break
                     with goal_turn():
                         result = await STATE.graph.ainvoke(
-                            {"messages": [HumanMessage(content=decision.message)], "session_id": session_id},
+                            {"messages": [HumanMessage(content=decision.message)], "session_id": session_id, **_model_extra},
                             config=config,
                         )
                     nxt = extract_output(_last_ai(result))

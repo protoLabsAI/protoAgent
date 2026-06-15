@@ -11,6 +11,9 @@ export type ChatSession = {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  // Per-tab model override (gateway model id). Undefined → the configured
+  // default. Sent with each turn so this tab talks to its own model.
+  model?: string;
 };
 
 export type SessionStatus = "idle" | "streaming" | "error";
@@ -317,6 +320,16 @@ export const chatStore = {
     setState((current) => ({
       ...current,
       sessionStatusMap: { ...current.sessionStatusMap, [sessionId]: status },
+    }));
+  },
+
+  // Per-tab model override. Empty string clears it (→ configured default).
+  setSessionModel(sessionId: string, model: string) {
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? { ...session, model: model || undefined } : session,
+      ),
     }));
   },
 };

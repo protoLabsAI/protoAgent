@@ -703,7 +703,7 @@ function ChatSessionSlot({
             }),
           );
         },
-      }, { images: opts.images });
+      }, { images: opts.images, model: session.model });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
     } catch (exc) {

@@ -26,6 +26,10 @@ class ProtoAgentState(AgentState):
     # Session tracking (A2A / chat session ID)
     session_id: NotRequired[str]
 
+    # Per-turn model override (per chat tab) — read by ModelOverrideMiddleware to
+    # swap the lead model for this turn; unset → the configured default.
+    model: NotRequired[str]
+
     # Knowledge context injected by KnowledgeMiddleware before LLM call
     context: NotRequired[str]
 

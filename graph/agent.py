@@ -38,6 +38,12 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     from graph.middleware.wait_yield import WaitYieldMiddleware
     middleware.append(WaitYieldMiddleware())
 
+    # Per-turn model override (per chat tab). Outermost wrap_model_call so the
+    # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
+    # the turn carries state["model"].
+    from graph.middleware.model_override import ModelOverrideMiddleware
+    middleware.append(ModelOverrideMiddleware(config))
+
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
     # first/outermost so the cache breakpoint lands on the stable system
     # prefix; KnowledgeMiddleware's context is delivered just after it.

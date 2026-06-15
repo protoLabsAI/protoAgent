@@ -929,10 +929,10 @@ export const api = {
     return request<{ ok: boolean }>("/api/theme", { method: "DELETE" });
   },
 
-  chat(message: string, sessionId: string) {
+  chat(message: string, sessionId: string, model?: string) {
     return request<{ response: string; messages: ChatMessage[] }>("/api/chat", {
       method: "POST",
-      body: { message, session_id: sessionId },
+      body: { message, session_id: sessionId, ...(model ? { model } : {}) },
     });
   },
 
@@ -965,7 +965,7 @@ export const api = {
       onFailed?: (message: string) => void;
       onDone?: () => void;
     } = {},
-    opts: { images?: { b64: string; mime: string; name: string }[] } = {},
+    opts: { images?: { b64: string; mime: string; name: string }[]; model?: string } = {},
   ) {
     // Desktop (WKWebView) can't read a streaming SSE body via fetch (see
     // isDesktopWebview) — the turn would render as a blank assistant bubble. Take
@@ -978,7 +978,7 @@ export const api = {
           method: "POST",
           headers: applyAuth(new Headers({ "Content-Type": "application/json" })),
           signal: handlers.signal,
-          body: JSON.stringify({ message, session_id: sessionId }),
+          body: JSON.stringify({ message, session_id: sessionId, ...(opts.model ? { model: opts.model } : {}) }),
         });
         if (!res.ok) {
           let detail = `${res.status} ${res.statusText}`;
@@ -1031,6 +1031,9 @@ export const api = {
             ],
             messageId: rpcId,
             contextId: sessionId,
+            // Per-tab model override — the executor merges message metadata into
+            // request_metadata, which the chat layer reads as the turn's model.
+            ...(opts.model ? { metadata: { model: opts.model } } : {}),
           },
         },
       }),
