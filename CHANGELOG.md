@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the picker is ready without a manual "Probe" (bd-hbf).
 
 ### Fixed
+- **ACP coding-agent client: a real coding turn died on its own output.** The
+  client read the agent's stdout with asyncio's default **64 KB line limit**, but a
+  single ACP JSON-RPC message routinely exceeds that (a tool result with a file's
+  contents, a large diff, a resumed session's history) — past the limit
+  `readline()` raises `LimitOverrunError`, which tore down the read loop and
+  aborted the turn mid-build. Raised the per-line ceiling to 32 MB. Also made the
+  read loop **resilient + diagnosable**: a single malformed `session/update` (or a
+  callback raising) is now logged and skipped instead of killing the whole session,
+  the loop logs *why* it ends (it was silent before — failures surfaced only as an
+  opaque "agent exited"), and `content` extraction handles list-shaped blocks (not
+  just a single dict), which also raised `AttributeError` and killed the turn.
+  Found by dogfooding the project-board coding loop end-to-end.
 - **Setup wizard "Project path" was cosmetic.** It was only folded into
   `operator.allowed_dirs` and never persisted, so the real beads/notes root
   (`_resolve_operator_project_root`) ignored it — typing a path didn't relocate

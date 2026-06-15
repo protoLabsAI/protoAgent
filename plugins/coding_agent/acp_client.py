@@ -51,6 +51,21 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
             out.append(block["text"])
     return " ".join(o for o in out if o).strip()[:limit]
 
+
+def _content_text(content) -> str:
+    """Text out of a session/update ``content`` field. The ACP spec types it as a
+    single ContentBlock (a dict), but agents legitimately send a LIST of blocks —
+    and the old ``(content or {}).get("text")`` raised ``AttributeError`` on a list,
+    which killed the whole read loop and aborted the turn. Handle dict, list, and
+    bare-string shapes."""
+    if isinstance(content, dict):
+        return content.get("text", "") or ""
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    if isinstance(content, str):
+        return content
+    return ""
+
 # ACP protocol version protoAgent speaks. Negotiated in `initialize`: the client
 # proposes ``PROTOCOL_VERSION`` and the agent echoes it (supported) or counters with
 # its latest. We only speak the versions in ``SUPPORTED_PROTOCOL_VERSIONS``; if the
@@ -58,6 +73,13 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
 # not proceed on an unsupported version) rather than warn-and-continue.
 PROTOCOL_VERSION = 1
 SUPPORTED_PROTOCOL_VERSIONS = (1,)
+
+# asyncio's StreamReader defaults to a 64 KB line limit; a single newline-delimited
+# ACP JSON-RPC message routinely exceeds that (a tool result with a file's contents,
+# a large diff, or a resumed session's history). Past the limit, `readline()` raises
+# LimitOverrunError, which killed the read loop and aborted the turn mid-build. Give
+# the reader generous headroom (per-line buffer ceiling).
+_STDOUT_LINE_LIMIT = 32 * 1024 * 1024  # 32 MB
 
 # JSON-RPC error code the agent returns from `session/new` when it has no
 # resolved auth (ACP `AUTH_REQUIRED`). The client surfaces an actionable message.
@@ -157,6 +179,9 @@ class AcpClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, **(self.env or {})},
+                # Raise the per-line buffer ceiling — ACP messages exceed the 64 KB
+                # default and would otherwise raise LimitOverrunError (kills the turn).
+                limit=_STDOUT_LINE_LIMIT,
             )
         except FileNotFoundError as exc:
             raise AcpError(
@@ -229,9 +254,22 @@ class AcpClient:
                 except json.JSONDecodeError:
                     logger.warning("[acp/%s] non-JSON line: %.200s", self.name, line)
                     continue
-                await self._handle(msg)
+                # One bad message (an update shape we mishandle, a callback raising)
+                # must NOT tear down the session — that aborts the turn mid-build with
+                # NO diagnostic (the old behavior: the loop died here, the finally
+                # failed the prompt future with "agent exited", and why was lost). Log
+                # it and keep reading so the turn survives a single hiccup.
+                try:
+                    await self._handle(msg)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "[acp/%s] error handling message (skipping, turn continues): %.300s",
+                        self.name, line,
+                    )
         except asyncio.CancelledError:
             raise
+        except Exception:  # noqa: BLE001 — surface WHY the loop ended (was silent → undiagnosable)
+            logger.exception("[acp/%s] read loop ended on error", self.name)
         finally:
             # Fail any in-flight requests if the process dies mid-turn.
             for fut in self._pending.values():
@@ -272,14 +310,14 @@ class AcpClient:
         update = params.get("update") or {}
         kind = update.get("sessionUpdate")
         if kind == "agent_message_chunk":
-            text = (update.get("content") or {}).get("text", "")
+            text = _content_text(update.get("content"))
             if text:
                 self._answer += text
                 await self._emit_text(text)   # stream the delta (token-ish) to the UI
         elif kind == "agent_thought_chunk":
             # The coder's reasoning trace — surface it (never folded into the answer)
             # for parity with the native runtime's thinking stream.
-            text = (update.get("content") or {}).get("text", "")
+            text = _content_text(update.get("content"))
             if text:
                 await self._emit_thought(text)
         elif kind == "tool_call":
