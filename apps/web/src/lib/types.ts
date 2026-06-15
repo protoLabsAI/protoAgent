@@ -433,6 +433,7 @@ export type AgentConfig = {
   };
   operator?: {
     allowed_dirs: string[];
+    project_dir?: string;
   };
   plugins?: {
     enabled?: string[];

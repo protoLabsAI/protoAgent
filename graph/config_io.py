@@ -593,6 +593,8 @@ def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
             allowed = operator.get("allowed_dirs", [])
             if not isinstance(allowed, list) or not all(isinstance(d, str) for d in allowed):
                 return False, "operator.allowed_dirs must be a list of strings"
+            if "project_dir" in operator and not isinstance(operator["project_dir"], str):
+                return False, "operator.project_dir must be a string"
     except (TypeError, ValueError) as e:
         return False, f"config validation: {e}"
     return True, ""

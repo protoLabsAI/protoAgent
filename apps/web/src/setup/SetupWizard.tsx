@@ -15,7 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
@@ -78,7 +78,7 @@ function defaultState(): WizardState {
       scheduler: true,
     },
     researcherTurns: 40,
-    knowledgePath: "/sandbox/knowledge/agent.db",
+    knowledgePath: "",
     knowledgeTopK: 5,
     allowedDirs: "",
     initBeads: false,
@@ -108,7 +108,7 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
       scheduler: Boolean(config.middleware.scheduler),
     },
     researcherTurns: Number(config.subagents.researcher.max_turns ?? 40),
-    knowledgePath: config.knowledge.db_path || "/sandbox/knowledge/agent.db",
+    knowledgePath: config.knowledge.db_path || "",
     knowledgeTopK: Number(config.knowledge.top_k ?? 5),
     allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
     initBeads: false,
@@ -171,9 +171,10 @@ export function SetupWizard({
     // ACP runtime needs no gateway, so don't gate the step on the model fields.
     if (step === "model")
       return Boolean(state.runtimeKind === "acp" || (state.apiBase.trim() && state.modelName.trim()));
-    if (step === "workspace") return state.knowledgePath.trim();
+    // The workspace step has no required fields — Knowledge DB is optional (blank
+    // = the default location) and the project dir defaults to the protoAgent dir.
     return true;
-  }, [state.apiBase, state.knowledgePath, state.modelName, state.runtimeKind, step]);
+  }, [state.apiBase, state.modelName, state.runtimeKind, step]);
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
@@ -186,26 +187,43 @@ export function SetupWizard({
     }));
   }
 
-  async function probeModels() {
-    setBusy(true);
+  async function probeModels(opts?: { silent?: boolean }) {
+    const silent = opts?.silent === true;
+    if (!silent) setBusy(true);
     setError("");
-    setModels([]);
+    if (!silent) setModels([]);
     try {
       const response = await api.models(state.apiBase, state.apiKey);
       if (response.error) {
-        setError(response.error);
+        if (!silent) setError(response.error); // auto-probe stays quiet — the user may still be typing creds
         return;
       }
       setModels(response.models);
-      if (response.models.length && !response.models.includes(state.modelName)) {
+      // Only auto-select on an explicit probe; auto-probe must not clobber a
+      // model the user (or a hydrated config) already chose.
+      if (!silent && response.models.length && !response.models.includes(state.modelName)) {
         update({ modelName: response.models[0] });
       }
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      if (!silent) setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }
+
+  // Auto-populate the model dropdown when the user reaches the model step with a
+  // gateway base already filled (native runtime only — ACP needs no gateway), so
+  // the picker is ready without a manual "Probe" click. Fires once per base;
+  // silent so a not-yet-entered key doesn't flash an error. (bd-hbf)
+  const autoProbedBase = useRef("");
+  useEffect(() => {
+    const base = state.apiBase.trim();
+    if (step !== "model" || state.runtimeKind !== "native" || !base) return;
+    if (autoProbedBase.current === base || models.length > 0) return;
+    autoProbedBase.current = base;
+    void probeModels({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, state.runtimeKind, state.apiBase]);
 
   // The real auth check: a 1-token completion down the same path as chat, so a
   // bad key / wrong model is caught here in the UI rather than as a failed turn.
@@ -290,6 +308,11 @@ export function SetupWizard({
             top_k: Number(state.knowledgeTopK),
           },
           operator: {
+            // The project dir is authoritative — the server's beads/notes root
+            // resolves to it (server._resolve_operator_project_root reads
+            // operator.project_dir). Blank = the protoAgent dir. It's also folded
+            // into allowed_dirs above so it's always operable.
+            project_dir: projectPath.trim(),
             allowed_dirs: allowedDirs,
           },
           // Discord + Google are managed in System → Settings, not the setup
@@ -534,39 +557,65 @@ export function SetupWizard({
           ) : null}
 
           {step === "workspace" ? (
-            <StepBody icon={<Database size={20} />} title="Workspace" kicker="Storage">
+            <StepBody icon={<Database size={20} />} title="Workspace" kicker="Project & memory">
+              {/* Group 1 — Project: where the agent works (the relatable concept). */}
+              <span className="field-hint">
+                <strong>Project</strong> — the directory this agent works in.
+              </span>
               <label className="field">
-                <span>Knowledge DB</span>
-                <Input value={state.knowledgePath} onChange={(event) => update({ knowledgePath: event.target.value })} />
-              </label>
-              <div className="setup-grid two">
-                <label className="field">
-                  <span>Knowledge top K</span>
-                  <Input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
-                </label>
-                <label className="field">
-                  <span>Project path</span>
-                  <Input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
-                </label>
-              </div>
-              <label className="field">
-                <span>Allowed project directories</span>
-                <Textarea
-                  rows={3}
-                  value={state.allowedDirs}
-                  onChange={(event) => update({ allowedDirs: event.target.value })}
-                  placeholder={"One path per line.\nThe protoAgent directory is always allowed."}
+                <span>Project directory</span>
+                <Input
+                  value={projectPath}
+                  onChange={(event) => onProjectPathChange(event.target.value)}
+                  placeholder="Absolute path — defaults to the protoAgent directory"
                 />
                 <span className="field-hint">
-                  Beads and notes may only read/write inside these directories. One per line.
-                  The protoAgent directory and the project path above are always allowed.
+                  Where this agent's beads &amp; notes live, and its default project. Must already
+                  exist. Leave blank to use the protoAgent directory.
+                  {projectPath.trim() && !projectPath.trim().startsWith("/") && !projectPath.trim().startsWith("~") ? (
+                    <span className="field-warn"> Use an absolute path (starting with / or ~).</span>
+                  ) : null}
                 </span>
               </label>
+              <label className="field">
+                <span>Additional allowed directories</span>
+                <Textarea
+                  rows={2}
+                  value={state.allowedDirs}
+                  onChange={(event) => update({ allowedDirs: event.target.value })}
+                  placeholder={"One absolute path per line — usually left blank."}
+                />
+                <span className="field-hint">
+                  Extra directories beads &amp; notes may read/write, beyond the project directory
+                  and protoAgent (which are always allowed). One per line. Most setups leave this blank.
+                </span>
+              </label>
+
+              {/* Group 2 — Memory: the RAG knowledge store. Advanced; safe defaults. */}
+              <span className="field-hint">
+                <strong>Memory</strong> — the long-term knowledge store (RAG). Defaults are fine.
+              </span>
+              <div className="setup-grid two">
+                <label className="field">
+                  <span>Knowledge database</span>
+                  <Input
+                    value={state.knowledgePath}
+                    onChange={(event) => update({ knowledgePath: event.target.value })}
+                    placeholder="Leave blank for the default"
+                  />
+                  <span className="field-hint">Blank = the default location (~/.protoagent/knowledge).</span>
+                </label>
+                <label className="field">
+                  <span>Recall results (top-K)</span>
+                  <Input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
+                  <span className="field-hint">How many memory snippets each recall returns.</span>
+                </label>
+              </div>
               <Checkbox
                 className="checkbox-field setup-checkbox"
                 checked={state.initBeads}
                 onCheckedChange={(c) => update({ initBeads: c })}
-                label="Initialize beads"
+                label="Initialize beads (task tracker) in the project directory"
               />
             </StepBody>
           ) : null}

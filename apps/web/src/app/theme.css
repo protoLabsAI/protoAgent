@@ -736,6 +736,11 @@ textarea {
   opacity: 0.75;
 }
 
+.field-warn {
+  color: var(--danger, var(--fg-warning, #d97706));
+  opacity: 1;
+}
+
 .subagent-grid {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;

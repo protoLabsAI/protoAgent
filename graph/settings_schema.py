@@ -222,8 +222,12 @@ FIELDS: list[Field] = [
     Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
+    Field("operator.project_dir", "operator_project_dir", "Project directory", "string",
+          "Identity", "Working directory for the console's beads/notes (and the agent's "
+          "default project). Always allowed. Blank = the protoAgent directory."),
     Field("operator.allowed_dirs", "operator_allowed_dirs", "Allowed project dirs", "string_list",
-          "Identity", "Directories the beads/notes APIs may touch."),
+          "Identity", "Extra directories the beads/notes APIs may touch, beyond the project "
+          "directory and protoAgent (which are always allowed)."),
     Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",
           "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live."),
 

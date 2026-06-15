@@ -602,6 +602,12 @@ class LangGraphConfig:
     # list — not the UI — is the security boundary. See operator_api/paths.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
+    # The operator console's working directory — where its beads/notes live, and
+    # the agent's default project. Set in the setup wizard / Settings. Blank =
+    # the resolver's default (PROTOAGENT_PROJECT_DIR env, else the protoAgent
+    # dir). Read by ``server._resolve_operator_project_root``; always allowed.
+    operator_project_dir: str = ""
+
     # Fenced filesystem toolset (ADR 0007 — operator primitives). ON by default,
     # fenced to a default **workspace** dir (paths.workspace_dir) when no explicit
     # ``projects`` are configured — read/write/list/search, every path contained
@@ -860,6 +866,7 @@ class LangGraphConfig:
                 "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
             ),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
+            operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
             filesystem_allow_run=data.get("filesystem", {}).get("allow_run", cls.filesystem_allow_run),
             filesystem_run_requires_approval=data.get("filesystem", {}).get(

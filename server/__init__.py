@@ -108,6 +108,15 @@ def _resolve_operator_project_root() -> str:
     env = os.environ.get("PROTOAGENT_PROJECT_DIR")
     if env:
         return str(Path(env).expanduser().resolve())
+    # Operator-chosen project dir from config (setup wizard / Settings). Only
+    # honored when it actually exists — a configured-but-missing path would break
+    # every beads/notes call, so fall through to the safe default instead.
+    cfg_obj = getattr(STATE, "graph_config", None)
+    configured = str(getattr(cfg_obj, "operator_project_dir", "") or "").strip() if cfg_obj else ""
+    if configured:
+        chosen = Path(configured).expanduser()
+        if chosen.is_dir():
+            return str(chosen.resolve())
     if getattr(sys, "frozen", False):
         cfg = os.environ.get("PROTOAGENT_CONFIG_DIR")
         base = Path(cfg) if cfg else Path.home()

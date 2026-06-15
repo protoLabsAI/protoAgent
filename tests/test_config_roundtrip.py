@@ -118,6 +118,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "model_provider": "openai",
     "model_vision": False,
     "operator_allowed_dirs": [],
+    "operator_project_dir": "",
     "operator_mcp_enabled": False,
     "operator_mcp_tools": [],
     "plugins_dir": "",
@@ -274,6 +275,7 @@ CONFIG_TO_DICT_GOLDEN = {
     },
     "operator": {
         "allowed_dirs": [],
+        "project_dir": "",
     },
     "operator_mcp": {
         "tools": [],
@@ -395,6 +397,7 @@ EMITTED_ATTRS = {
     "autostart_on_boot",
     # operator.*
     "operator_allowed_dirs",
+    "operator_project_dir",
     # --- B1 PR-3: config_to_dict is now FIELDS-complete, so these 27
     # newly-emitted keys (derived key->attr from FIELDS) must also round-trip. ---
     # agent_runtime
