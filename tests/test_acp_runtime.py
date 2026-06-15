@@ -222,6 +222,34 @@ async def test_acp_client_streams_answer_text_deltas():
     assert client._answer == "Hello world"   # still accumulated for the final return
 
 
+async def test_acp_client_handles_list_shaped_content_without_crashing():
+    """A coding agent (e.g. proto) can send agent_message_chunk `content` as a LIST
+    of blocks, not a single dict. The old `(content or {}).get("text")` raised
+    AttributeError on a list, killing the read loop and silently aborting the whole
+    turn mid-build. Content must extract from dict, list, and string shapes."""
+    from plugins.coding_agent.acp_client import AcpClient, _content_text
+
+    assert _content_text({"text": "a"}) == "a"
+    assert _content_text([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
+    assert _content_text("bare") == "bare"
+    assert _content_text(None) == ""
+
+    client = AcpClient("noop", cwd="/tmp", name="t")
+    deltas = []
+
+    async def on_text(d):
+        deltas.append(d)
+
+    client._on_text = on_text
+    # The shape that used to crash the loop:
+    await client._handle_update({"update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": [{"type": "text", "text": "from "}, {"type": "text", "text": "a list"}],
+    }})
+    assert deltas == ["from a list"]
+    assert client._answer == "from a list"
+
+
 async def test_persona_written_to_copilot_instructions(tmp_path, monkeypatch):
     import runtime.acp_runtime as rt_mod
     monkeypatch.setattr(rt_mod, "persona_doc", lambda config: "# id\nYou are Aria.")
