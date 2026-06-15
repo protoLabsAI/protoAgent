@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Inbox: a fired `now` item is now marked delivered.** A now-priority inbox
+  item (e.g. an ADR 0050 background-completion notification) fires an Activity
+  turn on arrival, but it was never marked delivered — so it lingered as pending
+  forever and the next `check_inbox` re-surfaced (and could re-act on) a backlog
+  of already-handled notifications. A successful fire now marks the item
+  delivered; a failed fire stays pending so `check_inbox` remains its fallback.
+
 ### Added
 - **The fallback-models setting picks from the gateway list.**
   `routing.fallback_models` was a plain newline textarea; it now renders as a list

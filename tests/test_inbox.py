@@ -110,6 +110,46 @@ def test_check_inbox_tool_returns_and_marks_delivered(tmp_path):
     assert asyncio.run(check_inbox.ainvoke({"priority_floor": "next"})) == "Inbox empty."
 
 
+# ── now-item fire marks delivered (bd-jus) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fired_now_item_is_marked_delivered(tmp_path, monkeypatch):
+    """A now-item whose Activity turn fired must be marked delivered, not left
+    pending to be re-surfaced (and re-acted-on) by the next check_inbox."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_ok(_item):
+        return True
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    res = await ch._operator_inbox_add({"text": "bg done", "priority": "now", "source": "background"})
+    assert res["fired"] is True
+    assert store.list(priority_floor="later") == []  # delivered → nothing pending
+
+
+@pytest.mark.asyncio
+async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
+    """A now-item whose fire FAILED stays pending so check_inbox is the fallback."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_fail(_item):
+        return False
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+
+    res = await ch._operator_inbox_add({"text": "bg done", "priority": "now"})
+    assert res["fired"] is False
+    assert len(store.list(priority_floor="later")) == 1  # still pending for check_inbox
+
+
 # ── POST /api/inbox route ────────────────────────────────────────────────────
 
 
