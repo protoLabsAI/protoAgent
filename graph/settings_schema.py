@@ -76,7 +76,7 @@ FIELDS: list[Field] = [
     # ── Routing ──────────────────────────────────────────────────────────────
     Field("routing.aux_model", "aux_model", "Auxiliary (fast) model", "string", "Routing",
           "Cheap/fast alias for summarization, goal-verification, and subagents. "
-          "Blank = use the main model.", scope="host"),
+          "Blank = use the main model.", options_source="models", scope="host"),
     Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
           "Routing", "Retried in order when the primary model errors.", scope="host"),
 
@@ -134,7 +134,8 @@ FIELDS: list[Field] = [
           "Knowledge",
           "Gateway speech-to-text model for audio/video ingestion (e.g. whisper-1), via the "
           "OpenAI-compatible /audio/transcriptions endpoint. Blank disables audio/video import. "
-          "Video needs ffmpeg on the host to extract the audio track.", restart=True),
+          "Video needs ffmpeg on the host to extract the audio track.",
+          options_source="models", restart=True),
     Field("knowledge.recall_preview_chars", "knowledge_recall_preview_chars", "Recall preview length",
           "number", "Knowledge",
           "How many characters of each recalled chunk the model sees. Bigger carries more "

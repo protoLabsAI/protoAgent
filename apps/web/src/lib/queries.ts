@@ -105,6 +105,12 @@ export const settingsSchemaQuery = () =>
   queryOptions({
     queryKey: queryKeys.settings,
     queryFn: () => api.settingsSchema(),
+    // The schema GET does a gateway round-trip server-side (it embeds the live
+    // model list for the model pickers) and is read by the Settings surface AND
+    // every chat tab's composer picker — so without a staleTime React Query would
+    // refire it on every mount/focus. A save still invalidates it (freshness on
+    // change); between saves it's served from cache.
+    staleTime: 5 * 60_000,
   });
 
 // The inbound inbox (ADR 0003) — all pending tiers. Live: the panel invalidates
