@@ -251,6 +251,32 @@ async def test_start_stop_idempotent(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_start_retries_owner_lock_then_polls(tmp_path):
+    """A jobs.db lock held at boot (a restart/redeploy overlap) must NOT
+    permanently skip the scheduler. start() schedules a background retry and
+    begins polling once the lock frees — instead of staying off until a reload."""
+    import scheduler.local as sl
+
+    s = _make_scheduler(tmp_path)
+    s._LOCK_RETRY_SECONDS = 0.05  # don't wait the real 15s
+    key = str(s.path)
+    sl._LOCKED_PATHS.add(key)  # simulate another live instance owning the jobs.db
+    try:
+        await s.start()
+        assert s._task is not None  # scheduled a retry — did NOT give up
+        assert s._lock_fd is None   # not acquired yet (still held)
+
+        sl._LOCKED_PATHS.discard(key)  # the other instance exits → lock frees
+        for _ in range(60):            # let the background retry acquire it
+            if s._lock_fd is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert s._lock_fd is not None  # acquired after waiting → now polling
+    finally:
+        await s.stop()
+
+
+@pytest.mark.asyncio
 async def test_due_job_fires(tmp_path, monkeypatch):
     """End-to-end: an ISO job in the past gets picked up and POSTs to /a2a."""
     s = _make_scheduler(tmp_path)

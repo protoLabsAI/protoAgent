@@ -73,24 +73,28 @@ def test_jobs_lock_excludes_a_second_holder(tmp_path):
     _release_jobs_lock(db, again)
 
 
-def test_second_scheduler_on_same_db_does_not_start_polling(tmp_path):
+def test_second_scheduler_on_same_db_does_not_poll(tmp_path):
     async def run():
         a = LocalScheduler("agentA", invoke_url="http://127.0.0.1:7870", db_dir=str(tmp_path))
         b = LocalScheduler("agentA", invoke_url="http://127.0.0.1:7871", db_dir=str(tmp_path))
         assert a.path == b.path  # same jobs.db (same agent + dir)
         await a.start()
-        await b.start()  # interlock: b must NOT start a poll task
-        started = (a._task is not None, b._task is not None)
+        await b.start()  # interlock: b must NOT acquire the lock / poll A's db
+        # A owns the lock and polls. B does NOT acquire it (so it never races A),
+        # but it doesn't give up either — it schedules a background retry (so a
+        # transient boot-time overlap self-heals rather than killing the scheduler).
+        a_owns = a._lock_fd is not None
+        b_waits = b._lock_fd is None and b._task is not None
         await a.stop()
         await b.stop()
         # After A releases, a fresh scheduler can claim it.
         c = LocalScheduler("agentA", invoke_url="http://127.0.0.1:7872", db_dir=str(tmp_path))
         await c.start()
-        c_started = c._task is not None
+        c_owns = c._lock_fd is not None
         await c.stop()
-        return started, c_started
+        return a_owns, b_waits, c_owns
 
-    (a_started, b_started), c_started = asyncio.run(run())
-    assert a_started is True
-    assert b_started is False
-    assert c_started is True
+    a_owns, b_waits, c_owns = asyncio.run(run())
+    assert a_owns is True
+    assert b_waits is True  # B waits for the lock (retry), never polls A's db
+    assert c_owns is True

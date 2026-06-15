@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The scheduler retries the jobs.db owner-lock instead of giving up.** If the
+  owner-lock was briefly held when the scheduler started — common on a
+  restart/redeploy where the previous process freed the port but is still
+  draining an in-flight turn — it logged "owned by another live instance" and
+  **never started**, so `wait` resumes (ADR 0053) and every scheduled task
+  silently didn't fire until an unrelated config reload happened to re-init it. It
+  now retries in the background (~15s) and starts polling the moment the lock
+  frees, so a contended boot self-heals in seconds. (Found driving the live agent
+  — a `wait` sat 16 min overdue after a restart.)
 - **`set_goal` rejects an unknown verifier instead of creating an unsatisfiable
   goal.** The tool only checked the verifier *type*, so a non-existent `check`
   (e.g. `"manual"`) created a goal that could never pass — it spun toward the

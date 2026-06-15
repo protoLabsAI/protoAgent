@@ -200,6 +200,10 @@ class LocalScheduler:
 
     name = "local"
 
+    # How often start() retries the jobs.db owner-lock when it's held at boot (a
+    # transient restart/redeploy overlap) before it can begin polling.
+    _LOCK_RETRY_SECONDS = 15.0
+
     def __init__(
         self,
         agent_name: str,
@@ -339,12 +343,21 @@ class LocalScheduler:
         # scheduler (the rest of the agent still serves normally).
         self._lock_fd = _acquire_jobs_lock(self.path)
         if self._lock_fd is None:
-            log.error(
-                "[scheduler] jobs.db at %s is already owned by another live instance — "
-                "not starting the scheduler. Run each instance with a distinct "
-                "PROTOAGENT_INSTANCE (or agent name) so they don't share a jobs.db.",
-                self.path,
+            # The jobs.db is owned by another live instance RIGHT NOW. Don't give
+            # up permanently — a brief overlap is common (a restart/redeploy where
+            # the old process freed the port but is still draining an in-flight
+            # turn keeps holding the flock). Retry in the background until it's
+            # free, then start polling, so a contended boot self-heals in seconds
+            # instead of staying scheduler-less until the next config reload. A
+            # genuinely co-located instance just keeps waiting harmlessly.
+            log.warning(
+                "[scheduler] jobs.db at %s is owned by another instance — retrying "
+                "every %.0fs in the background until it's free (if this persists, run "
+                "each instance with a distinct PROTOAGENT_INSTANCE).",
+                self.path, self._LOCK_RETRY_SECONDS,
             )
+            self._stopping = False
+            self._task = asyncio.create_task(self._await_lock_then_poll(), name="scheduler.local.lockwait")
             return
         self._stopping = False
         self._recover_missed_fires()
@@ -353,6 +366,24 @@ class LocalScheduler:
             "[scheduler] local backend started: agent=%s db=%s",
             self.agent_name, self.path,
         )
+
+    async def _await_lock_then_poll(self) -> None:
+        """Retry the owner-lock until acquired (or stopped), then poll. Lets a
+        scheduler that booted into a momentary lock contention recover on its own."""
+        while not self._stopping:
+            await asyncio.sleep(self._LOCK_RETRY_SECONDS)
+            if self._stopping:
+                return
+            fd = _acquire_jobs_lock(self.path)
+            if fd is not None:
+                self._lock_fd = fd
+                log.info(
+                    "[scheduler] acquired jobs.db owner-lock after waiting — starting poll loop "
+                    "(agent=%s db=%s)", self.agent_name, self.path,
+                )
+                self._recover_missed_fires()
+                await self._poll_loop()
+                return
 
     async def stop(self) -> None:
         self._stopping = True
