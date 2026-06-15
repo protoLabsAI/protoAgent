@@ -51,6 +51,11 @@ class GoalState:
     # continuation loop); "monitor" = an external process drives the metric, the
     # agent only supervises (verifier-only, out-of-band, no exhaustion).
     mode: str = "drive"
+    # Fresh-context mode (Ralph loop): each continuation turn starts a NEW
+    # LangGraph thread so the model sees a clean slate — no accumulated
+    # transcript from prior iterations. Durable state (plan artifact) lives
+    # on disk. Opt-in only; short goals benefit from transcript continuity.
+    fresh_context: bool = False
     last_checked: float | None = None  # last out-of-band verifier check (monitor)
     checklist: str = ""
     iteration: int = 0
@@ -81,7 +86,12 @@ class GoalState:
         vt = self.verifier.get("type", "llm")
         # Monitor goals have no iteration budget — show the disposition instead.
         progress = "monitor" if self.mode == "monitor" else f"iteration {self.iteration}/{self.max_iterations}"
-        base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress})"
+        # mode_tag: only shown when it adds info beyond the progress field.
+        # "fresh-context" is always worth noting; "drive" is the default for
+        # non-monitor goals (shown for clarity); monitor mode is redundant with
+        # the progress label so it's omitted.
+        mode_tag = "fresh-context" if self.fresh_context else ("drive" if self.mode == "drive" else "")
+        base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress}{', ' + mode_tag if mode_tag else ''})"
         if self.last_reason:
             base += f" — {self.last_reason}"
         return base
