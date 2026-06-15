@@ -80,9 +80,12 @@
 }
 
 /* Composer model picker — rendered in the DS PromptInput `actions` slot (ADR 0051,
-   the ComposerWithAttachments DS pattern). A quiet inline select that reads as text
-   until hover/focus. */
+   the ComposerWithAttachments DS pattern). A quiet inline button that reads as text
+   until hover/focus. Drives a DS Menu dropdown. */
 .composer-model-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font: inherit;
   font-size: 12px;
   color: var(--fg-secondary);
