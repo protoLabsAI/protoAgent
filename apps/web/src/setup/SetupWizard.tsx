@@ -18,6 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
@@ -467,15 +468,11 @@ export function SetupWizard({
                   {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
                   Probe
                 </Button>
-                <Button
-                 
-                  type="button"
+                <TestConnectionButton
                   onClick={() => void testConnection()}
-                  disabled={busy || !state.apiBase.trim() || !state.modelName.trim()}
-                >
-                  {busy ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                  Test connection
-                </Button>
+                  pending={busy}
+                  disabled={!state.apiBase.trim() || !state.modelName.trim()}
+                />
               </div>
               {tested ? (
                 <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">

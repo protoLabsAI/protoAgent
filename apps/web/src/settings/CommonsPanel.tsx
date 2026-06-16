@@ -1,8 +1,9 @@
-import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Empty } from "@protolabsai/ui/primitives";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Library, RefreshCw } from "lucide-react";
+import { Library } from "lucide-react";
 
+import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 
 // Global ▸ Commons (ADR 0041 + 0048) — the box-shared skill library every agent
@@ -22,11 +23,7 @@ export function CommonsPanel() {
       <PanelHeader
         title="Commons"
         kicker={`the box-shared skill library · ${commons.length} skill${commons.length === 1 ? "" : "s"}`}
-        actions={
-          <Button icon variant="ghost" type="button" onClick={() => void q.refetch()} disabled={q.isFetching} title="Refresh">
-            <RefreshCw size={16} className={q.isFetching ? "spin" : ""} />
-          </Button>
-        }
+        actions={<RefreshButton onClick={() => void q.refetch()} busy={q.isFetching} />}
       />
       <div className="stage-body">
         {!layered ? (

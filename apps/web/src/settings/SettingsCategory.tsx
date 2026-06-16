@@ -4,13 +4,14 @@ import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { Link2, Loader2, RotateCcw, Save } from "lucide-react";
 
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { StagePanel } from "../app/ErrorBoundary";
+import { HelpLink, TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
@@ -226,10 +227,7 @@ export function SettingsCategory({
         actions={
           <>
             {hasModel ? (
-              <Button type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
-                {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                Test connection
-              </Button>
+              <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
             ) : null}
             {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
             <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
@@ -303,13 +301,8 @@ export function SettingsCategory({
             ))}
             {hasDiscord && group.section === "Discord" ? (
               <div className="settings-group-actions">
-                <Button type="button" onClick={() => testDiscord.mutate()} disabled={testDiscord.isPending || save.isPending}>
-                  {testDiscord.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                  Test connection
-                </Button>
-                <a className="settings-help-link" href={DISCORD_GUIDE_URL} target="_blank" rel="noreferrer">
-                  How to create a bot <ExternalLink size={13} />
-                </a>
+                <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
+                <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
               </div>
             ) : null}
             {hasGoogle && group.section === "Google" ? (
@@ -331,22 +324,16 @@ export function SettingsCategory({
                       ? "Save the client ID + secret, then connect"
                       : "Not connected"}
                 </span>
-                <a className="settings-help-link" href={GOOGLE_GUIDE_URL} target="_blank" rel="noreferrer">
-                  Get an OAuth client <ExternalLink size={13} />
-                </a>
+                <HelpLink href={GOOGLE_GUIDE_URL}>Get an OAuth client</HelpLink>
               </div>
             ) : null}
             {group.test ? (
               <div className="settings-group-actions">
-                <Button
-
-                  type="button"
+                <TestConnectionButton
                   onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
-                  disabled={(testGroup.isPending && testingSection === group.section) || save.isPending}
-                >
-                  {testGroup.isPending && testingSection === group.section ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                  Test connection
-                </Button>
+                  pending={testGroup.isPending && testingSection === group.section}
+                  disabled={save.isPending}
+                />
               </div>
             ) : null}
           </AccordionItem>

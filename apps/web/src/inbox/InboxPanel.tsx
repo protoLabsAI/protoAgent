@@ -6,10 +6,11 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { Check, RefreshCw } from "lucide-react";
+import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
+import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
@@ -57,11 +58,7 @@ function InboxBody({
         compact
         title="Inbox"
         kicker={`${items.length} pending`}
-        actions={
-          <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-            <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-          </Button>
-        }
+        actions={<RefreshButton onClick={() => void refetch()} busy={isFetching} />}
       />
 
       <div className="inbox-list">

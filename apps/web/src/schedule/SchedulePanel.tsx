@@ -7,10 +7,11 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { CalendarClock, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
+import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -200,9 +201,7 @@ function ScheduleBody() {
         kicker={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${backend}`}
         actions={
           <>
-            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-              <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </Button>
+            <RefreshButton onClick={() => void refetch()} busy={isFetching} />
             <Button variant="primary" type="button" onClick={() => setModalOpen(true)}
                     disabled={backend === "disabled"} data-testid="schedule-new">
               <Plus size={16} /> New schedule
