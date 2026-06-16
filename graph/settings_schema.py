@@ -43,6 +43,10 @@ class Field:
     # the home/default layer + where the settings UI writes it. No "app" value: the
     # App layer is the dataclass defaults (no writable file).
     scope: str = "agent"
+    # Keep the field in FIELDS (so it round-trips through config_to_dict / the YAML
+    # writer) but DON'T render it in the generic Settings UI — for a key a dedicated
+    # panel already owns. `build_schema` skips it; `config_to_dict` keeps it. (#1076)
+    ui_hidden: bool = False
 
 
 # Ordered registry. Section order here is the order the UI renders groups in.
@@ -455,7 +459,11 @@ FIELDS: list[Field] = [
         scope="host",
     ),
     # ── Identity / operator ──────────────────────────────────────────────────
-    Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
+    # `identity.name` stays in FIELDS so it round-trips through the YAML writer, but
+    # it's ui_hidden: the dedicated Identity panel (Workspace ▸ Identity, POST
+    # /api/config) owns the agent name alongside its persona (SOUL.md). Surfacing it
+    # here too made the same field editable from two places with two write paths (#1076).
+    Field("identity.name", "identity_name", "Agent name", "string", "Identity", ui_hidden=True),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
     Field(
@@ -726,6 +734,8 @@ def build_schema(
     defaults = type(config)()
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
+        if f.ui_hidden:
+            continue  # in FIELDS for config round-trip, but a dedicated panel owns the UI (#1076)
         if _frozen and f.key.startswith("execute_code"):
             continue
         current = getattr(config, f.attr, None)
