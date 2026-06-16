@@ -19,6 +19,7 @@ from knowledge.store import KnowledgeStore
 
 # ── parsing (defensive JSON) ────────────────────────────────────────────────
 
+
 def test_parse_facts_plain_array():
     assert _parse_facts('["a", "b"]') == ["a", "b"]
 
@@ -41,6 +42,7 @@ def test_parse_facts_drops_blank_and_caps_length():
 
 
 # ── consolidation + namespace ───────────────────────────────────────────────
+
 
 def test_facts_stored_with_namespace_and_type(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
@@ -88,10 +90,15 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
         assert "teal" in transcript
         return ["The user's favorite color is teal", "<scratch_pad>noise</scratch_pad>also a fact"]
 
-    counts = asyncio.run(extract_and_store_facts(
-        "User: my favorite color is teal", knowledge_store=store, config=object(),
-        namespace="ns1", extractor=fake_extractor,
-    ))
+    counts = asyncio.run(
+        extract_and_store_facts(
+            "User: my favorite color is teal",
+            knowledge_store=store,
+            config=object(),
+            namespace="ns1",
+            extractor=fake_extractor,
+        )
+    )
     assert counts["added"] == 2
     facts = store.list_chunks(domain="fact", namespace="ns1", limit=10)
     # The store guardrail (ADR 0021 Phase 1) strips scratch_pad even here.

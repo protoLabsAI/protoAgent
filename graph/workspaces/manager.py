@@ -68,8 +68,7 @@ def _find(ident: str) -> dict | None:
     """Resolve a workspace by ``id`` OR display ``name`` (ids are opaque + immutable —
     the slug/scoping key; names are editable display labels). Id match wins."""
     ws = list_workspaces()
-    return (next((w for w in ws if w["id"] == ident), None)
-            or next((w for w in ws if w["name"] == ident), None))
+    return next((w for w in ws if w["id"] == ident), None) or next((w for w in ws if w["name"] == ident), None)
 
 
 def _new_id(name: str) -> str:
@@ -87,6 +86,7 @@ def _new_id(name: str) -> str:
 
 def _read_record(ws: Path) -> dict | None:
     import yaml
+
     f = ws / "workspace.yaml"
     if not f.exists():
         return None
@@ -106,9 +106,16 @@ def list_workspaces() -> list[dict]:
     for d in sorted(p for p in root.iterdir() if p.is_dir()):
         rec = _read_record(d)
         if rec:
-            out.append({"name": rec.get("name", d.name), "id": rec.get("id", d.name),
-                        "port": rec.get("port"), "bundle": rec.get("bundle") or "",
-                        "created": rec.get("created", ""), "path": str(d)})
+            out.append(
+                {
+                    "name": rec.get("name", d.name),
+                    "id": rec.get("id", d.name),
+                    "port": rec.get("port"),
+                    "bundle": rec.get("bundle") or "",
+                    "created": rec.get("created", ""),
+                    "path": str(d),
+                }
+            )
     return out
 
 
@@ -136,6 +143,7 @@ def _pick_port(explicit: int | None) -> int:
     # fleet agent on its own port but isn't a workspace, so it's invisible to list_workspaces().
     try:
         from runtime.state import STATE
+
         if getattr(STATE, "active_port", None):
             used.add(int(STATE.active_port))
     except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
@@ -179,8 +187,15 @@ plugins:
 """
 
 
-def create(name: str, *, from_config: str | None = None, inherit_model: str | None = None,
-           bundle: str | None = None, port: int | None = None, shared_skills: bool = False) -> dict:
+def create(
+    name: str,
+    *,
+    from_config: str | None = None,
+    inherit_model: str | None = None,
+    bundle: str | None = None,
+    port: int | None = None,
+    shared_skills: bool = False,
+) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
     an installed plugin bundle. Does not start it.
 
@@ -224,9 +239,15 @@ def create(name: str, *, from_config: str | None = None, inherit_model: str | No
             _stamp_identity(cfg, name, True, instance_id=wid)
 
     import yaml
+
     assigned = _pick_port(port)
-    rec = {"id": wid, "name": name, "port": assigned,
-           "created": datetime.now(timezone.utc).isoformat(), "bundle": bundle or ""}
+    rec = {
+        "id": wid,
+        "name": name,
+        "port": assigned,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "bundle": bundle or "",
+    }
     # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
     # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
     # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
@@ -266,11 +287,11 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         shutil.copyfile(src_sec, ws / "secrets.yaml")
 
 
-def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *,
-                    instance_id: str | None = None) -> None:
+def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:
     """Force identity.name (display) + instance.id (the opaque data-scope key) on a
     (possibly cloned) config, and optionally set skills.shared — comment-preserving."""
     from graph.config_io import load_yaml_doc, save_yaml_doc
+
     doc = load_yaml_doc(cfg)
     if not isinstance(doc, dict):
         return
@@ -284,15 +305,23 @@ def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *,
 def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     """Install a bundle (or plugin) into the workspace via a scoped subprocess —
     fresh env so the installer's module-level lock path picks up this workspace."""
-    env = {**os.environ,
-           "PROTOAGENT_CONFIG_DIR": str(ws),
-           "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"),
-           "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock")}
-    proc = subprocess.run([sys.executable, "-m", "server", "plugin", "install", bundle],
-                          env=env, capture_output=True, text=True, timeout=300)
+    env = {
+        **os.environ,
+        "PROTOAGENT_CONFIG_DIR": str(ws),
+        "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"),
+        "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "server", "plugin", "install", bundle],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
     if proc.returncode != 0:
         raise WorkspaceError(f"bundle install failed: {(proc.stderr or proc.stdout).strip()[:400]}")
     import json
+
     lock = ws / "plugins.lock"
     try:
         return [p["id"] for p in json.loads(lock.read_text()).get("plugins", [])] if lock.exists() else []
@@ -309,8 +338,12 @@ def run_exec(ident: str, passthrough: list[str]) -> tuple[dict, list[str]]:
     rec = _read_record(ws)
     if rec is None:
         raise WorkspaceError(f"no workspace {ident!r} at {ws}")
-    env = {"PROTOAGENT_CONFIG_DIR": str(ws), "PROTOAGENT_INSTANCE": str(rec.get("id", ident)),
-           "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"), "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock")}
+    env = {
+        "PROTOAGENT_CONFIG_DIR": str(ws),
+        "PROTOAGENT_INSTANCE": str(rec.get("id", ident)),
+        "PROTOAGENT_PLUGINS_DIR": str(ws / "plugins"),
+        "PROTOAGENT_PLUGINS_LOCK": str(ws / "plugins.lock"),
+    }
     argv = [sys.executable, "-m", "server", "--port", str(rec.get("port", PORT_BASE + 1)), *passthrough]
     return env, argv
 
@@ -350,6 +383,7 @@ def rename(ident: str, new_name: str) -> dict:
         raise WorkspaceError(f"an agent named {new_name!r} already exists")
 
     import yaml
+
     ws = Path(found["path"])
     rec = _read_record(ws) or {}
     rec["name"] = new_name

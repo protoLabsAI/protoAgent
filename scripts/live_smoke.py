@@ -122,20 +122,31 @@ def main() -> int:
         print(f"ok: agent card serves (name={card['name']}, skills={[s.get('id') for s in card['skills']]})")
 
         # Real A2A streaming turn over the actual transport.
-        body = json.dumps({
-            "jsonrpc": "2.0", "id": "smoke", "method": "SendStreamingMessage",
-            "params": {"message": {"role": "ROLE_USER", "parts": [{"text": "ping"}],
-                                   "messageId": "m1", "contextId": "smoke"}},
-        }).encode()
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "smoke",
+                "method": "SendStreamingMessage",
+                "params": {
+                    "message": {
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "ping"}],
+                        "messageId": "m1",
+                        "contextId": "smoke",
+                    }
+                },
+            }
+        ).encode()
         req = urllib.request.Request(
-            f"http://127.0.0.1:{agent_port}/a2a", data=body,
+            f"http://127.0.0.1:{agent_port}/a2a",
+            data=body,
             headers={"A2A-Version": "1.0", "Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read().decode("utf-8", "replace")
 
         assert "data:" in raw, f"no SSE data frames in response: {raw[:300]!r}"
-        terminal = ("COMPLETED" in raw or "live smoke ok" in raw or '"artifact' in raw.lower())
+        terminal = "COMPLETED" in raw or "live smoke ok" in raw or '"artifact' in raw.lower()
         assert terminal, f"no terminal/answer frame; first 600 chars: {raw[:600]!r}"
         print("ok: A2A SendStreamingMessage turn decoded + reached a terminal frame")
         print("\nLIVE SMOKE PASSED ✓")

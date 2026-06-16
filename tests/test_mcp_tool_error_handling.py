@@ -22,9 +22,7 @@ def _raising_tool() -> StructuredTool:
     async def _boom(**kwargs) -> str:
         raise ToolException('API error 404: {"success":false,"error":"Feature not found"}')
 
-    return StructuredTool.from_function(
-        coroutine=_boom, name="automaker__get_feature", description="stub"
-    )
+    return StructuredTool.from_function(coroutine=_boom, name="automaker__get_feature", description="stub")
 
 
 def test_handler_returns_recoverable_message():
@@ -58,11 +56,13 @@ def test_build_mcp_tools_wires_the_handler(monkeypatch):
         def get_tools(self):  # awaited via _run_blocking
             async def _coro():
                 return [kept]
+
             return _coro()
 
     monkeypatch.setattr(mt, "MultiServerMCPClient", lambda *a, **k: _FakeClient(), raising=False)
     # patch the imported symbol path used inside build_mcp_tools
     import langchain_mcp_adapters.client as mcp_client
+
     monkeypatch.setattr(mcp_client, "MultiServerMCPClient", lambda *a, **k: _FakeClient())
 
     class _Cfg:

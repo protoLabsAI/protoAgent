@@ -142,19 +142,40 @@ def test_structured_skill_advertises_mime_and_exposes_schema(monkeypatch) -> Non
     schema = {"type": "object", "properties": {"verdict": {"type": "string"}}, "required": ["verdict"]}
     # _SKILL_SPECS lives in server.a2a (ADR 0023 phase 2); _agent_skills /
     # structured_skill_schema read it from there, so patch it at its home.
-    monkeypatch.setattr(server.a2a, "_SKILL_SPECS", [{
-        "id": "market_review", "name": "Market Review", "description": "d",
-        "tags": [], "examples": [], "output_schema": schema, "result_mime": mime,
-    }])
+    monkeypatch.setattr(
+        server.a2a,
+        "_SKILL_SPECS",
+        [
+            {
+                "id": "market_review",
+                "name": "Market Review",
+                "description": "d",
+                "tags": [],
+                "examples": [],
+                "output_schema": schema,
+                "result_mime": mime,
+            }
+        ],
+    )
 
     skill = MessageToDict(server._agent_skills()[0])
-    assert skill["outputModes"] == [mime]                 # advertised on the card
+    assert skill["outputModes"] == [mime]  # advertised on the card
     got = server.structured_skill_schema("market_review")  # schema for the executor
     assert got == {"schema": schema, "mime": mime}
 
     # A skill with no schema → free text (no output_modes, no lookup).
-    monkeypatch.setattr(server.a2a, "_SKILL_SPECS", [{
-        "id": "chat", "name": "Chat", "description": "d", "tags": [], "examples": [],
-    }])
+    monkeypatch.setattr(
+        server.a2a,
+        "_SKILL_SPECS",
+        [
+            {
+                "id": "chat",
+                "name": "Chat",
+                "description": "d",
+                "tags": [],
+                "examples": [],
+            }
+        ],
+    )
     assert "outputModes" not in MessageToDict(server._agent_skills()[0])
     assert server.structured_skill_schema("chat") is None

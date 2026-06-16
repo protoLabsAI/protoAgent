@@ -25,7 +25,7 @@ from plugins.coding_agent.acp_client import AcpClient, AcpError
 # prompt emits a tool_call narration, asks one permission (server→client
 # request), then streams two agent_message_chunks — echoing the chosen option
 # id so the test can prove auto-allow picked the `allow` option.
-_FAKE_AGENT = r'''
+_FAKE_AGENT = r"""
 import sys, json
 
 def send(obj):
@@ -64,7 +64,7 @@ while True:
                 "update": {"sessionUpdate": "agent_message_chunk",
                            "content": {"type": "text", "text": chunk}}}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
-'''
+"""
 
 
 # ── ACP wire exchange against the fake agent ──────────────────────────────────
@@ -103,7 +103,7 @@ async def test_close_reaps_the_subprocess(fake_agent, tmp_path):
     await client.prompt("go", timeout=30.0)
     assert client._proc is not None and client._proc.returncode is None  # alive after the turn
     await client.close()
-    assert client._proc.returncode is not None      # reaped during close (the fix)
+    assert client._proc.returncode is not None  # reaped during close (the fix)
     assert client._stderr_task is not None and client._stderr_task.done()  # not leaked
 
 
@@ -112,7 +112,9 @@ async def test_acp_client_readonly_policy_denies_edit(fake_agent, tmp_path):
     # client picks the reject_once option, which the fake echoes back.
     spec = {"name": "ro", "permissions": "readonly", "allow_kinds": [], "deny_kinds": []}
     client = AcpClient(
-        sys.executable, [str(fake_agent)], cwd=str(tmp_path),
+        sys.executable,
+        [str(fake_agent)],
+        cwd=str(tmp_path),
         permission=_make_permission(spec),
     )
     try:
@@ -140,7 +142,7 @@ async def test_acp_client_bad_workdir_raises_acp_error():
 # so it can receive a session/cancel notification, which it records to a marker
 # file. Proves the client cancels the in-flight turn on the abort path instead of
 # leaving the session mid-generation.
-_CANCEL_AGENT = r'''
+_CANCEL_AGENT = r"""
 import sys, json, os
 MARKER = os.environ.get("CANCEL_MARKER", "")
 def send(obj):
@@ -165,10 +167,10 @@ while True:
             with open(MARKER, "w") as fh:
                 fh.write("cancelled")
         break
-'''
+"""
 
 # Advertises an auth method, then rejects session/new with AUTH_REQUIRED (-32000).
-_AUTH_AGENT = r'''
+_AUTH_AGENT = r"""
 import sys, json
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
@@ -188,7 +190,7 @@ while True:
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": mid,
               "error": {"code": -32000, "message": "auth required"}})
-'''
+"""
 
 
 async def test_prompt_timeout_sends_session_cancel(tmp_path):
@@ -196,7 +198,10 @@ async def test_prompt_timeout_sends_session_cancel(tmp_path):
     script.write_text(_CANCEL_AGENT, encoding="utf-8")
     marker = tmp_path / "cancelled.marker"
     client = AcpClient(
-        sys.executable, [str(script)], cwd=str(tmp_path), name="cancel",
+        sys.executable,
+        [str(script)],
+        cwd=str(tmp_path),
+        name="cancel",
         env={"CANCEL_MARKER": str(marker)},
     )
     try:
@@ -222,9 +227,9 @@ async def test_session_new_auth_required_raises_actionable(tmp_path):
     finally:
         await client.close()
     msg = str(ei.value)
-    assert "requires authentication" in msg   # actionable, not opaque
-    assert "openai" in msg                     # advertised auth method surfaced
-    assert ei.value.code == -32000             # AUTH_REQUIRED preserved
+    assert "requires authentication" in msg  # actionable, not opaque
+    assert "openai" in msg  # advertised auth method surfaced
+    assert ei.value.code == -32000  # AUTH_REQUIRED preserved
 
 
 # ── session lifecycle: load / close / version / thought (#970) ────────────────
@@ -232,7 +237,7 @@ async def test_session_new_auth_required_raises_actionable(tmp_path):
 # Advertises the `loadSession` capability, records whether session/new vs
 # session/load fired (to a marker), and on load replays one history chunk BEFORE
 # responding null — so the test can prove the replay is suppressed on reattach.
-_LOADER_AGENT = r'''
+_LOADER_AGENT = r"""
 import sys, json, os
 MARKER = os.environ.get("MARKER", "")
 def send(obj):
@@ -267,11 +272,11 @@ while True:
             "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
                                           "content": {"type": "text", "text": "fresh"}}}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
-'''
+"""
 
 # Emits an agent_thought_chunk (reasoning) then an agent_message_chunk (answer),
 # so the test can prove thoughts are surfaced separately and never folded in.
-_THOUGHT_AGENT = r'''
+_THOUGHT_AGENT = r"""
 import sys, json
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
@@ -296,11 +301,11 @@ while True:
             "sessionId": "s1", "update": {"sessionUpdate": "agent_message_chunk",
                                           "content": {"type": "text", "text": "the answer"}}}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
-'''
+"""
 
 # Counters with protocolVersion 2 (which this client does not speak) — the client
 # must close rather than proceed.
-_V2_AGENT = r'''
+_V2_AGENT = r"""
 import sys, json
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
@@ -314,7 +319,7 @@ while True:
     msg = json.loads(line)
     if msg.get("method") == "initialize":
         send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"protocolVersion": 2}})
-'''
+"""
 
 
 async def test_session_load_reattaches_persisted_session(tmp_path):
@@ -330,15 +335,19 @@ async def test_session_load_reattaches_persisted_session(tmp_path):
         encoding="utf-8",
     )
     client = AcpClient(
-        sys.executable, [str(script)], cwd=str(tmp_path), name="loader",
-        env={"MARKER": str(marker)}, session_id_path=sess_file,
+        sys.executable,
+        [str(script)],
+        cwd=str(tmp_path),
+        name="loader",
+        env={"MARKER": str(marker)},
+        session_id_path=sess_file,
     )
     try:
         answer = await client.prompt("continue the thread", timeout=30.0)
     finally:
         await client.close()
-    assert answer == "fresh"                 # replayed "OLD HISTORY" suppressed
-    assert marker.read_text() == "load:s1"   # reattached via session/load, not new
+    assert answer == "fresh"  # replayed "OLD HISTORY" suppressed
+    assert marker.read_text() == "load:s1"  # reattached via session/load, not new
     assert client._session_id == "s1"
 
 
@@ -347,7 +356,10 @@ async def test_session_new_persists_id_for_reattach(fake_agent, tmp_path):
     later client for the same launch signature can reattach it."""
     sess_file = tmp_path / "sess.json"
     client = AcpClient(
-        sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="persist",
+        sys.executable,
+        [str(fake_agent)],
+        cwd=str(tmp_path),
+        name="persist",
         session_id_path=sess_file,
     )
     try:
@@ -369,8 +381,14 @@ async def test_forget_session_deletes_persisted_id(tmp_path, monkeypatch):
     sess.write_text('{"sessionId": "s1"}', encoding="utf-8")
     monkeypatch.setattr(ca, "_session_id_path", lambda spec: sess)
     spec = {
-        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": str(tmp_path),
-        "env": None, "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+        "name": "proto",
+        "command": "proto",
+        "args": ["--acp"],
+        "workdir": str(tmp_path),
+        "env": None,
+        "permissions": "auto",
+        "allow_kinds": [],
+        "deny_kinds": [],
     }
     assert await ca.forget_session(spec) is True
     assert not sess.exists()
@@ -387,15 +405,18 @@ async def test_persisted_id_ignored_when_agent_lacks_loadsession(fake_agent, tmp
         encoding="utf-8",
     )
     client = AcpClient(
-        sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="nolc",
+        sys.executable,
+        [str(fake_agent)],
+        cwd=str(tmp_path),
+        name="nolc",
         session_id_path=sess_file,
     )
     try:
         answer = await client.prompt("add a healthz route", timeout=30.0)
     finally:
         await client.close()
-    assert answer == "Hello world [ok]"   # ran a normal new-session turn
-    assert client._session_id == "s1"      # the new id, not the stale "OLD"
+    assert answer == "Hello world [ok]"  # ran a normal new-session turn
+    assert client._session_id == "s1"  # the new id, not the stale "OLD"
     assert json.loads(sess_file.read_text(encoding="utf-8"))["sessionId"] == "s1"
 
 
@@ -446,7 +467,7 @@ async def test_agent_thought_chunk_surfaced_not_in_answer(tmp_path):
         answer = await client.prompt("go", thought_callback=on_thought, timeout=30.0)
     finally:
         await client.close()
-    assert answer == "the answer"        # thought NOT folded into the answer
+    assert answer == "the answer"  # thought NOT folded into the answer
     assert thoughts == ["thinking hard"]  # surfaced to the thought callback
 
 
@@ -457,7 +478,8 @@ _OPTS = [{"optionId": "a", "kind": "allow_once"}, {"optionId": "r", "kind": "rej
 
 def _perm(policy, kind, options=None, allow=None, deny=None):
     spec = {
-        "name": "x", "permissions": policy,
+        "name": "x",
+        "permissions": policy,
         "allow_kinds": [k.lower() for k in (allow or [])],
         "deny_kinds": [k.lower() for k in (deny or [])],
     }
@@ -473,7 +495,7 @@ def test_policy_auto_allows_everything():
 def test_policy_allowlist_denies_risky_allows_safe():
     assert _perm("allowlist", "edit") == "a"
     assert _perm("allowlist", "read") == "a"
-    assert _perm("allowlist", "execute") == "r"      # risky → reject option
+    assert _perm("allowlist", "execute") == "r"  # risky → reject option
     assert _perm("allowlist", "delete") == "r"
 
 
@@ -490,7 +512,7 @@ def test_policy_deny_cancels_when_no_reject_option():
 
 
 def test_policy_custom_allow_deny_kinds():
-    assert _perm("allowlist", "edit", deny=["edit"]) == "r"        # explicitly denied
+    assert _perm("allowlist", "edit", deny=["edit"]) == "r"  # explicitly denied
     assert _perm("readonly", "edit", allow=["read", "edit"]) == "a"  # explicitly allowed
 
 
@@ -501,8 +523,13 @@ async def test_evict_client_pops_and_closes():
     """evict_client removes the cached client AND awaits close() — a plain pop
     would forget the handle but leave the subprocess alive."""
     spec = {
-        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp/wt-1",
-        "permissions": "allowlist", "allow_kinds": [], "deny_kinds": [],
+        "name": "proto",
+        "command": "proto",
+        "args": ["--acp"],
+        "workdir": "/tmp/wt-1",
+        "permissions": "allowlist",
+        "allow_kinds": [],
+        "deny_kinds": [],
     }
 
     class _FakeClient:
@@ -526,13 +553,18 @@ def test_session_id_path_is_stable_and_keyed_per_signature():
     """The factory derives a session-id path from the cache key — stable for the same
     spec, distinct when the launch signature (e.g. workdir) changes."""
     spec_a = {
-        "name": "proto", "command": "proto", "args": ["--acp"], "workdir": "/tmp/wt-a",
-        "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+        "name": "proto",
+        "command": "proto",
+        "args": ["--acp"],
+        "workdir": "/tmp/wt-a",
+        "permissions": "auto",
+        "allow_kinds": [],
+        "deny_kinds": [],
     }
     spec_b = {**spec_a, "workdir": "/tmp/wt-b"}
     p_a, p_a2, p_b = P._session_id_path(spec_a), P._session_id_path(spec_a), P._session_id_path(spec_b)
-    assert p_a == p_a2                       # stable for the same signature
-    assert p_a != p_b                        # workdir is part of the key
+    assert p_a == p_a2  # stable for the same signature
+    assert p_a != p_b  # workdir is part of the key
     assert p_a.name.endswith(".json") and p_a.parent.name == "acp_sessions"
 
 
@@ -540,8 +572,13 @@ async def test_evict_client_swallows_close_errors():
     """A close() that raises must not propagate — teardown is best-effort, and the
     cache entry is dropped regardless."""
     spec = {
-        "name": "proto", "command": "proto", "args": [], "workdir": "/tmp/wt-2",
-        "permissions": "auto", "allow_kinds": [], "deny_kinds": [],
+        "name": "proto",
+        "command": "proto",
+        "args": [],
+        "workdir": "/tmp/wt-2",
+        "permissions": "auto",
+        "allow_kinds": [],
+        "deny_kinds": [],
     }
 
     class _BadClient:
@@ -549,5 +586,5 @@ async def test_evict_client_swallows_close_errors():
             raise RuntimeError("terminate blew up")
 
     P._CLIENTS[P._cache_key(spec)] = _BadClient()
-    assert await P.evict_client(spec) is True          # did not raise
+    assert await P.evict_client(spec) is True  # did not raise
     assert P._cache_key(spec) not in P._CLIENTS

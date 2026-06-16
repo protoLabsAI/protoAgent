@@ -95,8 +95,10 @@ def advertise(name: str, port: int) -> None:
         log.info("[discovery] mDNS disabled (fleet.discovery.mdns=false) — not advertising %s", name)
         return
     if _on_event_loop():
-        log.warning("[discovery] advertise() called on an event loop thread — refusing "
-                    "(sync zeroconf would deadlock it); call via asyncio.to_thread")
+        log.warning(
+            "[discovery] advertise() called on an event loop thread — refusing "
+            "(sync zeroconf would deadlock it); call via asyncio.to_thread"
+        )
         return
     try:
         from zeroconf import ServiceInfo, Zeroconf
@@ -132,8 +134,10 @@ def stop_advertise() -> None:
     ``advertise``); ``unregister``/``close`` block on the loop the same way."""
     global _zc, _info
     if _zc is not None and _on_event_loop():
-        log.warning("[discovery] stop_advertise() called on an event loop thread — refusing "
-                    "(sync zeroconf would deadlock it); call via asyncio.to_thread")
+        log.warning(
+            "[discovery] stop_advertise() called on an event loop thread — refusing "
+            "(sync zeroconf would deadlock it); call via asyncio.to_thread"
+        )
         return
     try:
         if _zc is not None:
@@ -168,8 +172,7 @@ def _tailscale_cli() -> str | None:
     """The tailscale CLI to ask about the tailnet, or None when not installed."""
     import shutil
 
-    return shutil.which("tailscale") or (
-        _TAILSCALE_APP_CLI if os.path.exists(_TAILSCALE_APP_CLI) else None)
+    return shutil.which("tailscale") or (_TAILSCALE_APP_CLI if os.path.exists(_TAILSCALE_APP_CLI) else None)
 
 
 def _tailnet_peer_ips(timeout: float = 3.0) -> list[str]:
@@ -180,13 +183,11 @@ def _tailnet_peer_ips(timeout: float = 3.0) -> list[str]:
     if not cli:
         return []
     try:
-        out = subprocess.run([cli, "status", "--json"], capture_output=True, text=True,
-                             timeout=timeout)
+        out = subprocess.run([cli, "status", "--json"], capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0:
             return []
         peers = (json.loads(out.stdout).get("Peer") or {}).values()
-        return [ip for p in peers if p.get("Online")
-                for ip in (p.get("TailscaleIPs") or []) if "." in ip]
+        return [ip for p in peers if p.get("Online") for ip in (p.get("TailscaleIPs") or []) if "." in ip]
     except Exception:  # noqa: BLE001 — discovery is best-effort, never blocks the endpoint
         log.debug("[discovery] tailscale status failed", exc_info=True)
         return []
@@ -198,15 +199,15 @@ async def _scan_tailnet(port_range: tuple[int, int], known: set) -> list[dict]:
     if not ips:
         return []
     async with httpx.AsyncClient() as client:
-        tasks = [_probe(client, ip, p) for ip in ips
-                 for p in range(port_range[0], port_range[1] + 1) if (ip, p) not in known]
+        tasks = [
+            _probe(client, ip, p) for ip in ips for p in range(port_range[0], port_range[1] + 1) if (ip, p) not in known
+        ]
         return [r for r in await asyncio.gather(*tasks) if r]
 
 
 async def _scan_local(port_range: tuple[int, int], skip_ports: set[int]) -> list[dict]:
     async with httpx.AsyncClient() as client:
-        tasks = [_probe(client, "127.0.0.1", p)
-                 for p in range(port_range[0], port_range[1] + 1) if p not in skip_ports]
+        tasks = [_probe(client, "127.0.0.1", p) for p in range(port_range[0], port_range[1] + 1) if p not in skip_ports]
         return [r for r in await asyncio.gather(*tasks) if r]
 
 
@@ -249,9 +250,13 @@ async def _no_results() -> list[dict]:
     return []
 
 
-async def discover(*, known: set | None = None,
-                   port_range: tuple[int, int] | None = None, timeout: float = 1.5,
-                   mdns: bool | None = None) -> list[dict]:
+async def discover(
+    *,
+    known: set | None = None,
+    port_range: tuple[int, int] | None = None,
+    timeout: float = 1.5,
+    mdns: bool | None = None,
+) -> list[dict]:
     """Other protoAgents (local + LAN + tailnet) minus the ones already in the fleet.
 
     ``known`` is a set of ``(host, port)`` already known (the host itself + existing members);

@@ -60,8 +60,7 @@ def load_plugin(root, plugin_id: str | None = None, *, entry: str = "__init__.py
     name = plugin_module_name(plugin_id or root.name)
     for cached in [m for m in list(sys.modules) if m == name or m.startswith(name + ".")]:
         sys.modules.pop(cached, None)
-    spec = importlib.util.spec_from_file_location(
-        name, str(root / entry), submodule_search_locations=[str(root)])
+    spec = importlib.util.spec_from_file_location(name, str(root / entry), submodule_search_locations=[str(root)])
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not create an import spec for {root / entry}")
     module = importlib.util.module_from_spec(spec)
@@ -87,7 +86,9 @@ def _raise_unpatched(dotted: str):
     def _stub(*_a, **_k):
         raise RuntimeError(
             f"{dotted} is a stubbed host seam — monkeypatch it in your test "
-            f"(install_host_stubs registered a placeholder so the import resolves).")
+            f"(install_host_stubs registered a placeholder so the import resolves)."
+        )
+
     return _stub
 
 
@@ -113,12 +114,13 @@ class _StubModule(types.ModuleType):
 def _default_stubs() -> dict:
     return {
         "graph": {},
-        "graph.sdk": {},                       # run_subagent / subagent_types / config / complete
+        "graph.sdk": {},  # run_subagent / subagent_types / config / complete
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
         "graph.config_io": {"SECRETS_YAML_PATH": Path("config/secrets.yaml")},
         "graph.goals": {},
-        "graph.goals.types": {"VerifyResult": type("VerifyResult", (), {
-            "__init__": lambda self, **kw: self.__dict__.update(kw)})},
+        "graph.goals.types": {
+            "VerifyResult": type("VerifyResult", (), {"__init__": lambda self, **kw: self.__dict__.update(kw)})
+        },
         "knowledge": {},
         "knowledge.store": {"KnowledgeStore": type("KnowledgeStore", (), {})},
     }
@@ -139,16 +141,16 @@ def install_host_stubs(extra: dict | None = None) -> list[str]:
     installed: list[str] = []
     for name in sorted(specs, key=lambda n: n.count(".")):  # parents before children
         if name in sys.modules:
-            continue                                        # already present (real or stubbed) — leave it
+            continue  # already present (real or stubbed) — leave it
         try:
-            __import__(name)                                # a real host module is installed → use it
+            __import__(name)  # a real host module is installed → use it
             continue
         except Exception:
             pass
-        module = _StubModule(name, specs[name])             # attrs set only when we CREATE the stub,
-        sys.modules[name] = module                          # so a real host module is never clobbered
+        module = _StubModule(name, specs[name])  # attrs set only when we CREATE the stub,
+        sys.modules[name] = module  # so a real host module is never clobbered
         installed.append(name)
-        if "." in name:                                     # attach to the parent package
+        if "." in name:  # attach to the parent package
             parent, _, child = name.rpartition(".")
             if parent in sys.modules:
                 setattr(sys.modules[parent], child, module)
@@ -179,8 +181,8 @@ class FakeRegistry:
         self.goal_hooks: list = []
         self.knowledge_stores: dict = {}
         self.embedders: dict = {}
-        self.handlers: dict = {}          # topic -> [handlers]
-        self.emitted: list = []           # (topic, data)
+        self.handlers: dict = {}  # topic -> [handlers]
+        self.emitted: list = []  # (topic, data)
         self.navigations: list = []
         self.thread_id_resolver = None
 

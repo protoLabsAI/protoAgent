@@ -130,7 +130,7 @@ def _hard_split(s: str, max_chars: int) -> list[str]:
                 parts.append(buf)
                 buf = ""
             for i in range(0, len(word), max_chars):
-                parts.append(word[i:i + max_chars])
+                parts.append(word[i : i + max_chars])
             continue
         candidate = (buf + " " + word) if buf else word
         if len(candidate) <= max_chars:
@@ -152,5 +152,5 @@ def _overlap_tail(chunk: str, overlap_chars: int) -> str:
     tail = chunk[-overlap_chars:]
     space = tail.find(" ")
     if space != -1:
-        tail = tail[space + 1:]
+        tail = tail[space + 1 :]
     return tail.strip()

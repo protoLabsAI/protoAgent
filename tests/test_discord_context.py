@@ -50,8 +50,10 @@ def test_recent_respects_limit_and_blank_skipped(tlog):
 
 
 def test_assemble_wraps_history_and_current():
-    turns = [Turn(ts=1_700_000_000_000, channel_id="c", user_id="u", role="user", content="prior q"),
-             Turn(ts=1_700_000_001_000, channel_id="c", user_id="u", role="assistant", content="prior a")]
+    turns = [
+        Turn(ts=1_700_000_000_000, channel_id="c", user_id="u", role="user", content="prior q"),
+        Turn(ts=1_700_000_001_000, channel_id="c", user_id="u", role="assistant", content="prior a"),
+    ]
     out = assemble_discord_context(turns, "now what?")
     assert "<recent_conversation>" in out and "User: prior q" in out and "Assistant: prior a" in out
     assert "<current_message>\nnow what?\n</current_message>" in out
@@ -98,9 +100,13 @@ async def test_flush_warms_with_history_and_records(tmp_path, monkeypatch):
 
     cid, _n, _t = gw._conversations.get_or_create("dm", "u1", timeout_s=900)
     gw._message_buffers["dm:u1"] = {
-        "messages": [{"id": "m0", "content": "follow up"}], "channel_id": "dm",
-        "user_id": "u1", "is_dm": True, "conversation_id": cid,
-        "is_new_conversation": True, "timer": None,
+        "messages": [{"id": "m0", "content": "follow up"}],
+        "channel_id": "dm",
+        "user_id": "u1",
+        "is_dm": True,
+        "conversation_id": cid,
+        "is_new_conversation": True,
+        "timer": None,
     }
     await gw._flush_burst("dm:u1")
 

@@ -38,7 +38,7 @@ def _make_rich_plugin_repo(root: Path, pid: str = "demo_kit") -> Path:
         "def register(registry):\n"
         "    @tool\n"
         "    def demo_kit_hello(name: str = 'world') -> str:\n"
-        "        \"\"\"say hi\"\"\"\n"
+        '        """say hi"""\n'
         "        return f'hello {name}'\n"
         "    registry.register_tool(demo_kit_hello)\n"
         "    from fastapi import APIRouter\n"

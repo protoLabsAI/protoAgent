@@ -122,17 +122,13 @@ async def _service_rpc(req_reader: asyncio.StreamReader, resp_writer, tool_map: 
 async def _connect_read(fd: int):
     loop = asyncio.get_event_loop()
     reader = asyncio.StreamReader()
-    transport, _ = await loop.connect_read_pipe(
-        lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, "rb", 0)
-    )
+    transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, "rb", 0))
     return reader, transport
 
 
 async def _connect_write(fd: int):
     loop = asyncio.get_event_loop()
-    transport, protocol = await loop.connect_write_pipe(
-        asyncio.streams.FlowControlMixin, os.fdopen(fd, "wb", 0)
-    )
+    transport, protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, os.fdopen(fd, "wb", 0))
     writer = asyncio.StreamWriter(transport, protocol, None, loop)
     return writer, transport
 
@@ -161,7 +157,9 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
     req_transport = resp_transport = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-u", path,
+            sys.executable,
+            "-u",
+            path,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -175,11 +173,15 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
         )
         # Parent doesn't use the child ends; closing req_w lets the parent's
         # reader see EOF when the child exits.
-        os.close(req_w); req_w = -1
-        os.close(resp_r); resp_r = -1
+        os.close(req_w)
+        req_w = -1
+        os.close(resp_r)
+        resp_r = -1
 
-        req_reader, req_transport = await _connect_read(req_r); req_r = -1
-        resp_writer, resp_transport = await _connect_write(resp_w); resp_w = -1
+        req_reader, req_transport = await _connect_read(req_r)
+        req_r = -1
+        resp_writer, resp_transport = await _connect_write(resp_w)
+        resp_w = -1
 
         service = asyncio.ensure_future(_service_rpc(req_reader, resp_writer, tool_map))
         try:
@@ -237,10 +239,7 @@ def build_execute_code_tool(all_tools: list, *, config):
     from langchain_core.tools import tool
 
     allow = set(config.execute_code_tools or [])
-    tool_map = {
-        t.name: t for t in all_tools
-        if t.name != "execute_code" and (not allow or t.name in allow)
-    }
+    tool_map = {t.name: t for t in all_tools if t.name != "execute_code" and (not allow or t.name in allow)}
     available = ", ".join(sorted(tool_map)) or "(none)"
     timeout = config.execute_code_timeout
     truncate = config.execute_code_output_truncate

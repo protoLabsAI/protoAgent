@@ -72,11 +72,7 @@ def configure(token: str | None, admin_ids: list[str] | None) -> None:
     """
     global _cfg_token, _cfg_admin_ids
     _cfg_token = (token or "").strip() or None
-    _cfg_admin_ids = (
-        {str(a).strip() for a in admin_ids if str(a).strip()}
-        if admin_ids is not None
-        else None
-    )
+    _cfg_admin_ids = {str(a).strip() for a in admin_ids if str(a).strip()} if admin_ids is not None else None
 
 
 def _token() -> str | None:
@@ -131,11 +127,13 @@ def _get_turn_log():
     if _turn_log is None:
         try:
             from surfaces.discord.turn_log import TurnLog
+
             _turn_log = TurnLog()
         except Exception:  # noqa: BLE001
             log.exception("[discord] turn-log init failed — long-window context disabled")
             _turn_log = False
     return _turn_log if _turn_log is not False else None
+
 
 # Module-level conversation + burst state, started from _run_gateway's loop.
 _conversations = ConversationManager()
@@ -324,10 +322,11 @@ async def _handle_message(d: dict, bot_id: str) -> None:
     if not content:
         return
 
-    log.info("[discord] msg from %s (%s) in %s: %s",
-             author.get("username"), user_id, channel_id, content[:80])
-    _emit("discord.message", {"channel_id": channel_id, "user_id": user_id,
-                              "username": author.get("username"), "is_dm": is_dm})
+    log.info("[discord] msg from %s (%s) in %s: %s", author.get("username"), user_id, channel_id, content[:80])
+    _emit(
+        "discord.message",
+        {"channel_id": channel_id, "user_id": user_id, "username": author.get("username"), "is_dm": is_dm},
+    )
 
     # Capture the DM channel as the operator's return address so scheduler-fired /
     # proactive turns have somewhere to deliver. Only DM channels — a guild
@@ -339,14 +338,18 @@ async def _handle_message(d: dict, bot_id: str) -> None:
     # leave the channel clean; the slow 👀 is armed in _flush_burst.
     entry = _message_buffers.get(buffer_key)
     if entry is None:
-        timeout_s = _f("DISCORD_DM_CONVERSATION_TIMEOUT_S", 900) if is_dm \
-            else _f("DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S", 300)
-        conversation_id, is_new, _turn = _conversations.get_or_create(
-            channel_id, user_id, timeout_s=timeout_s)
+        timeout_s = (
+            _f("DISCORD_DM_CONVERSATION_TIMEOUT_S", 900) if is_dm else _f("DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S", 300)
+        )
+        conversation_id, is_new, _turn = _conversations.get_or_create(channel_id, user_id, timeout_s=timeout_s)
         entry = {
-            "messages": [], "channel_id": channel_id, "user_id": user_id,
-            "is_dm": is_dm, "conversation_id": conversation_id,
-            "is_new_conversation": is_new, "timer": None,
+            "messages": [],
+            "channel_id": channel_id,
+            "user_id": user_id,
+            "is_dm": is_dm,
+            "conversation_id": conversation_id,
+            "is_new_conversation": is_new,
+            "timer": None,
         }
         _message_buffers[buffer_key] = entry
 
@@ -367,8 +370,7 @@ async def _slow_reaction_arm(channel_id: str, msgs: list[dict], is_dm: bool, sta
     except asyncio.CancelledError:
         return
     state["placed"] = True
-    await asyncio.gather(*[_react(channel_id, m["id"], _REACTION_THINKING) for m in msgs],
-                         return_exceptions=True)
+    await asyncio.gather(*[_react(channel_id, m["id"], _REACTION_THINKING) for m in msgs], return_exceptions=True)
 
 
 async def _burst_timer(buffer_key: str) -> None:
@@ -412,6 +414,7 @@ async def _flush_burst(buffer_key: str) -> None:
             recent = tlog.get_recent_turns(channel_id, user_id, limit=8, max_age_hours=24)
             if recent:
                 from surfaces.discord.context import assemble_discord_context
+
                 forward_content = assemble_discord_context(recent, combined)
         except Exception:
             log.exception("[discord] context assembly failed — proceeding without history")
@@ -437,8 +440,7 @@ async def _flush_burst(buffer_key: str) -> None:
 
     if not reply_text.strip():
         log.warning("[discord] empty reply for conversation %s — graceful fallback", conversation_id)
-        reply_text = ("Sorry — I lost the thread on that one. Could you say it again, "
-                      "maybe with a little more detail?")
+        reply_text = "Sorry — I lost the thread on that one. Could you say it again, maybe with a little more detail?"
 
     reply_message_id = await _reply(channel_id, last_message_id, reply_text, is_dm=is_dm)
 
@@ -492,8 +494,7 @@ async def _run_gateway() -> None:
     _conversations.start()
 
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{_DISCORD_API}/gateway/bot",
-                                headers={"Authorization": f"Bot {_token()}"})
+        resp = await client.get(f"{_DISCORD_API}/gateway/bot", headers={"Authorization": f"Bot {_token()}"})
         gateway_url = resp.json().get("url", "wss://gateway.discord.gg")
 
     sequence: int | None = None
@@ -509,15 +510,18 @@ async def _run_gateway() -> None:
 
                     if op == 10:  # HELLO
                         interval = data["d"]["heartbeat_interval"] / 1000
-                        await ws.send(json.dumps({
-                            "op": 2,
-                            "d": {
-                                "token": _token(),
-                                "intents": _GATEWAY_INTENTS,
-                                "properties": {"os": "linux", "browser": "protoagent",
-                                               "device": "protoagent"},
-                            },
-                        }))
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "op": 2,
+                                    "d": {
+                                        "token": _token(),
+                                        "intents": _GATEWAY_INTENTS,
+                                        "properties": {"os": "linux", "browser": "protoagent", "device": "protoagent"},
+                                    },
+                                }
+                            )
+                        )
                         asyncio.create_task(_heartbeat(ws, interval, lambda: sequence))
                     elif op == 0:  # DISPATCH
                         t = data.get("t")

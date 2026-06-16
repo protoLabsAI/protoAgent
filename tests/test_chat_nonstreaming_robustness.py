@@ -51,8 +51,10 @@ def _install_graph(monkeypatch, messages, scheduler=None):
         from graph.agent import create_agent_graph
 
         g = create_agent_graph(
-            LangGraphConfig(), scheduler=scheduler,
-            include_subagents=False, checkpointer=MemorySaver(),
+            LangGraphConfig(),
+            scheduler=scheduler,
+            include_subagents=False,
+            checkpointer=MemorySaver(),
         )
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
@@ -64,11 +66,22 @@ def _install_graph(monkeypatch, messages, scheduler=None):
 async def test_ask_human_interrupt_surfaces_the_question(monkeypatch):
     from server.chat import chat
 
-    _install_graph(monkeypatch, [
-        AIMessage(content="", tool_calls=[
-            {"name": "ask_human", "args": {"question": "What timezone are you in?"},
-             "id": "c1", "type": "tool_call"}]),
-    ])
+    _install_graph(
+        monkeypatch,
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "ask_human",
+                        "args": {"question": "What timezone are you in?"},
+                        "id": "c1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ],
+    )
     out = await chat("ask me my timezone", "sessA")
     content = out[0]["content"]
     assert content, "interrupt must not return an empty reply"
@@ -79,10 +92,13 @@ async def test_ask_human_interrupt_surfaces_the_question(monkeypatch):
 async def test_scratch_only_turn_kicks_and_recovers(monkeypatch):
     from server.chat import chat
 
-    _install_graph(monkeypatch, [
-        AIMessage(content="<scratch_pad>thinking, never committed</scratch_pad>"),
-        AIMessage(content="<output>recovered answer</output>"),
-    ])
+    _install_graph(
+        monkeypatch,
+        [
+            AIMessage(content="<scratch_pad>thinking, never committed</scratch_pad>"),
+            AIMessage(content="<output>recovered answer</output>"),
+        ],
+    )
     out = await chat("do something", "sessB")
     assert out[0]["content"] == "recovered answer"
 
@@ -91,12 +107,19 @@ async def test_scratch_only_turn_kicks_and_recovers(monkeypatch):
 async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     from server.chat import chat
 
-    _install_graph(monkeypatch, [
-        AIMessage(content="", tool_calls=[
-            {"name": "wait", "args": {"seconds": 30, "then": "resume"},
-             "id": "c1", "type": "tool_call"}]),
-        AIMessage(content="unused"),
-    ], scheduler=_FakeScheduler())
+    _install_graph(
+        monkeypatch,
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "wait", "args": {"seconds": 30, "then": "resume"}, "id": "c1", "type": "tool_call"}
+                ],
+            ),
+            AIMessage(content="unused"),
+        ],
+        scheduler=_FakeScheduler(),
+    )
     out = await chat("wait a bit then resume", "sessC")
     content = out[0]["content"]
     assert content and "Yielding" in content  # not a blank reply

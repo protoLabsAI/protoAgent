@@ -1,6 +1,5 @@
 """Tests for hot-memory (always-on domain='hot' facts)."""
 
-
 from langchain_core.messages import HumanMessage
 
 from graph.middleware.knowledge import KnowledgeMiddleware

@@ -54,21 +54,28 @@ class WorkflowRegistry:
         """Lightweight summaries for the UI / tool discovery."""
         out = []
         for name, r in sorted(self._recipes.items()):
-            out.append({
-                "name": name,
-                "description": r.get("description", ""),
-                "inputs": [
-                    {"name": i.get("name"), "required": bool(i.get("required")), "default": i.get("default")}
-                    for i in (r.get("inputs") or []) if isinstance(i, dict)
-                ],
-                "steps": [
-                    # depends_on may be authored as a single id string (e.g. `depends_on: step-a`)
-                    # — list() would shatter that into characters, so coerce a str to [str].
-                    {"id": s.get("id"), "subagent": s.get("subagent"),
-                     "depends_on": ([dep] if isinstance(dep := s.get("depends_on"), str) else list(dep or []))}
-                    for s in (r.get("steps") or []) if isinstance(s, dict)
-                ],
-            })
+            out.append(
+                {
+                    "name": name,
+                    "description": r.get("description", ""),
+                    "inputs": [
+                        {"name": i.get("name"), "required": bool(i.get("required")), "default": i.get("default")}
+                        for i in (r.get("inputs") or [])
+                        if isinstance(i, dict)
+                    ],
+                    "steps": [
+                        # depends_on may be authored as a single id string (e.g. `depends_on: step-a`)
+                        # — list() would shatter that into characters, so coerce a str to [str].
+                        {
+                            "id": s.get("id"),
+                            "subagent": s.get("subagent"),
+                            "depends_on": ([dep] if isinstance(dep := s.get("depends_on"), str) else list(dep or [])),
+                        }
+                        for s in (r.get("steps") or [])
+                        if isinstance(s, dict)
+                    ],
+                }
+            )
         return out
 
     def get(self, name: str) -> dict[str, Any] | None:

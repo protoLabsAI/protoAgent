@@ -86,9 +86,7 @@ def package_version() -> str:
         candidates = list(here.parents)
     for base in candidates:
         try:
-            m = re.search(
-                r'^version\s*=\s*"([^"]+)"', (base / "pyproject.toml").read_text(), re.MULTILINE
-            )
+            m = re.search(r'^version\s*=\s*"([^"]+)"', (base / "pyproject.toml").read_text(), re.MULTILINE)
             if m:
                 return m.group(1)
         except OSError:
@@ -203,10 +201,7 @@ def check_data_version() -> str | None:
             stamp_data_version(DATA_VERSION)
             return None
         if on_disk > DATA_VERSION:
-            return (
-                f"data-dir version mismatch: on-disk v{on_disk} > running v{DATA_VERSION}; "
-                f"downgrade is unsupported"
-            )
+            return f"data-dir version mismatch: on-disk v{on_disk} > running v{DATA_VERSION}; downgrade is unsupported"
     except Exception:  # noqa: BLE001
         pass
     return None
@@ -325,8 +320,7 @@ def _is_protoagent_pid(pid: int) -> bool:
     import subprocess
 
     try:
-        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
-                             capture_output=True, text=True, timeout=2).stdout
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=2).stdout
     except (OSError, subprocess.SubprocessError):
         return True
     if not out.strip():
@@ -341,8 +335,7 @@ def register_instance(port: int | None = None, identity: str = "") -> None:
     try:
         d = _instances_dir()
         d.mkdir(parents=True, exist_ok=True)
-        (d / f"{os.getpid()}.json").write_text(json.dumps(
-            {"pid": os.getpid(), "port": port, "identity": identity}))
+        (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "port": port, "identity": identity}))
     except Exception:  # noqa: BLE001
         pass
 
@@ -378,8 +371,7 @@ def colocated_instances() -> list[dict]:
                 rec = json.loads(f.read_text())
             except (OSError, ValueError):
                 rec = {}
-            out.append({"pid": pid, "port": rec.get("port"),
-                        "identity": rec.get("identity") or ""})
+            out.append({"pid": pid, "port": rec.get("port"), "identity": rec.get("identity") or ""})
     except Exception:  # noqa: BLE001
         return out
     return out
@@ -391,11 +383,13 @@ def colocation_warning() -> str | None:
     if not others:
         return None
     who = ", ".join(
-        f"{o['identity'] or 'unknown'} (pid {o['pid']}"
-        + (f", port {o['port']})" if o.get("port") else ")")
-        for o in others)
+        f"{o['identity'] or 'unknown'} (pid {o['pid']}" + (f", port {o['port']})" if o.get("port") else ")")
+        for o in others
+    )
     iid = instance_id()
     root = (data_home() / _safe_segment(iid)) if iid else data_home()
-    return (f"Another running instance shares this agent's data ({root}): {who}. "
-            "They can clobber each other's chat history, knowledge and stores — give each "
-            "instance its own PROTOAGENT_INSTANCE id (or stop the extra one).")
+    return (
+        f"Another running instance shares this agent's data ({root}): {who}. "
+        "They can clobber each other's chat history, knowledge and stores — give each "
+        "instance its own PROTOAGENT_INSTANCE id (or stop the extra one)."
+    )

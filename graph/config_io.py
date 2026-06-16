@@ -141,9 +141,7 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
     try:
         from graph.plugins.pconfig import installed_plugin_config_schemas
 
-        extra = tuple(
-            (sch.section, key) for sch in installed_plugin_config_schemas() for key in sch.secrets
-        )
+        extra = tuple((sch.section, key) for sch in installed_plugin_config_schemas() for key in sch.secrets)
         _PLUGIN_SECRET_PATHS_CACHE = extra  # remember the good set for next time
     except Exception as e:  # noqa: BLE001 — discovery is best-effort; fail SAFE, not empty
         extra = _PLUGIN_SECRET_PATHS_CACHE
@@ -154,6 +152,7 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
             e,
         )
     return SECRET_PATHS + extra
+
 
 # Setup wizard state.
 # Presence of this (empty) marker file = wizard has been run and the
@@ -261,6 +260,7 @@ def load_yaml_doc(path: Path = CONFIG_YAML_PATH) -> Any:
         if _HAS_RUAMEL:
             return _ruamel.load(f) or _ruamel.load("{}\n")
         import yaml
+
         return yaml.safe_load(f) or {}
 
 
@@ -282,9 +282,11 @@ def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
         log.warning(
             "ruamel.yaml not installed — YAML comments in %s will not be "
             "preserved on save. Add `ruamel.yaml>=0.18` to requirements.txt "
-            "to fix.", path,
+            "to fix.",
+            path,
         )
         import yaml
+
         yaml.safe_dump(doc, buf, sort_keys=False, default_flow_style=False)
     atomic_write(path, buf.getvalue())
 
@@ -292,6 +294,7 @@ def save_yaml_doc(doc: Any, path: Path = CONFIG_YAML_PATH) -> None:
 # ---------------------------------------------------------------------------
 # Config dict <-> dataclass
 # ---------------------------------------------------------------------------
+
 
 def _deep_merge(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge ``src`` into ``dst`` (src wins on leaf conflicts)."""
@@ -334,51 +337,54 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     # doesn't expose. Their attrs still round-trip via from_yaml; they're just not
     # in FIELDS, so they stay explicit.
     r = config.researcher
-    _deep_merge(d, {
-        "knowledge": {
-            "db_path": config.knowledge_db_path,
-            # Breaker knobs aren't settings-schema fields (operational, config-only),
-            # so emit them here for round-trip completeness.
-            "embed_breaker_threshold": config.knowledge_embed_breaker_threshold,
-            "embed_breaker_cooldown_s": config.knowledge_embed_breaker_cooldown_s,
-            # Same for the chunk-fold floor — max_chars/overlap are settings
-            # fields (round-trip via FIELDS); min_chars is config-only.
-            "chunk_min_chars": config.knowledge_chunk_min_chars,
-            # contextual_enrichment is a settings field; its doc cap is config-only.
-            "context_max_doc_chars": config.knowledge_context_max_doc_chars,
-        },
-        "mcp": {
-            "enabled": config.mcp_enabled,
-            "servers": list(config.mcp_servers),
-            "timeout_seconds": config.mcp_timeout_seconds,
-            "denylist": list(config.mcp_denylist),
-        },
-        "skills": {
-            "enabled": config.skills_enabled,
-            "db_path": config.skills_db_path,
-            "dir": config.skills_dir,
-        },
-        # Every plugins.* key from_dict consumes must be emitted here, or any
-        # consumer treating this dict as the COMPLETE config silently loses it
-        # (the YAML file itself was never at risk — apply_updates_to_yaml merges
-        # in place). `disabled` + `sources.allow` were omitted until the
-        # 2026-06-10 prod-readiness audit (N6); plugin-hardening P1 writes
-        # `sources.*`, so the dict has to carry them.
-        "plugins": {
-            "enabled": list(config.plugins_enabled),
-            "disabled": list(config.plugins_disabled),
-            "dir": config.plugins_dir,
-            "sources": {"allow": list(config.plugins_sources_allow)},
-        },
-        "subagents": {
-            "researcher": {
-                "enabled": r.enabled,
-                "tools": list(r.tools),
-                "max_turns": r.max_turns,
-                "model": r.model,
+    _deep_merge(
+        d,
+        {
+            "knowledge": {
+                "db_path": config.knowledge_db_path,
+                # Breaker knobs aren't settings-schema fields (operational, config-only),
+                # so emit them here for round-trip completeness.
+                "embed_breaker_threshold": config.knowledge_embed_breaker_threshold,
+                "embed_breaker_cooldown_s": config.knowledge_embed_breaker_cooldown_s,
+                # Same for the chunk-fold floor — max_chars/overlap are settings
+                # fields (round-trip via FIELDS); min_chars is config-only.
+                "chunk_min_chars": config.knowledge_chunk_min_chars,
+                # contextual_enrichment is a settings field; its doc cap is config-only.
+                "context_max_doc_chars": config.knowledge_context_max_doc_chars,
+            },
+            "mcp": {
+                "enabled": config.mcp_enabled,
+                "servers": list(config.mcp_servers),
+                "timeout_seconds": config.mcp_timeout_seconds,
+                "denylist": list(config.mcp_denylist),
+            },
+            "skills": {
+                "enabled": config.skills_enabled,
+                "db_path": config.skills_db_path,
+                "dir": config.skills_dir,
+            },
+            # Every plugins.* key from_dict consumes must be emitted here, or any
+            # consumer treating this dict as the COMPLETE config silently loses it
+            # (the YAML file itself was never at risk — apply_updates_to_yaml merges
+            # in place). `disabled` + `sources.allow` were omitted until the
+            # 2026-06-10 prod-readiness audit (N6); plugin-hardening P1 writes
+            # `sources.*`, so the dict has to carry them.
+            "plugins": {
+                "enabled": list(config.plugins_enabled),
+                "disabled": list(config.plugins_disabled),
+                "dir": config.plugins_dir,
+                "sources": {"allow": list(config.plugins_sources_allow)},
+            },
+            "subagents": {
+                "researcher": {
+                    "enabled": r.enabled,
+                    "tools": list(r.tools),
+                    "max_turns": r.max_turns,
+                    "model": r.model,
+                },
             },
         },
-    })
+    )
 
     # (C) Plugin-declared sections (ADR 0019) — reflect the PASSED config's resolved
     # plugin_config (not a re-discovery), with declared secrets redacted
@@ -776,10 +782,16 @@ def validate_model_connection(
     # Keep the leading human-readable cause, drop everything from the first
     # secret-ish marker on, and cap the length.
     import re as _re
-    detail = _re.split(
-        r"\s*(?:Received API Key|Key Hash|Unable to find token|Token=)",
-        detail, maxsplit=1,
-    )[0].strip().rstrip(".,")
+
+    detail = (
+        _re.split(
+            r"\s*(?:Received API Key|Key Hash|Unable to find token|Token=)",
+            detail,
+            maxsplit=1,
+        )[0]
+        .strip()
+        .rstrip(".,")
+    )
     detail = detail[:200]
     if resp.status_code in (401, 403) and not detail:
         detail = "authentication failed — check the API key"

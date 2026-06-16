@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RubricScore:
-    score: float                              # fraction of criteria met, 0..1
+    score: float  # fraction of criteria met, 0..1
     met: dict[str, bool] = field(default_factory=dict)
     reasons: str = ""
     error: str | None = None
@@ -67,9 +67,7 @@ def _invoke_grader(prompt: str, model: str | None) -> str:
     from graph.llm import create_llm
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    config = LangGraphConfig.from_yaml(
-        os.environ.get("PROTOAGENT_CONFIG", "config/langgraph-config.yaml")
-    )
+    config = LangGraphConfig.from_yaml(os.environ.get("PROTOAGENT_CONFIG", "config/langgraph-config.yaml"))
     grader_model = model or os.environ.get("EVAL_JUDGE_MODEL") or config.model_name
     llm = create_llm(config, model_name=grader_model)
     resp = llm.invoke([SystemMessage(_GRADER_SYSTEM), HumanMessage(prompt)])

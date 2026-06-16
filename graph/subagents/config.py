@@ -120,8 +120,11 @@ final synthesis in <output>. Keep <output> tight — ~400 words for a standard
 question; expand only for genuinely deep ones.""",
     tools=[
         "current_time",
-        "web_search", "fetch_url",
-        "memory_recall", "memory_list", "memory_ingest",
+        "web_search",
+        "fetch_url",
+        "memory_recall",
+        "memory_list",
+        "memory_ingest",
     ],
     # 40 turns leaves room for a real broad-question research arc
     # (multiple search/fetch cycles + synthesis). Single-question
@@ -321,7 +324,10 @@ pruned (forgot), with `#ids`, or that you did neither and why. Deliberation in
     tools=[
         "current_time",
         "recent_activity",
-        "memory_recall", "memory_list", "memory_ingest", "forget_memory",
+        "memory_recall",
+        "memory_list",
+        "memory_ingest",
+        "forget_memory",
     ],
     max_turns=30,
     # dream writes memory directly; it is not a workflow worth re-capturing as a skill.
@@ -390,7 +396,8 @@ proposed (with bead ids) + what you skipped and why. Deliberation in
         "current_time",
         "recent_activity",
         "memory_recall",
-        "list_skills", "save_skill",
+        "list_skills",
+        "save_skill",
         "beads_create",
     ],
     max_turns=30,

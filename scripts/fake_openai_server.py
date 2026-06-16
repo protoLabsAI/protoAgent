@@ -79,12 +79,17 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         else:
-            body = json.dumps({
-                "id": "smoke-1", "object": "chat.completion", "model": _MODEL,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": _ANSWER},
-                             "finish_reason": "stop"}],
-                "usage": usage,
-            }).encode()
+            body = json.dumps(
+                {
+                    "id": "smoke-1",
+                    "object": "chat.completion",
+                    "model": _MODEL,
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": _ANSWER}, "finish_reason": "stop"}
+                    ],
+                    "usage": usage,
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

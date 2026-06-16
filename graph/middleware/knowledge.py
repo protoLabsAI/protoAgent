@@ -136,24 +136,12 @@ class KnowledgeMiddleware(AgentMiddleware):
         for msg in reversed(messages):
             if isinstance(msg, HumanMessage):
                 if not last_human:
-                    last_human = (
-                        msg.content
-                        if isinstance(msg.content, str)
-                        else str(msg.content)
-                    )
+                    last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
                 else:
-                    content = (
-                        msg.content
-                        if isinstance(msg.content, str)
-                        else str(msg.content)
-                    )
+                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
                     context_parts.append(content)
             elif isinstance(msg, AIMessage):
-                content = (
-                    msg.content
-                    if isinstance(msg.content, str)
-                    else str(msg.content)
-                )
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 context_parts.append(content)
 
         recent_context = " ".join(reversed(context_parts))
@@ -185,9 +173,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             # (already-bound) tools this skill relies on — a relevance hint, not
             # a gate. See ADR 0005 (tool pollution / progressive disclosure).
             tools = getattr(s, "tools_used", ()) or ()
-            tools_line = (
-                f"    <relevant_tools>{', '.join(tools)}</relevant_tools>\n" if tools else ""
-            )
+            tools_line = f"    <relevant_tools>{', '.join(tools)}</relevant_tools>\n" if tools else ""
             return (
                 f'  <skill name="{s.name}">\n'
                 f"    <description>{s.description}</description>\n"
@@ -244,10 +230,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         import time
 
         now = time.monotonic()
-        if (
-            self._prior_sessions_cache is None
-            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
-        ):
+        if self._prior_sessions_cache is None or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
             self._prior_sessions_cache = self.load_memory()
             self._prior_sessions_loaded_at = now
         if self._prior_sessions_cache and not _in_goal_turn():
@@ -279,11 +262,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             last_human: str | None = None
             for msg in reversed(messages):
                 if isinstance(msg, HumanMessage):
-                    last_human = (
-                        msg.content
-                        if isinstance(msg.content, str)
-                        else str(msg.content)
-                    )
+                    last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
                     break
 
             if last_human and self._store is not None:

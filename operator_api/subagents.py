@@ -13,16 +13,18 @@ def list_subagents(config: Any) -> list[dict[str, Any]]:
     for name, registry_def in SUBAGENT_REGISTRY.items():
         override = getattr(config, name, None) if config is not None else None
         tools = list(getattr(override, "tools", registry_def.tools) or [])
-        out.append({
-            "name": name,
-            "description": registry_def.description,
-            "enabled": bool(getattr(override, "enabled", True)),
-            "tools": tools,
-            "default_tools": list(registry_def.tools),
-            "max_turns": int(getattr(override, "max_turns", registry_def.max_turns)),
-            "default_max_turns": int(registry_def.max_turns),
-            "allow_skill_emission": bool(registry_def.allow_skill_emission),
-        })
+        out.append(
+            {
+                "name": name,
+                "description": registry_def.description,
+                "enabled": bool(getattr(override, "enabled", True)),
+                "tools": tools,
+                "default_tools": list(registry_def.tools),
+                "max_turns": int(getattr(override, "max_turns", registry_def.max_turns)),
+                "default_max_turns": int(registry_def.max_turns),
+                "allow_skill_emission": bool(registry_def.allow_skill_emission),
+            }
+        )
     return out
 
 

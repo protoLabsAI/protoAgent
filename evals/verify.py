@@ -50,6 +50,7 @@ def _kb_store():
     sys.path before calling in).
     """
     from knowledge import KnowledgeStore
+
     return KnowledgeStore()  # honors KNOWLEDGE_DB_PATH env
 
 
@@ -166,11 +167,14 @@ def apply_setup(steps: list[dict]) -> str | None:
     for step in steps:
         for kind, args in step.items():
             if kind == "kb_ingest":
-                if store.add_chunk(
-                    args["content"],
-                    domain=args.get("domain", "general"),
-                    heading=args.get("heading"),
-                ) is None:
+                if (
+                    store.add_chunk(
+                        args["content"],
+                        domain=args.get("domain", "general"),
+                        heading=args.get("heading"),
+                    )
+                    is None
+                ):
                     return f"kb_ingest failed for {args!r}"
             else:
                 return f"unknown setup step: {kind}"

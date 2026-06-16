@@ -55,8 +55,10 @@ def test_ingest_tools_filter():
 
 def test_extractor_failure_falls_back_and_never_raises():
     store = MagicMock()
+
     def boom(name, out):
         raise RuntimeError("llm down")
+
     mw = KnowledgeIngestMiddleware(store, extractor=boom)
     # no raise; falls back to storing raw output
     mw.wrap_tool_call(_req("t"), lambda r: _result("raw"))
@@ -76,8 +78,10 @@ def test_store_failure_never_raises():
 async def test_async_path():
     store = MagicMock()
     mw = KnowledgeIngestMiddleware(store)
+
     async def handler(r):
         return _result("async data")
+
     out = await mw.awrap_tool_call(_req("t"), handler)
     assert out.content == "async data"
     store.add_finding.assert_called_once()
@@ -89,10 +93,14 @@ def test_config_wires_ingest(tmp_path):
     from graph.agent import _build_middleware
 
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump({
-        "middleware": {"ingest": True, "knowledge": False, "audit": False, "memory": False},
-        "ingest": {"tools": ["web_search"]},
-    }))
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "middleware": {"ingest": True, "knowledge": False, "audit": False, "memory": False},
+                "ingest": {"tools": ["web_search"]},
+            }
+        )
+    )
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.ingest_enabled is True and cfg.ingest_tools == ["web_search"]
     mw = _build_middleware(cfg, knowledge_store=MagicMock())

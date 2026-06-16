@@ -149,14 +149,16 @@ def evaluate(
             relevant = [key_to_id[key] for key in item["relevant"] if key in key_to_id]
             rows = store.search(item["q"], k=max(k, 1))
             retrieved = [r.get("id") for r in rows]
-            per_query.append({
-                "q": item["q"],
-                "mode": item.get("mode", "?"),
-                "recall": recall_at_k(retrieved, relevant, k),
-                "hit": hit_rate_at_k(retrieved, relevant, k),
-                "mrr": mrr(retrieved, relevant),
-                "ndcg": ndcg_at_k(retrieved, relevant, k),
-            })
+            per_query.append(
+                {
+                    "q": item["q"],
+                    "mode": item.get("mode", "?"),
+                    "recall": recall_at_k(retrieved, relevant, k),
+                    "hit": hit_rate_at_k(retrieved, relevant, k),
+                    "mrr": mrr(retrieved, relevant),
+                    "ndcg": ndcg_at_k(retrieved, relevant, k),
+                }
+            )
 
     def _agg(rows: list[dict]) -> dict:
         n = len(rows) or 1
@@ -186,8 +188,9 @@ def compare_hybrid_vs_keyword(embed_fn: EmbedFn, corpus, queries, *, k: int = 10
     return {"hybrid": hybrid, "keyword": keyword, "recall_lift": lift}
 
 
-def sweep(embed_fn: EmbedFn, corpus, queries, *, k: int = 10,
-          vector_ks=(10, 20, 40), rrf_ks=(20, 60, 120)) -> list[dict]:
+def sweep(
+    embed_fn: EmbedFn, corpus, queries, *, k: int = 10, vector_ks=(10, 20, 40), rrf_ks=(20, 60, 120)
+) -> list[dict]:
     """Grid over the two retrieval knobs surfaced in #985, ranked by recall@k."""
     out = []
     for vk in vector_ks:
@@ -210,9 +213,7 @@ def _gateway_embed_fn() -> EmbedFn:
     cfg = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
     fn = create_embed_fn(cfg)
     if fn is None:
-        raise SystemExit(
-            "no embedder: set knowledge.embed_model + a gateway api_key, or run with --embedder bow"
-        )
+        raise SystemExit("no embedder: set knowledge.embed_model + a gateway api_key, or run with --embedder bow")
     return fn
 
 
@@ -224,8 +225,12 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Retrieval-quality eval for the knowledge store.")
     p.add_argument("--k", type=int, default=10, help="top-k cut for the metrics (default 10).")
     p.add_argument("--gold", default=str(GOLD_PATH), help="gold YAML path.")
-    p.add_argument("--embedder", choices=["gateway", "bow"], default="gateway",
-                   help="gateway = real qwen3-embedding (default); bow = deterministic, offline.")
+    p.add_argument(
+        "--embedder",
+        choices=["gateway", "bow"],
+        default="gateway",
+        help="gateway = real qwen3-embedding (default); bow = deterministic, offline.",
+    )
     p.add_argument("--sweep", action="store_true", help="also sweep vector_k × rrf_k.")
     p.add_argument("--json", dest="json_out", default="", help="write the full report to this path.")
     args = p.parse_args(argv)
@@ -248,8 +253,10 @@ def main(argv: list[str] | None = None) -> int:
         report["sweep"] = grid
         print("\n  knob sweep (top 5 by recall@k):")
         for row in grid[:5]:
-            print(f"    vector_k={row['vector_k']:<3} rrf_k={row['rrf_k']:<4} "
-                  f"recall@k={row['recall@k']:.3f} mrr={row['mrr']:.3f} ndcg@k={row['ndcg@k']:.3f}")
+            print(
+                f"    vector_k={row['vector_k']:<3} rrf_k={row['rrf_k']:<4} "
+                f"recall@k={row['recall@k']:.3f} mrr={row['mrr']:.3f} ndcg@k={row['ndcg@k']:.3f}"
+            )
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(report, indent=2))

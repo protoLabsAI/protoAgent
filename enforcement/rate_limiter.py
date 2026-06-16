@@ -39,10 +39,7 @@ class RateLimiter:
         self._windows[action] = recent
 
         if len(recent) >= max_calls:
-            return False, (
-                f"Rate limit exceeded for '{action}': "
-                f"{max_calls} calls per {window:g}s window."
-            )
+            return False, (f"Rate limit exceeded for '{action}': {max_calls} calls per {window:g}s window.")
         recent.append(now)
         return True, None
 

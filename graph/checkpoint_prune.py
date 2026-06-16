@@ -41,9 +41,7 @@ def uuidv6_unix_seconds(checkpoint_id: str) -> float | None:
     return (ticks - _GREGORIAN_OFFSET) / 1e7
 
 
-def find_aged_threads(
-    db_path: str, max_age_seconds: float, *, now: float | None = None
-) -> list[str]:
+def find_aged_threads(db_path: str, max_age_seconds: float, *, now: float | None = None) -> list[str]:
     """Thread ids whose newest checkpoint is older than the cutoff (datable via
     UUIDv6). Used to harvest a thread to knowledge *before* deleting it."""
     import time as _time
@@ -53,9 +51,7 @@ def find_aged_threads(
     try:
         aged: list[str] = []
         for (thread_id,) in conn.execute("SELECT DISTINCT thread_id FROM checkpoints"):
-            rows = conn.execute(
-                "SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)
-            ).fetchall()
+            rows = conn.execute("SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchall()
             stamps = [t for t in (uuidv6_unix_seconds(r[0]) for r in rows) if t is not None]
             if stamps and max(stamps) < cutoff:
                 aged.append(thread_id)
@@ -100,11 +96,10 @@ def prune_checkpoints(
         # 1. Age TTL — drop whole threads idle past the cutoff.
         if max_age_seconds is not None:
             import time as _time
+
             cutoff = (now if now is not None else _time.time()) - max_age_seconds
             for thread_id in list(threads):
-                rows = conn.execute(
-                    "SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)
-                ).fetchall()
+                rows = conn.execute("SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchall()
                 stamps = [t for t in (uuidv6_unix_seconds(r[0]) for r in rows) if t is not None]
                 # Only TTL threads we can date *and* that are entirely old.
                 if stamps and max(stamps) < cutoff:
@@ -120,7 +115,8 @@ def prune_checkpoints(
                 "SELECT DISTINCT checkpoint_ns FROM checkpoints WHERE thread_id=?", (thread_id,)
             ).fetchall():
                 stale = [
-                    r[0] for r in conn.execute(
+                    r[0]
+                    for r in conn.execute(
                         "SELECT checkpoint_id FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? "
                         "ORDER BY checkpoint_id DESC LIMIT -1 OFFSET ?",
                         (thread_id, ns, keep),

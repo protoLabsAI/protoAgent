@@ -28,7 +28,7 @@ def test_apply_sets_model_preserving_tools_and_prompt():
         _apply_config_subagents(cfg)
         entry = SUBAGENT_REGISTRY["researcher"]
         assert entry.model == "protolabs/reasoning"
-        assert entry.tools == RESEARCHER_CONFIG.tools          # tools untouched (model-only)
+        assert entry.tools == RESEARCHER_CONFIG.tools  # tools untouched (model-only)
         assert entry.system_prompt == RESEARCHER_CONFIG.system_prompt
     finally:
         if original is not None:
@@ -38,13 +38,13 @@ def test_apply_sets_model_preserving_tools_and_prompt():
 def test_blank_model_is_base_and_idempotent():
     original = SUBAGENT_REGISTRY.get("researcher")
     try:
-        _apply_config_subagents(LangGraphConfig())            # default, model=""
+        _apply_config_subagents(LangGraphConfig())  # default, model=""
         assert SUBAGENT_REGISTRY["researcher"].model == RESEARCHER_CONFIG.model
         cfg = LangGraphConfig()
         cfg.researcher = dataclasses.replace(cfg.researcher, model="x")
         _apply_config_subagents(cfg)
         assert SUBAGENT_REGISTRY["researcher"].model == "x"
-        _apply_config_subagents(LangGraphConfig())            # cleared → reverts to base
+        _apply_config_subagents(LangGraphConfig())  # cleared → reverts to base
         assert SUBAGENT_REGISTRY["researcher"].model == RESEARCHER_CONFIG.model
     finally:
         if original is not None:
@@ -52,6 +52,7 @@ def test_blank_model_is_base_and_idempotent():
 
 
 # ── full override wiring (tools / max_turns / enabled), no drift ──────────────
+
 
 def test_default_config_preserves_registry_tools_no_drift():
     """An un-overridden config must equal the registry default — incl. memory_ingest,
@@ -68,6 +69,7 @@ def test_default_config_preserves_registry_tools_no_drift():
 
 def test_tools_and_max_turns_override_applies(tmp_path):
     import yaml as y
+
     original = SUBAGENT_REGISTRY.get("researcher")
     try:
         p = tmp_path / "c.yaml"
@@ -84,6 +86,7 @@ def test_tools_and_max_turns_override_applies(tmp_path):
 
 def test_disabled_removes_subagent():
     import dataclasses
+
     original = SUBAGENT_REGISTRY.get("researcher")
     try:
         cfg = LangGraphConfig()

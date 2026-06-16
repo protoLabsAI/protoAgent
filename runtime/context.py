@@ -25,8 +25,8 @@ log = logging.getLogger(__name__)
 class AssembledContext:
     """The two halves of a turn's context, kept apart so the prefix stays cacheable."""
 
-    stable_prefix: str            # persona + static instructions — turn-stable, cache it
-    volatile_delta: str = ""      # knowledge/skills/prior-sessions retrieved for THIS turn
+    stable_prefix: str  # persona + static instructions — turn-stable, cache it
+    volatile_delta: str = ""  # knowledge/skills/prior-sessions retrieved for THIS turn
     sources: list[str] = field(default_factory=list)  # what fed the delta (telemetry/debug)
 
     def as_prompt(self, message: str) -> str:
@@ -78,8 +78,9 @@ def _format_knowledge(results) -> str:
     return "\n".join(lines)
 
 
-def retrieve_volatile(config=None, *, query: str = "", knowledge_store=None,
-                      skills_index=None, memory_path: str = "/sandbox/memory/"):
+def retrieve_volatile(
+    config=None, *, query: str = "", knowledge_store=None, skills_index=None, memory_path: str = "/sandbox/memory/"
+):
     """The per-turn context blocks (prior sessions + skills + knowledge). Never raises.
 
     Same stores + query as `KnowledgeMiddleware`, so an external brain is fed what the
@@ -122,12 +123,16 @@ def retrieve_volatile(config=None, *, query: str = "", knowledge_store=None,
     return "\n\n".join(blocks), sources
 
 
-def assemble_context(config=None, *, query: str = "", knowledge_store=None,
-                     skills_index=None, include_subagents: bool = True) -> AssembledContext:
+def assemble_context(
+    config=None, *, query: str = "", knowledge_store=None, skills_index=None, include_subagents: bool = True
+) -> AssembledContext:
     """Build a turn's context as a cacheable prefix + a volatile delta (ADR 0033 D4)."""
     prefix = build_stable_prefix(config, include_subagents=include_subagents)
     delta, sources = retrieve_volatile(
-        config, query=query, knowledge_store=knowledge_store, skills_index=skills_index,
+        config,
+        query=query,
+        knowledge_store=knowledge_store,
+        skills_index=skills_index,
     )
     return AssembledContext(stable_prefix=prefix, volatile_delta=delta, sources=sources)
 
@@ -154,8 +159,11 @@ class ContextAssembler:
 
     def assemble(self, *, query: str = "") -> AssembledContext:
         return assemble_context(
-            self.config, query=query, knowledge_store=self.knowledge_store,
-            skills_index=self.skills_index, include_subagents=self.include_subagents,
+            self.config,
+            query=query,
+            knowledge_store=self.knowledge_store,
+            skills_index=self.skills_index,
+            include_subagents=self.include_subagents,
         )
 
     def after_turn(self, *, user: str = "", response: str = "") -> None:

@@ -110,17 +110,16 @@ def _build_subagent():
         name="hello_helper",
         description="Example plugin subagent — echoes a friendly status. Proof a "
         "plugin can register a delegate without editing SUBAGENT_REGISTRY.",
-        system_prompt="You are the hello_helper, a tiny example subagent. Reply "
-        "briefly and cheerfully, then stop.",
+        system_prompt="You are the hello_helper, a tiny example subagent. Reply briefly and cheerfully, then stop.",
         tools=["current_time"],
     )
 
 
 def register(registry) -> None:
     """Entry point — called once at load with a PluginRegistry."""
-    greeting = registry.config.get("greeting", "Hello")   # plugin config (ADR 0019)
+    greeting = registry.config.get("greeting", "Hello")  # plugin config (ADR 0019)
     registry.register_tool(hello)
-    registry.register_skill_dir("skills")            # bundled SKILL.md folder
+    registry.register_skill_dir("skills")  # bundled SKILL.md folder
     registry.register_router(_build_router(greeting))  # → /plugins/hello/ping (ADR 0018)
     registry.register_surface(_surface_start, stop=_surface_stop, name="hello-surface")
     registry.register_subagent(_build_subagent())

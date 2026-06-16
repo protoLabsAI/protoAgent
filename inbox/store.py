@@ -38,7 +38,7 @@ class InboxStore:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         db.row_factory = sqlite3.Row
         return db
@@ -89,15 +89,13 @@ class InboxStore:
             if dedup_key:
                 cutoff = (now - timedelta(seconds=self._dedup_window_s)).isoformat()
                 dup = db.execute(
-                    "SELECT id FROM inbox WHERE dedup_key = ? AND delivered_at IS NULL "
-                    "AND created_at >= ? LIMIT 1",
+                    "SELECT id FROM inbox WHERE dedup_key = ? AND delivered_at IS NULL AND created_at >= ? LIMIT 1",
                     (dedup_key, cutoff),
                 ).fetchone()
                 if dup is not None:
                     return None
             cur = db.execute(
-                "INSERT INTO inbox (created_at, priority, source, text, dedup_key) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO inbox (created_at, priority, source, text, dedup_key) VALUES (?, ?, ?, ?, ?)",
                 (now.isoformat(), priority, source, text, dedup_key or None),
             )
             db.commit()

@@ -23,8 +23,12 @@ def test_slug():
 
 def test_scaffold_plugin_is_loadable(monkeypatch, tmp_path):
     res = scaffold.scaffold_plugin(
-        "My Cool Plugin", summary="demo", with_view=True, with_skill=True,
-        with_workflow=True, target_dir=str(tmp_path),
+        "My Cool Plugin",
+        summary="demo",
+        with_view=True,
+        with_skill=True,
+        with_workflow=True,
+        target_dir=str(tmp_path),
     )
     assert res.id == "my-cool-plugin" and res.kind == "plugin"
     pdir = tmp_path / "my-cool-plugin"
@@ -99,8 +103,7 @@ def test_scaffolded_suite_passes_end_to_end(tmp_path):
 
     scaffold.scaffold_plugin("Green Birth", with_tests=True, target_dir=str(tmp_path))
     pdir = tmp_path / "green-birth"
-    proc = subprocess.run([sys.executable, "-m", "pytest", "-q"],
-                          cwd=str(pdir), capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(pdir), capture_output=True, text=True)
     assert proc.returncode == 0, f"scaffolded suite failed:\n{proc.stdout}\n{proc.stderr}"
 
 
@@ -113,7 +116,8 @@ def test_scaffold_comms_plugin(tmp_path):
 
 def test_scaffold_bundle_round_trips_through_loader(tmp_path):
     res = scaffold.scaffold_bundle(
-        "Project Manager Stack", summary="board + browser",
+        "Project Manager Stack",
+        summary="board + browser",
         members=[
             {"id": "delegates", "builtin": True},
             {"id": "project_board", "url": "https://github.com/you/pb", "ref": "v0.1.0"},
@@ -146,11 +150,18 @@ def test_cli_new_scaffolds(tmp_path, capsys):
 
 
 def test_cli_new_bundle_scaffolds(tmp_path, capsys):
-    rc = run_plugin_cli([
-        "new-bundle", "My Stack", "--dir", str(tmp_path),
-        "--member", "board=https://github.com/you/board@v1.0.0",
-        "--builtin", "delegates",
-    ])
+    rc = run_plugin_cli(
+        [
+            "new-bundle",
+            "My Stack",
+            "--dir",
+            str(tmp_path),
+            "--member",
+            "board=https://github.com/you/board@v1.0.0",
+            "--builtin",
+            "delegates",
+        ]
+    )
     assert rc == 0
     bundle = installer.load_bundle(tmp_path / "my-stack")
     assert {p["id"] for p in bundle["plugins"]} == {"board", "delegates"}

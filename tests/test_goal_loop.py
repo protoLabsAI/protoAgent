@@ -19,13 +19,16 @@ def test_to_cron_passes_through_a_cron_expression():
     assert _to_cron("0 */6 * * *") == "0 */6 * * *"
 
 
-@pytest.mark.parametrize("every,expected", [
-    ("15m", "*/15 * * * *"),
-    ("30m", "*/30 * * * *"),
-    ("2h", "0 */2 * * *"),
-    ("1d", "0 0 */1 * *"),
-    ("  45m ", "*/45 * * * *"),
-])
+@pytest.mark.parametrize(
+    "every,expected",
+    [
+        ("15m", "*/15 * * * *"),
+        ("30m", "*/30 * * * *"),
+        ("2h", "0 */2 * * *"),
+        ("1d", "0 0 */1 * *"),
+        ("  45m ", "*/45 * * * *"),
+    ],
+)
 def test_to_cron_converts_duration_shorthand(every, expected):
     assert _to_cron(every) == expected
 
@@ -52,10 +55,8 @@ class _Controller:
         self.calls: list[dict] = []
         self.store = _Store()
 
-    def set_goal_safe(self, session_id, condition, verifier, max_iterations=None,
-                      no_progress_limit=None, mode="drive"):
-        self.calls.append({"session_id": session_id, "condition": condition,
-                           "verifier": verifier, "mode": mode})
+    def set_goal_safe(self, session_id, condition, verifier, max_iterations=None, no_progress_limit=None, mode="drive"):
+        self.calls.append({"session_id": session_id, "condition": condition, "verifier": verifier, "mode": mode})
         return (self._ok, self._msg)
 
 
@@ -73,8 +74,9 @@ class _Scheduler:
     def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
         if self._raise:
             raise ValueError("bad timezone")
-        self.added.append({"prompt": prompt, "schedule": schedule, "job_id": job_id,
-                           "timezone": timezone, "context_id": context_id})
+        self.added.append(
+            {"prompt": prompt, "schedule": schedule, "job_id": job_id, "timezone": timezone, "context_id": context_id}
+        )
         return _Job(job_id or "job-1")
 
     def cancel_job(self, job_id):
@@ -93,15 +95,19 @@ def wired(monkeypatch):
 # ── start_goal_loop ──────────────────────────────────────────────────────────────────
 def test_start_goal_loop_sets_a_monitor_goal_and_schedules_the_tick(wired):
     ctrl, sched = wired
-    res = start_goal_loop(session_id="sess-1", goal="reach 1,000,000 credits",
-                          verifier="spacetraders:credits", verifier_args={"min": 1_000_000},
-                          every="30m", prompt="Run the OODA tick and report.")
+    res = start_goal_loop(
+        session_id="sess-1",
+        goal="reach 1,000,000 credits",
+        verifier="spacetraders:credits",
+        verifier_args={"min": 1_000_000},
+        every="30m",
+        prompt="Run the OODA tick and report.",
+    )
     assert res["ok"] and res["job_id"] == "job-1" and res["schedule"] == "*/30 * * * *"
     # the goal is a MONITOR goal verified by the plugin verifier
     call = ctrl.calls[0]
     assert call["mode"] == "monitor"
-    assert call["verifier"] == {"type": "plugin", "check": "spacetraders:credits",
-                                "args": {"min": 1_000_000}}
+    assert call["verifier"] == {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1_000_000}}
     # the tick fires back INTO the goal's session (so it drives the right goal)
     assert sched.added[0]["context_id"] == "sess-1"
     assert sched.added[0]["schedule"] == "*/30 * * * *"
@@ -109,8 +115,7 @@ def test_start_goal_loop_sets_a_monitor_goal_and_schedules_the_tick(wired):
 
 def test_bad_schedule_does_not_set_a_goal(wired):
     ctrl, sched = wired
-    res = start_goal_loop(session_id="s", goal="g", verifier="p:v", every="whenever",
-                          prompt="tick")
+    res = start_goal_loop(session_id="s", goal="g", verifier="p:v", every="whenever", prompt="tick")
     assert not res["ok"]
     assert ctrl.calls == [] and sched.added == []  # nothing wired on bad input
 
@@ -120,8 +125,7 @@ def test_goal_rejected_means_no_job_scheduled(monkeypatch):
     sched = _Scheduler()
     monkeypatch.setattr(STATE, "goal_controller", ctrl)
     monkeypatch.setattr(STATE, "scheduler", sched)
-    res = start_goal_loop(session_id="s", goal="g", verifier="p:missing", every="15m",
-                          prompt="tick")
+    res = start_goal_loop(session_id="s", goal="g", verifier="p:missing", every="15m", prompt="tick")
     assert not res["ok"] and "goal not set" in res["message"]
     assert sched.added == []
 
@@ -131,8 +135,9 @@ def test_scheduling_failure_rolls_back_the_goal(monkeypatch):
     sched = _Scheduler(raise_on_add=True)
     monkeypatch.setattr(STATE, "goal_controller", ctrl)
     monkeypatch.setattr(STATE, "scheduler", sched)
-    res = start_goal_loop(session_id="sess-1", goal="g", verifier="p:v", every="15m",
-                          prompt="tick", timezone="Bad/Zone")
+    res = start_goal_loop(
+        session_id="sess-1", goal="g", verifier="p:v", every="15m", prompt="tick", timezone="Bad/Zone"
+    )
     assert not res["ok"]
     assert ctrl.store.cleared == ["sess-1"]  # goal rolled back so we don't strand it
 
@@ -140,12 +145,10 @@ def test_scheduling_failure_rolls_back_the_goal(monkeypatch):
 def test_unavailable_subsystems_are_reported(monkeypatch):
     monkeypatch.setattr(STATE, "goal_controller", None)
     monkeypatch.setattr(STATE, "scheduler", _Scheduler())
-    assert not start_goal_loop(session_id="s", goal="g", verifier="p:v",
-                               every="15m", prompt="t")["ok"]
+    assert not start_goal_loop(session_id="s", goal="g", verifier="p:v", every="15m", prompt="t")["ok"]
     monkeypatch.setattr(STATE, "goal_controller", _Controller())
     monkeypatch.setattr(STATE, "scheduler", None)
-    assert not start_goal_loop(session_id="s", goal="g", verifier="p:v",
-                               every="15m", prompt="t")["ok"]
+    assert not start_goal_loop(session_id="s", goal="g", verifier="p:v", every="15m", prompt="t")["ok"]
 
 
 # ── stop_goal_loop ───────────────────────────────────────────────────────────────────

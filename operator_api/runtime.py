@@ -155,6 +155,7 @@ def _file_size(path: Any) -> int | None:
         return None
     try:
         import os
+
         return os.path.getsize(str(path))
     except OSError:
         return None

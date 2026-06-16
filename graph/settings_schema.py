@@ -20,15 +20,15 @@ from typing import Any
 
 @dataclass
 class Field:
-    key: str                      # dotted YAML path, e.g. "model.temperature"
-    attr: str                     # LangGraphConfig attribute holding the value
+    key: str  # dotted YAML path, e.g. "model.temperature"
+    attr: str  # LangGraphConfig attribute holding the value
     label: str
-    type: str                     # string|text|number|bool|select|string_list|secret
+    type: str  # string|text|number|bool|select|string_list|secret
     section: str
     description: str = ""
-    restart: bool = False         # True = needs a full process restart (not hot-reload)
+    restart: bool = False  # True = needs a full process restart (not hot-reload)
     options: list[str] = field(default_factory=list)
-    options_source: str = ""      # "models" → filled dynamically by the endpoint
+    options_source: str = ""  # "models" → filled dynamically by the endpoint
     minimum: float | None = None
     maximum: float | None = None
     # Conditional visibility (#963): {"key": "<sibling field key>", "equals": <value>}
@@ -48,200 +48,449 @@ class Field:
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
     # ── Agent runtime (ADR 0033) — leads the Agent settings: "who runs the turn?" ──
-    Field("agent_runtime", "agent_runtime", "Agent runtime", "select", "Agent runtime",
-          "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
-          "coding agent over ACP (needs its CLI installed + authenticated on the host).",
-          options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"]),
-    Field("operator_mcp.tools", "operator_mcp_tools", "Tools exposed to the ACP brain", "string_list",
-          "Agent runtime", "Allowlist of operator tools an external (ACP) brain may call via MCP — "
-          "one per line, or `*` for all (minus execute_code). Empty = none. Ignored by native."),
-
+    Field(
+        "agent_runtime",
+        "agent_runtime",
+        "Agent runtime",
+        "select",
+        "Agent runtime",
+        "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
+        "coding agent over ACP (needs its CLI installed + authenticated on the host).",
+        options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"],
+    ),
+    Field(
+        "operator_mcp.tools",
+        "operator_mcp_tools",
+        "Tools exposed to the ACP brain",
+        "string_list",
+        "Agent runtime",
+        "Allowlist of operator tools an external (ACP) brain may call via MCP — "
+        "one per line, or `*` for all (minus execute_code). Empty = none. Ignored by native.",
+    ),
     # ── Model ────────────────────────────────────────────────────────────────
-    Field("model.name", "model_name", "Primary model", "select", "Model",
-          "The main reasoning model (gateway alias).", options_source="models", scope="host"),
+    Field(
+        "model.name",
+        "model_name",
+        "Primary model",
+        "select",
+        "Model",
+        "The main reasoning model (gateway alias).",
+        options_source="models",
+        scope="host",
+    ),
     Field("model.provider", "model_provider", "Provider", "string", "Model", scope="host"),
     Field("model.api_base", "api_base", "API base URL", "string", "Model", scope="host"),
-    Field("model.api_key", "api_key", "API key", "secret", "Model",
-          "Stored in secrets.yaml, never echoed back."),
-    Field("model.temperature", "temperature", "Temperature", "number", "Model",
-          minimum=0, maximum=2),
+    Field("model.api_key", "api_key", "API key", "secret", "Model", "Stored in secrets.yaml, never echoed back."),
+    Field("model.temperature", "temperature", "Temperature", "number", "Model", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model", minimum=1),
-    Field("model.vision", "model_vision", "Vision (native images)", "bool", "Model",
-          "Turn on when the primary model accepts images (e.g. protolabs/fast, protolabs/smart). "
-          "Chat then sends attached images straight to the model as native multimodal parts "
-          "instead of through the extraction pipeline.", restart=True),
-    Field("model.max_iterations", "max_iterations", "Max tool iterations", "number", "Model",
-          "Hard cap on the agent loop per turn.", minimum=1),
-
+    Field(
+        "model.vision",
+        "model_vision",
+        "Vision (native images)",
+        "bool",
+        "Model",
+        "Turn on when the primary model accepts images (e.g. protolabs/fast, protolabs/smart). "
+        "Chat then sends attached images straight to the model as native multimodal parts "
+        "instead of through the extraction pipeline.",
+        restart=True,
+    ),
+    Field(
+        "model.max_iterations",
+        "max_iterations",
+        "Max tool iterations",
+        "number",
+        "Model",
+        "Hard cap on the agent loop per turn.",
+        minimum=1,
+    ),
     # ── Routing ──────────────────────────────────────────────────────────────
-    Field("routing.aux_model", "aux_model", "Auxiliary (fast) model", "string", "Routing",
-          "Cheap/fast alias for summarization, goal-verification, and subagents. "
-          "Blank = use the main model.", options_source="models", scope="host"),
-    Field("routing.fallback_models", "routing_fallback_models", "Fallback models", "string_list",
-          "Routing", "Retried in order when the primary model errors.",
-          options_source="models", scope="host"),
-
+    Field(
+        "routing.aux_model",
+        "aux_model",
+        "Auxiliary (fast) model",
+        "string",
+        "Routing",
+        "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the main model.",
+        options_source="models",
+        scope="host",
+    ),
+    Field(
+        "routing.fallback_models",
+        "routing_fallback_models",
+        "Fallback models",
+        "string_list",
+        "Routing",
+        "Retried in order when the primary model errors.",
+        options_source="models",
+        scope="host",
+    ),
     # ── Context compaction ───────────────────────────────────────────────────
-    Field("compaction.enabled", "compaction_enabled", "Enable compaction", "bool", "Compaction",
-          "Summarize old history near the context limit."),
-    Field("compaction.trigger", "compaction_trigger", "Trigger", "string", "Compaction",
-          'fraction:0.8 | tokens:120000 | messages:80 (fraction/tokens need a model profile).'),
-    Field("compaction.keep_messages", "compaction_keep_messages", "Keep last N messages", "number",
-          "Compaction", minimum=1),
-    Field("compaction.model", "compaction_model", "Summarizer model", "string", "Compaction",
-          "Blank = routing.aux_model, then the main model."),
-
+    Field(
+        "compaction.enabled",
+        "compaction_enabled",
+        "Enable compaction",
+        "bool",
+        "Compaction",
+        "Summarize old history near the context limit.",
+    ),
+    Field(
+        "compaction.trigger",
+        "compaction_trigger",
+        "Trigger",
+        "string",
+        "Compaction",
+        "fraction:0.8 | tokens:120000 | messages:80 (fraction/tokens need a model profile).",
+    ),
+    Field(
+        "compaction.keep_messages",
+        "compaction_keep_messages",
+        "Keep last N messages",
+        "number",
+        "Compaction",
+        minimum=1,
+    ),
+    Field(
+        "compaction.model",
+        "compaction_model",
+        "Summarizer model",
+        "string",
+        "Compaction",
+        "Blank = routing.aux_model, then the main model.",
+    ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode"),
-    Field("goal.max_iterations", "goal_max_iterations", "Max continuations", "number", "Goal mode",
-          minimum=1),
-    Field("goal.eval_model", "goal_eval_model", "Verifier model", "string", "Goal mode",
-          "Blank = routing.aux_model, then the main model."),
-
+    Field("goal.max_iterations", "goal_max_iterations", "Max continuations", "number", "Goal mode", minimum=1),
+    Field(
+        "goal.eval_model",
+        "goal_eval_model",
+        "Verifier model",
+        "string",
+        "Goal mode",
+        "Blank = routing.aux_model, then the main model.",
+    ),
     # ── Programmatic tool calling ────────────────────────────────────────────
-    Field("execute_code.enabled", "execute_code_enabled", "Enable execute_code", "bool", "Tools",
-          "The model writes ONE Python script that calls several of its tools and returns "
-          "just the result — collapsing a long think→call→read tool chain into a single "
-          "turn. SECURITY: runs model-written code in a subprocess (its env scrubbed of "
-          "secrets + a hard timeout). That's isolation, NOT a true sandbox — the script "
-          "can still reach the disk/network as the server user, so enable it only for a "
-          "trusted model or inside a hardened container."),
-    Field("execute_code.timeout", "execute_code_timeout", "Script timeout (s)", "number", "Tools",
-          minimum=1),
-
+    Field(
+        "execute_code.enabled",
+        "execute_code_enabled",
+        "Enable execute_code",
+        "bool",
+        "Tools",
+        "The model writes ONE Python script that calls several of its tools and returns "
+        "just the result — collapsing a long think→call→read tool chain into a single "
+        "turn. SECURITY: runs model-written code in a subprocess (its env scrubbed of "
+        "secrets + a hard timeout). That's isolation, NOT a true sandbox — the script "
+        "can still reach the disk/network as the server user, so enable it only for a "
+        "trusted model or inside a hardened container.",
+    ),
+    Field("execute_code.timeout", "execute_code_timeout", "Script timeout (s)", "number", "Tools", minimum=1),
     # ── Prompt caching ───────────────────────────────────────────────────────
-    Field("prompt_cache.enabled", "prompt_cache_enabled", "Enable prefix caching", "bool", "Caching",
-          "Anthropic prefix caching on the stable prompt; no-op on non-Anthropic models.", scope="host"),
-    Field("prompt_cache.ttl", "prompt_cache_ttl", "Cache TTL", "select", "Caching",
-          options=["5m", "1h"], scope="host"),
-    Field("prompt_cache.warm.enabled", "cache_warming_enabled", "Cache warming", "bool", "Caching",
-          "Reproduce the cached prefix on an interval (only for sporadic, latency-sensitive traffic).", scope="host"),
-    Field("prompt_cache.warm.interval_seconds", "cache_warming_interval_seconds",
-          "Warm interval (s)", "number", "Caching", minimum=1, scope="host"),
-
+    Field(
+        "prompt_cache.enabled",
+        "prompt_cache_enabled",
+        "Enable prefix caching",
+        "bool",
+        "Caching",
+        "Anthropic prefix caching on the stable prompt; no-op on non-Anthropic models.",
+        scope="host",
+    ),
+    Field("prompt_cache.ttl", "prompt_cache_ttl", "Cache TTL", "select", "Caching", options=["5m", "1h"], scope="host"),
+    Field(
+        "prompt_cache.warm.enabled",
+        "cache_warming_enabled",
+        "Cache warming",
+        "bool",
+        "Caching",
+        "Reproduce the cached prefix on an interval (only for sporadic, latency-sensitive traffic).",
+        scope="host",
+    ),
+    Field(
+        "prompt_cache.warm.interval_seconds",
+        "cache_warming_interval_seconds",
+        "Warm interval (s)",
+        "number",
+        "Caching",
+        minimum=1,
+        scope="host",
+    ),
     # ── Knowledge / memory ───────────────────────────────────────────────────
-    Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge",
-          minimum=1),
-    Field("knowledge.embeddings", "knowledge_embeddings", "Semantic recall (embeddings)", "bool", "Knowledge",
-          "Hybrid FTS5 + vector search via the embedding model (RRF-fused). Off = "
-          "keyword-only. Needs the gateway to serve the embedding model; falls back "
-          "to keyword search on outage.", restart=True),
-    Field("knowledge.embed_model", "embed_model", "Embedding model", "select", "Knowledge",
-          "Gateway model used to embed for semantic recall (NOT the chat model). Picked from "
-          "the models your gateway serves — a wrong alias silently degrades recall to "
-          "keyword-only. Falls back to a free-text field if the gateway can't be listed.",
-          options_source="models"),
-    Field("knowledge.transcribe_model", "transcribe_model", "Transcription model", "string",
-          "Knowledge",
-          "Gateway speech-to-text model for audio/video ingestion (e.g. whisper-1), via the "
-          "OpenAI-compatible /audio/transcriptions endpoint. Blank disables audio/video import. "
-          "Video needs ffmpeg on the host to extract the audio track.",
-          options_source="models", restart=True),
-    Field("knowledge.recall_preview_chars", "knowledge_recall_preview_chars", "Recall preview length",
-          "number", "Knowledge",
-          "How many characters of each recalled chunk the model sees. Bigger carries more "
-          "answer-bearing context at no retrieval cost.", minimum=1, restart=True),
-    Field("knowledge.vector_k", "knowledge_vector_k", "Hybrid candidate pool", "number", "Knowledge",
-          "How many FTS5 + vector candidates are fused (RRF) per query before the top-k cut. "
-          "Bigger = wider recall, slightly slower.", minimum=1, restart=True),
-    Field("knowledge.rrf_k", "knowledge_rrf_k", "RRF constant (k)", "number", "Knowledge",
-          "Reciprocal-Rank-Fusion constant. Higher flattens the rank weighting (60 is the "
-          "standard default).", minimum=1, restart=True),
-    Field("knowledge.min_score", "knowledge_min_score", "Recall relevance floor", "number", "Knowledge",
-          "Drop fused hits below this score; 0 keeps all. A floor stops off-topic turns from "
-          "injecting weak chunks — RRF scores aren't normalized, so tune empirically.",
-          minimum=0, restart=True),
-    Field("knowledge.chunk_max_chars", "knowledge_chunk_max_chars", "Ingest chunk size", "number",
-          "Knowledge",
-          "Large ingests (conversation summaries, pasted docs) are split into pieces at most "
-          "this many characters before embedding, so each passage gets its own vector. Smaller = "
-          "more precise recall, more rows. Content under this size isn't split.",
-          minimum=1, restart=True),
-    Field("knowledge.chunk_overlap_chars", "knowledge_chunk_overlap_chars", "Ingest chunk overlap",
-          "number", "Knowledge",
-          "Characters shared between adjacent chunks so a span straddling a split is still wholly "
-          "present in one chunk. 0 = no overlap.", minimum=0, restart=True),
-    Field("knowledge.contextual_enrichment", "knowledge_contextual_enrichment",
-          "Contextual enrichment", "bool", "Knowledge",
-          "When a document splits, prepend a one-line aux-LLM context situating each chunk in the "
-          "whole document before embedding — lifts both semantic and keyword recall (Anthropic's "
-          "Contextual Retrieval). Costs one aux call per chunk at ingest (not on the query path). "
-          "Off by default.", restart=True),
-    Field("knowledge.attach_inline_budget", "knowledge_attach_inline_budget",
-          "Chat attachment inline budget", "number", "Knowledge",
-          "A file dropped in chat is inlined whole if its text is at or under this many "
-          "characters; a larger doc is indexed for retrieval instead, with only a lede of this "
-          "length inlined — so a big document never gets dumped into the turn.", minimum=1),
+    Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge", minimum=1),
+    Field(
+        "knowledge.embeddings",
+        "knowledge_embeddings",
+        "Semantic recall (embeddings)",
+        "bool",
+        "Knowledge",
+        "Hybrid FTS5 + vector search via the embedding model (RRF-fused). Off = "
+        "keyword-only. Needs the gateway to serve the embedding model; falls back "
+        "to keyword search on outage.",
+        restart=True,
+    ),
+    Field(
+        "knowledge.embed_model",
+        "embed_model",
+        "Embedding model",
+        "select",
+        "Knowledge",
+        "Gateway model used to embed for semantic recall (NOT the chat model). Picked from "
+        "the models your gateway serves — a wrong alias silently degrades recall to "
+        "keyword-only. Falls back to a free-text field if the gateway can't be listed.",
+        options_source="models",
+    ),
+    Field(
+        "knowledge.transcribe_model",
+        "transcribe_model",
+        "Transcription model",
+        "string",
+        "Knowledge",
+        "Gateway speech-to-text model for audio/video ingestion (e.g. whisper-1), via the "
+        "OpenAI-compatible /audio/transcriptions endpoint. Blank disables audio/video import. "
+        "Video needs ffmpeg on the host to extract the audio track.",
+        options_source="models",
+        restart=True,
+    ),
+    Field(
+        "knowledge.recall_preview_chars",
+        "knowledge_recall_preview_chars",
+        "Recall preview length",
+        "number",
+        "Knowledge",
+        "How many characters of each recalled chunk the model sees. Bigger carries more "
+        "answer-bearing context at no retrieval cost.",
+        minimum=1,
+        restart=True,
+    ),
+    Field(
+        "knowledge.vector_k",
+        "knowledge_vector_k",
+        "Hybrid candidate pool",
+        "number",
+        "Knowledge",
+        "How many FTS5 + vector candidates are fused (RRF) per query before the top-k cut. "
+        "Bigger = wider recall, slightly slower.",
+        minimum=1,
+        restart=True,
+    ),
+    Field(
+        "knowledge.rrf_k",
+        "knowledge_rrf_k",
+        "RRF constant (k)",
+        "number",
+        "Knowledge",
+        "Reciprocal-Rank-Fusion constant. Higher flattens the rank weighting (60 is the standard default).",
+        minimum=1,
+        restart=True,
+    ),
+    Field(
+        "knowledge.min_score",
+        "knowledge_min_score",
+        "Recall relevance floor",
+        "number",
+        "Knowledge",
+        "Drop fused hits below this score; 0 keeps all. A floor stops off-topic turns from "
+        "injecting weak chunks — RRF scores aren't normalized, so tune empirically.",
+        minimum=0,
+        restart=True,
+    ),
+    Field(
+        "knowledge.chunk_max_chars",
+        "knowledge_chunk_max_chars",
+        "Ingest chunk size",
+        "number",
+        "Knowledge",
+        "Large ingests (conversation summaries, pasted docs) are split into pieces at most "
+        "this many characters before embedding, so each passage gets its own vector. Smaller = "
+        "more precise recall, more rows. Content under this size isn't split.",
+        minimum=1,
+        restart=True,
+    ),
+    Field(
+        "knowledge.chunk_overlap_chars",
+        "knowledge_chunk_overlap_chars",
+        "Ingest chunk overlap",
+        "number",
+        "Knowledge",
+        "Characters shared between adjacent chunks so a span straddling a split is still wholly "
+        "present in one chunk. 0 = no overlap.",
+        minimum=0,
+        restart=True,
+    ),
+    Field(
+        "knowledge.contextual_enrichment",
+        "knowledge_contextual_enrichment",
+        "Contextual enrichment",
+        "bool",
+        "Knowledge",
+        "When a document splits, prepend a one-line aux-LLM context situating each chunk in the "
+        "whole document before embedding — lifts both semantic and keyword recall (Anthropic's "
+        "Contextual Retrieval). Costs one aux call per chunk at ingest (not on the query path). "
+        "Off by default.",
+        restart=True,
+    ),
+    Field(
+        "knowledge.attach_inline_budget",
+        "knowledge_attach_inline_budget",
+        "Chat attachment inline budget",
+        "number",
+        "Knowledge",
+        "A file dropped in chat is inlined whole if its text is at or under this many "
+        "characters; a larger doc is indexed for retrieval instead, with only a lede of this "
+        "length inlined — so a big document never gets dumped into the turn.",
+        minimum=1,
+    ),
     Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
-    Field("checkpoint.db_path", "checkpoint_db_path", "Conversation history DB", "string", "Knowledge",
-          "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
-          restart=True),
-    Field("checkpoint.keep_per_thread", "checkpoint_keep_per_thread", "History: keep N per session",
-          "number", "Knowledge", "Latest checkpoints retained per chat session.", minimum=1),
-    Field("checkpoint.max_age_days", "checkpoint_max_age_days", "History: max age (days)", "number",
-          "Knowledge", "Drop whole sessions idle longer than this (0 = never).", minimum=0),
-    Field("checkpoint.prune_interval_hours", "checkpoint_prune_interval_hours", "History: prune every (hours)",
-          "number", "Knowledge", "How often the prune sweep runs (0 disables it).", minimum=0,
-          restart=True),
-    Field("checkpoint.harvest_enabled", "checkpoint_harvest_enabled", "History: harvest to knowledge", "bool",
-          "Knowledge", "Summarize a session into the searchable knowledge base before pruning/deleting it."),
-    Field("knowledge.facts", "knowledge_facts", "Extract semantic facts", "bool", "Knowledge",
-          "On session retirement, also distil durable facts (aux model) and "
-          "consolidate them into the store. Rides the harvest pass."),
-
+    Field(
+        "checkpoint.db_path",
+        "checkpoint_db_path",
+        "Conversation history DB",
+        "string",
+        "Knowledge",
+        "SQLite path for per-session chat history (survives restarts). Blank = in-memory.",
+        restart=True,
+    ),
+    Field(
+        "checkpoint.keep_per_thread",
+        "checkpoint_keep_per_thread",
+        "History: keep N per session",
+        "number",
+        "Knowledge",
+        "Latest checkpoints retained per chat session.",
+        minimum=1,
+    ),
+    Field(
+        "checkpoint.max_age_days",
+        "checkpoint_max_age_days",
+        "History: max age (days)",
+        "number",
+        "Knowledge",
+        "Drop whole sessions idle longer than this (0 = never).",
+        minimum=0,
+    ),
+    Field(
+        "checkpoint.prune_interval_hours",
+        "checkpoint_prune_interval_hours",
+        "History: prune every (hours)",
+        "number",
+        "Knowledge",
+        "How often the prune sweep runs (0 disables it).",
+        minimum=0,
+        restart=True,
+    ),
+    Field(
+        "checkpoint.harvest_enabled",
+        "checkpoint_harvest_enabled",
+        "History: harvest to knowledge",
+        "bool",
+        "Knowledge",
+        "Summarize a session into the searchable knowledge base before pruning/deleting it.",
+    ),
+    Field(
+        "knowledge.facts",
+        "knowledge_facts",
+        "Extract semantic facts",
+        "bool",
+        "Knowledge",
+        "On session retirement, also distil durable facts (aux model) and "
+        "consolidate them into the store. Rides the harvest pass.",
+    ),
     # ── Skills (ADR 0041 tiered stores) ──────────────────────────────────────
     # `skills.scope` is the agent's own choice of how it participates in the
     # fleet's skill library; `commons.path` is the box-shared location of that
     # library (host-scoped — every agent on the box reads the same commons).
-    Field("skills.scope", "skills_scope", "Skill sharing", "select", "Skills",
-          "How this agent uses the skill library: scoped (private only) · shared "
-          "(the one box commons) · layered (read the commons ∪ private, write "
-          "private, promote proven skills up). Blank = derived (scoped).",
-          options=["scoped", "shared", "layered"]),
-    Field("commons.path", "commons_path", "Commons location", "string", "Skills",
-          "Box-shared skill commons read by every agent on this machine. "
-          "Blank = ~/.protoagent/commons.", scope="host"),
-
+    Field(
+        "skills.scope",
+        "skills_scope",
+        "Skill sharing",
+        "select",
+        "Skills",
+        "How this agent uses the skill library: scoped (private only) · shared "
+        "(the one box commons) · layered (read the commons ∪ private, write "
+        "private, promote proven skills up). Blank = derived (scoped).",
+        options=["scoped", "shared", "layered"],
+    ),
+    Field(
+        "commons.path",
+        "commons_path",
+        "Commons location",
+        "string",
+        "Skills",
+        "Box-shared skill commons read by every agent on this machine. Blank = ~/.protoagent/commons.",
+        scope="host",
+    ),
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
     Field("middleware.audit", "audit_middleware", "Audit middleware", "bool", "Middleware"),
     Field("middleware.scheduler", "scheduler_enabled", "Scheduler", "bool", "Middleware"),
     Field("middleware.enforcement", "enforcement_enabled", "Tool enforcement", "bool", "Middleware"),
-
     # ── Telemetry (local cost/latency store, ADR 0006) ───────────────────────
-    Field("telemetry.enabled", "telemetry_enabled", "Store telemetry locally", "bool", "Telemetry",
-          "Persist a per-turn cost/latency row to a local SQLite DB (queryable in Settings → "
-          "Telemetry). Off = nothing is recorded — no store is opened. Stays on your machine; "
-          "it is never sent anywhere.", restart=True, scope="host"),
-    Field("telemetry.retention_days", "telemetry_retention_days", "Telemetry retention (days)",
-          "number", "Telemetry", "Auto-prune rows older than this (0 = keep forever).",
-          minimum=0, restart=True, scope="host"),
-
+    Field(
+        "telemetry.enabled",
+        "telemetry_enabled",
+        "Store telemetry locally",
+        "bool",
+        "Telemetry",
+        "Persist a per-turn cost/latency row to a local SQLite DB (queryable in Settings → "
+        "Telemetry). Off = nothing is recorded — no store is opened. Stays on your machine; "
+        "it is never sent anywhere.",
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "telemetry.retention_days",
+        "telemetry_retention_days",
+        "Telemetry retention (days)",
+        "number",
+        "Telemetry",
+        "Auto-prune rows older than this (0 = keep forever).",
+        minimum=0,
+        restart=True,
+        scope="host",
+    ),
     # ── Identity / operator ──────────────────────────────────────────────────
     Field("identity.name", "identity_name", "Agent name", "string", "Identity"),
     Field("identity.operator", "identity_operator", "Operator", "string", "Identity"),
     Field("identity.org", "identity_org", "Organization", "string", "Identity", scope="host"),
-    Field("operator.project_dir", "operator_project_dir", "Project directory", "string",
-          "Identity", "Working directory for the console's beads/notes (and the agent's "
-          "default project). Always allowed. Blank = the protoAgent directory."),
-    Field("operator.allowed_dirs", "operator_allowed_dirs", "Allowed project dirs", "string_list",
-          "Identity", "Extra directories the beads/notes APIs may touch, beyond the project "
-          "directory and protoAgent (which are always allowed)."),
-    Field("auth.token", "auth_token", "A2A auth token", "secret", "Identity",
-          "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live."),
-
+    Field(
+        "operator.project_dir",
+        "operator_project_dir",
+        "Project directory",
+        "string",
+        "Identity",
+        "Working directory for the console's beads/notes (and the agent's "
+        "default project). Always allowed. Blank = the protoAgent directory.",
+    ),
+    Field(
+        "operator.allowed_dirs",
+        "operator_allowed_dirs",
+        "Allowed project dirs",
+        "string_list",
+        "Identity",
+        "Extra directories the beads/notes APIs may touch, beyond the project "
+        "directory and protoAgent (which are always allowed).",
+    ),
+    Field(
+        "auth.token",
+        "auth_token",
+        "A2A auth token",
+        "secret",
+        "Identity",
+        "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live.",
+    ),
     # Discord's Settings group is now declared by the discord plugin's manifest
     # (ADR 0019) and rendered via the plugin-fields path in build_schema.
-
     # Google's Settings group is now declared by the google plugin's manifest
     # (ADR 0019) and rendered via the plugin-fields path in build_schema. The
     # "Connect Google" button (consent flow) is a console affordance, not a field.
-
     # ── Runtime (restart) ────────────────────────────────────────────────────
-    Field("runtime.autostart_on_boot", "autostart_on_boot", "Autostart on boot", "bool", "Runtime",
-          "Install/remove the boot LaunchAgent.", restart=True),
-
+    Field(
+        "runtime.autostart_on_boot",
+        "autostart_on_boot",
+        "Autostart on boot",
+        "bool",
+        "Runtime",
+        "Install/remove the boot LaunchAgent.",
+        restart=True,
+    ),
     # ── Host box-runtime knobs (Host layer, ADR 0047 D8) ─────────────────────
     # Box-wide runtime knobs promoted out of env/CLI into the Host cascade layer.
     # All scope="host": the box default every co-located agent inherits (file > env
@@ -249,33 +498,85 @@ FIELDS: list[Field] = [
     # the host process — a workspace leaf override is a silent no-op (ADR §5).
     # Regrouped into Network / Discovery / Keep-warm sections (bd-2zb) so Host config
     # reads as coherent groups instead of one "Fleet" lump; all map to System below.
-    Field("network.bind", "bind_host", "Bind interface", "string", "Network",
-          "Network interface the server listens on. 127.0.0.1 = loopback only (safe "
-          "default); 0.0.0.0 = all interfaces (token-gate the A2A endpoint first). An "
-          "explicit --host flag still wins. Env fallback: PROTOAGENT_HOST.",
-          restart=True, scope="host"),
-    Field("fleet.port_base", "fleet_port_base", "Workspace port base", "number", "Network",
-          "Base TCP port for fleet workspace agents — each gets port_base+1, +2, … "
-          "unless given an explicit port.", minimum=1, maximum=65535, restart=True, scope="host"),
-    Field("fleet.discovery.port_min", "discovery_port_min", "Discovery scan: min port", "number",
-          "Discovery", "Low end (inclusive) of the port window fleet discovery probes on the "
-          "LAN / tailnet.", minimum=1, maximum=65535, scope="host"),
-    Field("fleet.discovery.port_max", "discovery_port_max", "Discovery scan: max port", "number",
-          "Discovery", "High end (inclusive) of the discovery port window.",
-          minimum=1, maximum=65535, scope="host"),
-    Field("fleet.discovery.mdns", "discovery_mdns", "mDNS discovery", "bool", "Discovery",
-          "Advertise + browse the _protoagent._tcp mDNS/Bonjour channel so LAN siblings "
-          "find each other automatically. Off = no mDNS (tailnet + manual register still "
-          "work); useful where multicast is noisy or blocked.", scope="host"),
-    Field("fleet.warm.max", "fleet_max_warm", "Warm-agent cap", "number", "Keep-warm",
-          "Max fleet agents kept running at once; the least-recently-active beyond this "
-          "are spun down (LRU). 0 = unlimited. Env fallback: PROTOAGENT_FLEET_MAX_WARM.",
-          minimum=0, scope="host"),
-    Field("fleet.warm.grace_seconds", "fleet_warm_grace_seconds", "Warm eviction grace (s)",
-          "number", "Keep-warm",
-          "Spare an agent touched within this many seconds from LRU eviction (it may be "
-          "mid-turn). 0 = pure LRU. Env fallback: PROTOAGENT_FLEET_WARM_GRACE.",
-          minimum=0, scope="host"),
+    Field(
+        "network.bind",
+        "bind_host",
+        "Bind interface",
+        "string",
+        "Network",
+        "Network interface the server listens on. 127.0.0.1 = loopback only (safe "
+        "default); 0.0.0.0 = all interfaces (token-gate the A2A endpoint first). An "
+        "explicit --host flag still wins. Env fallback: PROTOAGENT_HOST.",
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "fleet.port_base",
+        "fleet_port_base",
+        "Workspace port base",
+        "number",
+        "Network",
+        "Base TCP port for fleet workspace agents — each gets port_base+1, +2, … unless given an explicit port.",
+        minimum=1,
+        maximum=65535,
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "fleet.discovery.port_min",
+        "discovery_port_min",
+        "Discovery scan: min port",
+        "number",
+        "Discovery",
+        "Low end (inclusive) of the port window fleet discovery probes on the LAN / tailnet.",
+        minimum=1,
+        maximum=65535,
+        scope="host",
+    ),
+    Field(
+        "fleet.discovery.port_max",
+        "discovery_port_max",
+        "Discovery scan: max port",
+        "number",
+        "Discovery",
+        "High end (inclusive) of the discovery port window.",
+        minimum=1,
+        maximum=65535,
+        scope="host",
+    ),
+    Field(
+        "fleet.discovery.mdns",
+        "discovery_mdns",
+        "mDNS discovery",
+        "bool",
+        "Discovery",
+        "Advertise + browse the _protoagent._tcp mDNS/Bonjour channel so LAN siblings "
+        "find each other automatically. Off = no mDNS (tailnet + manual register still "
+        "work); useful where multicast is noisy or blocked.",
+        scope="host",
+    ),
+    Field(
+        "fleet.warm.max",
+        "fleet_max_warm",
+        "Warm-agent cap",
+        "number",
+        "Keep-warm",
+        "Max fleet agents kept running at once; the least-recently-active beyond this "
+        "are spun down (LRU). 0 = unlimited. Env fallback: PROTOAGENT_FLEET_MAX_WARM.",
+        minimum=0,
+        scope="host",
+    ),
+    Field(
+        "fleet.warm.grace_seconds",
+        "fleet_warm_grace_seconds",
+        "Warm eviction grace (s)",
+        "number",
+        "Keep-warm",
+        "Spare an agent touched within this many seconds from LRU eviction (it may be "
+        "mid-turn). 0 = pure LRU. Env fallback: PROTOAGENT_FLEET_WARM_GRACE.",
+        minimum=0,
+        scope="host",
+    ),
 ]
 
 _BY_KEY = {f.key: f for f in FIELDS}
@@ -408,6 +709,7 @@ def build_schema(
     Secrets report ``value: ""`` plus ``is_set`` rather than echoing the secret.
     """
     import sys as _sys
+
     # In the frozen desktop build execute_code can't run (no standalone Python to
     # spawn — see graph.agent), so hide its toggle entirely rather than offer a
     # setting that does nothing. From source / Docker it shows as normal.
@@ -441,7 +743,7 @@ def build_schema(
         if f.maximum is not None:
             entry["maximum"] = f.maximum
         if f.depends_on:
-            entry["depends_on"] = f.depends_on   # #963 — full dotted sibling key
+            entry["depends_on"] = f.depends_on  # #963 — full dotted sibling key
         groups.setdefault(f.section, {"section": f.section, "fields": []})["fields"].append(entry)
 
     # Plugin-declared settings fields (ADR 0019) — value from config.plugin_config,

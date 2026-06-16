@@ -128,6 +128,6 @@ def test_openai_streaming(monkeypatch):
     r = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "yo"}], "stream": True})
     assert r.headers["content-type"].startswith("text/event-stream")
     frames = [ln for ln in r.text.splitlines() if ln.startswith("data: ")]
-    first = json.loads(frames[0][len("data: "):])
+    first = json.loads(frames[0][len("data: ") :])
     assert first["choices"][0]["delta"]["content"] == "echo:yo"
     assert frames[-1] == "data: [DONE]"

@@ -109,6 +109,7 @@ def test_sync_recolones_missing_from_lock(env):
     installer.install(str(repo))
     # simulate a fresh checkout: code gone, lock present
     import shutil
+
     shutil.rmtree(installer.live_plugins_dir() / "demo_ext")
     assert installer.list_installed()[0]["present"] is False
     results = installer.sync()
@@ -184,18 +185,15 @@ def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
 
 def test_uninstall_removes_enabled_ref_keeps_config(env):
     cfg = env / "cfg" / "langgraph-config.yaml"
-    cfg.write_text(
-        "plugins:\n  enabled: [demo_ext, other]\n"
-        "demo_ext:\n  greeting: hi\n"
-    )
+    cfg.write_text("plugins:\n  enabled: [demo_ext, other]\ndemo_ext:\n  greeting: hi\n")
     repo = _make_plugin_repo(env)
     installer.install(str(repo))
     rep = installer.uninstall("demo_ext")  # no purge
     assert "enabled-ref" in rep["removed"]
     text = cfg.read_text()
-    assert "demo_ext" not in _enabled_list(text)   # dropped from plugins.enabled
-    assert "other" in _enabled_list(text)          # siblings untouched
-    assert "demo_ext:" in text                      # config section KEPT (no purge)
+    assert "demo_ext" not in _enabled_list(text)  # dropped from plugins.enabled
+    assert "other" in _enabled_list(text)  # siblings untouched
+    assert "demo_ext:" in text  # config section KEPT (no purge)
 
 
 def test_uninstall_purge_removes_config_and_secrets(env):
@@ -207,22 +205,21 @@ def test_uninstall_purge_removes_config_and_secrets(env):
     installer.install(str(repo))
     rep = installer.uninstall("demo_ext", purge=True)
     assert set(rep["removed"]) >= {"code", "config", "secrets"}
-    assert "demo_ext" not in cfg.read_text()        # section + enabled ref gone
-    assert "demo_ext" not in secrets.read_text()     # secrets gone
-    assert "model" in secrets.read_text()            # other secrets kept
+    assert "demo_ext" not in cfg.read_text()  # section + enabled ref gone
+    assert "demo_ext" not in secrets.read_text()  # secrets gone
+    assert "model" in secrets.read_text()  # other secrets kept
 
 
 def _enabled_list(yaml_text: str) -> str:
     import yaml as _y
+
     return str((_y.safe_load(yaml_text).get("plugins") or {}).get("enabled") or [])
 
 
 def test_configured_allowlist_reads_config(tmp_path, monkeypatch):
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
-    (cfg_dir / "langgraph-config.yaml").write_text(
-        "plugins:\n  sources:\n    allow: [github.com/protoLabsAI/*]\n"
-    )
+    (cfg_dir / "langgraph-config.yaml").write_text("plugins:\n  sources:\n    allow: [github.com/protoLabsAI/*]\n")
     monkeypatch.setenv("PROTOAGENT_CONFIG_DIR", str(cfg_dir))
     assert installer.configured_allowlist() == ["github.com/protoLabsAI/*"]
 

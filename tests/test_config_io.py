@@ -60,12 +60,7 @@ def test_apply_updates_merges_shallowly(tmp_path: Path) -> None:
     from graph import config_io
 
     yaml_path = tmp_path / "c.yaml"
-    yaml_path.write_text(
-        "model:\n"
-        "  name: original-model\n"
-        "  temperature: 0.1\n"
-        "  api_base: http://original\n"
-    )
+    yaml_path.write_text("model:\n  name: original-model\n  temperature: 0.1\n  api_base: http://original\n")
 
     doc = config_io.load_yaml_doc(yaml_path)
     config_io.apply_updates_to_yaml(doc, {"model": {"temperature": 0.9}})
@@ -135,12 +130,30 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
     # when their plugin is enabled (surfaced via plugin_config), and a default
     # LangGraphConfig() carries no plugin_config.
     assert set(d.keys()) == {
-        "model", "subagents", "middleware", "knowledge", "skills", "commons", "mcp",
-        "plugins", "identity", "auth", "runtime", "operator", "agent_runtime",
-        "checkpoint", "compaction", "execute_code", "goal", "operator_mcp",
-        "prompt_cache", "routing", "telemetry",
+        "model",
+        "subagents",
+        "middleware",
+        "knowledge",
+        "skills",
+        "commons",
+        "mcp",
+        "plugins",
+        "identity",
+        "auth",
+        "runtime",
+        "operator",
+        "agent_runtime",
+        "checkpoint",
+        "compaction",
+        "execute_code",
+        "goal",
+        "operator_mcp",
+        "prompt_cache",
+        "routing",
+        "telemetry",
         # Box runtime (Host layer, ADR 0047 D8).
-        "network", "fleet",
+        "network",
+        "fleet",
     }
     assert d["model"]["name"] == cfg.model_name
     assert d["model"]["temperature"] == cfg.temperature
@@ -162,19 +175,23 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
 # ── validate_config_dict ─────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("bad_value,expected_error_fragment", [
-    ({"model": {"temperature": 3.0}}, "temperature"),
-    ({"model": {"temperature": -0.1}}, "temperature"),
-    ({"model": {"max_tokens": 0}}, "max_tokens"),
-    ({"model": {"max_iterations": 0}}, "max_iterations"),
-    ({"subagents": {"researcher": {"max_turns": 0}}}, "max_turns"),
-    ({"subagents": {"researcher": {"tools": "not-a-list"}}}, "list"),
-    ({"knowledge": {"top_k": 0}}, "top_k"),
-    ({"operator": {"allowed_dirs": "not-a-list"}}, "allowed_dirs"),
-    ({"operator": {"allowed_dirs": [1, 2]}}, "allowed_dirs"),
-])
+@pytest.mark.parametrize(
+    "bad_value,expected_error_fragment",
+    [
+        ({"model": {"temperature": 3.0}}, "temperature"),
+        ({"model": {"temperature": -0.1}}, "temperature"),
+        ({"model": {"max_tokens": 0}}, "max_tokens"),
+        ({"model": {"max_iterations": 0}}, "max_iterations"),
+        ({"subagents": {"researcher": {"max_turns": 0}}}, "max_turns"),
+        ({"subagents": {"researcher": {"tools": "not-a-list"}}}, "list"),
+        ({"knowledge": {"top_k": 0}}, "top_k"),
+        ({"operator": {"allowed_dirs": "not-a-list"}}, "allowed_dirs"),
+        ({"operator": {"allowed_dirs": [1, 2]}}, "allowed_dirs"),
+    ],
+)
 def test_validate_rejects_bad_values(bad_value, expected_error_fragment):
     from graph.config_io import validate_config_dict
+
     ok, err = validate_config_dict(bad_value)
     assert not ok
     assert expected_error_fragment in err
@@ -194,12 +211,7 @@ def test_from_yaml_reads_operator_allowed_dirs(tmp_path: Path) -> None:
     from graph.config import LangGraphConfig
 
     p = tmp_path / "langgraph-config.yaml"
-    p.write_text(
-        "operator:\n"
-        "  allowed_dirs:\n"
-        "    - /home/kj/projects/foo\n"
-        "    - /home/kj/projects/bar\n"
-    )
+    p.write_text("operator:\n  allowed_dirs:\n    - /home/kj/projects/foo\n    - /home/kj/projects/bar\n")
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.operator_allowed_dirs == [
         "/home/kj/projects/foo",
@@ -318,7 +330,8 @@ def test_write_soul_writes_source_always(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_write_soul_writes_both_when_runtime_parent_exists(
-    monkeypatch, tmp_path: Path,
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     from graph import config_io
 
@@ -534,15 +547,18 @@ def test_read_soul_preset_unknown_returns_empty():
     assert read_soul_preset("") == ""
 
 
-@pytest.mark.parametrize("malicious", [
-    "../secret",
-    "../../etc/passwd",
-    "../../../etc/passwd",
-    "subdir/../../../outside",
-    "/etc/hosts",
-    "..",
-    "../../graph/config",  # try to read a real repo file via ../../
-])
+@pytest.mark.parametrize(
+    "malicious",
+    [
+        "../secret",
+        "../../etc/passwd",
+        "../../../etc/passwd",
+        "subdir/../../../outside",
+        "/etc/hosts",
+        "..",
+        "../../graph/config",  # try to read a real repo file via ../../
+    ],
+)
 def test_read_soul_preset_rejects_path_traversal(malicious):
     """CRITICAL: the preset name must not let a caller escape
     ``config/soul-presets/``. Every ``..`` or absolute path
@@ -570,9 +586,12 @@ def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) ->
     from infra import paths
     from graph import config_io
 
-    base = tmp_path / "langgraph-config.yaml"; base.write_text("model:\n  name: base-config\n")
-    base_secrets = tmp_path / "secrets.yaml"; base_secrets.write_text("model:\n  api_key: SEKRET\n")
-    base_marker = tmp_path / ".setup-complete"; base_marker.write_text("")
+    base = tmp_path / "langgraph-config.yaml"
+    base.write_text("model:\n  name: base-config\n")
+    base_secrets = tmp_path / "secrets.yaml"
+    base_secrets.write_text("model:\n  api_key: SEKRET\n")
+    base_marker = tmp_path / ".setup-complete"
+    base_marker.write_text("")
     scoped = tmp_path / "foo" / "langgraph-config.yaml"
     scoped_secrets = tmp_path / "foo" / "secrets.yaml"
     scoped_marker = tmp_path / "foo" / ".setup-complete"
@@ -587,6 +606,6 @@ def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) ->
     monkeypatch.setattr(paths, "instance_id", lambda: "foo")
 
     assert config_io.ensure_live_config() is True
-    assert "base-config" in scoped.read_text()                     # inherited the base config
+    assert "base-config" in scoped.read_text()  # inherited the base config
     assert scoped_secrets.read_text() == base_secrets.read_text()  # + secrets
-    assert scoped_marker.exists()                                  # + setup state (no re-wizard)
+    assert scoped_marker.exists()  # + setup state (no re-wizard)

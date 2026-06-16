@@ -12,6 +12,7 @@ from graph.middleware.redaction import redact
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_tool_message(content: str):
     msg = MagicMock()
     msg.content = content
@@ -28,11 +29,13 @@ def _make_request(name: str, args: dict):
 # AuditMiddleware sync integration
 # ---------------------------------------------------------------------------
 
+
 class TestAuditMiddlewareSyncRedaction:
     """Test that _handle_tool_call applies redaction before audit/tracing."""
 
     def _build_middleware(self):
         from graph.middleware.audit import AuditMiddleware
+
         return AuditMiddleware()
 
     def test_bearer_token_in_args_redacted_in_audit(self, tmp_path):
@@ -40,6 +43,7 @@ class TestAuditMiddlewareSyncRedaction:
         audit_file = tmp_path / "audit.jsonl"
 
         from observability.audit import AuditLogger
+
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -69,6 +73,7 @@ class TestAuditMiddlewareSyncRedaction:
         audit_file = tmp_path / "audit.jsonl"
 
         from observability.audit import AuditLogger
+
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -119,6 +124,7 @@ class TestAuditMiddlewareSyncRedaction:
         audit_file = tmp_path / "audit.jsonl"
 
         from observability.audit import AuditLogger
+
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -144,17 +150,20 @@ class TestAuditMiddlewareSyncRedaction:
 # AuditMiddleware async integration
 # ---------------------------------------------------------------------------
 
+
 class TestAuditMiddlewareAsyncRedaction:
     """Test that _ahandle_tool_call applies redaction before audit/tracing."""
 
     def _build_middleware(self):
         from graph.middleware.audit import AuditMiddleware
+
         return AuditMiddleware()
 
     async def test_bearer_token_in_args_redacted_async(self, tmp_path):
         audit_file = tmp_path / "audit.jsonl"
 
         from observability.audit import AuditLogger
+
         fake_logger = AuditLogger(path=audit_file)
 
         middleware = self._build_middleware()
@@ -213,6 +222,7 @@ class TestAuditMiddlewareAsyncRedaction:
 # ---------------------------------------------------------------------------
 # Standalone redact() contract tests
 # ---------------------------------------------------------------------------
+
 
 def test_redact_returns_valid_json_serializable_values():
     """Ensure [REDACTED] placeholder is JSON-safe."""

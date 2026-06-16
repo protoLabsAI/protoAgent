@@ -56,7 +56,7 @@ def test_hybrid_results_carry_an_rrf_score(tmp_path):
     results = store.search("math calculator", k=2)
     scores = [r.get("score") for r in results]
     assert all(isinstance(s, float) for s in scores)  # every hit scored
-    assert scores == sorted(scores, reverse=True)      # ranked high→low
+    assert scores == sorted(scores, reverse=True)  # ranked high→low
 
 
 def test_vector_only_hit_is_hydrated(tmp_path):
@@ -80,7 +80,10 @@ def test_circuit_breaker_falls_back_to_fts(tmp_path):
         raise RuntimeError("embedding service down")
 
     store = HybridKnowledgeStore(
-        _db(tmp_path), embed_fn=flaky_embed, breaker_threshold=2, breaker_cooldown_s=999,
+        _db(tmp_path),
+        embed_fn=flaky_embed,
+        breaker_threshold=2,
+        breaker_cooldown_s=999,
     )
     # add_chunk still succeeds (FTS5 path); embedding just fails silently.
     store.add_chunk("use the calculator for math", domain="general")
@@ -103,7 +106,10 @@ def test_reset_embed_breaker_closes_an_open_breaker(tmp_path):
         return [1.0, 0.0]
 
     store = HybridKnowledgeStore(
-        _db(tmp_path), embed_fn=embed, breaker_threshold=2, breaker_cooldown_s=999,
+        _db(tmp_path),
+        embed_fn=embed,
+        breaker_threshold=2,
+        breaker_cooldown_s=999,
     )
     store.add_chunk("calculator math", domain="general")
     store.search("calculator")  # trips the failures

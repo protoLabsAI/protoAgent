@@ -177,6 +177,7 @@ class SkillCurator:
     def _get_index(self):
         if self._index is None:
             from graph.skills.index import SkillsIndex
+
             self._index = SkillsIndex(self.db_path)
         return self._index
 
@@ -260,7 +261,9 @@ class SkillCurator:
             index.update_confidence(sid, s.get("confidence", 1.0))
         log.info(
             "[curator] persisted %d skills to %s (deleted %d)",
-            len(kept_by_id), self.db_path, deleted,
+            len(kept_by_id),
+            self.db_path,
+            deleted,
         )
 
     # ── Confidence decay ───────────────────────────────────────────────────────
@@ -271,9 +274,7 @@ class SkillCurator:
         # Prefer last_used; fall back to created_at as proxy
         ts_str = skill.get("last_used") or skill.get("created_at")
         if not ts_str:
-            log.debug(
-                "[curator] skill %s has no timestamp — using 0 days idle", skill.get("id")
-            )
+            log.debug("[curator] skill %s has no timestamp — using 0 days idle", skill.get("id"))
             return 0.0
         try:
             last = _parse_iso(ts_str)
@@ -320,9 +321,7 @@ class SkillCurator:
 
     # ── Deduplication ──────────────────────────────────────────────────────────
 
-    def _build_similarity_matrix(
-        self, skills: list[dict]
-    ) -> list[list[float]]:
+    def _build_similarity_matrix(self, skills: list[dict]) -> list[list[float]]:
         """Return an n×n similarity matrix using Jaccard similarity."""
         # Try sentence-transformers first; fall back to Jaccard with a warning.
         try:
@@ -337,10 +336,7 @@ class SkillCurator:
             log.debug("[curator] similarity matrix built with sentence-transformers")
             return matrix
         except ImportError:
-            log.warning(
-                "[curator] sentence-transformers not available — "
-                "falling back to token Jaccard similarity"
-            )
+            log.warning("[curator] sentence-transformers not available — falling back to token Jaccard similarity")
 
         n = len(skills)
         texts = [_skill_text(s) for s in skills]
@@ -393,12 +389,8 @@ class SkillCurator:
                 continue
             # Pick the skill with the highest confidence as the canonical one
             best_idx = max(cluster, key=lambda i: float(skills[i].get("confidence", 0)))
-            removed_ids = [
-                skills[i]["id"] for i in cluster if i != best_idx
-            ]
-            report.append(
-                {"kept": skills[best_idx]["id"], "removed": removed_ids}
-            )
+            removed_ids = [skills[i]["id"] for i in cluster if i != best_idx]
+            report.append({"kept": skills[best_idx]["id"], "removed": removed_ids})
             ids_to_remove.update(removed_ids)
 
         if ids_to_remove:
@@ -448,13 +440,9 @@ class SkillCurator:
             size = os.path.getsize(self.audit_path)
             if size > AUDIT_MAX_BYTES:
                 ts = _now_utc().strftime("%Y-%m-%d")
-                archive = os.path.join(
-                    audit_dir, f"audit-{ts}.jsonl"
-                )
+                archive = os.path.join(audit_dir, f"audit-{ts}.jsonl")
                 os.rename(self.audit_path, archive)
-                log.warning(
-                    "[curator] audit.jsonl exceeded 100 MB — archived to %s", archive
-                )
+                log.warning("[curator] audit.jsonl exceeded 100 MB — archived to %s", archive)
 
         with open(self.audit_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, default=str) + "\n")
@@ -468,8 +456,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m graph.skills.curator",
         description=(
-            "Periodic skill curator — deduplicates, decays confidence, and "
-            "prunes the protoAgent skill index."
+            "Periodic skill curator — deduplicates, decays confidence, and prunes the protoAgent skill index."
         ),
     )
     p.add_argument(

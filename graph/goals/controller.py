@@ -31,17 +31,15 @@ log = logging.getLogger(__name__)
 CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
 
 _GOAL_PLAN_RE = re.compile(r"<goal_plan>(.*?)</goal_plan>", re.IGNORECASE | re.DOTALL)
-_GIVEUP_RE = re.compile(
-    r"<goal_unachievable(?:\s+reason=\"([^\"]*)\")?\s*/?>", re.IGNORECASE
-)
+_GIVEUP_RE = re.compile(r"<goal_unachievable(?:\s+reason=\"([^\"]*)\")?\s*/?>", re.IGNORECASE)
 
 
 @dataclass
 class Decision:
-    action: str               # "continue" | "done"
+    action: str  # "continue" | "done"
     state: GoalState | None = None
-    message: str | None = None   # continuation prompt (action == "continue")
-    note: str = ""               # human-readable status note
+    message: str | None = None  # continuation prompt (action == "continue")
+    note: str = ""  # human-readable status note
 
 
 class GoalController:
@@ -63,10 +61,9 @@ class GoalController:
         if not isinstance(message, str):
             return None
         stripped = message.strip()
-        if not (stripped == "/goal" or stripped.lower().startswith("/goal ")
-                or stripped.lower().startswith("/goal\n")):
+        if not (stripped == "/goal" or stripped.lower().startswith("/goal ") or stripped.lower().startswith("/goal\n")):
             return None
-        rest = stripped[len("/goal"):].strip()
+        rest = stripped[len("/goal") :].strip()
 
         # /goal  → status
         if not rest:
@@ -81,9 +78,11 @@ class GoalController:
         # /goal {json}  or  /goal <free text>  → set
         spec, condition, max_iters, no_progress, mode, fresh_context = self._parse_set(rest)
         if condition is None:
-            return ("Could not parse goal. Use `/goal <text>` or "
-                    '`/goal {"condition": "...", "verifier": {"type": "command", '
-                    '"command": "pytest -q"}}`.')
+            return (
+                "Could not parse goal. Use `/goal <text>` or "
+                '`/goal {"condition": "...", "verifier": {"type": "command", '
+                '"command": "pytest -q"}}`.'
+            )
         state = GoalState(
             session_id=session_id,
             condition=condition,
@@ -101,24 +100,34 @@ class GoalController:
     # eval()s a spec expr — all code-exec sinks that stay operator-only (/goal).
     SAFE_PROGRAMMATIC_VERIFIERS = frozenset({"plugin"})
 
-    def set_goal_safe(self, session_id: str, condition: str, verifier: dict,
-                      max_iterations: int | None = None,
-                      no_progress_limit: int | None = None,
-                      mode: str = "drive") -> tuple[bool, str]:
+    def set_goal_safe(
+        self,
+        session_id: str,
+        condition: str,
+        verifier: dict,
+        max_iterations: int | None = None,
+        no_progress_limit: int | None = None,
+        mode: str = "drive",
+    ) -> tuple[bool, str]:
         """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
         Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
         programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
         operator `/goal` path keeps full access. Returns (ok, message)."""
         vtype = (verifier or {}).get("type")
         if vtype not in self.SAFE_PROGRAMMATIC_VERIFIERS:
-            return (False, f"programmatic goals must use a 'plugin' verifier (got {vtype!r}); "
-                    "command/test/ci/data verifiers are operator-only — set them with /goal.")
+            return (
+                False,
+                f"programmatic goals must use a 'plugin' verifier (got {vtype!r}); "
+                "command/test/ci/data verifiers are operator-only — set them with /goal.",
+            )
         if not condition:
             return (False, "a goal condition is required.")
         if not (verifier.get("check")):
             return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
         state = GoalState(
-            session_id=session_id, condition=condition, verifier=verifier,
+            session_id=session_id,
+            condition=condition,
+            verifier=verifier,
             mode=("monitor" if mode == "monitor" else "drive"),  # ADR 0030 (still plugin-gated)
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
             no_progress_limit=no_progress_limit,  # per-goal patience (ADR 0030 D4)
@@ -165,8 +174,7 @@ class GoalController:
         result = await run_verifier(state.verifier, ctx)
 
         if result.met:
-            return await self._finish(state, "achieved", result.reason or "verifier passed",
-                                evidence=result.evidence)
+            return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
 
         # Monitor goals (ADR 0030): an external process drives the metric, not the
         # agent's turns — so on not-met there's nothing for the agent to do. Record
@@ -175,6 +183,7 @@ class GoalController:
         # (/ a future deadline). This is what closes ADR-0028 D6.
         if state.mode == "monitor":
             from time import time
+
             state.last_reason = result.reason
             state.last_evidence = result.evidence
             state.last_checked = time()
@@ -196,9 +205,7 @@ class GoalController:
             else:
                 state.checklist = plan_text
 
-        signature_unchanged = (
-            result.reason == state.last_reason and result.evidence == state.last_evidence
-        )
+        signature_unchanged = result.reason == state.last_reason and result.evidence == state.last_evidence
         state.no_progress_streak = (state.no_progress_streak + 1) if signature_unchanged else 0
         state.last_reason = result.reason
         state.last_evidence = result.evidence
@@ -206,13 +213,16 @@ class GoalController:
 
         limit = state.no_progress_limit or getattr(self._config, "goal_no_progress_limit", 3)
         if state.iteration >= state.max_iterations:
-            return await self._finish(state, "exhausted",
-                                f"ran out of iteration budget ({state.max_iterations})",
-                                evidence=result.evidence)
+            return await self._finish(
+                state, "exhausted", f"ran out of iteration budget ({state.max_iterations})", evidence=result.evidence
+            )
         if state.no_progress_streak >= limit:
-            return await self._finish(state, "unachievable",
-                                f"no progress after {state.no_progress_streak} attempts: {result.reason}",
-                                evidence=result.evidence)
+            return await self._finish(
+                state,
+                "unachievable",
+                f"no progress after {state.no_progress_streak} attempts: {result.reason}",
+                evidence=result.evidence,
+            )
 
         self._store.set(state)
         # Realtime goal-loop progress (ADR 0051 Slice 3) — only goal.achieved/failed were
@@ -220,14 +230,18 @@ class GoalController:
         # Best-effort, same channel as the terminal events.
         try:
             from graph.plugins.host import HOST
+
             if HOST.publish:
-                HOST.publish("goal.iteration", {
-                    "session_id": getattr(state, "session_id", "") or "",
-                    "condition": getattr(state, "condition", "") or "",
-                    "iteration": state.iteration,
-                    "max_iterations": state.max_iterations,
-                    "reason": result.reason,
-                })
+                HOST.publish(
+                    "goal.iteration",
+                    {
+                        "session_id": getattr(state, "session_id", "") or "",
+                        "condition": getattr(state, "condition", "") or "",
+                        "iteration": state.iteration,
+                        "max_iterations": state.max_iterations,
+                        "reason": result.reason,
+                    },
+                )
         except Exception:  # noqa: BLE001 — a bus hiccup must never break the goal loop
             pass
         return Decision(
@@ -247,14 +261,17 @@ class GoalController:
         if state is None:
             return None
         ctx = VerifyContext(
-            config=self._config, condition=state.condition,
-            last_text="", tool_summary="", cwd=os.getcwd(),
+            config=self._config,
+            condition=state.condition,
+            last_text="",
+            tool_summary="",
+            cwd=os.getcwd(),
         )
         result = await run_verifier(state.verifier, ctx)
         if result.met:
-            return await self._finish(state, "achieved", result.reason or "verifier passed",
-                                      evidence=result.evidence)
+            return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
         from time import time
+
         state.last_reason = result.reason
         state.last_evidence = result.evidence
         state.last_checked = time()
@@ -282,6 +299,7 @@ class GoalController:
     async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
         from time import time
         from graph.goals.hooks import fire_goal_hooks
+
         state.status = status
         state.last_reason = reason
         if evidence:
@@ -295,15 +313,19 @@ class GoalController:
         # `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must never break finish.
         try:
             from graph.plugins.host import HOST
+
             if HOST.publish:
-                HOST.publish("goal.achieved" if status == "achieved" else "goal.failed", {
-                    "session_id": state.session_id,
-                    "condition": state.condition,
-                    "status": status,
-                    "reason": reason,
-                    "evidence": evidence or state.last_evidence or "",
-                    "mode": state.mode,
-                })
+                HOST.publish(
+                    "goal.achieved" if status == "achieved" else "goal.failed",
+                    {
+                        "session_id": state.session_id,
+                        "condition": state.condition,
+                        "status": status,
+                        "reason": reason,
+                        "evidence": evidence or state.last_evidence or "",
+                        "mode": state.mode,
+                    },
+                )
         except Exception:  # noqa: BLE001
             log.debug("[goals] goal.* bus emit failed", exc_info=True)
         glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗"}.get(status, "•")
@@ -319,8 +341,8 @@ class GoalController:
                 f"[goal continuation {state.iteration}/{state.max_iterations} — fresh context]\n"
                 f"Goal: {state.condition}\n"
                 f"Verifier ({vtype}) last result: {result.reason}\n"
-                + (evidence_block + "\n" if evidence_block else "\n") +
-                f"Plan from last iteration:\n{plan}\n\n"
+                + (evidence_block + "\n" if evidence_block else "\n")
+                + f"Plan from last iteration:\n{plan}\n\n"
                 f"Take ONE concrete step toward the goal. Read the plan — it records what's "
                 f"been tried, what's next, and what failed. Update your running checklist "
                 f"inside <goal_plan>...</goal_plan> at the end of your turn (it will be "

@@ -19,24 +19,24 @@ from __future__ import annotations
 
 # USD per token, (input, output). Keep in sync with Workstacean MODEL_RATES.
 MODEL_RATES: dict[str, dict[str, float]] = {
-    "claude-opus-4-8":           {"input": 0.000015,   "output": 0.000075},
-    "claude-opus-4-6":           {"input": 0.000015,   "output": 0.000075},
-    "claude-sonnet-4-6":         {"input": 0.000003,   "output": 0.000015},
-    "claude-haiku-4-5":          {"input": 0.00000025, "output": 0.00000125},
+    "claude-opus-4-8": {"input": 0.000015, "output": 0.000075},
+    "claude-opus-4-6": {"input": 0.000015, "output": 0.000075},
+    "claude-sonnet-4-6": {"input": 0.000003, "output": 0.000015},
+    "claude-haiku-4-5": {"input": 0.00000025, "output": 0.00000125},
     "claude-haiku-4-5-20251001": {"input": 0.00000025, "output": 0.00000125},
-    "gpt-4o":                    {"input": 0.0000025,  "output": 0.00001},
-    "gpt-4o-mini":               {"input": 0.00000015, "output": 0.0000006},
+    "gpt-4o": {"input": 0.0000025, "output": 0.00001},
+    "gpt-4o-mini": {"input": 0.00000015, "output": 0.0000006},
     # protolabs/* are self-hosted vLLM (RTX 6000 Blackwell) — no per-token API
     # spend, so these are a low nominal local-compute estimate (trackable, not
     # billing) rather than the Claude-ish `default` which would overstate cost
     # ~30x. Substring match covers the gateway aliases (protolabs/reasoning →
     # protolabs/smart backend, etc.). Keep in sync with Workstacean MODEL_RATES.
-    "protolabs/reasoning":       {"input": 0.0000001,  "output": 0.0000004},
-    "protolabs/smart":           {"input": 0.0000001,  "output": 0.0000004},
-    "protolabs/fast":            {"input": 0.00000005, "output": 0.0000002},
-    "protolabs/nano":            {"input": 0.00000003, "output": 0.0000001},
-    "protolabs":                 {"input": 0.0000001,  "output": 0.0000004},
-    "default":                   {"input": 0.000003,   "output": 0.000015},
+    "protolabs/reasoning": {"input": 0.0000001, "output": 0.0000004},
+    "protolabs/smart": {"input": 0.0000001, "output": 0.0000004},
+    "protolabs/fast": {"input": 0.00000005, "output": 0.0000002},
+    "protolabs/nano": {"input": 0.00000003, "output": 0.0000001},
+    "protolabs": {"input": 0.0000001, "output": 0.0000004},
+    "default": {"input": 0.000003, "output": 0.000015},
 }
 
 

@@ -40,9 +40,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         if record.exc_info:
-            payload["exc_type"] = getattr(
-                record.exc_info[0], "__name__", str(record.exc_info[0])
-            )
+            payload["exc_type"] = getattr(record.exc_info[0], "__name__", str(record.exc_info[0]))
             payload["exc"] = self.formatException(record.exc_info)
         elif record.exc_text:
             payload["exc"] = record.exc_text

@@ -41,12 +41,15 @@ def test_exits_on_loopback_when_required(monkeypatch):
     assert ei.value.code == 1
 
 
-@pytest.mark.parametrize("bad", [
-    "http://127.0.0.1:7870",
-    "http://localhost:7870",
-    "http://[::1]:7870",
-    "http://0.0.0.0:7870",
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://127.0.0.1:7870",
+        "http://localhost:7870",
+        "http://[::1]:7870",
+        "http://0.0.0.0:7870",
+    ],
+)
 def test_exits_on_each_loopback_form(monkeypatch, bad):
     _set(monkeypatch, require=True, public_url=bad)
     with pytest.raises(SystemExit):

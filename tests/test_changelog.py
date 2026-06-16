@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-_SPEC = importlib.util.spec_from_file_location(
-    "changelog", Path(__file__).parent.parent / "scripts" / "changelog.py"
-)
+_SPEC = importlib.util.spec_from_file_location("changelog", Path(__file__).parent.parent / "scripts" / "changelog.py")
 changelog = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(changelog)
 
@@ -90,14 +88,16 @@ def test_scaffold_prepends_when_absent_and_is_idempotent(tmp_path, monkeypatch):
     cl = tmp_path / "CHANGELOG.md"
     cl.write_text(_SCAFFOLD_MD, encoding="utf-8")
     mj = tmp_path / "changelog.json"
-    mj.write_text(json.dumps([{"version": "v0.1.0", "date": "2026-01-01", "changes": ["curated blurb"]}]), encoding="utf-8")
+    mj.write_text(
+        json.dumps([{"version": "v0.1.0", "date": "2026-01-01", "changes": ["curated blurb"]}]), encoding="utf-8"
+    )
     monkeypatch.setattr(changelog, "CHANGELOG", cl)
     monkeypatch.setattr(changelog, "MARKETING_JSON", mj)
 
     assert changelog.scaffold("0.2.0") is True
     entries = json.loads(mj.read_text(encoding="utf-8"))
     assert [e["version"] for e in entries] == ["v0.2.0", "v0.1.0"]  # prepended
-    assert entries[1]["changes"] == ["curated blurb"]              # existing curation untouched
+    assert entries[1]["changes"] == ["curated blurb"]  # existing curation untouched
     # Running again is a no-op (doesn't clobber a curated entry).
     assert changelog.scaffold("0.2.0") is False
     assert json.loads(mj.read_text(encoding="utf-8")) == entries

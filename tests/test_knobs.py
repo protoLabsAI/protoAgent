@@ -14,11 +14,13 @@ from graph.sdk import Knobs as SdkKnobs  # re-exported on the plugin SDK surface
 
 
 def _knobs() -> Knobs:
-    return (Knobs()
-            .define("min_margin", 30, lo=0, help="cr/unit floor")
-            .define("buy_buffer", 600_000, lo=0)
-            .define("mining", True)
-            .define("sink_cutoff", "ABUNDANT", choices=["LIMITED", "HIGH", "ABUNDANT"]))
+    return (
+        Knobs()
+        .define("min_margin", 30, lo=0, help="cr/unit floor")
+        .define("buy_buffer", 600_000, lo=0)
+        .define("mining", True)
+        .define("sink_cutoff", "ABUNDANT", choices=["LIMITED", "HIGH", "ABUNDANT"])
+    )
 
 
 def test_exported_on_the_sdk():
@@ -29,8 +31,7 @@ def test_define_infers_type_and_defaults():
     k = _knobs()
     assert k.get("min_margin") == 30
     assert k.get("mining") is True
-    assert k.values() == {"min_margin": 30, "buy_buffer": 600_000,
-                          "mining": True, "sink_cutoff": "ABUNDANT"}
+    assert k.values() == {"min_margin": 30, "buy_buffer": 600_000, "mining": True, "sink_cutoff": "ABUNDANT"}
 
 
 def test_set_coerces_number_from_string():
@@ -69,8 +70,8 @@ def test_unknown_knob_is_a_readable_message_not_a_raise():
 
 def test_changes_log_records_only_real_changes():
     k = _knobs()
-    k.set("min_margin", "30")     # same value → no log entry
-    k.set("min_margin", "20")     # changed → logged
+    k.set("min_margin", "30")  # same value → no log entry
+    k.set("min_margin", "20")  # changed → logged
     log = k.changes()
     assert len(log) == 1 and log[0]["action"] == "tune" and "30 → 20" in log[0]["detail"]
 

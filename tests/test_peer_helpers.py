@@ -10,9 +10,7 @@ from tools.peer_tools import _extract_text, _is_terminal
 
 def test_extract_text_unwraps_a2a_1_0_task_envelope():
     assert _extract_text({"task": {"artifacts": [{"parts": [{"text": "hello"}]}]}}) == "hello"
-    assert _extract_text(
-        {"task": {"status": {"message": {"parts": [{"text": "via status"}]}}}}
-    ) == "via status"
+    assert _extract_text({"task": {"status": {"message": {"parts": [{"text": "via status"}]}}}}) == "via status"
     assert _extract_text({"artifacts": [{"parts": [{"kind": "text", "text": "legacy"}]}]}) == "legacy"
     assert _extract_text(None) is None
     assert _extract_text({"task": {}}) is None

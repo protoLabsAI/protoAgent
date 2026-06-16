@@ -95,15 +95,18 @@ def test_fresh_context_continuation_seeds_from_durable_plan(tmp_path):
     c = _ctrl(tmp_path)
     c._store.write_plan("s", "- [ ] wire the thing")
     state = GoalState(
-        session_id="s", condition="make it green",
-        fresh_context=True, iteration=3, max_iterations=8,
+        session_id="s",
+        condition="make it green",
+        fresh_context=True,
+        iteration=3,
+        max_iterations=8,
     )
     result = VerifyResult(met=False, reason="2 tests still failing", evidence="pytest: 2 failed")
     prompt = c._continuation(state, result)
     assert "fresh context" in prompt
-    assert "wire the thing" in prompt           # the durable plan is seeded in
-    assert "make it green" in prompt            # the goal condition
-    assert "2 tests still failing" in prompt    # the last verifier reason
+    assert "wire the thing" in prompt  # the durable plan is seeded in
+    assert "make it green" in prompt  # the goal condition
+    assert "2 tests still failing" in prompt  # the last verifier reason
     assert "ONE concrete step" in prompt
     assert "<goal_plan>" in prompt
 
@@ -111,11 +114,14 @@ def test_fresh_context_continuation_seeds_from_durable_plan(tmp_path):
 def test_default_continuation_stays_same_session(tmp_path):
     c = _ctrl(tmp_path)
     state = GoalState(
-        session_id="s", condition="make it green",
-        checklist="- [ ] do the work", iteration=1, max_iterations=8,
+        session_id="s",
+        condition="make it green",
+        checklist="- [ ] do the work",
+        iteration=1,
+        max_iterations=8,
     )
     result = VerifyResult(met=False, reason="nope", evidence="")
     prompt = c._continuation(state, result)
-    assert "fresh context" not in prompt        # default path: same-session continuity
-    assert "Current plan" in prompt             # the existing template
-    assert "do the work" in prompt              # seeded from in-memory checklist, not disk
+    assert "fresh context" not in prompt  # default path: same-session continuity
+    assert "Current plan" in prompt  # the existing template
+    assert "do the work" in prompt  # seeded from in-memory checklist, not disk

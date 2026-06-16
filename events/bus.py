@@ -129,9 +129,7 @@ class EventBus:
             except Exception:  # noqa: BLE001 — one bad subscriber can't break the bus
                 log.exception("[events] handler for %r failed on %r", pattern, event)
 
-    def subscribe_handler(
-        self, topic: str, handler: Callable[[dict[str, Any]], Any]
-    ) -> Callable[[], None]:
+    def subscribe_handler(self, topic: str, handler: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
         """Register an in-process handler for ``topic`` (ADR 0039). Returns an
         unsubscribe callable. ``handler`` receives the full payload
         ``{"event", "data", "seq"}`` and may be sync or async."""

@@ -63,9 +63,7 @@ class ResponseCache:
             return None
         key = self._key(*parts)
         try:
-            row = self._conn.execute(
-                "SELECT value, created_at FROM response_cache WHERE key = ?", (key,)
-            ).fetchone()
+            row = self._conn.execute("SELECT value, created_at FROM response_cache WHERE key = ?", (key,)).fetchone()
             if row is None:
                 return None
             value, created_at = row

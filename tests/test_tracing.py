@@ -87,7 +87,7 @@ def test_disabled_trace_tool_call_returns_none():
 
 def test_disabled_score_current_trace_is_silent():
     tracing = _reload_tracing()
-    tracing.score_current_trace("verdict", 1.0)   # must not raise
+    tracing.score_current_trace("verdict", 1.0)  # must not raise
 
 
 # ── Enabled (fake Langfuse) ───────────────────────────────────────────────────
@@ -204,8 +204,11 @@ def test_trace_tool_call_on_failure_marks_error_level():
     tracing = _reload_tracing()
     fake, _span, _child = _enable_with_fake_client(tracing)
     tracing.trace_tool_call(
-        tool_name="file_bug", args={}, result="boom",
-        duration_ms=10, success=False,
+        tool_name="file_bug",
+        args={},
+        result="boom",
+        duration_ms=10,
+        success=False,
     )
     kwargs = fake.start_observation.call_args.kwargs
     assert kwargs["level"] == "ERROR"
@@ -216,7 +219,9 @@ def test_score_current_trace_delegates_to_client():
     fake, _s, _c = _enable_with_fake_client(tracing)
     tracing.score_current_trace("verdict", 1.0, comment="PASS")
     fake.score_current_trace.assert_called_once_with(
-        name="verdict", value=1.0, comment="PASS",
+        name="verdict",
+        value=1.0,
+        comment="PASS",
     )
 
 
@@ -241,6 +246,7 @@ def test_otel_cross_context_detach_error_is_silenced():
     """
     import io
     import logging
+
     _reload_tracing()  # ensures the filter is installed via module import
 
     handler_buf = io.StringIO()
@@ -257,8 +263,7 @@ def test_otel_cross_context_detach_error_is_silenced():
         # has to match on the message string itself.
         try:
             raise ValueError(
-                "<Token var=<ContextVar name='current_context'> at 0x...> "
-                "was created in a different Context"
+                "<Token var=<ContextVar name='current_context'> at 0x...> was created in a different Context"
             )
         except ValueError:
             otel_log.error("Failed to detach context", exc_info=True)
@@ -267,9 +272,5 @@ def test_otel_cross_context_detach_error_is_silenced():
         otel_log.removeHandler(handler)
 
     output = handler_buf.getvalue()
-    assert "Failed to detach context" not in output, (
-        "filter failed to silence the cross-context detach error"
-    )
-    assert "unrelated OTel error" in output, (
-        "filter is too broad — it silenced an unrelated error too"
-    )
+    assert "Failed to detach context" not in output, "filter failed to silence the cross-context detach error"
+    assert "unrelated OTel error" in output, "filter is too broad — it silenced an unrelated error too"

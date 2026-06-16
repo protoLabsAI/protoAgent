@@ -32,20 +32,20 @@ def fake_io(monkeypatch):
 
 
 def test_upsert_routes_secret_to_overlay_and_strips_config(fake_io):
-    store.upsert_delegate({"name": "helm", "type": "a2a", "url": "https://h/a2a",
-                           "auth": {"scheme": "bearer", "token": "SEKRET"}})
+    store.upsert_delegate(
+        {"name": "helm", "type": "a2a", "url": "https://h/a2a", "auth": {"scheme": "bearer", "token": "SEKRET"}}
+    )
     stored = fake_io["doc"]["delegates"][0]
-    assert stored["auth"] == {"scheme": "bearer"}            # token stripped from config
+    assert stored["auth"] == {"scheme": "bearer"}  # token stripped from config
     assert "SEKRET" not in str(stored)
     assert fake_io["secrets"]["delegate_secrets"]["helm.auth.token"] == "SEKRET"
 
 
 def test_merged_delegates_overlays_secret(fake_io):
-    store.upsert_delegate({"name": "opus", "type": "openai", "url": "https://g/v1",
-                           "model": "m", "api_key": "K"})
-    assert "K" not in str(fake_io["doc"]["delegates"])        # not in tracked config
+    store.upsert_delegate({"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "K"})
+    assert "K" not in str(fake_io["doc"]["delegates"])  # not in tracked config
     merged = store.merged_delegates()
-    assert merged[0]["api_key"] == "K"                        # overlaid back at load
+    assert merged[0]["api_key"] == "K"  # overlaid back at load
 
 
 def test_upsert_replaces_by_name_and_delete(fake_io):
@@ -64,6 +64,7 @@ def test_upsert_replaces_by_name_and_delete(fake_io):
 def client(fake_io, monkeypatch):
     async def _noreload():
         return True, "reloaded"
+
     monkeypatch.setattr(api, "_reload", _noreload)
     app = FastAPI()
     app.include_router(api.build_router())
@@ -78,8 +79,9 @@ def test_delegate_types_endpoint(client):
 
 def test_create_list_update_delete_flow(client, fake_io):
     # create
-    r = client.post("/api/delegates", json={"name": "opus", "type": "openai",
-                                            "url": "https://g/v1", "model": "m", "api_key": "K"})
+    r = client.post(
+        "/api/delegates", json={"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "K"}
+    )
     assert r.status_code == 200 and r.json()["ok"] is True
     names = [d["name"] for d in r.json()["delegates"]]
     assert names == ["opus"]
@@ -89,18 +91,23 @@ def test_create_list_update_delete_flow(client, fake_io):
     assert fake_io["secrets"]["delegate_secrets"]["opus.api_key"] == "K"
 
     # duplicate → 409
-    assert client.post("/api/delegates", json={"name": "opus", "type": "openai",
-                                               "url": "https://g/v1", "model": "m"}).status_code == 409
+    assert (
+        client.post(
+            "/api/delegates", json={"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}
+        ).status_code
+        == 409
+    )
 
     # list
     assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["opus"]
 
     # update missing → 404
-    assert client.put("/api/delegates/nope", json={"type": "openai", "url": "https://g/v1",
-                                                    "model": "m"}).status_code == 404
+    assert (
+        client.put("/api/delegates/nope", json={"type": "openai", "url": "https://g/v1", "model": "m"}).status_code
+        == 404
+    )
     # update ok
-    r = client.put("/api/delegates/opus", json={"type": "openai", "url": "https://g/v1",
-                                                "model": "m2"})
+    r = client.put("/api/delegates/opus", json={"type": "openai", "url": "https://g/v1", "model": "m2"})
     assert r.status_code == 200
     assert client.get("/api/delegates").json()["delegates"][0]["model"] == "m2"
 
@@ -111,15 +118,18 @@ def test_create_list_update_delete_flow(client, fake_io):
 
 def test_create_invalid_returns_400(client):
     assert client.post("/api/delegates", json={"name": "x", "type": "nope"}).status_code == 400
-    assert client.post("/api/delegates", json={"name": "y", "type": "openai",
-                                               "url": "https://g/v1"}).status_code == 400  # no model
+    assert (
+        client.post("/api/delegates", json={"name": "y", "type": "openai", "url": "https://g/v1"}).status_code == 400
+    )  # no model
 
 
 def test_test_endpoint_acp_probe(client):
     import sys
+
     # acp probe is local (binary-on-PATH + workdir exists) — point at the python exe.
-    r = client.post("/api/delegates/test", json={"name": "t", "type": "acp",
-                                                 "command": sys.executable, "workdir": "/tmp"})
+    r = client.post(
+        "/api/delegates/test", json={"name": "t", "type": "acp", "command": sys.executable, "workdir": "/tmp"}
+    )
     assert r.status_code == 200 and r.json()["ok"] is True
 
 
@@ -129,6 +139,7 @@ def test_test_endpoint_unknown_type_400(client):
 
 def test_list_includes_health_snapshot(client, monkeypatch):
     import plugins.delegates.health as H
+
     client.post("/api/delegates", json={"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"})
     monkeypatch.setattr(H, "health_snapshot", lambda: {"opus": {"ok": True, "latency_ms": 12, "detail": "ok"}})
     body = client.get("/api/delegates").json()["delegates"][0]
@@ -139,28 +150,30 @@ def test_test_endpoint_probes_saved_delegate_by_name(client):
     # The per-row Test button sends only {name, type}; the endpoint must probe the
     # STORED config (command/workdir), not fail on the missing fields.
     import sys
-    client.post("/api/delegates", json={"name": "proto", "type": "acp",
-                                        "command": sys.executable, "workdir": "/tmp"})
+
+    client.post("/api/delegates", json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
     r = client.post("/api/delegates/test", json={"name": "proto", "type": "acp"})
     assert r.status_code == 200 and r.json()["ok"] is True
 
 
 def test_public_view_redacts_secrets_including_nested_env():
     raw = {
-        "name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp",
+        "name": "proto",
+        "type": "acp",
+        "command": "proto",
+        "workdir": "/tmp",
         "env": {"HOME": "/h", "OPENAI_BASE_URL": "https://g/v1", "OPENAI_API_KEY": "sk-LEAK"},
     }
     view = api._public_view(raw)
-    assert "sk-LEAK" not in str(view)               # nested env secret redacted
+    assert "sk-LEAK" not in str(view)  # nested env secret redacted
     assert view["env"]["OPENAI_API_KEY"] == "***"
-    assert view["env"]["HOME"] == "/h"              # non-secret env preserved
+    assert view["env"]["HOME"] == "/h"  # non-secret env preserved
 
 
 def test_public_view_drops_top_level_secrets():
     raw = {"name": "o", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "sk-X"}
     view = api._public_view(raw)
     assert "sk-X" not in str(view) and "api_key" not in view
-    raw2 = {"name": "h", "type": "a2a", "url": "https://h/a2a",
-            "auth": {"scheme": "bearer", "token": "SEKRET-TOKEN"}}
+    raw2 = {"name": "h", "type": "a2a", "url": "https://h/a2a", "auth": {"scheme": "bearer", "token": "SEKRET-TOKEN"}}
     view2 = api._public_view(raw2)
     assert "SEKRET-TOKEN" not in str(view2) and view2["auth"] == {"scheme": "bearer"}

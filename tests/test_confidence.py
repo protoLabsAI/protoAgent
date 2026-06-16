@@ -39,9 +39,7 @@ def test_extract_confidence_malformed_score_is_none():
 
 def test_confidence_tags_stripped_from_output():
     text = (
-        "<output>Clean answer.</output>"
-        "<confidence>0.9</confidence>"
-        "<confidence_explanation>x</confidence_explanation>"
+        "<output>Clean answer.</output><confidence>0.9</confidence><confidence_explanation>x</confidence_explanation>"
     )
     out = extract_output(text)
     assert out == "Clean answer."

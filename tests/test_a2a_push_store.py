@@ -43,8 +43,12 @@ async def test_set_get_roundtrip():
 async def test_set_upserts_same_config_id():
     """Re-setting the same config id replaces it rather than duplicating."""
     s, ctx = _store(), _ctx()
-    await s.set_info("task-1", TaskPushNotificationConfig(task_id="task-1", id="c", url="https://a/hook", token="t1"), ctx)
-    await s.set_info("task-1", TaskPushNotificationConfig(task_id="task-1", id="c", url="https://b/hook", token="t2"), ctx)
+    await s.set_info(
+        "task-1", TaskPushNotificationConfig(task_id="task-1", id="c", url="https://a/hook", token="t1"), ctx
+    )
+    await s.set_info(
+        "task-1", TaskPushNotificationConfig(task_id="task-1", id="c", url="https://b/hook", token="t2"), ctx
+    )
     rows = await s.get_info("task-1", ctx)
     assert len(rows) == 1
     assert rows[0].url == "https://b/hook" and rows[0].token == "t2"

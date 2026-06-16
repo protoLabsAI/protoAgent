@@ -124,7 +124,9 @@ def test_skill_artifact_validation_tools_not_list() -> None:
     """SkillV1Artifact must reject a non-list tools_used."""
     with pytest.raises(TypeError, match="tools_used"):
         SkillV1Artifact(
-            name="x", description="d", prompt_template="p",
+            name="x",
+            description="d",
+            prompt_template="p",
             tools_used="current_time",  # type: ignore[arg-type]
         )
 
@@ -149,9 +151,13 @@ def test_emit_and_get_pending_skills() -> None:
 def test_emit_multiple_skills() -> None:
     """Multiple emit calls accumulate in order."""
     for i in range(3):
-        emit_skill_artifact(SkillV1Artifact(
-            name=f"skill-{i}", description="d", prompt_template="p",
-        ))
+        emit_skill_artifact(
+            SkillV1Artifact(
+                name=f"skill-{i}",
+                description="d",
+                prompt_template="p",
+            )
+        )
     skills = get_pending_skills()
     assert [s.name for s in skills] == ["skill-0", "skill-1", "skill-2"]
 
@@ -232,8 +238,7 @@ def _run_emit_logic(
     if emit_skill and allow_skill_emission:
         if not tools_used:
             logging.getLogger(__name__).warning(
-                "[skill] emit_skill=True but no tool usage metadata captured; "
-                "skipping skill emission.",
+                "[skill] emit_skill=True but no tool usage metadata captured; skipping skill emission.",
             )
         else:
             artifact = SkillV1Artifact(

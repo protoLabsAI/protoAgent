@@ -58,7 +58,7 @@ def test_create_bad_name_is_400(client):
 
 def test_activate_unknown_400_and_proxy_409(client):
     assert client.post("/api/fleet/ghost/activate").status_code == 400  # no such workspace
-    assert client.get("/agents/ghost/whatever").status_code == 409      # slug not running
+    assert client.get("/agents/ghost/whatever").status_code == 409  # slug not running
 
 
 def test_activate_autostarts_a_stopped_agent(client):

@@ -15,8 +15,10 @@ import protolabs_a2a as pa
 def test_cost_payload_includes_cache_fields_and_costusd() -> None:
     part = pa.emit_cost(
         {
-            "input_tokens": 1500, "output_tokens": 420,
-            "cache_read_input_tokens": 900, "cache_creation_input_tokens": 100,
+            "input_tokens": 1500,
+            "output_tokens": 420,
+            "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 100,
         },
         duration_ms=2000,
         cost_usd=0.0123,
@@ -52,7 +54,12 @@ def test_record_llm_call_accepts_enriched_signature_when_disabled() -> None:
     # No init() in tests → disabled → no-op, but the signature must accept the
     # new cache/cost kwargs without error.
     metrics.record_llm_call(
-        "claude-opus-4-8", "stop", 1.2,
-        tokens_input=100, tokens_output=50,
-        cache_read=60, cache_creation=10, cost_usd=0.002,
+        "claude-opus-4-8",
+        "stop",
+        1.2,
+        tokens_input=100,
+        tokens_output=50,
+        cache_read=60,
+        cache_creation=10,
+        cost_usd=0.002,
     )

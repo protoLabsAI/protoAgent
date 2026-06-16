@@ -38,12 +38,13 @@ def test_default_is_none(tmp_path):
 async def test_per_goal_limit_drives_unachievable(tmp_path):
     async def _never(spec, ctx):
         return VerifyResult(False, "x", "e")  # never met, identical evidence
+
     set_plugin_verifiers({"p:never": _never})
     try:
         c = _ctrl(tmp_path)
         c.set_goal_safe("s", "cond", {"type": "plugin", "check": "p:never"}, no_progress_limit=1)
         d1 = await c.evaluate("s", last_text="")
-        assert d1.action == "continue"          # 1st: sets the evidence baseline
+        assert d1.action == "continue"  # 1st: sets the evidence baseline
         d2 = await c.evaluate("s", last_text="")
         assert d2.action == "done" and d2.state.status == "unachievable"  # streak hit limit=1
     finally:

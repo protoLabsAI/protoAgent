@@ -32,6 +32,7 @@ def _build_match_query(query: str) -> str:
     terms = re.findall(r"\w+", query.lower())
     return " OR ".join(f"{t}*" for t in terms)
 
+
 # Bump when FTS table columns change — triggers auto-migration
 # v2: added confidence + last_used (consumed by the skill curator).
 # v3: added `source` ('disk' = human-authored SKILL.md, re-seeded each boot;
@@ -113,9 +114,7 @@ class SkillsIndex:
     def _schema_compatible(self, conn: sqlite3.Connection) -> bool:
         """Return True if the DB has the expected schema at the current version."""
         try:
-            cur = conn.execute(
-                "SELECT version FROM _skills_meta WHERE key = 'schema_version' LIMIT 1"
-            )
+            cur = conn.execute("SELECT version FROM _skills_meta WHERE key = 'schema_version' LIMIT 1")
             row = cur.fetchone()
             if row is None:
                 # Meta table exists but no version row → treat as incompatible
@@ -134,8 +133,7 @@ class SkillsIndex:
             conn.execute("DROP TABLE IF EXISTS _fts5_probe")
         except sqlite3.OperationalError as exc:
             raise RuntimeError(
-                "SQLite FTS5 extension not available in this build. "
-                "Rebuild SQLite with FTS5 enabled."
+                "SQLite FTS5 extension not available in this build. Rebuild SQLite with FTS5 enabled."
             ) from exc
 
         conn.executescript("""
@@ -227,9 +225,18 @@ class SkillsIndex:
                      user_facing, slash)
                 VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?, ?)
                 """,
-                (name, description, prompt_template, tools_str,
-                 source_session_id, created_at, last_used, source,
-                 user_facing, slash),
+                (
+                    name,
+                    description,
+                    prompt_template,
+                    tools_str,
+                    source_session_id,
+                    created_at,
+                    last_used,
+                    source,
+                    user_facing,
+                    slash,
+                ),
             )
             conn.commit()
             log.debug("[skills] indexed skill: %s (source=%s)", name, source)
@@ -248,9 +255,7 @@ class SkillsIndex:
             return
         conn = self._open_conn()
         try:
-            conn.execute(
-                "DELETE FROM skills_fts WHERE name = ? AND source = 'emitted'", (name,)
-            )
+            conn.execute("DELETE FROM skills_fts WHERE name = ? AND source = 'emitted'", (name,))
             conn.commit()
         except sqlite3.Error as exc:
             log.error("[skills] failed to de-dupe emitted skill %s: %s", name, exc)

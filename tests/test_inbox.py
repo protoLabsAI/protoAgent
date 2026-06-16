@@ -170,6 +170,7 @@ async def test_fired_now_item_is_marked_delivered(tmp_path, monkeypatch):
 
     async def _fire_ok(_item):
         return True
+
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
 
     res = await ch._operator_inbox_add({"text": "bg done", "priority": "now", "source": "background"})
@@ -188,6 +189,7 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
     async def _fire_fail(_item):
         return False
+
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
 
     res = await ch._operator_inbox_add({"text": "bg done", "priority": "now"})

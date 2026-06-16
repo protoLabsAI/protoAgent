@@ -15,6 +15,7 @@ def _req(name, args=None, call_id="c1"):
 
 # ── RateLimiter ───────────────────────────────────────────────────────────────
 
+
 def test_rate_limiter_unlimited_when_unconfigured():
     rl = RateLimiter()
     for _ in range(100):
@@ -41,12 +42,15 @@ def test_rate_limiter_reset():
 
 # ── EnforcementMiddleware ─────────────────────────────────────────────────────
 
+
 def test_allows_when_unconfigured():
     mw = EnforcementMiddleware()
     called = {}
+
     def handler(r):
         called["yes"] = True
         return "ok"
+
     assert mw.wrap_tool_call(_req("foo"), handler) == "ok"
     assert called.get("yes")
 
@@ -54,9 +58,11 @@ def test_allows_when_unconfigured():
 def test_denies_listed_tool_without_executing():
     mw = EnforcementMiddleware(disallowed_tools=["danger"])
     called = {}
+
     def handler(r):
         called["ran"] = True
         return "ok"
+
     out = mw.wrap_tool_call(_req("danger", call_id="abc"), handler)
     assert isinstance(out, ToolMessage)
     assert out.tool_call_id == "abc"
@@ -69,6 +75,7 @@ def test_predicate_blocks_with_reason():
         if args.get("n", 0) > 10:
             return "n too large"
         return None
+
     mw = EnforcementMiddleware(predicate=deny_big)
     assert mw.wrap_tool_call(_req("t", {"n": 5}), lambda r: "ok") == "ok"
     out = mw.wrap_tool_call(_req("t", {"n": 99}), lambda r: "ok")
@@ -87,8 +94,10 @@ def test_rate_limit_blocks_third_call():
 @pytest.mark.asyncio
 async def test_async_path_blocks_and_allows():
     mw = EnforcementMiddleware(disallowed_tools=["bad"])
+
     async def handler(r):
         return "ran"
+
     assert await mw.awrap_tool_call(_req("good"), handler) == "ran"
     out = await mw.awrap_tool_call(_req("bad", call_id="z"), handler)
     assert isinstance(out, ToolMessage) and out.tool_call_id == "z"
@@ -101,11 +110,14 @@ def test_config_wires_enforcement(monkeypatch, tmp_path):
     from graph.agent import _build_middleware
 
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump({
-        "middleware": {"enforcement": True, "knowledge": False, "audit": False,
-                       "memory": False},
-        "enforcement": {"disallowed_tools": ["rm_rf"]},
-    }))
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "middleware": {"enforcement": True, "knowledge": False, "audit": False, "memory": False},
+                "enforcement": {"disallowed_tools": ["rm_rf"]},
+            }
+        )
+    )
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.enforcement_enabled is True
     assert cfg.enforcement_disallowed_tools == ["rm_rf"]

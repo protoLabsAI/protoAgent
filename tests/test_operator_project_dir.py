@@ -57,7 +57,8 @@ def test_allowed_dirs_deduplicates_project_root(tmp_path, monkeypatch):
     monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
     project = str(tmp_path.resolve())
     monkeypatch.setattr(
-        server.STATE, "graph_config",
+        server.STATE,
+        "graph_config",
         SimpleNamespace(
             operator_project_dir=project,
             operator_allowed_dirs=[project, "/other/dir"],
@@ -72,7 +73,8 @@ def test_allowed_dirs_preserves_order_on_dedup(tmp_path, monkeypatch):
     monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
     project = str(tmp_path.resolve())
     monkeypatch.setattr(
-        server.STATE, "graph_config",
+        server.STATE,
+        "graph_config",
         SimpleNamespace(
             operator_project_dir=project,
             operator_allowed_dirs=["/alpha", project, "/beta", project],
@@ -87,7 +89,8 @@ def test_allowed_dirs_unchanged_without_duplicates(tmp_path, monkeypatch):
     monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
     project = str(tmp_path.resolve())
     monkeypatch.setattr(
-        server.STATE, "graph_config",
+        server.STATE,
+        "graph_config",
         SimpleNamespace(
             operator_project_dir=project,
             operator_allowed_dirs=["/alpha", "/beta"],

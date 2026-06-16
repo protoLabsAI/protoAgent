@@ -1,12 +1,12 @@
 """Unit tests for graph.middleware.redaction module."""
 
-
 from graph.middleware.redaction import redact, PATTERNS
 
 
 # ---------------------------------------------------------------------------
 # Pattern presence
 # ---------------------------------------------------------------------------
+
 
 def test_patterns_dict_has_required_keys():
     assert "bearer_token" in PATTERNS
@@ -19,6 +19,7 @@ def test_patterns_dict_has_required_keys():
 # ---------------------------------------------------------------------------
 # Bearer token
 # ---------------------------------------------------------------------------
+
 
 def test_bearer_token_in_header_string():
     s = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature"
@@ -46,6 +47,7 @@ def test_bearer_token_in_dict_value():
 # ---------------------------------------------------------------------------
 # OpenAI-style API keys (sk-...)
 # ---------------------------------------------------------------------------
+
 
 def test_openai_key_bare_string():
     s = "sk-aBcDefGhIjKlMnOpQrStUvWxYz1234"
@@ -81,6 +83,7 @@ def test_openai_key_too_short_not_redacted():
 # Generic api_key
 # ---------------------------------------------------------------------------
 
+
 def test_generic_api_key_equals():
     s = 'api_key="abcdefghijklmnopq1234"'
     result = redact(s)
@@ -105,6 +108,7 @@ def test_apikey_no_separator():
 # ---------------------------------------------------------------------------
 # Environment variable dict key redaction
 # ---------------------------------------------------------------------------
+
 
 def test_env_var_redaction_openai():
     data = {"OPENAI_API_KEY": "sk-real-secret-key-that-is-long"}
@@ -147,14 +151,9 @@ def test_non_sensitive_key_unchanged():
 # Nested dict traversal
 # ---------------------------------------------------------------------------
 
+
 def test_nested_dict():
-    data = {
-        "outer": {
-            "inner": {
-                "OPENAI_API_KEY": "secret-key-value-here"
-            }
-        }
-    }
+    data = {"outer": {"inner": {"OPENAI_API_KEY": "secret-key-value-here"}}}
     result = redact(data)
     assert result["outer"]["inner"]["OPENAI_API_KEY"] == "[REDACTED]"
 
@@ -204,6 +203,7 @@ def test_mixed_types_in_list():
 # False positives — legitimate data must not be mangled
 # ---------------------------------------------------------------------------
 
+
 def test_false_positives_url_with_key():
     # URL containing 'key' should not be redacted (no credential pattern match)
     url = "https://maps.example.com/api/v1/geocode?format=json"
@@ -238,6 +238,7 @@ def test_false_positives_content_type_header():
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_empty_string():
     assert redact("") == ""
@@ -306,12 +307,12 @@ def test_provider_token_shapes_redacted():
     # Obviously-fake values that still match the regex SHAPES (so they exercise
     # the patterns) but aren't real tokens — avoids tripping secret scanning.
     samples = [
-        "M" + "A" * 23 + ".AAAAAA." + "A" * 30,        # discord shape
-        "ghp_" + "A" * 36,                              # github shape (fails real checksum)
-        "ya29." + "A" * 30,                             # google oauth shape
-        "AIza" + "A" * 30,                              # google api-key shape
-        "AKIA" + "A" * 16,                              # aws shape
-        "xoxb-0000000000-" + "a" * 12,                  # slack shape
+        "M" + "A" * 23 + ".AAAAAA." + "A" * 30,  # discord shape
+        "ghp_" + "A" * 36,  # github shape (fails real checksum)
+        "ya29." + "A" * 30,  # google oauth shape
+        "AIza" + "A" * 30,  # google api-key shape
+        "AKIA" + "A" * 16,  # aws shape
+        "xoxb-0000000000-" + "a" * 12,  # slack shape
     ]
     for s in samples:
         assert "[REDACTED]" in redact(s), s

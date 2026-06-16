@@ -33,17 +33,20 @@ def _clear_cache():
 def _lock(monkeypatch, plugins: list[dict], *, bundles: list[dict] | None = None):
     """Make installer._read_lock() return a fixed lock (no disk)."""
     monkeypatch.setattr(
-        installer, "_read_lock",
+        installer,
+        "_read_lock",
         lambda: {"plugins": list(plugins), "bundles": list(bundles or [])},
     )
 
 
 # ── check_updates() ───────────────────────────────────────────────────────────
 def test_behind_when_latest_differs(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
     monkeypatch.setattr(installer, "_git", lambda *a, **k: f"{_LATEST}\tHEAD")
 
     rows = installer.check_updates()
@@ -58,10 +61,12 @@ def test_behind_when_latest_differs(monkeypatch):
 
 
 def test_up_to_date_when_latest_equals(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
     monkeypatch.setattr(installer, "_git", lambda *a, **k: f"{_CUR}\tHEAD")
 
     row = installer.check_updates()[0]
@@ -71,19 +76,23 @@ def test_up_to_date_when_latest_equals(monkeypatch):
 
 
 def test_up_to_date_is_case_insensitive(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR.upper()},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR.upper()},
+        ],
+    )
     monkeypatch.setattr(installer, "_git", lambda *a, **k: f"{_CUR}\tHEAD")
     assert installer.check_updates()[0]["behind"] is False
 
 
 def test_pinned_sha_skips_network(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": _CUR,
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": _CUR, "resolved_sha": _CUR},
+        ],
+    )
     called = {"n": 0}
 
     def _boom(*a, **k):
@@ -101,10 +110,12 @@ def test_pinned_sha_skips_network(monkeypatch):
 
 
 def test_empty_ref_uses_head(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "", "resolved_sha": _CUR},
+        ],
+    )
     seen: list[tuple] = []
 
     def _git(*args, **kw):
@@ -123,10 +134,12 @@ def test_annotated_tag_compares_peeled_commit(monkeypatch):
     to the lock's commit SHA, so the naive compare reported a permanent false
     "behind" (ADR 0049). The peeled ``<ref>^{}`` line must win the compare."""
     tag_object = "c" * 40
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v1.2.3",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v1.2.3", "resolved_sha": _CUR},
+        ],
+    )
     seen: list[tuple] = []
 
     def _git(*args, **kw):
@@ -144,22 +157,25 @@ def test_annotated_tag_compares_peeled_commit(monkeypatch):
 def test_lightweight_tag_or_branch_falls_back_to_bare_line(monkeypatch):
     """A branch / lightweight tag matches only the bare refspec — no peeled line —
     and the compare keeps working off it."""
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v2.0.0",
-         "resolved_sha": _CUR},
-    ])
-    monkeypatch.setattr(
-        installer, "_git", lambda *a, **k: f"{_LATEST}\trefs/tags/v2.0.0")
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "v2.0.0", "resolved_sha": _CUR},
+        ],
+    )
+    monkeypatch.setattr(installer, "_git", lambda *a, **k: f"{_LATEST}\trefs/tags/v2.0.0")
     row = installer.check_updates()[0]
     assert row["latest_sha"] == _LATEST
     assert row["behind"] is True
 
 
 def test_error_when_ls_remote_fails(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
 
     def _git(*a, **k):
         raise installer.InstallError("git ls-remote failed: could not read from remote")
@@ -172,10 +188,12 @@ def test_error_when_ls_remote_fails(monkeypatch):
 
 
 def test_error_on_timeout(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
 
     def _git(*a, **k):
         raise subprocess.TimeoutExpired(cmd="git ls-remote", timeout=5.0)
@@ -188,9 +206,12 @@ def test_error_on_timeout(monkeypatch):
 
 
 def test_error_when_no_source_url(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "", "requested_ref": "main", "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
 
     def _boom(*a, **k):
         raise AssertionError("must not ls-remote a sourceless entry")
@@ -202,10 +223,12 @@ def test_error_when_no_source_url(monkeypatch):
 
 
 def test_error_when_no_remote_sha_resolved(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "nope",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "nope", "resolved_sha": _CUR},
+        ],
+    )
     monkeypatch.setattr(installer, "_git", lambda *a, **k: "")  # ref matched nothing
     row = installer.check_updates()[0]
     assert row["latest_sha"] is None
@@ -214,10 +237,12 @@ def test_error_when_no_remote_sha_resolved(monkeypatch):
 
 # ── TTL cache ─────────────────────────────────────────────────────────────────
 def test_ttl_cache_avoids_second_ls_remote(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
     calls = {"n": 0}
 
     def _git(*a, **k):
@@ -232,10 +257,12 @@ def test_ttl_cache_avoids_second_ls_remote(monkeypatch):
 
 
 def test_ttl_cache_expires(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
     calls = {"n": 0}
 
     def _git(*a, **k):
@@ -250,14 +277,14 @@ def test_ttl_cache_expires(monkeypatch):
 
 
 def test_cache_is_keyed_by_source_and_ref(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "a", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-        {"id": "b", "source_url": "https://x/y.git", "requested_ref": "dev",
-         "resolved_sha": _CUR},
-        {"id": "c", "source_url": "https://x/z.git", "requested_ref": "main",
-         "resolved_sha": _CUR},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "a", "source_url": "https://x/y.git", "requested_ref": "main", "resolved_sha": _CUR},
+            {"id": "b", "source_url": "https://x/y.git", "requested_ref": "dev", "resolved_sha": _CUR},
+            {"id": "c", "source_url": "https://x/z.git", "requested_ref": "main", "resolved_sha": _CUR},
+        ],
+    )
     calls = {"n": 0}
 
     def _git(*a, **k):
@@ -293,6 +320,7 @@ def _wire_state(monkeypatch, *, enabled, disabled, meta):
     monkeypatch.setitem(sys.modules, "server.agent_init", fake)
 
     import runtime.state as rs
+
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
@@ -301,7 +329,8 @@ def _wire_state(monkeypatch, *, enabled, disabled, meta):
 
 def test_updates_route_returns_check_updates(monkeypatch):
     monkeypatch.setattr(
-        installer, "check_updates",
+        installer,
+        "check_updates",
         lambda: [{"id": "demo", "behind": True, "pinned": False, "error": None}],
     )
     body = _client().get("/api/plugins/updates").json()
@@ -309,10 +338,18 @@ def test_updates_route_returns_check_updates(monkeypatch):
 
 
 def test_update_route_reinstalls_and_reloads(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR, "present": True},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "main",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
     monkeypatch.setattr(installer, "live_plugins_dir", lambda: __import__("pathlib").Path("/tmp/none"))
     captured = _wire_state(monkeypatch, enabled=["demo"], disabled=[], meta=[{"id": "demo", "views": []}])
 
@@ -338,14 +375,23 @@ def test_update_route_reinstalls_and_reloads(monkeypatch):
 
 
 def test_update_route_disabled_plugin_reinstalls_without_reload(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR, "present": True},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "main",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
     captured = _wire_state(monkeypatch, enabled=[], disabled=["demo"], meta=[])
 
     monkeypatch.setattr(
-        installer, "install",
+        installer,
+        "install",
         lambda *a, **k: {"id": "demo", "version": "0.2.0", "resolved_sha": _LATEST},
     )
 
@@ -358,14 +404,22 @@ def test_update_route_disabled_plugin_reinstalls_without_reload(monkeypatch):
 
 
 def test_update_route_flags_restart_for_view_plugin(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "boardy", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR, "present": True},
-    ])
-    _wire_state(monkeypatch, enabled=["boardy"], disabled=[],
-                meta=[{"id": "boardy", "views": [{"id": "board"}]}])
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "boardy",
+                "source_url": "https://x/y.git",
+                "requested_ref": "main",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
+    _wire_state(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "views": [{"id": "board"}]}])
     monkeypatch.setattr(
-        installer, "install",
+        installer,
+        "install",
         lambda *a, **k: {"id": "boardy", "version": "0.2.0", "resolved_sha": _LATEST},
     )
     body = _client().post("/api/plugins/boardy/update").json()
@@ -381,10 +435,12 @@ def test_update_route_404_on_unknown_id(monkeypatch):
 
 
 def test_update_route_400_on_sourceless_id(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "", "requested_ref": "", "resolved_sha": _CUR,
-         "present": True},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {"id": "demo", "source_url": "", "requested_ref": "", "resolved_sha": _CUR, "present": True},
+        ],
+    )
     _wire_state(monkeypatch, enabled=[], disabled=[], meta=[])
     resp = _client().post("/api/plugins/demo/update")
     assert resp.status_code == 400
@@ -392,10 +448,18 @@ def test_update_route_400_on_sourceless_id(monkeypatch):
 
 
 def test_update_route_400_on_install_error(monkeypatch):
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR, "present": True},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "main",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
     _wire_state(monkeypatch, enabled=["demo"], disabled=[], meta=[])
 
     def _install(*a, **k):
@@ -414,19 +478,28 @@ def test_update_route_purges_stale_module_subtree(monkeypatch):
     prefix-sibling modules are left alone (the match is .-boundary-aware)."""
     from graph.plugins.loader import _plugin_module_name
 
-    _lock(monkeypatch, [
-        {"id": "demo", "source_url": "https://x/y.git", "requested_ref": "main",
-         "resolved_sha": _CUR, "present": True},
-    ])
+    _lock(
+        monkeypatch,
+        [
+            {
+                "id": "demo",
+                "source_url": "https://x/y.git",
+                "requested_ref": "main",
+                "resolved_sha": _CUR,
+                "present": True,
+            },
+        ],
+    )
     _wire_state(monkeypatch, enabled=["demo"], disabled=[], meta=[{"id": "demo", "views": []}])
     monkeypatch.setattr(
-        installer, "install",
+        installer,
+        "install",
         lambda *a, **k: {"id": "demo", "version": "0.2.0", "resolved_sha": _LATEST},
     )
 
-    prefix = _plugin_module_name("demo")          # protoagent_plugin_demo
+    prefix = _plugin_module_name("demo")  # protoagent_plugin_demo
     other = _plugin_module_name("other")
-    sibling = f"{prefix}2"                          # shares the string prefix, NOT a submodule
+    sibling = f"{prefix}2"  # shares the string prefix, NOT a submodule
     seeded = [prefix, f"{prefix}.tools", f"{prefix}.sub.deep", sibling, other]
     for name in seeded:
         sys.modules[name] = types.ModuleType(name)

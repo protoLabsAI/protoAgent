@@ -21,7 +21,8 @@ def _load_discord_plugin():
 
     path = _BUNDLE_CONFIG_DIR.parent / "plugins" / "discord" / "__init__.py"
     spec = importlib.util.spec_from_file_location(
-        "discord_plugin_under_test", str(path),
+        "discord_plugin_under_test",
+        str(path),
         submodule_search_locations=[str(path.parent)],
     )
     m = importlib.util.module_from_spec(spec)

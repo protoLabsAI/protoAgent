@@ -81,7 +81,9 @@ def test_cost_extension_mime_uri_and_payload():
     assert pa.COST_EXT_URI == "https://proto-labs.ai/a2a/ext/cost-v1"
     part = pa.emit_cost(
         {"input_tokens": 1500, "output_tokens": 420},
-        duration_ms=900, cost_usd=0.0123, success=True,
+        duration_ms=900,
+        cost_usd=0.0123,
+        success=True,
     )
     assert part["metadata"]["mimeType"] == pa.COST_MIME
     payload = pa.parse_cost(part)
@@ -119,8 +121,11 @@ def test_tool_call_extension_mime_uri_and_payload():
     assert pa.TOOL_CALL_EXT_URI == "https://proto-labs.ai/a2a/ext/tool-call-v1"
     part = pa.emit_tool_call("id1", "file_bug", "completed", args={"x": 1}, result="ok")
     assert pa.parse_tool_call(part) == {
-        "toolCallId": "id1", "name": "file_bug", "phase": "completed",
-        "args": {"x": 1}, "result": "ok",
+        "toolCallId": "id1",
+        "name": "file_bug",
+        "phase": "completed",
+        "args": {"x": 1},
+        "result": "ok",
     }
 
 
@@ -140,8 +145,12 @@ def _skill() -> AgentSkill:
 
 def test_build_agent_card_applies_conventions():
     card = pa.build_agent_card(
-        name="protoagent", description="d", url="http://h/a2a", version="1.0.0",
-        skills=[_skill()], bearer=True,
+        name="protoagent",
+        description="d",
+        url="http://h/a2a",
+        version="1.0.0",
+        skills=[_skill()],
+        bearer=True,
     )
     j = MessageToDict(card)
     assert j["provider"] == {"organization": "protoLabs AI", "url": "https://protolabs.ai"}
@@ -155,8 +164,12 @@ def test_build_agent_card_applies_conventions():
 
 def test_build_agent_card_omits_bearer_when_not_configured():
     card = pa.build_agent_card(
-        name="a", description="d", url="http://h/a2a", version="1.0.0",
-        skills=[_skill()], bearer=False,
+        name="a",
+        description="d",
+        url="http://h/a2a",
+        version="1.0.0",
+        skills=[_skill()],
+        bearer=False,
     )
     j = MessageToDict(card)
     assert set(j["securitySchemes"]) == {"apiKey"}
@@ -168,8 +181,12 @@ def test_build_agent_card_omits_bearer_when_not_configured():
 def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
     """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn)."""
     card = pa.build_agent_card(
-        name="test", description="d", url="http://test/a2a", version="0.0.0",
-        skills=[_skill()], bearer=bool(bearer),
+        name="test",
+        description="d",
+        url="http://test/a2a",
+        version="0.0.0",
+        skills=[_skill()],
+        bearer=bool(bearer),
     )
     handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(stream_fn),
@@ -180,6 +197,7 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
     app = FastAPI()
     if bearer is not None or api_key or allowed_origins is not None:
         from a2a_impl import auth
+
         auth.install(
             app,
             bearer_token=bearer or "",
@@ -195,20 +213,31 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None):
 
 
 def _send_msg(client, text="hi", rpc_id="r1"):
-    return client.post("/a2a", headers=A2A_HEADERS, json={
-        "jsonrpc": "2.0", "id": rpc_id, "method": "SendMessage",
-        "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": text}]}},
-    })
+    return client.post(
+        "/a2a",
+        headers=A2A_HEADERS,
+        json={
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": "SendMessage",
+            "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": text}]}},
+        },
+    )
 
 
 async def _poll_terminal(client, task_id, *, tries=60):
     for _ in range(tries):
-        g = await client.post("/a2a", headers=A2A_HEADERS, json={
-            "jsonrpc": "2.0", "id": "g", "method": "GetTask", "params": {"id": task_id}})
+        g = await client.post(
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={"jsonrpc": "2.0", "id": "g", "method": "GetTask", "params": {"id": task_id}},
+        )
         t = g.json()["result"]
         if t["status"]["state"] in (
-            "TASK_STATE_COMPLETED", "TASK_STATE_FAILED",
-            "TASK_STATE_CANCELED", "TASK_STATE_INPUT_REQUIRED",
+            "TASK_STATE_COMPLETED",
+            "TASK_STATE_FAILED",
+            "TASK_STATE_CANCELED",
+            "TASK_STATE_INPUT_REQUIRED",
         ):
             return t
         await asyncio.sleep(0.03)
@@ -244,6 +273,7 @@ async def test_send_message_runs_to_completed_with_text_artifact():
 async def test_terminal_artifact_carries_all_extensions_in_order():
     """text → worldstate-delta → cost-v1 → confidence-v1, matching the order
     the hand-rolled handler emitted (consumers read parts in order)."""
+
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "done text")
         yield ("usage", {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001})
@@ -270,6 +300,7 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
 @pytest.mark.asyncio
 async def test_no_extension_parts_when_nothing_to_report():
     """A bare text completion yields only the text part — no empty DataParts."""
+
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("done", "just text")
 
@@ -327,10 +358,17 @@ async def test_tool_events_surface_as_tool_call_dataparts():
     app = _build_app(stream)
     tool_payloads = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
-        async with c.stream("POST", "/a2a", headers=A2A_HEADERS, json={
-            "jsonrpc": "2.0", "id": "s", "method": "SendStreamingMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
-        }) as resp:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
             assert resp.status_code == 200
             assert resp.headers["content-type"].startswith("text/event-stream")
             async for line in resp.aiter_lines():
@@ -361,17 +399,26 @@ async def test_errored_tool_end_surfaces_phase_failed():
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("tool_start", {"id": "t1", "name": "run_command", "input": {"command": "rm -rf /"}})
-        yield ("tool_end", {"id": "t1", "name": "run_command",
-                            "output": "Command declined by the operator — not run", "error": True})
+        yield (
+            "tool_end",
+            {"id": "t1", "name": "run_command", "output": "Command declined by the operator — not run", "error": True},
+        )
         yield ("done", "ok")
 
     app = _build_app(stream)
     payloads = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
-        async with c.stream("POST", "/a2a", headers=A2A_HEADERS, json={
-            "jsonrpc": "2.0", "id": "s", "method": "SendStreamingMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
-        }) as resp:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -403,17 +450,27 @@ async def test_text_deltas_stream_as_incremental_artifact_frames():
         yield ("text", "First sentence of the streamed answer here. ")
         yield ("text", "Second sentence that continues the answer. ")
         yield ("text", "Third and final sentence to wrap it up.")
-        yield ("done", "First sentence of the streamed answer here. "
-                       "Second sentence that continues the answer. "
-                       "Third and final sentence to wrap it up.")
+        yield (
+            "done",
+            "First sentence of the streamed answer here. "
+            "Second sentence that continues the answer. "
+            "Third and final sentence to wrap it up.",
+        )
 
     app = _build_app(stream)
     artifact_texts: list[str] = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
-        async with c.stream("POST", "/a2a", headers=A2A_HEADERS, json={
-            "jsonrpc": "2.0", "id": "s", "method": "SendStreamingMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
-        }) as resp:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
             assert resp.status_code == 200
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
@@ -532,9 +589,16 @@ async def test_invalid_bearer_token_returns_401():
 
     app = _build_app(stream, bearer="secret-token")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
-        r = await c.post("/a2a", headers={**A2A_HEADERS, "Authorization": "Bearer wrong"}, json={
-            "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}}})
+        r = await c.post(
+            "/a2a",
+            headers={**A2A_HEADERS, "Authorization": "Bearer wrong"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        )
     assert r.status_code == 401
 
 
@@ -545,9 +609,16 @@ async def test_valid_bearer_token_passes():
 
     app = _build_app(stream, bearer="secret-token")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
-        r = await c.post("/a2a", headers={**A2A_HEADERS, "Authorization": "Bearer secret-token"}, json={
-            "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}}})
+        r = await c.post(
+            "/a2a",
+            headers={**A2A_HEADERS, "Authorization": "Bearer secret-token"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        )
     assert r.status_code == 200
     assert "result" in r.json()
 
@@ -559,9 +630,16 @@ async def test_rejected_origin_returns_403():
 
     app = _build_app(stream, allowed_origins="https://example.com")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
-        r = await c.post("/a2a", headers={**A2A_HEADERS, "Origin": "https://evil.com"}, json={
-            "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}}})
+        r = await c.post(
+            "/a2a",
+            headers={**A2A_HEADERS, "Origin": "https://evil.com"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        )
     assert r.status_code == 403
 
 
@@ -572,9 +650,16 @@ async def test_allowed_origin_passes():
 
     app = _build_app(stream, allowed_origins="https://example.com,https://other.com")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
-        r = await c.post("/a2a", headers={**A2A_HEADERS, "Origin": "https://example.com"}, json={
-            "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-            "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}}})
+        r = await c.post(
+            "/a2a",
+            headers={**A2A_HEADERS, "Origin": "https://example.com"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        )
     assert r.status_code == 200
 
 
@@ -587,10 +672,10 @@ def test_extract_image_parts_inline_and_url():
 
     img = b"\x89PNG-fake-bytes"
     parts = [
-        _t.SimpleNamespace(media_type="", raw=b"", url=""),                     # text → skip
-        _t.SimpleNamespace(media_type="image/png", raw=img, url=""),            # inline image
+        _t.SimpleNamespace(media_type="", raw=b"", url=""),  # text → skip
+        _t.SimpleNamespace(media_type="image/png", raw=img, url=""),  # inline image
         _t.SimpleNamespace(media_type="image/jpeg", raw=b"", url="https://x/y.jpg"),  # url image
-        _t.SimpleNamespace(media_type="application/pdf", raw=b"x", url=""),     # non-image → skip
+        _t.SimpleNamespace(media_type="application/pdf", raw=b"x", url=""),  # non-image → skip
     ]
     ctx = _t.SimpleNamespace(message=_t.SimpleNamespace(parts=parts))
     out = _extract_image_parts(ctx)
@@ -603,4 +688,5 @@ def test_extract_image_parts_empty_when_no_message():
     import types as _t
 
     from a2a_impl.executor import _extract_image_parts
+
     assert _extract_image_parts(_t.SimpleNamespace(message=None)) == []

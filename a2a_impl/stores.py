@@ -116,6 +116,7 @@ def is_safe_webhook_url(url: str) -> bool:
     everything outside it. Unset ⇒ the default denylist below.
     """
     from security import policy
+
     if policy.is_enabled():
         return policy.is_allowed(url)
 
@@ -220,8 +221,7 @@ class ValidatingPushNotificationSender(BasePushNotificationSender):
         # getaddrinfo here would block the event loop for the OS timeout.
         if url and not await asyncio.to_thread(is_safe_webhook_url, url):
             log.warning(
-                "[a2a] refusing push delivery to unsafe webhook url for "
-                "task_id=%s: %s",
+                "[a2a] refusing push delivery to unsafe webhook url for task_id=%s: %s",
                 task_id,
                 url,
             )
@@ -288,9 +288,7 @@ def build_push_sender(
     return ValidatingPushNotificationSender(httpx_client, push_config_store)
 
 
-async def sweep_expired_tasks(
-    engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_S, now: datetime | None = None
-) -> int:
+async def sweep_expired_tasks(engine: AsyncEngine, *, ttl_s: int = _DEFAULT_TTL_S, now: datetime | None = None) -> int:
     """Delete task rows older than ``ttl_s`` (24h default), keyed on the SDK's
     ``last_updated`` column. The SDK DB store has no TTL knob, so this restores
     the bespoke store's 24h eviction. Returns the number of rows deleted."""
@@ -300,16 +298,12 @@ async def sweep_expired_tasks(
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     async with session_maker() as session:
-        result = await session.execute(
-            delete(TaskModel).where(TaskModel.last_updated < cutoff)
-        )
+        result = await session.execute(delete(TaskModel).where(TaskModel.last_updated < cutoff))
         await session.commit()
         return result.rowcount or 0
 
 
-async def sweep_orphaned_push_configs(
-    task_engine: AsyncEngine, push_engine: AsyncEngine
-) -> int:
+async def sweep_orphaned_push_configs(task_engine: AsyncEngine, push_engine: AsyncEngine) -> int:
     """Delete push-notification configs whose task no longer exists (ADR 0051 Slice 3).
 
     The SDK push-config store has no timestamp/TTL knob, so a registered webhook config
@@ -328,17 +322,15 @@ async def sweep_orphaned_push_configs(
     psm = async_sessionmaker(push_engine, expire_on_commit=False)
     async with psm() as s:
         try:
-            rows = (await s.execute(
-                text("SELECT DISTINCT task_id FROM push_notification_configs")
-            )).all()
+            rows = (await s.execute(text("SELECT DISTINCT task_id FROM push_notification_configs"))).all()
         except Exception:  # noqa: BLE001 — table absent/renamed (SDK change): no-op
             return 0
         orphans = [r[0] for r in rows if r[0] not in live]
         if not orphans:
             return 0
-        stmt = text(
-            "DELETE FROM push_notification_configs WHERE task_id IN :ids"
-        ).bindparams(bindparam("ids", expanding=True))
+        stmt = text("DELETE FROM push_notification_configs WHERE task_id IN :ids").bindparams(
+            bindparam("ids", expanding=True)
+        )
         res = await s.execute(stmt, {"ids": orphans})
         await s.commit()
         return res.rowcount or len(orphans)
@@ -373,9 +365,7 @@ def _interrupted_status_blob(now: datetime) -> dict:
     return MessageToDict(status)
 
 
-async def reconcile_interrupted_tasks(
-    engine: AsyncEngine, *, now: datetime | None = None
-) -> int:
+async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | None = None) -> int:
     """Fail any task left non-terminal (``submitted`` / ``working``) by a restart.
 
     The bespoke task store did this; the SDK store doesn't — so an interrupted

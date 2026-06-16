@@ -4,6 +4,7 @@ Moves site-packages to the front of sys.path so installed packages
 (langchain_core, langchain, etc.) are never shadowed by local directories
 that pytest inserts during collection.
 """
+
 from __future__ import annotations
 
 import os

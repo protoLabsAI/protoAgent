@@ -75,10 +75,10 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
     for text in [s.get("prompt", "") for s in steps if isinstance(s, dict)] + [recipe.get("output", "")]:
         for ref in _refs(text):
             if ref.startswith("inputs."):
-                if ref[len("inputs."):] not in input_names:
+                if ref[len("inputs.") :] not in input_names:
                     errors.append(f"template references unknown input {ref!r}")
             elif ref.startswith("steps.") and ref.endswith(".output"):
-                mid = ref[len("steps."):-len(".output")]
+                mid = ref[len("steps.") : -len(".output")]
                 if mid not in id_set:
                     errors.append(f"template references unknown step {mid!r}")
             else:
@@ -109,10 +109,11 @@ def render_template(text: str, inputs: dict, step_outputs: dict) -> str:
     def sub(m: re.Match) -> str:
         ref = m.group(1)
         if ref.startswith("inputs."):
-            return str(inputs.get(ref[len("inputs."):], ""))
+            return str(inputs.get(ref[len("inputs.") :], ""))
         if ref.startswith("steps.") and ref.endswith(".output"):
-            return str(step_outputs.get(ref[len("steps."):-len(".output")], ""))
+            return str(step_outputs.get(ref[len("steps.") : -len(".output")], ""))
         return m.group(0)
+
     return _REF_RE.sub(sub, text or "")
 
 

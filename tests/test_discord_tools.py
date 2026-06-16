@@ -90,9 +90,7 @@ async def test_send_posts_and_returns_id(monkeypatch):
 async def test_send_splits_long_content(monkeypatch):
     cap: list = []
     # two posts ⇒ two canned responses
-    monkeypatch.setattr(
-        httpx, "AsyncClient", _fake_client(cap, [_Resp(200, {"id": "a"}), _Resp(200, {"id": "b"})])
-    )
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_client(cap, [_Resp(200, {"id": "a"}), _Resp(200, {"id": "b"})]))
     body = ("x" * 1500 + "\n") + ("y" * 1500)  # > 2000, splits at the newline
     out = await dt.discord_send.ainvoke({"channel_id": "123", "content": body})
     assert "posted 2 message(s)" in out
@@ -158,8 +156,6 @@ async def test_react_encodes_emoji(monkeypatch):
 @pytest.mark.asyncio
 async def test_rate_limit_surfaced(monkeypatch):
     cap: list = []
-    monkeypatch.setattr(
-        httpx, "AsyncClient", _fake_client(cap, _Resp(429, {"retry_after": 1.5}, text="slow down"))
-    )
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_client(cap, _Resp(429, {"retry_after": 1.5}, text="slow down")))
     out = await dt.discord_send.ainvoke({"channel_id": "1", "content": "hi"})
     assert "HTTP 429" in out and "retry_after=1.5" in out

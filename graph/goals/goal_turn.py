@@ -22,7 +22,8 @@ import contextlib
 import contextvars
 
 _goal_turn_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "_protoagent_goal_turn", default=False,
+    "_protoagent_goal_turn",
+    default=False,
 )
 
 

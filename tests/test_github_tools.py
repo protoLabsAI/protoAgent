@@ -33,12 +33,19 @@ async def test_repo_required_no_silent_default():
 
 @pytest.mark.asyncio
 async def test_get_pr_happy_path():
-    payload = json.dumps({
-        "number": 7, "title": "Add thing", "state": "OPEN",
-        "author": {"login": "octocat"}, "body": "does a thing",
-        "additions": 10, "deletions": 2,
-        "files": [{"path": "a.py"}, {"path": "b.py"}], "url": "http://x/7",
-    })
+    payload = json.dumps(
+        {
+            "number": 7,
+            "title": "Add thing",
+            "state": "OPEN",
+            "author": {"login": "octocat"},
+            "body": "does a thing",
+            "additions": 10,
+            "deletions": 2,
+            "files": [{"path": "a.py"}, {"path": "b.py"}],
+            "url": "http://x/7",
+        }
+    )
     with patch("tools.github_tools.run_gh", return_value=(0, payload, "")):
         out = await _tools()["github_get_pr"].ainvoke({"repo": "o/r", "number": 7})
     assert "PR #7" in out and "Add thing" in out
@@ -51,10 +58,12 @@ async def test_list_issues_empty_and_populated():
     t = _tools()["github_list_issues"]
     with patch("tools.github_tools.run_gh", return_value=(0, "[]", "")):
         assert "No open issues" in await t.ainvoke({"repo": "o/r"})
-    items = json.dumps([
-        {"number": 1, "title": "bug", "state": "OPEN", "labels": [{"name": "p0"}]},
-        {"number": 2, "title": "feat", "state": "OPEN", "labels": []},
-    ])
+    items = json.dumps(
+        [
+            {"number": 1, "title": "bug", "state": "OPEN", "labels": [{"name": "p0"}]},
+            {"number": 2, "title": "feat", "state": "OPEN", "labels": []},
+        ]
+    )
     with patch("tools.github_tools.run_gh", return_value=(0, items, "")):
         out = await t.ainvoke({"repo": "o/r", "state": "open"})
     assert "#1" in out and "p0" in out and "#2" in out
@@ -77,9 +86,7 @@ async def test_gh_failure_surfaces_error_string():
 async def test_commit_diff_truncates():
     big = "diff --git a b\n" + ("+x\n" * 5000)
     with patch("tools.github_tools.run_gh", return_value=(0, big, "")):
-        out = await _tools()["github_get_commit_diff"].ainvoke(
-            {"repo": "o/r", "ref": "deadbeef", "max_chars": 100}
-        )
+        out = await _tools()["github_get_commit_diff"].ainvoke({"repo": "o/r", "ref": "deadbeef", "max_chars": 100})
     assert "truncated at 100" in out
 
 
@@ -87,6 +94,7 @@ async def test_commit_diff_truncates():
 async def test_run_gh_missing_binary():
     """run_gh reports a clean error when gh isn't installed (no raise)."""
     from tools.gh_cli import run_gh
+
     with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
         rc, out, err = await run_gh(["pr", "view", "1"])
     assert rc == 1 and "not installed" in err
@@ -94,12 +102,30 @@ async def test_run_gh_missing_binary():
 
 @pytest.mark.asyncio
 async def test_ci_runs_happy_path():
-    payload = json.dumps([
-        {"databaseId": 101, "name": "CI", "status": "completed", "conclusion": "failure",
-         "headBranch": "main", "event": "push", "createdAt": "t", "url": "http://x/101"},
-        {"databaseId": 102, "name": "CI", "status": "completed", "conclusion": "success",
-         "headBranch": "main", "event": "push", "createdAt": "t", "url": "http://x/102"},
-    ])
+    payload = json.dumps(
+        [
+            {
+                "databaseId": 101,
+                "name": "CI",
+                "status": "completed",
+                "conclusion": "failure",
+                "headBranch": "main",
+                "event": "push",
+                "createdAt": "t",
+                "url": "http://x/101",
+            },
+            {
+                "databaseId": 102,
+                "name": "CI",
+                "status": "completed",
+                "conclusion": "success",
+                "headBranch": "main",
+                "event": "push",
+                "createdAt": "t",
+                "url": "http://x/102",
+            },
+        ]
+    )
     with patch("tools.github_tools.run_gh", return_value=(0, payload, "")):
         out = await _tools()["github_ci_runs"].ainvoke({"repo": "o/r"})
     assert "#101 [failure]" in out and "http://x/101" in out
@@ -124,8 +150,8 @@ async def test_run_failure_extracts_error_lines():
     with patch("tools.github_tools.run_gh", return_value=(0, log, "")):
         out = await _tools()["github_run_failure"].ainvoke({"repo": "o/r", "run_id": 101})
     assert "AssertionError: expected 1 to equal 2" in out
-    assert "1 passed, 1 failed" in out      # matched on "fail"
-    assert "all good here" not in out        # non-error line filtered out
+    assert "1 passed, 1 failed" in out  # matched on "fail"
+    assert "all good here" not in out  # non-error line filtered out
 
 
 @pytest.mark.asyncio
@@ -133,4 +159,4 @@ async def test_run_failure_falls_back_to_tail():
     log = "job\tstep\t2026Z benign line one\njob\tstep\t2026Z benign line two\n"
     with patch("tools.github_tools.run_gh", return_value=(0, log, "")):
         out = await _tools()["github_run_failure"].ainvoke({"repo": "o/r", "run_id": 5})
-    assert "benign line two" in out          # tail fallback when nothing matches
+    assert "benign line two" in out  # tail fallback when nothing matches

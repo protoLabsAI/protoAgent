@@ -40,10 +40,7 @@ async def test_tool_bridge_roundtrip():
 
 @pytest.mark.asyncio
 async def test_tool_bridge_loop_collapses_chain():
-    code = (
-        "vals = [tools.echo_tool(text=w) for w in ['a', 'b', 'c']]\n"
-        "print('-'.join(vals))"
-    )
+    code = "vals = [tools.echo_tool(text=w) for w in ['a', 'b', 'c']]\nprint('-'.join(vals))"
     out = await run_code(code, _TOOL_MAP)
     assert out == "A-B-C"
 
@@ -51,24 +48,14 @@ async def test_tool_bridge_loop_collapses_chain():
 @pytest.mark.asyncio
 async def test_tool_error_propagates_to_script():
     # The tool raises; the proxy surfaces it as a RuntimeError the script can see.
-    code = (
-        "try:\n"
-        "    tools.boom_tool()\n"
-        "except Exception as e:\n"
-        "    print('caught:', e)"
-    )
+    code = "try:\n    tools.boom_tool()\nexcept Exception as e:\n    print('caught:', e)"
     out = await run_code(code, _TOOL_MAP)
     assert "caught:" in out and "kaboom" in out
 
 
 @pytest.mark.asyncio
 async def test_unknown_tool_reported():
-    code = (
-        "try:\n"
-        "    tools.nope()\n"
-        "except Exception as e:\n"
-        "    print('err:', e)"
-    )
+    code = "try:\n    tools.nope()\nexcept Exception as e:\n    print('err:', e)"
     out = await run_code(code, _TOOL_MAP)
     assert "not available" in out
 
@@ -101,6 +88,7 @@ async def test_output_truncation():
 
 
 # --- tool-build wiring ------------------------------------------------------
+
 
 def test_build_excludes_self_and_respects_allowlist():
     cfg = LangGraphConfig(execute_code_enabled=True, execute_code_tools=["echo_tool"])

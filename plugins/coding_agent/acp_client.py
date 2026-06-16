@@ -41,7 +41,7 @@ ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end ev
 def _tool_output_preview(update: dict, limit: int = 300) -> str:
     """Best-effort short text from a tool_call_update's content blocks (for the end card)."""
     out: list[str] = []
-    for block in (update.get("content") or []):
+    for block in update.get("content") or []:
         if not isinstance(block, dict):
             continue
         inner = block.get("content")
@@ -65,6 +65,7 @@ def _content_text(content) -> str:
     if isinstance(content, str):
         return content
     return ""
+
 
 # ACP protocol version protoAgent speaks. Negotiated in `initialize`: the client
 # proposes ``PROTOCOL_VERSION`` and the agent echoes it (supported) or counters with
@@ -142,7 +143,7 @@ class AcpClient:
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
-        self._protocol_version = PROTOCOL_VERSION   # the negotiated version
+        self._protocol_version = PROTOCOL_VERSION  # the negotiated version
         # True only while replaying history during ``session/load`` — suppresses the
         # replayed updates so a silent reattach doesn't re-stream the thread.
         self._loading = False
@@ -184,9 +185,7 @@ class AcpClient:
                 limit=_STDOUT_LINE_LIMIT,
             )
         except FileNotFoundError as exc:
-            raise AcpError(
-                f"agent binary not found: {self.command!r} (is it installed and on PATH?)"
-            ) from exc
+            raise AcpError(f"agent binary not found: {self.command!r} (is it installed and on PATH?)") from exc
 
         self._reader_task = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -264,7 +263,8 @@ class AcpClient:
                 except Exception:  # noqa: BLE001
                     logger.exception(
                         "[acp/%s] error handling message (skipping, turn continues): %.300s",
-                        self.name, line,
+                        self.name,
+                        line,
                     )
         except asyncio.CancelledError:
             raise
@@ -285,9 +285,7 @@ class AcpClient:
                 if "error" in msg:
                     err = msg.get("error") or {}
                     if isinstance(err, dict):
-                        fut.set_exception(
-                            AcpError(str(err.get("message") or err), code=err.get("code"))
-                        )
+                        fut.set_exception(AcpError(str(err.get("message") or err), code=err.get("code")))
                     else:
                         fut.set_exception(AcpError(str(err)))
                 else:
@@ -313,7 +311,7 @@ class AcpClient:
             text = _content_text(update.get("content"))
             if text:
                 self._answer += text
-                await self._emit_text(text)   # stream the delta (token-ish) to the UI
+                await self._emit_text(text)  # stream the delta (token-ish) to the UI
         elif kind == "agent_thought_chunk":
             # The coder's reasoning trace — surface it (never folded into the answer)
             # for parity with the native runtime's thinking stream.
@@ -325,23 +323,27 @@ class AcpClient:
             # UI can render a card (parity with the native runtime's tool_start).
             title = update.get("title") or update.get("kind") or "working"
             await self._narrate(str(title))
-            await self._emit_tool({
-                "phase": "start",
-                "id": str(update.get("toolCallId") or title),
-                "name": str(title),
-                "input": str(update.get("kind") or ""),
-            })
+            await self._emit_tool(
+                {
+                    "phase": "start",
+                    "id": str(update.get("toolCallId") or title),
+                    "name": str(title),
+                    "input": str(update.get("kind") or ""),
+                }
+            )
         elif kind == "tool_call_update":
             # Status transition — emit an end event when it finishes (tool_end card).
             status = str(update.get("status") or "")
             if status in ("completed", "failed"):
-                await self._emit_tool({
-                    "phase": "end",
-                    "id": str(update.get("toolCallId") or ""),
-                    "name": str(update.get("title") or ""),
-                    "output": _tool_output_preview(update),
-                    "status": status,
-                })
+                await self._emit_tool(
+                    {
+                        "phase": "end",
+                        "id": str(update.get("toolCallId") or ""),
+                        "name": str(update.get("title") or ""),
+                        "output": _tool_output_preview(update),
+                        "status": status,
+                    }
+                )
         elif kind:
             # plan / current_mode_update / available_commands_update / usage_update —
             # not surfaced yet, but logged so they're visibly dropped, not silent.
@@ -353,11 +355,7 @@ class AcpClient:
         if method == "session/request_permission":
             resolver = self._permission or self._auto_allow
             option_id = resolver(msg.get("params") or {})
-            outcome = (
-                {"outcome": "selected", "optionId": option_id}
-                if option_id
-                else {"outcome": "cancelled"}
-            )
+            outcome = {"outcome": "selected", "optionId": option_id} if option_id else {"outcome": "cancelled"}
             await self._respond(rid, {"outcome": outcome})
         else:
             # We didn't advertise fs/terminal; decline anything else cleanly so
@@ -446,11 +444,7 @@ class AcpClient:
         try:
             proc.stdin.write(
                 (
-                    json.dumps(
-                        {"jsonrpc": "2.0", "method": method,
-                         "params": {"sessionId": self._session_id}}
-                    )
-                    + "\n"
+                    json.dumps({"jsonrpc": "2.0", "method": method, "params": {"sessionId": self._session_id}}) + "\n"
                 ).encode()
             )
             await proc.stdin.drain()
@@ -471,19 +465,22 @@ class AcpClient:
     # -- handshake -----------------------------------------------------------
 
     async def _initialize(self) -> None:
-        result = await self._request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                # PR1: no client-served fs/terminal — the coding agent uses its own,
-                # confined to the session cwd.
-                "clientCapabilities": {
-                    "fs": {"readTextFile": False, "writeTextFile": False},
-                    "terminal": False,
+        result = (
+            await self._request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    # PR1: no client-served fs/terminal — the coding agent uses its own,
+                    # confined to the session cwd.
+                    "clientCapabilities": {
+                        "fs": {"readTextFile": False, "writeTextFile": False},
+                        "terminal": False,
+                    },
                 },
-            },
-            timeout=30.0,
-        ) or {}
+                timeout=30.0,
+            )
+            or {}
+        )
         # Keep what the agent told us instead of discarding it: its auth methods
         # (for an actionable auth-required message) and capabilities.
         self._auth_methods = result.get("authMethods") or []
@@ -520,7 +517,9 @@ class AcpClient:
             except AcpError as exc:
                 logger.info(
                     "[acp/%s] session/load %s failed (%s) — starting fresh",
-                    self.name, persisted, exc,
+                    self.name,
+                    persisted,
+                    exc,
                 )
         await self._new_session()
 
@@ -572,17 +571,11 @@ class AcpClient:
 
     async def _new_session(self) -> None:
         try:
-            result = await self._request(
-                "session/new", {"cwd": self.cwd, "mcpServers": self.mcp_servers}, timeout=30.0
-            )
+            result = await self._request("session/new", {"cwd": self.cwd, "mcpServers": self.mcp_servers}, timeout=30.0)
         except AcpError as exc:
             if exc.code == AUTH_REQUIRED:
                 methods = (
-                    ", ".join(
-                        str(m.get("id") or m.get("name"))
-                        for m in self._auth_methods
-                        if isinstance(m, dict)
-                    )
+                    ", ".join(str(m.get("id") or m.get("name")) for m in self._auth_methods if isinstance(m, dict))
                     or "(none advertised)"
                 )
                 raise AcpError(

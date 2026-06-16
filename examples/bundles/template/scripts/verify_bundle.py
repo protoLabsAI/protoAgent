@@ -59,8 +59,7 @@ def main(bundle_src: str) -> int:
     enabled = list(dict.fromkeys((summary.get("enabled") or []) + members))
     cfg_path = scratch / "cfg" / "langgraph-config.yaml"
     cfg_path.write_text(
-        "plugins:\n  enabled: [" + ", ".join(enabled) + "]\n"
-        f"  plugins_dir: {scratch / 'cfg' / 'plugins'}\n"
+        "plugins:\n  enabled: [" + ", ".join(enabled) + f"]\n  plugins_dir: {scratch / 'cfg' / 'plugins'}\n"
     )
     res = load_plugins(LangGraphConfig.from_yaml(str(cfg_path)))
     meta_by_id = {m["id"]: m for m in res.meta}
@@ -81,7 +80,7 @@ def main(bundle_src: str) -> int:
     root = installer.live_plugins_dir()
     for pid in members:
         manifest = load_manifest(root / pid)
-        for view in (manifest.views if manifest else []):
+        for view in manifest.views if manifest else []:
             path = view.get("path", "")
             if not path:
                 continue

@@ -56,8 +56,9 @@ class TelegramAdapter:
         async with httpx.AsyncClient(timeout=40) as client:
 
             async def _send(chat_id, text: str) -> None:
-                await client.post(_API.format(token=token, method="sendMessage"),
-                                  json={"chat_id": chat_id, "text": text})
+                await client.post(
+                    _API.format(token=token, method="sendMessage"), json={"chat_id": chat_id, "text": text}
+                )
 
             log.info("[telegram] gateway started (long-poll)")
             while True:
@@ -85,9 +86,14 @@ class TelegramAdapter:
                     async def reply(out: str, _cid=chat_id) -> None:
                         await _send(_cid, out)
 
-                    await handle(InboundMessage(
-                        text=text, user_id=user_id, channel_id=str(chat_id), reply=reply,
-                    ))
+                    await handle(
+                        InboundMessage(
+                            text=text,
+                            user_id=user_id,
+                            channel_id=str(chat_id),
+                            reply=reply,
+                        )
+                    )
 
 
 def register(registry) -> None:

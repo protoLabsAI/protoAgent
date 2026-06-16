@@ -66,7 +66,7 @@ def _load_delegates_config() -> list:
     try:
         from .store import merged_delegates
 
-        return merged_delegates()   # delegates + secrets overlaid from secrets.yaml
+        return merged_delegates()  # delegates + secrets overlaid from secrets.yaml
     except Exception:  # noqa: BLE001 — config read is best-effort
         log.exception("[delegates] reading delegates config failed")
     return []
@@ -105,5 +105,4 @@ def register(registry) -> None:
         )
         return
     registry.register_tool(_build_delegate_to(reg))
-    log.info("[delegates] registered delegate_to for %d delegate(s): %s",
-             len(reg.names()), ", ".join(reg.names()))
+    log.info("[delegates] registered delegate_to for %d delegate(s): %s", len(reg.names()), ", ".join(reg.names()))

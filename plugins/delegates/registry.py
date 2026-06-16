@@ -27,8 +27,12 @@ class DelegateRegistry:
         dtype = str(raw.get("type", "")).strip()
         adapter = ADAPTERS.get(dtype)
         if adapter is None:
-            logger.warning("[delegates] %s: unknown type %r (want one of %s) — skipped",
-                           raw.get("name"), dtype, ", ".join(ADAPTERS))
+            logger.warning(
+                "[delegates] %s: unknown type %r (want one of %s) — skipped",
+                raw.get("name"),
+                dtype,
+                ", ".join(ADAPTERS),
+            )
             return
         try:
             d = adapter.parse(raw)
@@ -49,15 +53,12 @@ class DelegateRegistry:
     def listing(self) -> str:
         """Human/LLM-facing one-liner per delegate (for the tool description)."""
         return "; ".join(
-            f"`{d.name}` ({d.type}{' — ' + d.description if d.description else ''})"
-            for d in self._items.values()
+            f"`{d.name}` ({d.type}{' — ' + d.description if d.description else ''})" for d in self._items.values()
         )
 
     async def dispatch(self, name: str, query: str) -> str:
         d = self._items.get(name)
         if d is None:
-            raise DelegateError(
-                f"unknown delegate {name!r}. Configured: {', '.join(self._items) or '(none)'}."
-            )
+            raise DelegateError(f"unknown delegate {name!r}. Configured: {', '.join(self._items) or '(none)'}.")
         adapter = ADAPTERS[d.type]
         return await adapter.dispatch(d, query)

@@ -151,6 +151,7 @@ async def extract_and_store_facts(
         return {"added": 0, "skipped": 0}
     counts = consolidate_and_store(knowledge_store, facts, namespace=namespace)
     if counts["added"] or counts["skipped"]:
-        log.info("[memory] facts: +%d new, %d dup-skipped (ns=%s)",
-                 counts["added"], counts["skipped"], namespace or "-")
+        log.info(
+            "[memory] facts: +%d new, %d dup-skipped (ns=%s)", counts["added"], counts["skipped"], namespace or "-"
+        )
     return counts

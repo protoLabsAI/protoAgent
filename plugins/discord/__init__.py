@@ -30,6 +30,7 @@ class DiscordProbe(BaseModel):
 
     bot_token: str = ""
 
+
 # Holds the running gateway task across start/stop/reload.
 _state: dict = {"task": None}
 
@@ -49,9 +50,11 @@ def _launch(cfg: dict, host) -> None:
 
     configure(cfg.get("bot_token"), cfg.get("admin_ids"))
     if not _should_start(cfg):
-        log.info("[discord] gateway not started (enabled=%s, token set=%s)",
-                 cfg.get("enabled"),
-                 bool((cfg.get("bot_token") or "").strip() or os.environ.get("DISCORD_BOT_TOKEN")))
+        log.info(
+            "[discord] gateway not started (enabled=%s, token set=%s)",
+            cfg.get("enabled"),
+            bool((cfg.get("bot_token") or "").strip() or os.environ.get("DISCORD_BOT_TOKEN")),
+        )
         return
     if not (host and host.invoke):
         log.warning("[discord] no agent invoke available — gateway not started")
@@ -86,8 +89,7 @@ def _build_router(registry):
         body = req or DiscordProbe()
         token = body.bot_token or (registry.config.get("bot_token") or "")
         ok, bot_user, error = await validate_token(token)
-        return {"ok": ok, "error": error,
-                "bot_user": (bot_user or {}).get("username") if ok else None}
+        return {"ok": ok, "error": error, "bot_user": (bot_user or {}).get("username") if ok else None}
 
     return router
 

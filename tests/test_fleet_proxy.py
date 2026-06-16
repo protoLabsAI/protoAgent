@@ -57,8 +57,7 @@ class FakeClient:
         self.built = None
 
     def build_request(self, method, url, headers=None, content=None, params=None):
-        self.built = {"method": method, "url": url, "headers": headers,
-                      "content": content, "params": params}
+        self.built = {"method": method, "url": url, "headers": headers, "content": content, "params": params}
         return object()  # opaque request handle
 
     async def send(self, req, stream=True):
@@ -69,23 +68,23 @@ class FakeClient:
 
 # --- _target_for_slug -------------------------------------------------------
 
+
 def test_host_slug_uses_active_port(monkeypatch):
     from runtime import state as state_mod
+
     monkeypatch.setattr(state_mod.STATE, "active_port", 7870, raising=False)
     assert proxy._target_for_slug("host") == ("http://127.0.0.1:7870", {})
 
 
 def test_peer_slug_resolves_when_alive(monkeypatch):
-    monkeypatch.setattr(proxy.supervisor, "_load_state",
-                        lambda: {"alice": {"port": 7001, "pid": 42}})
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
     monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
     assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
 
 
 def test_peer_slug_is_none_when_dead(monkeypatch):
-    monkeypatch.setattr(proxy.supervisor, "_load_state",
-                        lambda: {"alice": {"port": 7001, "pid": 42}})
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: False)
     monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
     assert proxy._target_for_slug("alice") is None
@@ -103,17 +102,19 @@ def test_remote_slug_resolves_to_url_with_bearer(monkeypatch):
     Authorization override (the browser's header carries the HUB's token, not the remote's)."""
     monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: False)
-    monkeypatch.setattr(proxy.supervisor, "remote_for_slug",
-                        lambda slug: {"id": "ava-1a2b", "name": "ava",
-                                      "url": "http://100.101.189.45:7871", "token": "sek"})
-    assert proxy._target_for_slug("ava-1a2b") == (
-        "http://100.101.189.45:7871", {"authorization": "Bearer sek"})
+    monkeypatch.setattr(
+        proxy.supervisor,
+        "remote_for_slug",
+        lambda slug: {"id": "ava-1a2b", "name": "ava", "url": "http://100.101.189.45:7871", "token": "sek"},
+    )
+    assert proxy._target_for_slug("ava-1a2b") == ("http://100.101.189.45:7871", {"authorization": "Bearer sek"})
 
 
 def test_remote_without_token_adds_no_header(monkeypatch):
     monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
-    monkeypatch.setattr(proxy.supervisor, "remote_for_slug",
-                        lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": ""})
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": ""}
+    )
     assert proxy._target_for_slug("r1") == ("http://h:1", {})
 
 
@@ -133,8 +134,7 @@ def test_resolution_is_cached_within_ttl(monkeypatch):
 
 
 def test_cache_expires_after_ttl(monkeypatch):
-    monkeypatch.setattr(proxy.supervisor, "_load_state",
-                        lambda: {"alice": {"port": 7001, "pid": 42}})
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {"alice": {"port": 7001, "pid": 42}})
     monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: True)
     monkeypatch.setattr(proxy.supervisor, "remote_for_slug", lambda slug: None)
     assert proxy._target_for_slug("alice") == ("http://127.0.0.1:7001", {})
@@ -143,6 +143,7 @@ def test_cache_expires_after_ttl(monkeypatch):
 
 
 # --- forward_to -----------------------------------------------------------
+
 
 async def test_forward_to_returns_409_when_not_running(monkeypatch):
     monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: None)
@@ -166,6 +167,7 @@ async def test_forward_to_delegates_to_target_when_running(monkeypatch):
 
 
 # --- _forward_to_base -----------------------------------------------------
+
 
 async def test_forward_strips_hop_headers_and_pipes_body(monkeypatch):
     up = FakeUpstream(
@@ -211,11 +213,13 @@ async def test_forward_returns_502_on_connect_error(monkeypatch):
 
 # --- _get_client ----------------------------------------------------------
 
+
 def test_get_client_is_pooled_and_recreated_when_closed():
     proxy._client = None
     c1 = proxy._get_client()
     assert proxy._get_client() is c1  # pooled
     import asyncio
+
     asyncio.run(c1.aclose())
     c2 = proxy._get_client()
     assert c2 is not c1  # recreated after close

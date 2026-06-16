@@ -16,6 +16,7 @@ from graph.middleware import model_override as mo
 
 # ── unit: the middleware ──────────────────────────────────────────────────────
 
+
 class _FakeModel:
     def __init__(self, name):
         self.model_name = name
@@ -34,6 +35,7 @@ def _patch_create_llm(monkeypatch, recorder):
     def _fake(config, *, model_name=None):
         recorder.append(model_name)
         return _FakeModel(model_name)
+
     monkeypatch.setattr("graph.llm.create_llm", _fake)
 
 
@@ -86,11 +88,13 @@ async def test_async_swaps_model(monkeypatch):
 
     async def handler(r):
         seen["model"] = r.model
+
     await mw.awrap_model_call(_FakeReq({"model": "m2"}, _FakeModel("d")), handler)
     assert built == ["m2"] and seen["model"].model_name == "m2"
 
 
 # ── integration: the override fires inside a real graph turn ───────────────────
+
 
 class _ToolFake(GenericFakeChatModel):
     def bind_tools(self, tools, **kwargs):
@@ -110,9 +114,9 @@ async def test_state_model_drives_the_turn(monkeypatch):
         calls.append(model_name)
         return _ToolFake(messages=iter([AIMessage(content="ok")]))
 
-    with patch("graph.agent.create_llm", _fake_create_llm), \
-         patch("graph.llm.create_llm", _fake_create_llm):
+    with patch("graph.agent.create_llm", _fake_create_llm), patch("graph.llm.create_llm", _fake_create_llm):
         from graph.agent import create_agent_graph
+
         g = create_agent_graph(LangGraphConfig(), include_subagents=False, checkpointer=MemorySaver())
         await g.ainvoke(
             {"messages": [HumanMessage("hi")], "session_id": "s1", "model": "protolabs/fast"},

@@ -36,6 +36,7 @@ class ModelOverrideMiddleware(AgentMiddleware):
         llm = self._cache.get(want)
         if llm is None:
             from graph.llm import create_llm
+
             llm = create_llm(self._config, model_name=want)
             self._cache[want] = llm
         return llm

@@ -27,16 +27,26 @@ def _wire(monkeypatch, *, servers):
     monkeypatch.setitem(sys.modules, "server.agent_init", fake)
 
     import runtime.state as rs
-    monkeypatch.setattr(rs.STATE, "graph_config",
-                        types.SimpleNamespace(mcp_servers=list(servers)), raising=False)
+
+    monkeypatch.setattr(rs.STATE, "graph_config", types.SimpleNamespace(mcp_servers=list(servers)), raising=False)
     return captured
 
 
 def test_add_stdio_server_enables_mcp_and_hot_reloads(monkeypatch):
     captured = _wire(monkeypatch, servers=[])
-    body = _client().post("/api/mcp/servers", json={
-        "name": "echo", "transport": "stdio", "command": "python", "args": "-m echo",
-    }).json()
+    body = (
+        _client()
+        .post(
+            "/api/mcp/servers",
+            json={
+                "name": "echo",
+                "transport": "stdio",
+                "command": "python",
+                "args": "-m echo",
+            },
+        )
+        .json()
+    )
     assert body["ok"] and body["servers"] == ["echo"]
     mcp = captured["config"]["mcp"]
     assert mcp["enabled"] is True
@@ -58,8 +68,13 @@ def test_add_upserts_by_name(monkeypatch):
 
 
 def test_remove_server(monkeypatch):
-    captured = _wire(monkeypatch, servers=[{"name": "echo", "transport": "stdio", "command": "x"},
-                                           {"name": "keep", "transport": "stdio", "command": "y"}])
+    captured = _wire(
+        monkeypatch,
+        servers=[
+            {"name": "echo", "transport": "stdio", "command": "x"},
+            {"name": "keep", "transport": "stdio", "command": "y"},
+        ],
+    )
     body = _client().delete("/api/mcp/servers/echo").json()
     assert body["servers"] == ["keep"]
     assert [s["name"] for s in captured["config"]["mcp"]["servers"]] == ["keep"]
@@ -82,15 +97,23 @@ def test_import_mcpservers_wrapper(monkeypatch):
     body = _client().post("/api/mcp/servers/import", json={"raw": raw}).json()
     assert body["added"] == ["filesystem", "weather"]
     servers = {s["name"]: s for s in captured["config"]["mcp"]["servers"]}
-    assert servers["filesystem"] == {"name": "filesystem", "transport": "stdio", "command": "npx", "args": ["-y", "@mcp/fs", "/data"]}
+    assert servers["filesystem"] == {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@mcp/fs", "/data"],
+    }
     assert servers["weather"]["transport"] == "streamable_http"  # alias normalized
     assert servers["weather"]["url"] == "https://example.com/mcp"
 
 
 def test_import_single_object_with_name(monkeypatch):
     captured = _wire(monkeypatch, servers=[])
-    body = _client().post("/api/mcp/servers/import",
-                          json={"raw": '{"name": "echo", "command": "python", "args": ["-m", "echo"]}'}).json()
+    body = (
+        _client()
+        .post("/api/mcp/servers/import", json={"raw": '{"name": "echo", "command": "python", "args": ["-m", "echo"]}'})
+        .json()
+    )
     assert body["added"] == ["echo"]
     assert captured["config"]["mcp"]["servers"][0]["command"] == "python"
 

@@ -43,8 +43,6 @@ def resolve_project_path(
     if allowed_dirs is not None:
         roots = _resolved_roots(allowed_dirs)
         if not any(path == root or root in path.parents for root in roots):
-            raise ValueError(
-                f"project_path is outside the allowed directories: {path}"
-            )
+            raise ValueError(f"project_path is outside the allowed directories: {path}")
 
     return path

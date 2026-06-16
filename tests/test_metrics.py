@@ -14,6 +14,7 @@ def test_record_a2a_turn_safe_when_disabled():
 def test_record_a2a_turn_increments_when_enabled():
     if metrics.is_enabled() or _try_init():
         from prometheus_client import REGISTRY
+
         p = metrics._prefix()
         before = REGISTRY.get_sample_value(f"{p}_a2a_turns_total", {"state": "completed"}) or 0.0
         metrics.record_a2a_turn("completed", 2.0)

@@ -24,28 +24,26 @@ def search_messages(service: Any, query: str, max_results: int = 10) -> list[dic
     """Search the mailbox (Gmail query syntax, e.g. ``is:unread newer_than:1d``)
     and return lightweight headers — id, from, subject, date, snippet."""
     max_results = max(1, min(int(max_results), 50))
-    resp = (
-        service.users().messages()
-        .list(userId="me", q=query or "", maxResults=max_results)
-        .execute()
-    )
+    resp = service.users().messages().list(userId="me", q=query or "", maxResults=max_results).execute()
     out: list[dict] = []
     for ref in resp.get("messages", []) or []:
         msg = (
-            service.users().messages()
-            .get(userId="me", id=ref["id"], format="metadata",
-                 metadataHeaders=["From", "Subject", "Date"])
+            service.users()
+            .messages()
+            .get(userId="me", id=ref["id"], format="metadata", metadataHeaders=["From", "Subject", "Date"])
             .execute()
         )
         p = msg.get("payload", {})
-        out.append({
-            "id": msg.get("id", ""),
-            "from": _header(p, "From"),
-            "subject": _header(p, "Subject"),
-            "date": _header(p, "Date"),
-            "snippet": (msg.get("snippet") or "").strip(),
-            "unread": "UNREAD" in (msg.get("labelIds") or []),
-        })
+        out.append(
+            {
+                "id": msg.get("id", ""),
+                "from": _header(p, "From"),
+                "subject": _header(p, "Subject"),
+                "date": _header(p, "Date"),
+                "snippet": (msg.get("snippet") or "").strip(),
+                "unread": "UNREAD" in (msg.get("labelIds") or []),
+            }
+        )
     return out
 
 
@@ -99,9 +97,5 @@ def create_draft(service: Any, to: str, subject: str, body: str) -> dict:
     mime["to"] = to
     mime["subject"] = subject
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
-    draft = (
-        service.users().drafts()
-        .create(userId="me", body={"message": {"raw": raw}})
-        .execute()
-    )
+    draft = service.users().drafts().create(userId="me", body={"message": {"raw": raw}}).execute()
     return {"draft_id": draft.get("id", ""), "to": to, "subject": subject}

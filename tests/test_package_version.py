@@ -12,10 +12,12 @@ import sys
 
 from infra import paths
 
+
 def _force_no_installed_metadata(monkeypatch):
     """Make ``importlib.metadata.version("protoagent")`` raise, so resolution falls
     through to the pyproject read — the frozen-binary + Docker reality (the package
     is never pip-installed there)."""
+
     def _raise(name):
         raise importlib.metadata.PackageNotFoundError(name)
 
@@ -24,9 +26,7 @@ def _force_no_installed_metadata(monkeypatch):
 
 def test_reads_meipass_pyproject_when_frozen(monkeypatch, tmp_path):
     _force_no_installed_metadata(monkeypatch)
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "protoagent"\nversion = "9.9.9"\n', encoding="utf-8"
-    )
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "protoagent"\nversion = "9.9.9"\n', encoding="utf-8")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
 

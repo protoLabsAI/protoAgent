@@ -52,6 +52,7 @@ def _operator_runtime_status():
     # appears/clears as siblings come and go. Quiet (empty `.instances/`) costs one
     # is_dir(); the `ps` guard only runs when sibling heartbeats actually exist.
     from infra.paths import colocation_warning, instance_uid, package_version
+
     try:
         warnings = [w for w in (colocation_warning(),) if w]
     except Exception:  # noqa: BLE001 — status must never raise
@@ -62,6 +63,7 @@ def _operator_runtime_status():
     # the scoped fleet.json is empty, so this no-ops.
     try:
         from graph.fleet import supervisor as _sup
+
         skew = _sup.version_skew_warning()
         if skew:
             warnings.append(skew)
@@ -102,19 +104,37 @@ def _operator_subagent_list():
 # console can section the list instead of showing a wall of 30. Name → category;
 # unknown core names fall back to "General", plugin/mcp tools to their source.
 _TOOL_CATEGORY = {
-    "current_time": "General", "calculator": "General", "web_search": "General",
-    "fetch_url": "General", "ask_human": "General", "request_user_input": "General",
-    "github_get_pr": "GitHub", "github_get_issue": "GitHub",
-    "github_list_issues": "GitHub", "github_get_commit_diff": "GitHub",
-    "read_note": "Notes", "write_note": "Notes", "append_note": "Notes",
-    "memory_ingest": "Memory", "memory_recall": "Memory", "memory_list": "Memory",
+    "current_time": "General",
+    "calculator": "General",
+    "web_search": "General",
+    "fetch_url": "General",
+    "ask_human": "General",
+    "request_user_input": "General",
+    "github_get_pr": "GitHub",
+    "github_get_issue": "GitHub",
+    "github_list_issues": "GitHub",
+    "github_get_commit_diff": "GitHub",
+    "read_note": "Notes",
+    "write_note": "Notes",
+    "append_note": "Notes",
+    "memory_ingest": "Memory",
+    "memory_recall": "Memory",
+    "memory_list": "Memory",
     "memory_stats": "Memory",
-    "schedule_task": "Scheduler", "list_schedules": "Scheduler", "cancel_schedule": "Scheduler",
+    "schedule_task": "Scheduler",
+    "list_schedules": "Scheduler",
+    "cancel_schedule": "Scheduler",
     "check_inbox": "Inbox",
-    "beads_create": "Beads", "beads_list": "Beads", "beads_update": "Beads", "beads_close": "Beads",
+    "beads_create": "Beads",
+    "beads_list": "Beads",
+    "beads_update": "Beads",
+    "beads_close": "Beads",
     "set_goal": "Goals",
-    "task": "Delegation", "task_batch": "Delegation", "run_workflow": "Workflows",
-    "save_workflow": "Workflows", "search_tools": "Discovery",
+    "task": "Delegation",
+    "task_batch": "Delegation",
+    "run_workflow": "Workflows",
+    "save_workflow": "Workflows",
+    "search_tools": "Discovery",
 }
 
 
@@ -155,10 +175,14 @@ def _operator_tools_list():
         seen.add(name)
         src = source or ("plugin" if name in plugin_names else "mcp" if name in mcp_names else "core")
         desc = (getattr(tool, "description", "") or "").strip().split("\n")[0]
-        out.append({
-            "name": name, "description": desc, "source": src,
-            "category": _tool_category(name, src),
-        })
+        out.append(
+            {
+                "name": name,
+                "description": desc,
+                "source": src,
+                "category": _tool_category(name, src),
+            }
+        )
 
     bound = getattr(STATE.graph, "bound_tools", None)
     if bound is not None:
@@ -182,9 +206,9 @@ def _operator_tools_list():
             add(t, "core")
     except Exception:  # noqa: BLE001
         log.exception("[tools] core enumeration failed")
-    for t in (getattr(STATE, "plugin_tools", None) or []):
+    for t in getattr(STATE, "plugin_tools", None) or []:
         add(t, "plugin")
-    for t in (getattr(STATE, "mcp_tools", None) or []):
+    for t in getattr(STATE, "mcp_tools", None) or []:
         add(t, "mcp")
     return {"tools": out, "count": len(out)}
 
@@ -218,6 +242,7 @@ async def _operator_subagent_batch(req: dict):
 
 async def _operator_scheduler_list() -> dict:
     import asyncio
+
     if STATE.scheduler is None:
         return {"jobs": [], "backend": "disabled"}
     jobs = await asyncio.to_thread(STATE.scheduler.list_jobs)
@@ -229,6 +254,7 @@ async def _operator_scheduler_list() -> dict:
 
 async def _operator_scheduler_add(req: dict) -> dict:
     import asyncio
+
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
     prompt = (req.get("prompt") or "").strip()
@@ -238,14 +264,18 @@ async def _operator_scheduler_add(req: dict) -> dict:
     if not schedule:
         raise ValueError("schedule is required")
     job = await asyncio.to_thread(
-        STATE.scheduler.add_job, prompt, schedule,
-        job_id=req.get("job_id") or None, timezone=req.get("timezone") or None,
+        STATE.scheduler.add_job,
+        prompt,
+        schedule,
+        job_id=req.get("job_id") or None,
+        timezone=req.get("timezone") or None,
     )
     return job.as_dict()
 
 
 async def _operator_scheduler_cancel(job_id: str) -> dict:
     import asyncio
+
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
     canceled = await asyncio.to_thread(STATE.scheduler.cancel_job, job_id)
@@ -254,6 +284,7 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
 
 async def _operator_goals_list() -> dict:
     import asyncio
+
     if STATE.goal_controller is None:
         return {"goals": [], "enabled": False}
     states = await asyncio.to_thread(STATE.goal_controller.store.all)
@@ -262,6 +293,7 @@ async def _operator_goals_list() -> dict:
 
 async def _operator_goals_clear(session_id: str) -> dict:
     import asyncio
+
     if STATE.goal_controller is None:
         return {"cleared": False, "enabled": False}
     cleared = await asyncio.to_thread(STATE.goal_controller.store.clear, session_id)
@@ -277,7 +309,9 @@ async def _operator_goals_set(body: dict) -> dict:
     if not sid:
         return {"ok": False, "error": "session_id is required"}
     ok, msg = STATE.goal_controller.set_goal_safe(
-        sid, (body or {}).get("condition"), (body or {}).get("verifier") or {},
+        sid,
+        (body or {}).get("condition"),
+        (body or {}).get("verifier") or {},
         (body or {}).get("max_iterations"),
     )
     return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
@@ -316,7 +350,9 @@ async def _operator_activity_list() -> dict:
 def _inbox_authorized(token: str | None) -> bool:
     """Validate the inbound bearer token (ADR 0003). Mirrors the A2A posture:
     when no token is configured the endpoint is open (dev), else it must match."""
-    active = ((STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "") or "").strip()
+    active = (
+        (STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "") or ""
+    ).strip()
     if not active:
         return True
     return (token or "") == active
@@ -336,7 +372,9 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
     # scheduler's fire (scheduler/local.py).
     headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-    bearer = ((STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
+    bearer = (
+        (STATE.graph_config.auth_token if STATE.graph_config else "") or os.environ.get("A2A_AUTH_TOKEN", "")
+    ).strip()
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
     api_key = os.environ.get(f"{AGENT_NAME_ENV.upper()}_API_KEY", "").strip()
@@ -344,7 +382,9 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         headers["X-API-Key"] = api_key
     mid = str(uuid4())
     body = {
-        "jsonrpc": "2.0", "id": mid, "method": "SendMessage",
+        "jsonrpc": "2.0",
+        "id": mid,
+        "method": "SendMessage",
         "params": {
             # contextId is a field of Message in 1.0 (params-level => -32602).
             "message": {
@@ -353,7 +393,12 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
                 "messageId": mid,
                 "contextId": ACTIVITY_CONTEXT,
             },
-            "metadata": {"origin": "inbox", "inbox_id": item.get("id"), "inbox_source": item.get("source", ""), "priority": item.get("priority", "now")},
+            "metadata": {
+                "origin": "inbox",
+                "inbox_id": item.get("id"),
+                "inbox_source": item.get("source", ""),
+                "priority": item.get("priority", "now"),
+            },
         },
     }
     try:
@@ -385,10 +430,15 @@ async def _operator_inbox_add(payload: dict) -> dict:
     )
     if item is None:
         return {"ok": True, "deduped": True}
-    _event_bus.publish("inbox.item", {
-        "id": item["id"], "priority": item["priority"],
-        "source": item.get("source") or "", "text": item["text"],
-    })
+    _event_bus.publish(
+        "inbox.item",
+        {
+            "id": item["id"],
+            "priority": item["priority"],
+            "source": item.get("source") or "",
+            "text": item["text"],
+        },
+    )
     fired = await _fire_activity_from_inbox(item) if item["priority"] == "now" else False
     if fired:
         # A now-item that fired has been delivered to the agent (its Activity turn
@@ -406,7 +456,9 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
     if STATE.inbox_store is None:
         return {"items": []}
     items = STATE.inbox_store.list(
-        priority_floor=floor or "later", include_delivered=include_delivered, limit=200,
+        priority_floor=floor or "later",
+        include_delivered=include_delivered,
+        limit=200,
     )
     return {"items": items}
 
@@ -428,11 +480,13 @@ def _operator_chat_commands() -> dict:
 
     commands = []
     if STATE.goal_controller is not None:
-        commands.append({
-            "name": "goal",
-            "kind": "control",
-            "description": "Set, check, or clear a self-driving goal for this chat session.",
-            "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
-        })
+        commands.append(
+            {
+                "name": "goal",
+                "kind": "control",
+                "description": "Set, check, or clear a self-driving goal for this chat session.",
+                "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
+            }
+        )
     commands.extend(resolve_slash_commands())
     return {"commands": commands}

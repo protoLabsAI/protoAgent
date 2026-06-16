@@ -29,9 +29,7 @@ async def test_command_missing_field():
 
 @pytest.mark.asyncio
 async def test_test_verifier_surfaces_last_line():
-    res = await run_verifier(
-        {"type": "test", "command": "echo '5 passed in 1.2s'; exit 0"}, VerifyContext()
-    )
+    res = await run_verifier({"type": "test", "command": "echo '5 passed in 1.2s'; exit 0"}, VerifyContext())
     assert res.met is True
     assert "5 passed" in res.reason
 
@@ -86,6 +84,7 @@ async def test_ci_pr_checks(monkeypatch):
     async def fake_run_gh(args, timeout=60):
         assert args[:2] == ["pr", "checks"]
         return (0, "all checks passed", "")
+
     monkeypatch.setattr("tools.gh_cli.run_gh", fake_run_gh)
     res = await run_verifier({"type": "ci", "pr": 42}, VerifyContext())
     assert res.met is True
@@ -95,12 +94,14 @@ async def test_ci_pr_checks(monkeypatch):
 async def test_ci_branch_run_conclusion(monkeypatch):
     async def fake_run_gh(args, timeout=60):
         return (0, json.dumps([{"status": "completed", "conclusion": "success", "name": "CI"}]), "")
+
     monkeypatch.setattr("tools.gh_cli.run_gh", fake_run_gh)
     res = await run_verifier({"type": "ci", "branch": "main"}, VerifyContext())
     assert res.met is True
 
     async def fake_fail(args, timeout=60):
         return (0, json.dumps([{"status": "completed", "conclusion": "failure"}]), "")
+
     monkeypatch.setattr("tools.gh_cli.run_gh", fake_fail)
     res2 = await run_verifier({"type": "ci", "branch": "main"}, VerifyContext())
     assert res2.met is False
@@ -144,9 +145,7 @@ async def _ok_verifier(spec, ctx):
 async def test_plugin_verifier_dispatches():
     set_plugin_verifiers({"demo:check": _ok_verifier})
     try:
-        res = await run_verifier(
-            {"type": "plugin", "check": "demo:check", "args": {"min": 5}}, VerifyContext()
-        )
+        res = await run_verifier({"type": "plugin", "check": "demo:check", "args": {"min": 5}}, VerifyContext())
         assert res.met is True and res.reason == "met" and res.evidence == "5"
     finally:
         set_plugin_verifiers({})
@@ -163,6 +162,7 @@ async def test_unknown_plugin_verifier_is_not_met():
 async def test_plugin_verifier_error_never_marks_met():
     async def _boom(spec, ctx):
         raise RuntimeError("kaboom")
+
     set_plugin_verifiers({"demo:boom": _boom})
     try:
         res = await run_verifier({"type": "plugin", "check": "demo:boom"}, VerifyContext())
@@ -174,9 +174,10 @@ async def test_plugin_verifier_error_never_marks_met():
 def test_registry_auto_namespaces_and_guards():
     from pathlib import Path
     from graph.plugins.registry import PluginRegistry
+
     reg = PluginRegistry("myplugin", Path("."))
-    reg.register_goal_verifier("credits", _ok_verifier)        # → myplugin:credits
-    reg.register_goal_verifier("other:explicit", _ok_verifier) # kept as-is
-    reg.register_goal_verifier("", _ok_verifier)               # invalid — ignored
-    reg.register_goal_verifier("bad", None)                    # invalid — ignored
+    reg.register_goal_verifier("credits", _ok_verifier)  # → myplugin:credits
+    reg.register_goal_verifier("other:explicit", _ok_verifier)  # kept as-is
+    reg.register_goal_verifier("", _ok_verifier)  # invalid — ignored
+    reg.register_goal_verifier("bad", None)  # invalid — ignored
     assert set(reg.goal_verifiers) == {"myplugin:credits", "other:explicit"}

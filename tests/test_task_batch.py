@@ -43,9 +43,7 @@ def test_build_returns_task_and_batch(monkeypatch):
 async def test_single_task_is_unbounded(monkeypatch):
     rec = []
     tools = _build(monkeypatch, recorder=rec)
-    out = await tools["task"].ainvoke(
-        {"description": "d", "prompt": "p", "subagent_type": "researcher"}
-    )
+    out = await tools["task"].ainvoke({"description": "d", "prompt": "p", "subagent_type": "researcher"})
     assert out == "OUT:d"
     # single task must not truncate
     assert rec[0]["truncate"] is None
@@ -54,11 +52,15 @@ async def test_single_task_is_unbounded(monkeypatch):
 @pytest.mark.asyncio
 async def test_batch_orders_results_by_index(monkeypatch):
     tools = _build(monkeypatch)
-    out = await tools["task_batch"].ainvoke({"tasks": [
-        {"description": "alpha", "prompt": "p1"},
-        {"description": "beta", "prompt": "p2"},
-        {"description": "gamma", "prompt": "p3"},
-    ]})
+    out = await tools["task_batch"].ainvoke(
+        {
+            "tasks": [
+                {"description": "alpha", "prompt": "p1"},
+                {"description": "beta", "prompt": "p2"},
+                {"description": "gamma", "prompt": "p3"},
+            ]
+        }
+    )
     # ordered 1..3 regardless of completion order
     assert out.index("Task 1/3") < out.index("Task 2/3") < out.index("Task 3/3")
     assert "OUT:alpha" in out and "OUT:beta" in out and "OUT:gamma" in out
@@ -87,9 +89,7 @@ async def test_batch_respects_concurrency_cap(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
     tools = {t.name: t for t in agent_mod._build_task_tools(cfg, [])}
-    await tools["task_batch"].ainvoke({"tasks": [
-        {"description": f"t{i}", "prompt": "p"} for i in range(6)
-    ]})
+    await tools["task_batch"].ainvoke({"tasks": [{"description": f"t{i}", "prompt": "p"} for i in range(6)]})
     assert state["peak"] <= 2
 
 
@@ -103,10 +103,14 @@ async def test_batch_empty_list(monkeypatch):
 @pytest.mark.asyncio
 async def test_batch_missing_prompt_isolated(monkeypatch):
     tools = _build(monkeypatch)
-    out = await tools["task_batch"].ainvoke({"tasks": [
-        {"description": "good", "prompt": "p"},
-        {"description": "bad"},  # no prompt
-    ]})
+    out = await tools["task_batch"].ainvoke(
+        {
+            "tasks": [
+                {"description": "good", "prompt": "p"},
+                {"description": "bad"},  # no prompt
+            ]
+        }
+    )
     assert "OUT:good" in out
     assert "missing 'prompt'" in out
 
@@ -120,9 +124,13 @@ async def test_batch_failure_isolated(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
     tools = {t.name: t for t in agent_mod._build_task_tools(LangGraphConfig(), [])}
-    out = await tools["task_batch"].ainvoke({"tasks": [
-        {"description": "ok", "prompt": "p"},
-        {"description": "boom", "prompt": "p"},
-    ]})
+    out = await tools["task_batch"].ainvoke(
+        {
+            "tasks": [
+                {"description": "ok", "prompt": "p"},
+                {"description": "boom", "prompt": "p"},
+            ]
+        }
+    )
     assert "OUT:ok" in out
     assert "RuntimeError" in out and "kaboom" in out

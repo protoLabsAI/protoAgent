@@ -42,10 +42,11 @@ CREATE INDEX IF NOT EXISTS idx_discord_turns_lookup
 @dataclass(frozen=True)
 class Turn:
     """One side of one Discord message exchange."""
-    ts: int                # ms since epoch
+
+    ts: int  # ms since epoch
     channel_id: str
     user_id: str
-    role: str              # "user" | "assistant"
+    role: str  # "user" | "assistant"
     content: str
     conversation_id: str | None = None
 
@@ -144,8 +145,14 @@ class TurnLog:
             return []
 
         return [
-            Turn(ts=r["ts"], channel_id=r["channel_id"], user_id=r["user_id"],
-                 role=r["role"], content=r["content"], conversation_id=r["conversation_id"])
+            Turn(
+                ts=r["ts"],
+                channel_id=r["channel_id"],
+                user_id=r["user_id"],
+                role=r["role"],
+                content=r["content"],
+                conversation_id=r["conversation_id"],
+            )
             for r in reversed(rows)
         ]
 

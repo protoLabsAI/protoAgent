@@ -23,8 +23,8 @@ def test_counts_when_parent_compacts(monkeypatch):
     monkeypatch.setattr(metrics, "record_compaction", lambda: calls.append(1))
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
     out = _instance().before_model({"messages": []}, None)
-    assert out == {"messages": []}     # parent result passed through
-    assert calls == [1]                # counted once
+    assert out == {"messages": []}  # parent result passed through
+    assert calls == [1]  # counted once
 
 
 def test_no_count_when_parent_returns_none(monkeypatch):

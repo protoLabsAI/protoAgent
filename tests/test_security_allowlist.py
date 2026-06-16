@@ -19,6 +19,7 @@ def _reset_allowlist():
 
 # ── the allowlist primitive ─────────────────────────────────────────────────
 
+
 def test_unset_is_permissive():
     assert policy.is_enabled() is False
     assert policy.check_url("http://8.8.8.8/cb") is None  # no opinion when off
@@ -27,9 +28,9 @@ def test_unset_is_permissive():
 def test_in_allowlist_allowed_out_blocked():
     policy.set_callback_allowlist(["10.0.0.0/8", "100.64.0.0/10"])
     assert policy.is_enabled() is True
-    assert policy.check_url("http://10.5.6.7/cb") is None       # in 10/8
+    assert policy.check_url("http://10.5.6.7/cb") is None  # in 10/8
     assert policy.check_url("https://100.64.1.1:8443/x") is None  # in tailnet
-    blocked = policy.check_url("http://8.8.8.8/cb")             # public, not listed
+    blocked = policy.check_url("http://8.8.8.8/cb")  # public, not listed
     assert blocked and "not in the callback allowlist" in blocked
 
 
@@ -45,6 +46,7 @@ def test_malformed_cidr_is_ignored():
 
 
 # ── config parse ────────────────────────────────────────────────────────────
+
 
 def test_config_parses_security_section(tmp_path):
     p = tmp_path / "langgraph-config.yaml"
@@ -63,10 +65,11 @@ def test_config_empty_security_section_tolerated(tmp_path):
 
 # ── push-callback integration (stores.is_safe_webhook_url) ──────────────
 
+
 def test_callback_default_denylist_when_allowlist_unset():
     # unset → existing private-IP denylist holds; public is fine
     assert stores.is_safe_webhook_url("http://10.0.0.1/cb") is False  # RFC1918 denied
-    assert stores.is_safe_webhook_url("http://8.8.8.8/cb") is True    # public ok
+    assert stores.is_safe_webhook_url("http://8.8.8.8/cb") is True  # public ok
 
 
 def test_callback_allowlist_overrides_denylist_and_restricts():

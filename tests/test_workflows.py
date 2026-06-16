@@ -17,8 +17,12 @@ VALID = {
     "inputs": [{"name": "topic", "required": True}, {"name": "depth", "default": "deep"}],
     "steps": [
         {"id": "gather", "subagent": "researcher", "prompt": "research {{inputs.topic}} ({{inputs.depth}})"},
-        {"id": "brief", "subagent": "researcher", "depends_on": ["gather"],
-         "prompt": "write up:\n{{steps.gather.output}}"},
+        {
+            "id": "brief",
+            "subagent": "researcher",
+            "depends_on": ["gather"],
+            "prompt": "write up:\n{{steps.gather.output}}",
+        },
     ],
     "output": "{{steps.brief.output}}",
 }
@@ -31,29 +35,39 @@ def test_validate_accepts_valid_recipe():
 def test_validate_catches_structural_errors():
     assert "missing 'name'" in validate_recipe({"steps": [{"id": "a", "subagent": "researcher", "prompt": "x"}]})
     assert any("non-empty list" in e for e in validate_recipe({"name": "x"}))
-    dup = {"name": "x", "steps": [
-        {"id": "a", "subagent": "researcher", "prompt": "p"},
-        {"id": "a", "subagent": "researcher", "prompt": "p"},
-    ]}
+    dup = {
+        "name": "x",
+        "steps": [
+            {"id": "a", "subagent": "researcher", "prompt": "p"},
+            {"id": "a", "subagent": "researcher", "prompt": "p"},
+        ],
+    }
     assert any("duplicate step id" in e for e in validate_recipe(dup))
 
 
 def test_validate_catches_dep_and_cycle_and_subagent():
     bad_dep = {"name": "x", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "depends_on": ["z"]}]}
     assert any("unknown step 'z'" in e for e in validate_recipe(bad_dep))
-    cycle = {"name": "x", "steps": [
-        {"id": "a", "subagent": "researcher", "prompt": "p", "depends_on": ["b"]},
-        {"id": "b", "subagent": "researcher", "prompt": "p", "depends_on": ["a"]},
-    ]}
+    cycle = {
+        "name": "x",
+        "steps": [
+            {"id": "a", "subagent": "researcher", "prompt": "p", "depends_on": ["b"]},
+            {"id": "b", "subagent": "researcher", "prompt": "p", "depends_on": ["a"]},
+        ],
+    }
     assert any("cycle" in e for e in validate_recipe(cycle))
     unknown_sub = {"name": "x", "steps": [{"id": "a", "subagent": "nope", "prompt": "p"}]}
     assert any("unknown subagent" in e for e in validate_recipe(unknown_sub, known_subagents={"researcher"}))
 
 
 def test_validate_catches_bad_template_refs():
-    bad = {"name": "x", "inputs": [{"name": "topic"}], "steps": [
-        {"id": "a", "subagent": "researcher", "prompt": "{{inputs.missing}} {{steps.ghost.output}}"},
-    ]}
+    bad = {
+        "name": "x",
+        "inputs": [{"name": "topic"}],
+        "steps": [
+            {"id": "a", "subagent": "researcher", "prompt": "{{inputs.missing}} {{steps.ghost.output}}"},
+        ],
+    }
     errs = validate_recipe(bad)
     assert any("unknown input" in e for e in errs)
     assert any("unknown step" in e for e in errs)
@@ -98,11 +112,14 @@ def test_execute_runs_independent_steps_in_parallel():
         running -= 1
         return sid
 
-    fanout = {"name": "f", "steps": [
-        {"id": "a", "subagent": "researcher", "prompt": "p"},
-        {"id": "b", "subagent": "researcher", "prompt": "p"},
-        {"id": "c", "subagent": "researcher", "prompt": "p"},
-    ]}
+    fanout = {
+        "name": "f",
+        "steps": [
+            {"id": "a", "subagent": "researcher", "prompt": "p"},
+            {"id": "b", "subagent": "researcher", "prompt": "p"},
+            {"id": "c", "subagent": "researcher", "prompt": "p"},
+        ],
+    }
     asyncio.run(execute_workflow(fanout, {}, run_step=run_step, max_concurrency=4))
     assert max_seen >= 2  # independent steps overlapped
 

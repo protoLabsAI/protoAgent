@@ -162,25 +162,27 @@ def _build_subagent_section() -> str:
             lines.append(f"  Tools: {', '.join(config.tools)}")
         lines.append("")
 
-    lines.extend([
-        "**Rules:**",
-        "- Pick the most specialized subagent whose description matches the task. Don't do",
-        "  domain work a subagent is purpose-built for (deep research, strategy/planning,",
-        "  multi-step gathering) inline — delegate it.",
-        "- For simple, quick requests, answer directly without delegation.",
-        "- Run independent delegations concurrently — one `task` call each, or `task_batch`",
-        "  (bounded automatically by the configured concurrency cap).",
-        "- Subagents cannot spawn further subagents.",
-        "",
-        "**Background delegation (`run_in_background=true` on `task`):** default to this for",
-        "any long, independent, or tool/quota-heavy delegation — deep research, a strategic",
-        "audit, anything that will take many turns or lots of web/tool calls. It returns",
-        "immediately with a job id and the result is delivered back to you automatically on a",
-        "later turn, so the conversation stays live instead of freezing on a multi-minute",
-        "delegation. Use foreground (the default) only when you need the result to finish your",
-        "current reply. Once you background a task, do NOT poll it or spawn a duplicate — you",
-        "will be notified when it completes.",
-    ])
+    lines.extend(
+        [
+            "**Rules:**",
+            "- Pick the most specialized subagent whose description matches the task. Don't do",
+            "  domain work a subagent is purpose-built for (deep research, strategy/planning,",
+            "  multi-step gathering) inline — delegate it.",
+            "- For simple, quick requests, answer directly without delegation.",
+            "- Run independent delegations concurrently — one `task` call each, or `task_batch`",
+            "  (bounded automatically by the configured concurrency cap).",
+            "- Subagents cannot spawn further subagents.",
+            "",
+            "**Background delegation (`run_in_background=true` on `task`):** default to this for",
+            "any long, independent, or tool/quota-heavy delegation — deep research, a strategic",
+            "audit, anything that will take many turns or lots of web/tool calls. It returns",
+            "immediately with a job id and the result is delivered back to you automatically on a",
+            "later turn, so the conversation stays live instead of freezing on a multi-minute",
+            "delegation. Use foreground (the default) only when you need the result to finish your",
+            "current reply. Once you background a task, do NOT poll it or spawn a duplicate — you",
+            "will be notified when it completes.",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -194,9 +196,5 @@ def build_subagent_prompt(agent_name: str, workspace: str = "/sandbox") -> str:
     identically to top-level streaming.
     """
     config = SUBAGENT_REGISTRY.get(agent_name)
-    base = (
-        config.system_prompt
-        if config
-        else "You are a subagent. Complete the delegated task efficiently."
-    )
+    base = config.system_prompt if config else "You are a subagent. Complete the delegated task efficiently."
     return f"{base}\n\n{OUTPUT_FORMAT_INSTRUCTIONS}"

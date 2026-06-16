@@ -29,8 +29,8 @@ SKILL_V1_MIME = "application/vnd.protolabs.skill-v1+json"
 # ContextVar holding skills emitted during the current async context (task run).
 # Initialised to None; callers must use get_pending_skills() and
 # emit_skill_artifact() rather than accessing this directly.
-_pending_skills: contextvars.ContextVar[list[SkillV1Artifact] | None] = (
-    contextvars.ContextVar("_pending_skills", default=None)
+_pending_skills: contextvars.ContextVar[list[SkillV1Artifact] | None] = contextvars.ContextVar(
+    "_pending_skills", default=None
 )
 
 
@@ -52,9 +52,7 @@ class SkillV1Artifact:
     description: str
     prompt_template: str
     tools_used: list[str] = field(default_factory=list)
-    created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source_session_id: str = ""
     # User-facing skills (ADR 0052): when True, the skill is offered as a `/<slash>`
     # command in the chat composer and runs its procedure on demand (in addition to the

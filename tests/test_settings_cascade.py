@@ -109,10 +109,12 @@ def test_no_host_file_matches_from_dict(tmp_path):
     body = "model:\n  name: m\n  temperature: 0.7\ngoal:\n  max_iterations: 11\ncompaction:\n  enabled: false\n"
     path = _agent_yaml(tmp_path, body)
     import yaml as _yaml
+
     doc = _yaml.safe_load(open(path))
     via_yaml = LangGraphConfig.from_yaml(path)
     via_dict = LangGraphConfig.from_dict(doc, config_dir=tmp_path)
     import dataclasses
+
     for f in dataclasses.fields(via_yaml):
         if f.name == "plugin_config":
             continue  # resolution is config_dir-relative; equal here but skip to be safe
@@ -127,8 +129,8 @@ def test_build_schema_reports_scope_and_source():
     cfg = LangGraphConfig()  # App defaults
     groups = build_schema(
         cfg,
-        agent_doc={"goal": {"enabled": False}},      # agent leaf sets an agent-scoped key
-        host_doc={"model": {"name": "host-m"}},       # host layer sets a host-scoped key
+        agent_doc={"goal": {"enabled": False}},  # agent leaf sets an agent-scoped key
+        host_doc={"model": {"name": "host-m"}},  # host layer sets a host-scoped key
     )
     by_key = {e["key"]: e for g in groups for e in g["fields"]}
 
@@ -137,8 +139,8 @@ def test_build_schema_reports_scope_and_source():
     assert by_key["goal.enabled"]["scope"] == "agent"
 
     # source = the layer the live value came from
-    assert by_key["model.name"]["source"] == "host"          # inherited from Host
-    assert by_key["goal.enabled"]["source"] == "agent"       # set in the agent leaf
+    assert by_key["model.name"]["source"] == "host"  # inherited from Host
+    assert by_key["goal.enabled"]["source"] == "agent"  # set in the agent leaf
     assert by_key["compaction.enabled"]["source"] == "default"  # neither layer → App default
 
 
@@ -153,8 +155,8 @@ def test_build_schema_agent_override_of_host_field_shows_as_agent_source():
         host_doc={"model": {"name": "host-m"}},
     )
     by_key = {e["key"]: e for g in groups for e in g["fields"]}
-    assert by_key["model.name"]["scope"] == "host"     # home layer is still host
-    assert by_key["model.name"]["source"] == "agent"   # but the live value is the agent override
+    assert by_key["model.name"]["scope"] == "host"  # home layer is still host
+    assert by_key["model.name"]["source"] == "agent"  # but the live value is the agent override
 
 
 # ── Slice 3: the layer-aware WRITE half ───────────────────────────────────────
@@ -224,7 +226,8 @@ def test_host_layer_refuses_secret(tmp_path, monkeypatch):
     _no_reload(monkeypatch)
 
     ok, messages = _apply_settings_changes(
-        config={"model": {"name": "box-model", "api_key": "sk-SHOULD-NOT-LAND"}}, layer="host",
+        config={"model": {"name": "box-model", "api_key": "sk-SHOULD-NOT-LAND"}},
+        layer="host",
     )
     assert ok
     written = _yaml.safe_load(hp.read_text()) or {}
@@ -246,7 +249,8 @@ def test_host_layer_refuses_agent_scoped_key(tmp_path, monkeypatch):
     _no_reload(monkeypatch)
 
     ok, _ = _apply_settings_changes(
-        config={"model": {"name": "box-model"}, "goal": {"enabled": False}}, layer="host",
+        config={"model": {"name": "box-model"}, "goal": {"enabled": False}},
+        layer="host",
     )
     assert ok
     written = _yaml.safe_load(hp.read_text()) or {}
@@ -401,8 +405,8 @@ def test_d8_host_file_sets_box_runtime_leaf_overrides(tmp_path, monkeypatch):
     _host_yaml(tmp_path, "fleet:\n  port_base: 8000\n  warm:\n    max: 5\n", monkeypatch)
     path = _agent_yaml(tmp_path, "fleet:\n  warm:\n    max: 7\n")  # leaf overrides warm, silent on port_base
     cfg = LangGraphConfig.from_yaml(path)
-    assert cfg.fleet_max_warm == 7       # leaf wins over host + env
-    assert cfg.fleet_port_base == 8000   # inherited from host
+    assert cfg.fleet_max_warm == 7  # leaf wins over host + env
+    assert cfg.fleet_port_base == 8000  # inherited from host
 
 
 def test_d8_host_cannot_inject_via_unscoped_key(tmp_path, monkeypatch):

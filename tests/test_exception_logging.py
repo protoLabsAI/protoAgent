@@ -93,9 +93,7 @@ async def test_chat_langgraph_stream_logs_traceback_on_exception(caplog):
     async def _exploding_events(*args, **kwargs):
         # Shape the raise so it mirrors the production failure: a path
         # op getting None. Any exception exercises the log path.
-        raise TypeError(
-            "expected str, bytes or os.PathLike object, not NoneType"
-        )
+        raise TypeError("expected str, bytes or os.PathLike object, not NoneType")
         yield  # make this an async generator even though we raise first
 
     fake_graph = MagicMock()
@@ -130,11 +128,7 @@ async def test_chat_langgraph_non_stream_logs_traceback_on_exception(caplog):
     caplog.set_level(logging.ERROR, logger="protoagent.server")
 
     fake_graph = MagicMock()
-    fake_graph.ainvoke = AsyncMock(
-        side_effect=TypeError(
-            "expected str, bytes or os.PathLike object, not NoneType"
-        )
-    )
+    fake_graph.ainvoke = AsyncMock(side_effect=TypeError("expected str, bytes or os.PathLike object, not NoneType"))
     with patch("server.STATE.graph", fake_graph):
         result = await _chat_langgraph("hi", "s-err")
 

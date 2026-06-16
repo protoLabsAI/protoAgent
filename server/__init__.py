@@ -72,8 +72,8 @@ log = logging.getLogger("protoagent.server")
 # ---------------------------------------------------------------------------
 
 _event_bus = EventBus()  # Server→client SSE push channel (ADR 0003). Process-
-                         # lifetime singleton; producers publish, /api/events
-                         # streams to connected consoles.
+# lifetime singleton; producers publish, /api/events
+# streams to connected consoles.
 
 
 def _bundle_root() -> Path:
@@ -158,8 +158,6 @@ def _install_parent_death_watchdog() -> None:
     threading.Thread(target=_watch, daemon=True, name="parent-death-watchdog").start()
 
 
-
-
 # Chat backend (ADR 0023 phase 2) — the turn loop, tool/interrupt shaping, and
 # slash-command parsing/execution live in server/chat.py. Re-exported here so
 # server.<symbol> keeps resolving for the OpenAI-compat + A2A wiring in _main and
@@ -226,6 +224,7 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
     _record_a2a_telemetry,
     structured_skill_schema,
 )
+
 # Agent init / builders / reload / settings (ADR 0023 phase 2) live in
 # server/agent_init.py. Re-exported here so server.<symbol> keeps resolving for
 # _main's wiring below and the test suite. agent_init.py imports agent_name /
@@ -262,11 +261,10 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 )
 
 
-
-
 # ---------------------------------------------------------------------------
 # Main — FastAPI + React console + A2A + OpenAI-compat + Prometheus
 # ---------------------------------------------------------------------------
+
 
 def _main():
 
@@ -335,9 +333,9 @@ def _main():
         choices=["console", "none", "full"],
         default=os.environ.get("PROTOAGENT_UI", "").lower() or None,
         help="UI deployment tier (ADR 0010): 'console' (default) = React console at "
-             "/app + API/A2A; 'none' = API + A2A + /metrics only (headless servers / "
-             "the lean stack). 'full' is a DEPRECATED alias for 'console' — the Gradio "
-             "tier was removed. Env: PROTOAGENT_UI.",
+        "/app + API/A2A; 'none' = API + A2A + /metrics only (headless servers / "
+        "the lean stack). 'full' is a DEPRECATED alias for 'console' — the Gradio "
+        "tier was removed. Env: PROTOAGENT_UI.",
     )
     parser.add_argument(
         "--headless",
@@ -349,7 +347,7 @@ def _main():
         "--setup",
         action="store_true",
         help="Headless setup (ADR 0010): validate the live config + mark setup "
-             "complete, then exit. No wizard/UI needed.",
+        "complete, then exit. No wizard/UI needed.",
     )
     args = parser.parse_args()
     STATE.active_port = args.port
@@ -372,8 +370,12 @@ def _main():
     if args.setup:
         from graph.config import LangGraphConfig
         from graph.config_io import (
-            CONFIG_YAML_PATH, ensure_live_config, mark_setup_complete, validate_for_headless,
+            CONFIG_YAML_PATH,
+            ensure_live_config,
+            mark_setup_complete,
+            validate_for_headless,
         )
+
         ensure_live_config()
         cfg = LangGraphConfig.from_yaml(CONFIG_YAML_PATH)
         ok, reason = validate_for_headless(cfg)
@@ -391,6 +393,7 @@ def _main():
     # Initialize observability
     from observability import tracing
     from observability import metrics
+
     tracing.init()
     metrics.init()
 
@@ -437,6 +440,7 @@ def _main():
     # ignores project_path). Reused by _init_langgraph_agent later.
     if STATE.beads_store is None:
         from beads import BeadsStore
+
         STATE.beads_store = BeadsStore()
 
     # Console handler bodies live in operator_api/console_handlers.py (ADR 0023
@@ -508,12 +512,14 @@ def _main():
             or getattr(_cfg, "telemetry_retention_days", 0) > 0
         ):
             import asyncio
+
             STATE.checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
 
         # Monitor-goal cadence (ADR 0030) — out-of-band verifier ticks so a met
         # long-horizon goal finishes without a session turn.
         if STATE.graph_config is not None and getattr(STATE.graph_config, "goal_enabled", True):
             import asyncio
+
             STATE.monitor_goals_task = asyncio.create_task(_monitor_goals_loop())
 
         # (The inbound Discord gateway now starts as the discord plugin's surface,
@@ -540,8 +546,8 @@ def _main():
         # same loop waiting on its own future — a guaranteed ~10s EventLoopBlocked boot stall.
         try:
             from graph.fleet import discovery
-            await asyncio.to_thread(
-                discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0))
+
+            await asyncio.to_thread(discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0))
         except Exception:
             log.exception("[discovery] mDNS advertise failed")
 
@@ -551,8 +557,8 @@ def _main():
         # out to `ps` per sibling.
         try:
             from infra import paths as _paths
-            _paths.register_instance(int(getattr(STATE, "active_port", 0) or 0) or None,
-                                     agent_name())
+
+            _paths.register_instance(int(getattr(STATE, "active_port", 0) or 0) or None, agent_name())
             _w = await asyncio.to_thread(_paths.colocation_warning)
             if _w:
                 log.warning("[instance] %s", _w)
@@ -566,6 +572,7 @@ def _main():
         # moment. Hub-scoped, off the loop (file IO + liveness probes), best-effort.
         try:
             from graph.fleet import supervisor as _sup
+
             await asyncio.to_thread(_sup.reconcile_on_boot)
         except Exception:
             log.exception("[fleet] boot version reconcile failed")
@@ -575,6 +582,7 @@ def _main():
         # Drop the co-location heartbeat (#706). Best-effort.
         try:
             from infra import paths as _paths
+
             _paths.unregister_instance()
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             pass
@@ -585,6 +593,7 @@ def _main():
         # Done early so members start exiting while the hub tears down the rest.
         try:
             from graph.fleet import supervisor as _sup
+
             stopped = await asyncio.to_thread(_sup.shutdown_all)
             if stopped:
                 log.info("[fleet] spun down %d member(s) on host exit", len(stopped))
@@ -594,6 +603,7 @@ def _main():
         # advertise (zc.close() posts to and waits on the loop it's called from).
         try:
             from graph.fleet import discovery
+
             await asyncio.to_thread(discovery.stop_advertise)
         except Exception:  # noqa: BLE001 — mDNS withdraw is best-effort on shutdown
             pass
@@ -620,6 +630,7 @@ def _main():
                 log.exception("[cache-warmer] shutdown failed")
         try:
             from surfaces.discord import stop as _stop_discord
+
             await _stop_discord()
         except Exception:
             log.exception("[discord] shutdown failed")
@@ -655,11 +666,13 @@ def _main():
     # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.
     from operator_api.fleet_routes import register_fleet_routes
+
     register_fleet_routes(fastapi_app)
 
     # Per-agent theme (ADR 0042) — each agent saves its own look; the console repaints
     # to the focused agent's theme (proxied via /agents/<slug>/api/theme, slug routing).
     from operator_api.theme_routes import register_theme_routes
+
     register_theme_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
@@ -717,6 +730,14 @@ def _main():
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
     )
 
+    # Short-lived SSE token endpoint (Part 3 of auth inversion): the React
+    # console fetches a 30s HMAC token here (bearer-gated under /api/) and
+    # passes it to ``EventSource("/api/events?token=...")``. Server-to-server
+    # callers that already carry an Authorization header are unaffected.
+    @fastapi_app.get("/api/sse-token", include_in_schema=False)
+    async def _sse_token():
+        return {"token": auth.generate_sse_token()}
+
     a2a_card = _build_agent_card_proto()
     # Deploy-time guard (opt-in): refuse to start if the card would advertise a
     # loopback URL — a deployed agent that does so is silently unreachable to
@@ -743,9 +764,8 @@ def _main():
         if not spec:
             return None
         from graph.structured_skill import finalize_structured
-        return await finalize_structured(
-            skill_id, spec["schema"], spec["mime"], final_text, STATE.graph_config
-        )
+
+        return await finalize_structured(skill_id, spec["schema"], spec["mime"], final_text, STATE.graph_config)
 
     _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(
@@ -793,16 +813,19 @@ def _main():
     if ui != "none" and static_dir.exists():
         manifest_path = static_dir / "manifest.json"
         if manifest_path.exists():
+
             @fastapi_app.get("/manifest.json", include_in_schema=False)
             async def _serve_manifest() -> FileResponse:
                 return FileResponse(str(manifest_path), media_type="application/manifest+json")
 
         sw_path = static_dir / "sw.js"
         if sw_path.exists():
+
             @fastapi_app.get("/sw.js", include_in_schema=False)
             async def _serve_sw() -> FileResponse:
                 return FileResponse(
-                    str(sw_path), media_type="application/javascript",
+                    str(sw_path),
+                    media_type="application/javascript",
                     headers={"Service-Worker-Allowed": "/"},
                 )
 
@@ -811,6 +834,7 @@ def _main():
         # legacy /favicon.ico path resolve to the SVG mark.
         favicon_path = static_dir / "favicon.svg"
         if favicon_path.exists():
+
             @fastapi_app.get("/favicon.svg", include_in_schema=False)
             @fastapi_app.get("/favicon.ico", include_in_schema=False)
             async def _serve_favicon() -> FileResponse:
@@ -837,8 +861,7 @@ def _main():
     # the env read is a defensive fallback for the degenerate no-config path.
     if not args.host:
         args.host = (
-            STATE.graph_config.bind_host if STATE.graph_config
-            else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
+            STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
         ) or "127.0.0.1"
 
     log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)

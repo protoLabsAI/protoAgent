@@ -60,8 +60,12 @@ async def test_dm_captures_return_address(monkeypatch):
 
     monkeypatch.setattr(gw, "_api", fake_api)
     d = {
-        "channel_id": "dm-chan", "id": "m1", "content": "hey",
-        "author": {"id": "u1", "username": "kj"}, "guild_id": None, "mentions": [],
+        "channel_id": "dm-chan",
+        "id": "m1",
+        "content": "hey",
+        "author": {"id": "u1", "username": "kj"},
+        "guild_id": None,
+        "mentions": [],
     }
     await gw._handle_message(d, "bot")
     assert ra.get() == "dm-chan"
@@ -77,8 +81,11 @@ async def test_guild_message_does_not_capture(monkeypatch):
 
     monkeypatch.setattr(gw, "_api", fake_api)
     d = {
-        "channel_id": "guild-chan", "id": "m1", "content": "<@bot> hi",
-        "author": {"id": "u1", "username": "kj"}, "guild_id": "g1",
+        "channel_id": "guild-chan",
+        "id": "m1",
+        "content": "<@bot> hi",
+        "author": {"id": "u1", "username": "kj"},
+        "guild_id": "g1",
         "mentions": [{"id": "bot"}],
     }
     await gw._handle_message(d, "bot")
@@ -102,9 +109,7 @@ async def test_activity_message_delivers_to_dm(monkeypatch):
     monkeypatch.setattr(gw, "_api", fake_api)
     ra.record("dm-chan")
 
-    delivered = await gw._deliver_event(
-        {"event": "activity.message", "data": {"text": "reminder: standup at 10"}}
-    )
+    delivered = await gw._deliver_event({"event": "activity.message", "data": {"text": "reminder: standup at 10"}})
     assert delivered is True
     post = next(c for c in sent if c["method"] == "POST" and c["path"].endswith("/messages"))
     assert post["path"] == "/channels/dm-chan/messages"
@@ -122,9 +127,7 @@ async def test_no_delivery_without_return_address(monkeypatch):
 
     monkeypatch.setattr(gw, "_api", fake_api)
     # no ra.record() — nothing captured
-    delivered = await gw._deliver_event(
-        {"event": "activity.message", "data": {"text": "hi"}}
-    )
+    delivered = await gw._deliver_event({"event": "activity.message", "data": {"text": "hi"}})
     assert delivered is False and sent == []
 
 

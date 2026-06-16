@@ -42,7 +42,10 @@ async def _hello_stream(text, ctx, *, resume=False, caller_trace=None, **kwargs)
 
 def _build_app(stream_fn) -> FastAPI:
     card = pa.build_agent_card(
-        name="test", description="d", url="http://test/a2a", version="0.0.0",
+        name="test",
+        description="d",
+        url="http://test/a2a",
+        version="0.0.0",
         skills=[AgentSkill(id="chat", name="Chat", description="c", tags=["t"])],
         bearer=False,
     )
@@ -92,8 +95,8 @@ def test_client_sets_the_version_header():
 async def test_ask_round_trips_against_a2a_1_0(routed_client):
     client, _ = routed_client
     r = await client.ask("hi", timeout_s=5)
-    assert r.state == "completed"          # 0.3 method/role → -32601 → "failed"
-    assert r.text == "hello world"         # untyped {"text": …} part parsed
+    assert r.state == "completed"  # 0.3 method/role → -32601 → "failed"
+    assert r.text == "hello world"  # untyped {"text": …} part parsed
     assert r.usage.get("input_tokens") == 10  # cost-v1 DataPart parsed
 
 
@@ -121,14 +124,20 @@ async def test_ask_with_context_id_round_trips(routed_client):
 async def test_params_level_context_id_is_rejected(routed_client):
     """Pins that contextId belongs inside the message, not on the request."""
     _, app = routed_client
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5
-    ) as c:
-        r = await c.post("/a2a", headers={"A2A-Version": "1.0"}, json={
-            "jsonrpc": "2.0", "id": "x", "method": "SendMessage",
-            "params": {"contextId": "ctx-1", "message": {
-                "role": "ROLE_USER", "parts": [{"text": "hi"}], "messageId": "m"}},
-        })
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5) as c:
+        r = await c.post(
+            "/a2a",
+            headers={"A2A-Version": "1.0"},
+            json={
+                "jsonrpc": "2.0",
+                "id": "x",
+                "method": "SendMessage",
+                "params": {
+                    "contextId": "ctx-1",
+                    "message": {"role": "ROLE_USER", "parts": [{"text": "hi"}], "messageId": "m"},
+                },
+            },
+        )
     assert r.json().get("error", {}).get("code") == -32602
 
 
@@ -159,12 +168,14 @@ async def test_legacy_0_3_shape_is_rejected(routed_client):
     """Pins the contract: the old ``message/send`` (no version header) 404s, so
     the migration above is load-bearing, not cosmetic."""
     _, app = routed_client
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5
-    ) as c:
-        r = await c.post("/a2a", json={
-            "jsonrpc": "2.0", "id": "x", "method": "message/send",
-            "params": {"message": {
-                "role": "user", "parts": [{"kind": "text", "text": "hi"}], "messageId": "m"}},
-        })
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5) as c:
+        r = await c.post(
+            "/a2a",
+            json={
+                "jsonrpc": "2.0",
+                "id": "x",
+                "method": "message/send",
+                "params": {"message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}], "messageId": "m"}},
+            },
+        )
     assert r.json().get("error", {}).get("code") == -32601

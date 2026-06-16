@@ -74,9 +74,13 @@ def _seed_index(db_path: str, skills: list[dict]):
                 source_session_id, created_at, confidence, last_used)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                s["name"], s["description"], s.get("prompt_template", ""),
-                " ".join(s.get("tools_used", [])), "",
-                s.get("created_at", ""), s.get("confidence", 1.0),
+                s["name"],
+                s["description"],
+                s.get("prompt_template", ""),
+                " ".join(s.get("tools_used", [])),
+                "",
+                s.get("created_at", ""),
+                s.get("confidence", 1.0),
                 s.get("last_used", s.get("created_at", "")),
             ),
         )
@@ -177,9 +181,7 @@ class TestConfidenceDecay:
         """last_used timestamp takes priority over created_at."""
         curator = self._curator()
         # created 180 days ago but used 10 days ago
-        skill = _make_skill(
-            confidence=1.0, days_ago=180, last_used_days_ago=10
-        )
+        skill = _make_skill(confidence=1.0, days_ago=180, last_used_days_ago=10)
         curator._apply_decay([skill])
         expected = 0.5 ** (10 / 90)
         assert abs(skill["confidence"] - expected) < 1e-6
@@ -345,10 +347,12 @@ class TestCuratorRun:
 
     def test_dry_run_leaves_store_unchanged(self, tmp_path):
         # A low-confidence, long-idle skill would be pruned on a real run.
-        idx = _seed_index(str(tmp_path / "skills.db"), [
-            _make_skill(name="stale", description="old thing",
-                        confidence=1.0, last_used_days_ago=400),
-        ])
+        idx = _seed_index(
+            str(tmp_path / "skills.db"),
+            [
+                _make_skill(name="stale", description="old thing", confidence=1.0, last_used_days_ago=400),
+            ],
+        )
         SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=True).run()
         assert len(idx.all_skills()) == 1  # nothing deleted in dry-run
 
@@ -374,12 +378,16 @@ class TestCuratorRun:
         the SQLite store; the fresh one survives. Distinct names so dedup
         doesn't collapse the pair before prune runs."""
         old_skill = _make_skill(
-            name="stale crawler", description="scrapes an old feed",
-            confidence=1.0, last_used_days_ago=300,
+            name="stale crawler",
+            description="scrapes an old feed",
+            confidence=1.0,
+            last_used_days_ago=300,
         )
         fresh_skill = _make_skill(
-            name="active summarizer", description="summarizes recent docs",
-            confidence=0.9, last_used_days_ago=5,
+            name="active summarizer",
+            description="summarizes recent docs",
+            confidence=0.9,
+            last_used_days_ago=5,
         )
         idx = _seed_index(str(tmp_path / "skills.db"), [old_skill, fresh_skill])
 
@@ -396,19 +404,29 @@ class TestCuratorRun:
         idx = _seed_index(str(tmp_path / "skills.db"), [_make_skill()])
         entry = SkillCurator(index=idx, audit_path=self._audit(tmp_path), dry_run=False).run()
         required_keys = {
-            "run_id", "timestamp", "dry_run", "skills_before",
-            "skills_after", "decay_applied", "deduplicated", "pruned",
+            "run_id",
+            "timestamp",
+            "dry_run",
+            "skills_before",
+            "skills_after",
+            "decay_applied",
+            "deduplicated",
+            "pruned",
         }
         assert required_keys.issubset(entry.keys())
 
     def test_store_persisted_after_run(self, tmp_path):
         old_skill = _make_skill(
-            name="stale crawler", description="scrapes an old feed",
-            confidence=1.0, last_used_days_ago=300,
+            name="stale crawler",
+            description="scrapes an old feed",
+            confidence=1.0,
+            last_used_days_ago=300,
         )
         fresh_skill = _make_skill(
-            name="active summarizer", description="summarizes recent docs",
-            confidence=0.9, last_used_days_ago=2,
+            name="active summarizer",
+            description="summarizes recent docs",
+            confidence=0.9,
+            last_used_days_ago=2,
         )
         idx = _seed_index(str(tmp_path / "skills.db"), [old_skill, fresh_skill])
 

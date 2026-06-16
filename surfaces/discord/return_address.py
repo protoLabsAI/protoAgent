@@ -51,7 +51,7 @@ def get() -> str | None:
         p = _path()
         if not p.exists():
             return None
-        return (json.loads(p.read_text()).get(_KEY) or None)
+        return json.loads(p.read_text()).get(_KEY) or None
     except Exception:  # noqa: BLE001 — a missing/corrupt file just means "no address"
         return None
 

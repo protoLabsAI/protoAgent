@@ -75,15 +75,15 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: alive.discard(int(pid)))
 
     ids = {}
-    for nm in ("a", "b", "c"):           # a started first → least-recently-active
+    for nm in ("a", "b", "c"):  # a started first → least-recently-active
         ids[nm] = manager.create(nm)["id"]
-        supervisor.start(nm)             # display name resolves to the id
+        supervisor.start(nm)  # display name resolves to the id
 
     evicted = supervisor.enforce_warm_cap(keep=2, protect="c")  # protect by name too
-    assert evicted == [ids["a"]]         # LRU evicted (state keys = ids), protected one kept
+    assert evicted == [ids["a"]]  # LRU evicted (state keys = ids), protected one kept
     assert not supervisor.is_running("a")
     assert supervisor.is_running("b") and supervisor.is_running("c")
-    assert supervisor.enforce_warm_cap(keep=0) == []   # 0 = unlimited, no-op
+    assert supervisor.enforce_warm_cap(keep=0) == []  # 0 = unlimited, no-op
 
 
 # ── remote fleet members (ADR 0042 §I) ────────────────────────────────────────
@@ -92,19 +92,19 @@ def test_remote_member_lifecycle(tmp_path, monkeypatch):
     rec = supervisor.add_remote("ava", "http://100.101.189.45:7871/", token="sek")
     assert rec["name"] == "ava" and rec["id"].startswith("ava-")
     assert rec["url"] == "http://100.101.189.45:7871"  # trailing slash trimmed
-    assert "token" not in rec                           # never returned
+    assert "token" not in rec  # never returned
 
     # proxy-side lookup DOES carry the token
     assert supervisor.remote_for_slug(rec["id"])["token"] == "sek"
 
     with pytest.raises(supervisor.FleetError):
-        supervisor.add_remote("ava", "http://other:1")          # name taken
+        supervisor.add_remote("ava", "http://other:1")  # name taken
     with pytest.raises(supervisor.FleetError):
         supervisor.add_remote("ava2", "http://100.101.189.45:7871")  # url taken
     with pytest.raises(supervisor.FleetError):
-        supervisor.add_remote("bad", "ftp://nope")              # not http(s)
+        supervisor.add_remote("bad", "ftp://nope")  # not http(s)
     with pytest.raises(supervisor.FleetError):
-        supervisor.add_remote("host", "http://h:1")             # reserved slug
+        supervisor.add_remote("host", "http://h:1")  # reserved slug
     # SSRF guard (#871): cloud-metadata / link-local is blocked even though private
     # LAN/tailnet remotes (like ava above) are allowed.
     with pytest.raises(supervisor.FleetError):
@@ -114,8 +114,8 @@ def test_remote_member_lifecycle(tmp_path, monkeypatch):
     entry = next(a for a in supervisor.status() if a.get("remote"))
     assert entry["name"] == "ava" and entry["running"] is False
     assert entry["a2a"] == "http://100.101.189.45:7871/a2a" and entry["pid"] is None
-    assert entry["version"] == ""      # no probe yet — version unknown
-    assert "token" not in entry        # the bearer NEVER leaves the registry via status()
+    assert entry["version"] == ""  # no probe yet — version unknown
+    assert "token" not in entry  # the bearer NEVER leaves the registry via status()
 
     supervisor._probe_cache[rec["id"]] = (True, supervisor.time.monotonic())
     assert next(a for a in supervisor.status() if a.get("remote"))["running"] is True
@@ -148,6 +148,7 @@ def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
         return FakeResp()
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", fake_get)
     supervisor.refresh_remote_probes()
     supervisor.refresh_remote_probes()  # within TTL — no second call
@@ -170,6 +171,7 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
             return {"name": "ava", "version": "0.30.0"}
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
     supervisor.refresh_remote_probes()
 
@@ -199,6 +201,7 @@ def test_probe_card_without_version_keeps_last_known(tmp_path, monkeypatch):
             raise ValueError("not json")
 
     import httpx
+
     monkeypatch.setattr(httpx, "get", lambda url, timeout: NoVersionResp())
     supervisor.refresh_remote_probes()
     assert supervisor.remote_for_slug(rec["id"])["version"] == "0.28.0"
@@ -228,8 +231,7 @@ def test_remotes_lock_serializes_concurrent_adds(tmp_path, monkeypatch):
         except Exception as e:  # noqa: BLE001 — surfaced below
             errs.append(e)
 
-    threads = [threading.Thread(target=add, args=(n, p))
-               for n, p in (("r-one", 1), ("r-two", 2))]
+    threads = [threading.Thread(target=add, args=(n, p)) for n, p in (("r-one", 1), ("r-two", 2))]
     for t in threads:
         t.start()
     for t in threads:
@@ -287,7 +289,7 @@ def test_shutdown_all_opt_out_keeps_members(tmp_path, monkeypatch):
     supervisor.start("a")
 
     assert supervisor.shutdown_all(timeout=1.0) == []  # opt-out → no-op
-    assert len(alive) == 1 and not killed              # member untouched
+    assert len(alive) == 1 and not killed  # member untouched
     assert supervisor.is_running("a")
 
 

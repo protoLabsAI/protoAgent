@@ -14,9 +14,7 @@ from graph.components import (
 
 class TestCodec:
     def test_roundtrip(self):
-        s = "Rendered a table component. " + encode_component(
-            "table", {"columns": ["A", "B"], "rows": [["1", "2"]]}
-        )
+        s = "Rendered a table component. " + encode_component("table", {"columns": ["A", "B"], "rows": [["1", "2"]]})
         got = extract_component(s)
         assert got == {"component": "table", "props": {"columns": ["A", "B"], "rows": [["1", "2"]]}}
         assert strip_component(s) == "Rendered a table component."

@@ -61,8 +61,10 @@ def _reset_live_embed_breaker() -> None:
         try:
             if reset():
                 import logging
+
                 logging.getLogger("protoagent.server").info(
-                    "[knowledge] embedding breaker cleared (live key tested OK)")
+                    "[knowledge] embedding breaker cleared (live key tested OK)"
+                )
         except Exception:  # noqa: BLE001 — never let a breaker reset break the test route
             pass
 
@@ -78,6 +80,7 @@ def register_config_routes(app) -> None:
     @app.get("/api/config")
     async def _api_get_config():
         from graph.config_io import config_to_dict, read_soul
+
         return {
             "config": config_to_dict(STATE.graph_config),
             "soul": read_soul(),
@@ -87,9 +90,7 @@ def register_config_routes(app) -> None:
     async def _api_post_config(req: ConfigReloadRequest):
         # Offload off the event loop (#497) — the reload's graph compile is heavy
         # and would otherwise freeze the server for its duration.
-        ok, messages = await asyncio.to_thread(
-            _apply_settings_changes, config=req.config, soul=req.soul
-        )
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=req.config, soul=req.soul)
         return {"ok": ok, "messages": messages}
 
     @app.post("/api/config/models")
@@ -146,6 +147,7 @@ def register_config_routes(app) -> None:
     @app.get("/api/config/setup-status")
     async def _api_setup_status():
         from graph.config_io import is_setup_complete, list_soul_presets
+
         return {
             "setup_complete": is_setup_complete(),
             "presets": list_soul_presets(),
@@ -166,12 +168,14 @@ def register_config_routes(app) -> None:
     @app.post("/api/config/reset-setup")
     async def _api_reset_setup():
         from graph.config_io import reset_setup
+
         reset_setup()
         return {"ok": True, "message": "setup marker removed"}
 
     @app.get("/api/config/presets/{name}")
     async def _api_read_preset(name: str):
         from graph.config_io import read_soul_preset
+
         return {"name": name, "content": read_soul_preset(name)}
 
     # --- Generic settings (schema-driven UI) --------------------------------
@@ -194,7 +198,8 @@ def register_config_routes(app) -> None:
         host_doc = _load_host_layer()
         return {
             "groups": build_schema(
-                STATE.graph_config, model_options=models,
+                STATE.graph_config,
+                model_options=models,
                 agent_doc=agent_doc if isinstance(agent_doc, dict) else {},
                 host_doc=host_doc,
             )

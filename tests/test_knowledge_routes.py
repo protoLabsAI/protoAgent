@@ -33,6 +33,7 @@ def test_knowledge_search_and_browse(monkeypatch):
             class _C:
                 def as_dict(self_inner):
                     return {"id": 2, "content": "recent"}
+
             return [_C()]
 
         def stats(self):
@@ -95,7 +96,7 @@ def test_chunk_update_keeps_old_row_when_add_fails(monkeypatch):
     ks.add_chunk = lambda *a, **k: None  # store rejects the revision
     c = _client(monkeypatch, knowledge=ks)
     assert c.put("/api/knowledge/chunks/3", json={"content": "x"}).status_code == 400
-    assert ks.deleted == []                                   # the original survives
+    assert ks.deleted == []  # the original survives
 
 
 def test_chunk_delete(monkeypatch):
@@ -133,11 +134,26 @@ def test_knowledge_row_preview_fallback():
 def test_playbooks_tier_passthrough(monkeypatch):
     """A layered index tags each skill with its tier (private|commons); the list
     payload must carry it so the surface can badge + gate Promote."""
+
     class _Layered:
         def all_skills(self):
             return [
-                {"id": 1, "name": "a", "source": "emitted", "confidence": 0.5, "tier": "private", "prompt_template": "x"},
-                {"id": 1, "name": "b", "source": "promoted", "confidence": 0.9, "tier": "commons", "prompt_template": "x"},
+                {
+                    "id": 1,
+                    "name": "a",
+                    "source": "emitted",
+                    "confidence": 0.5,
+                    "tier": "private",
+                    "prompt_template": "x",
+                },
+                {
+                    "id": 1,
+                    "name": "b",
+                    "source": "promoted",
+                    "confidence": 0.9,
+                    "tier": "commons",
+                    "prompt_template": "x",
+                },
             ]
 
     c = _client(monkeypatch, skills=_Layered())
@@ -170,6 +186,7 @@ def test_promote_route_layered(monkeypatch):
 def test_promote_route_unsupported_in_scoped_mode(monkeypatch):
     """A plain (non-layered) index has no commons to promote into — the route
     explains rather than 500s."""
+
     class _Plain:
         def all_skills(self):
             return [{"id": 1, "name": "a"}]
@@ -199,8 +216,7 @@ class _IngestKS:
 def test_ingest_text(monkeypatch):
     ks = _IngestKS()
     c = _client(monkeypatch, knowledge=ks)
-    body = c.post("/api/knowledge/ingest",
-                  data={"text": "a pasted note body", "title": "My Note"}).json()
+    body = c.post("/api/knowledge/ingest", data={"text": "a pasted note body", "title": "My Note"}).json()
     assert body["enabled"] is True
     assert body["ids"] == [101, 102] and body["chunks"] == 2
     assert body["source_type"] == "text" and body["title"] == "My Note"
@@ -222,8 +238,10 @@ def test_ingest_url(monkeypatch):
     # Patch the engine so no network: the route imports extract_url from `ingestion`.
     import ingestion
     from ingestion import ExtractResult
+
     monkeypatch.setattr(
-        ingestion, "extract_url",
+        ingestion,
+        "extract_url",
         lambda u, **kw: ExtractResult(text="fetched article body", title="Article", source_type="html"),
     )
     c = _client(monkeypatch, knowledge=ks)
@@ -252,6 +270,7 @@ def test_ingest_audio_without_transcribe_model_returns_501(monkeypatch):
     """Audio upload with no transcribe model configured (graph_config=None →
     transcribe fn None) → the engine's MissingDependency maps to 501."""
     import runtime.state as rs
+
     monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
     c = _client(monkeypatch, knowledge=_IngestKS())
     files = {"file": ("clip.mp3", b"\x00\x01audio", "audio/mpeg")}
@@ -264,8 +283,10 @@ import types as _types  # noqa: E402
 
 def _attach_client(monkeypatch, ks, *, budget=20):
     import runtime.state as rs
+
     monkeypatch.setattr(
-        rs.STATE, "graph_config",
+        rs.STATE,
+        "graph_config",
         _types.SimpleNamespace(knowledge_attach_inline_budget=budget),
         raising=False,
     )
@@ -279,7 +300,7 @@ def test_attach_small_doc_inlines(monkeypatch):
     body = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()
     assert body["mode"] == "inline" and body["chunks"] == 0
     assert "a short attached note" in body["context"]
-    assert ks.docs == []                       # nothing indexed for a small doc
+    assert ks.docs == []  # nothing indexed for a small doc
 
 
 def test_attach_large_doc_indexes_session_scoped(monkeypatch):
@@ -289,8 +310,8 @@ def test_attach_large_doc_indexes_session_scoped(monkeypatch):
     files = {"file": ("big.txt", big, "text/plain")}
     body = c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json()
     assert body["mode"] == "indexed" and body["chunks"] == 2
-    assert "indexed for retrieval" in body["context"]   # lede + retrieval note, not a dump
-    assert len(body["context"]) < 250                    # only the lede inlined, not the whole doc
+    assert "indexed for retrieval" in body["context"]  # lede + retrieval note, not a dump
+    assert len(body["context"]) < 250  # only the lede inlined, not the whole doc
     content, kw = ks.docs[0]
     assert kw["domain"] == "attachment" and kw["namespace"] == "attach:s1"
 

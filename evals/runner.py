@@ -92,10 +92,7 @@ async def _run_agent_card(client: AgentClient, case: dict) -> CaseResult:
         if len(skills) < expect["skills_min"]:
             problems.append(f"only {len(skills)} skills, expected >= {expect['skills_min']}")
     if "extensions_contain" in expect:
-        ext_uris = [
-            e.get("uri", "")
-            for e in (card.get("capabilities") or {}).get("extensions") or []
-        ]
+        ext_uris = [e.get("uri", "") for e in (card.get("capabilities") or {}).get("extensions") or []]
         for needle in expect["extensions_contain"]:
             if not any(needle in u for u in ext_uris):
                 problems.append(f"missing extension matching {needle!r}; saw {ext_uris}")
@@ -142,11 +139,18 @@ async def _run_auth_check(client: AgentClient, case: dict) -> CaseResult:
         return CaseResult(case["id"], case["category"], case["name"], False, f"request failed: {e}")
     if r.status_code != expected_status:
         return CaseResult(
-            case["id"], case["category"], case["name"], False,
+            case["id"],
+            case["category"],
+            case["name"],
+            False,
             f"got {r.status_code}, expected {expected_status}",
         )
     return CaseResult(
-        case["id"], case["category"], case["name"], True, f"status={r.status_code}",
+        case["id"],
+        case["category"],
+        case["name"],
+        True,
+        f"status={r.status_code}",
     )
 
 
@@ -189,7 +193,9 @@ async def _await_audit_assertion(
     while True:
         entries = verify.audit_entries_since(since)
         passed, detail = verify.assert_tools_fired(
-            entries, expected_tools, require_success=require_success,
+            entries,
+            expected_tools,
+            require_success=require_success,
         )
         if passed or asyncio.get_running_loop().time() >= deadline:
             return entries, passed, detail
@@ -214,7 +220,10 @@ async def _run_prompt_case(
             err = verify.apply_setup(case["setup"])
             if err:
                 return CaseResult(
-                    case["id"], case["category"], case["name"], False,
+                    case["id"],
+                    case["category"],
+                    case["name"],
+                    False,
                     f"setup failed: {err}",
                 )
 
@@ -222,11 +231,13 @@ async def _run_prompt_case(
 
         if streaming:
             events, result = await client.stream(
-                case["prompt"], timeout_s=case.get("timeout_s", 90),
+                case["prompt"],
+                timeout_s=case.get("timeout_s", 90),
             )
         else:
             result = await client.ask(
-                case["prompt"], timeout_s=case.get("timeout_s", 90),
+                case["prompt"],
+                timeout_s=case.get("timeout_s", 90),
             )
 
         if result is None or result.state != "completed":
@@ -235,7 +246,10 @@ async def _run_prompt_case(
             duration = result.duration_ms if result else 0
             text_preview = (result.text if result else "")[:200]
             return CaseResult(
-                case["id"], case["category"], case["name"], False,
+                case["id"],
+                case["category"],
+                case["name"],
+                False,
                 f"task state={state}; error={error}",
                 duration_ms=duration,
                 raw={"text": text_preview},
@@ -250,7 +264,9 @@ async def _run_prompt_case(
         if expected_tools is not None:
             require_success = case.get("tool_outcome", "success") == "success"
             _entries, passed, detail = await _await_audit_assertion(
-                since, expected_tools, require_success=require_success,
+                since,
+                expected_tools,
+                require_success=require_success,
             )
             if not passed:
                 problems.append(detail)
@@ -264,7 +280,9 @@ async def _run_prompt_case(
             while True:
                 entries = verify.audit_entries_since(since)
                 passed, detail = verify.assert_any_tool_fired(
-                    entries, any_tools, require_success=require_success,
+                    entries,
+                    any_tools,
+                    require_success=require_success,
                 )
                 if passed or asyncio.get_running_loop().time() >= deadline:
                     break
@@ -282,7 +300,8 @@ async def _run_prompt_case(
         vk = case.get("verify_kb") or {}
         if "find_chunk_containing" in vk:
             chunk = verify.find_chunk_containing(
-                vk["find_chunk_containing"], domain=vk.get("domain"),
+                vk["find_chunk_containing"],
+                domain=vk.get("domain"),
             )
             if not chunk:
                 problems.append(f"no chunk containing {vk['find_chunk_containing']!r}")
@@ -299,11 +318,14 @@ async def _run_prompt_case(
                     problems.append(f"missing SSE event kind {kind!r}; saw {sorted(seen_kinds)}")
 
         detail = (
-            "; ".join(problems) if problems
+            "; ".join(problems)
+            if problems
             else f"OK ({result.duration_ms}ms, {result.usage.get('total_tokens', '?')}t)"
         )
         return CaseResult(
-            case["id"], case["category"], case["name"],
+            case["id"],
+            case["category"],
+            case["name"],
             passed=not problems,
             detail=detail,
             duration_ms=result.duration_ms,
@@ -346,12 +368,16 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
             return CaseResult(cid, cat, name, False, "case missing 'set_goal' spec")
         set_reply = await client.ask("/goal " + json.dumps(spec), timeout_s=30, context_id=ctx)
         if set_reply.state != "completed" or "goal set" not in set_reply.text.lower():
-            return CaseResult(cid, cat, name, False, f"goal not set (state={set_reply.state}): {set_reply.text[:120]!r}")
+            return CaseResult(
+                cid, cat, name, False, f"goal not set (state={set_reply.state}): {set_reply.text[:120]!r}"
+            )
 
         result = await client.ask(case["prompt"], timeout_s=case.get("timeout_s", 120), context_id=ctx)
         if result is None or result.state != "completed":
             state = result.state if result else "no-final-event"
-            return CaseResult(cid, cat, name, False, f"trigger state={state}; error={(result.error if result else None) or '(none)'}")
+            return CaseResult(
+                cid, cat, name, False, f"trigger state={state}; error={(result.error if result else None) or '(none)'}"
+            )
 
         problems: list[str] = []
 
@@ -363,11 +389,13 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
                 # Fail loudly on a missing/empty goal record instead of letting
                 # a None status quietly mismatch — surfaces a backend/shape
                 # divergence rather than masking it.
-                problems.append(f"expected goal status {expected_status!r} but no goal state returned (resp={goal_resp})")
+                problems.append(
+                    f"expected goal status {expected_status!r} but no goal state returned (resp={goal_resp})"
+                )
             elif gstate.get("status") != expected_status:
                 problems.append(
                     f"goal status={gstate.get('status')!r} expected {expected_status!r} "
-                    f"(iter={gstate.get('iteration')}, reason={str(gstate.get('last_reason',''))[:80]!r})"
+                    f"(iter={gstate.get('iteration')}, reason={str(gstate.get('last_reason', ''))[:80]!r})"
                 )
 
         text_lower = result.text.lower()
@@ -377,7 +405,11 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
 
         detail = "; ".join(problems) if problems else f"OK ({result.duration_ms}ms)"
         return CaseResult(
-            cid, cat, name, passed=not problems, detail=detail,
+            cid,
+            cat,
+            name,
+            passed=not problems,
+            detail=detail,
             duration_ms=result.duration_ms,
             tokens=result.usage.get("total_tokens", 0) or 0,
             raw={"reply": result.text[:300]},
@@ -428,7 +460,9 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
     since = verify.audit_now()  # mark before the run so we see tools the steps fire
     try:
         out = await client.run_workflow(
-            wf, case.get("inputs") or {}, timeout_s=case.get("timeout_s", 300),
+            wf,
+            case.get("inputs") or {},
+            timeout_s=case.get("timeout_s", 300),
         )
     except Exception as e:  # noqa: BLE001
         return CaseResult(cid, cat, name, False, f"workflow run failed: {e!r}")
@@ -453,7 +487,9 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
     if expected_tools is not None:
         require_success = case.get("tool_outcome", "success") == "success"
         _entries, passed_t, detail_t = await _await_audit_assertion(
-            since, expected_tools, require_success=require_success,
+            since,
+            expected_tools,
+            require_success=require_success,
         )
         if not passed_t:
             problems.append(detail_t)
@@ -466,7 +502,9 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
         while True:
             entries = verify.audit_entries_since(since)
             passed_any, detail_a = verify.assert_any_tool_fired(
-                entries, any_tools, require_success=require_success,
+                entries,
+                any_tools,
+                require_success=require_success,
             )
             if passed_any or asyncio.get_running_loop().time() >= deadline:
                 break
@@ -476,8 +514,13 @@ async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
 
     detail = "; ".join(problems) if problems else f"OK ({duration_ms}ms, {len(text)} chars)"
     return CaseResult(
-        cid, cat, name, passed=not problems, detail=detail,
-        duration_ms=duration_ms, raw={"output": text[:300]},
+        cid,
+        cat,
+        name,
+        passed=not problems,
+        detail=detail,
+        duration_ms=duration_ms,
+        raw={"output": text[:300]},
     )
 
 
@@ -498,15 +541,21 @@ async def run_one(client: AgentClient, case: dict) -> CaseResult:
     runner = _RUNNERS.get(case.get("kind", "ask"))
     if runner is None:
         return CaseResult(
-            case["id"], case.get("category", "?"), case.get("name", "?"),
-            False, f"unknown kind: {case.get('kind')}",
+            case["id"],
+            case.get("category", "?"),
+            case.get("name", "?"),
+            False,
+            f"unknown kind: {case.get('kind')}",
         )
     try:
         return await runner(client, case)
     except Exception as e:
         return CaseResult(
-            case["id"], case.get("category", "?"), case.get("name", "?"),
-            False, f"exception: {e!r}",
+            case["id"],
+            case.get("category", "?"),
+            case.get("name", "?"),
+            False,
+            f"exception: {e!r}",
         )
 
 
@@ -526,10 +575,7 @@ def _print_board(results: list[CaseResult]) -> None:
             pass_count += 1
         time_s = f"{r.duration_ms}ms".rjust(6)
         tokens = str(r.tokens).rjust(6) if r.tokens else "  -   "
-        print(
-            f"{r.id.ljust(width_id)}  {r.category.ljust(width_cat)}  "
-            f"{mark}    {time_s}  {tokens}  {r.detail[:80]}"
-        )
+        print(f"{r.id.ljust(width_id)}  {r.category.ljust(width_cat)}  {mark}    {time_s}  {tokens}  {r.detail[:80]}")
     print("-" * 90)
     skip_count = sum(1 for r in results if r.skipped)
     ran = len(results) - skip_count
@@ -561,7 +607,8 @@ async def main():
     p.add_argument("--category", default=None)
     p.add_argument("--out", default=None)
     p.add_argument(
-        "--model-label", default=None,
+        "--model-label",
+        default=None,
         help="tag the report with this model name (default: auto-detect from /healthz)",
     )
     args = p.parse_args()
@@ -590,7 +637,9 @@ async def main():
         except Exception:
             model_label = ""
 
-    print(f"Running {len(cases)} case(s) against {client.base_url}" + (f" [model: {model_label}]" if model_label else ""))
+    print(
+        f"Running {len(cases)} case(s) against {client.base_url}" + (f" [model: {model_label}]" if model_label else "")
+    )
     results: list[CaseResult] = []
     for case in cases:
         sys.stdout.write(f"  {case['id']}... ")
@@ -598,8 +647,12 @@ async def main():
         skip = _requirements_unmet(case)
         if skip:
             result = CaseResult(
-                case["id"], case.get("category", "?"), case.get("name", "?"),
-                passed=True, detail=f"skipped: {skip}", skipped=True,
+                case["id"],
+                case.get("category", "?"),
+                case.get("name", "?"),
+                passed=True,
+                detail=f"skipped: {skip}",
+                skipped=True,
             )
         else:
             result = await run_one(client, case)
@@ -609,9 +662,7 @@ async def main():
 
     _print_board(results)
 
-    out_path = Path(args.out) if args.out else (
-        Path(__file__).parent / "results" / f"run-{int(time.time())}.json"
-    )
+    out_path = Path(args.out) if args.out else (Path(__file__).parent / "results" / f"run-{int(time.time())}.json")
     _save_report(results, out_path, model=model_label, base_url=client.base_url)
 
     return 0 if all(r.passed for r in results) else 1

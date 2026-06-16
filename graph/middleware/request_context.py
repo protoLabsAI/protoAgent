@@ -15,7 +15,8 @@ from __future__ import annotations
 import contextvars
 
 _request_metadata_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar(
-    "protoagent_request_metadata", default={},
+    "protoagent_request_metadata",
+    default={},
 )
 
 

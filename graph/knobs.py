@@ -82,16 +82,30 @@ class Knobs:
         self._log_cap = log_cap
 
     # ── declaration ────────────────────────────────────────────────────────────────────
-    def define(self, name: str, default: Any, *, kind: type | None = None,
-               lo: Any = None, hi: Any = None, choices: list | None = None,
-               help: str = "") -> "Knobs":
+    def define(
+        self,
+        name: str,
+        default: Any,
+        *,
+        kind: type | None = None,
+        lo: Any = None,
+        hi: Any = None,
+        choices: list | None = None,
+        help: str = "",
+    ) -> "Knobs":
         """Declare a knob (chainable). ``kind`` is inferred from ``default`` if omitted
         (bool/int/float/str). ``lo``/``hi`` clamp numbers; ``choices`` constrains values."""
         if name in self._knobs:
             raise ValueError(f"knob {name!r} already defined")
-        k = kind or (bool if isinstance(default, bool) else
-                     int if isinstance(default, int) else
-                     float if isinstance(default, float) else str)
+        k = kind or (
+            bool
+            if isinstance(default, bool)
+            else int
+            if isinstance(default, int)
+            else float
+            if isinstance(default, float)
+            else str
+        )
         self._knobs[name] = Knob(name, default, kind=k, lo=lo, hi=hi, choices=choices, help=help)
         return self
 
@@ -172,8 +186,7 @@ class Knobs:
         del self._log[: -self._log_cap]
 
 
-def make_knob_tools(knobs: Knobs, *, prefix: str,
-                    show: bool = True, tune: bool = True, presets: bool = True) -> list:
+def make_knob_tools(knobs: Knobs, *, prefix: str, show: bool = True, tune: bool = True, presets: bool = True) -> list:
     """Auto-generate the agent-facing control-surface tools for ``knobs`` — ``<prefix>_knobs``
     (show), ``<prefix>_tune`` (set one knob), ``<prefix>_preset`` (show/apply a preset). Returns
     a list of LangChain tools to ``registry.register_tools(...)``. langchain is imported lazily,
@@ -182,45 +195,54 @@ def make_knob_tools(knobs: Knobs, *, prefix: str,
     from langchain_core.tools import tool  # lazy — keeps the module host-free to import
 
     made: list = []
-    knob_help = "; ".join(f"{r['name']} ({r['help']})" if r["help"] else r["name"]
-                          for r in knobs.schema())
+    knob_help = "; ".join(f"{r['name']} ({r['help']})" if r["help"] else r["name"] for r in knobs.schema())
 
     if show:
+
         async def _show() -> str:
             lines = [f"{prefix} knobs:"]
             for r in knobs.schema():
-                extra = (f" choices={r['choices']}" if "choices" in r
-                         else f" range={r['range']}" if "range" in r else "")
-                lines.append(f"  {r['name']} = {r['value']} (default {r['default']}){extra}"
-                             + (f" — {r['help']}" if r["help"] else ""))
+                extra = f" choices={r['choices']}" if "choices" in r else f" range={r['range']}" if "range" in r else ""
+                lines.append(
+                    f"  {r['name']} = {r['value']} (default {r['default']}){extra}"
+                    + (f" — {r['help']}" if r["help"] else "")
+                )
             if knobs.presets():
                 lines.append("presets: " + ", ".join(knobs.presets()))
             return "\n".join(lines)
+
         _show.__name__ = f"{prefix}_knobs"
         _show.__doc__ = f"Show the current {prefix} engine knobs, their ranges, and presets."
         made.append(tool(_show))
 
     if tune:
+
         async def _tune(knob: str, value: str) -> str:
             return knobs.set(knob, value)
+
         _tune.__name__ = f"{prefix}_tune"
         _tune.__doc__ = (
             f"Tune ONE {prefix} engine knob at runtime (reversible; takes effect immediately). "
             f"Knobs: {knob_help}.\n\nArgs:\n    knob: the knob name.\n    value: the new value "
-            f"(a number, or one of the knob's choices).")
+            f"(a number, or one of the knob's choices)."
+        )
         made.append(tool(_tune))
 
     if presets and knobs.presets():
+
         async def _preset(name: str = "") -> str:
             if not name:
                 return f"{prefix} presets: " + " · ".join(
-                    f"{n} ({p['blurb']})" if p["blurb"] else n for n, p in knobs.presets().items())
+                    f"{n} ({p['blurb']})" if p["blurb"] else n for n, p in knobs.presets().items()
+                )
             return knobs.apply_preset(name)
+
         _preset.__name__ = f"{prefix}_preset"
         _preset.__doc__ = (
             f"Set or show the {prefix} engine PRESET — a named knob bundle (a whole doctrine in "
             f"one move) vs {prefix}_tune's single knob. Call with no name to list presets.\n\n"
-            f"Args:\n    name: the preset to apply, or \"\" to list them.")
+            f'Args:\n    name: the preset to apply, or "" to list them.'
+        )
         made.append(tool(_preset))
 
     return made

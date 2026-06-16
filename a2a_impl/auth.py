@@ -1,9 +1,9 @@
-"""Request-time auth + origin enforcement for the A2A endpoint.
+"""Request-time auth + origin enforcement — default-deny posture.
 
 ``a2a-sdk`` advertises security schemes on the agent card but does NOT enforce
 them on the wire — enforcement is the host's job. This module is a small
-Starlette/FastAPI middleware that guards the ``/a2a`` JSON-RPC path with the
-same posture the hand-rolled handler had:
+Starlette/FastAPI middleware that guards **every** path except an explicit public
+allowlist:
 
   - **Bearer** — ``Authorization: Bearer <token>`` validated against the
     configured token (``auth.token`` in YAML or ``A2A_AUTH_TOKEN`` env). No-op
@@ -12,15 +12,24 @@ same posture the hand-rolled handler had:
   - **Origin** — ``A2A_ALLOWED_ORIGINS`` allowlist for browser callers. No-op
     when unset or ``*``.
 
+Default-deny: anything NOT on the public allowlist requires auth. The SSE
+endpoint ``/api/events`` accepts a short-lived HMAC query-string token so
+browser ``EventSource`` clients (which cannot send ``Authorization`` headers)
+can authenticate.
+
 The active bearer token lives in a module-level holder so a wizard/drawer reload
 can update it live via ``set_bearer_token`` without re-registering routes.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
+import json
 import logging
 import os
+import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -35,24 +44,30 @@ _API_KEY: list[str] = [""]
 # Allowed origins: None = verification disabled; list = allowlist.
 _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 
-# Path prefixes the guard applies to: the A2A JSON-RPC surface plus the operator
-# console + OpenAI-compat APIs (which drive subagents, rewrite config/SOUL,
-# schedule jobs, and run turns). The agent card, /healthz, /metrics, and the
-# static console assets live OUTSIDE these prefixes and stay public.
-# /active/* and /agents/<slug>/* are the fleet hub's reverse proxies to an agent (ADR 0042).
-# They must be guarded too — they drive the agent's full API (chat, config, subagents/run, …),
-# and spawned peers carry no token of their own, so the hub is the only gate.
-_GUARDED_PREFIXES = ("/a2a", "/api/", "/v1/", "/active/", "/agents/")
+# ---------------------------------------------------------------------------
+# Public allowlist — paths/prefixes that pass WITHOUT auth.
+# Everything else requires bearer / X-API-Key (default-deny).
+# ---------------------------------------------------------------------------
+_PUBLIC_PREFIXES = (
+    "/healthz",
+    "/metrics",
+    "/.well-known/",
+    "/app",
+    "/manifest.json",
+    "/sw.js",
+    "/favicon.svg",
+    "/favicon.ico",
+    "/static/",
+    "/_ds/",
+)
 
-# Exempt from the guard: the read-only Server-Sent-Events stream (direct + proxied under any
-# slug). Browsers' EventSource cannot set an Authorization header, so a bearer can't be presented
-# here — and it only exposes activity/inbox events, not any action. The proxied path carries a
-# slug (/agents/<slug>/api/events), so match the SSE suffix rather than a fixed prefix.
-_GUARD_EXEMPT = ("/api/events",)
+# SSE token lifetime (seconds).
+_SSE_TOKEN_LIFETIME = 30
 
 
-def _is_exempt(path: str) -> bool:
-    return path.endswith("/api/events") or any(path.startswith(p) for p in _GUARD_EXEMPT)
+def _is_public(path: str) -> bool:
+    """Return True when ``path`` is on the public allowlist (no auth needed)."""
+    return any(path.startswith(p) for p in _PUBLIC_PREFIXES)
 
 
 def set_bearer_token(token: str | None) -> None:
@@ -68,7 +83,7 @@ def configure(*, bearer_token: str | None, api_key: str, allowed_origins_raw: st
             ``None`` means "unspecified" and falls back to ``A2A_AUTH_TOKEN``;
             an explicit ``""`` means "bearer off" (e.g. an apiKey-only agent)
             and does NOT fall back — otherwise a stray env var would silently
-            enable bearer auth the card never advertises. Empty/whitespace →
+            enable bearer auth the card never advertises. Empty/whitespace ->
             open mode.
         api_key: the ``<AGENT>_API_KEY`` value; "" disables the X-API-Key check.
         allowed_origins_raw: ``A2A_ALLOWED_ORIGINS`` value ("" = disabled,
@@ -92,19 +107,77 @@ def configure(*, bearer_token: str | None, api_key: str, allowed_origins_raw: st
         _ALLOWED_ORIGINS[0] = [o.strip().lower() for o in raw.split(",") if o.strip()]
 
 
+# ---------------------------------------------------------------------------
+# Short-lived SSE query-string token (Part 3)
+# ---------------------------------------------------------------------------
+
+
+def generate_sse_token(session_id: str = "") -> str:
+    """Return a base64url-encoded, HMAC-signed token valid for ``_SSE_TOKEN_LIFETIME`` seconds.
+
+    The token is a JSON payload ``{session_id, exp}`` concatenated with an
+    HMAC-SHA256 signature. The signing key is the active bearer token — when
+    no bearer is configured (open mode) the function returns an empty string
+    (SSE is already unrestricted).
+    """
+    key = _BEARER[0]
+    if not key:
+        return ""
+    payload = json.dumps({"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME}, separators=(",", ":"))
+    sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(payload.encode() + b"." + sig).decode()
+
+
+def _validate_sse_token(token: str) -> bool:
+    """Validate a query-string SSE token in constant time. Returns True when valid."""
+    key = _BEARER[0]
+    if not key:
+        return True  # open mode — no bearer ⇒ no token needed
+    if not token:
+        return False
+    try:
+        raw = base64.urlsafe_b64decode(token.encode())
+    except Exception:
+        return False
+    parts = raw.rsplit(b".", 1)
+    if len(parts) != 2:
+        return False
+    payload_bytes, sig = parts
+    expected = hmac.new(key.encode(), payload_bytes, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        data = json.loads(payload_bytes)
+    except Exception:
+        return False
+    exp = data.get("exp", 0)
+    if time.time() > exp:
+        return False
+    return True
+
+
 def _unauthorized(detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=401)
 
 
 class A2AAuthMiddleware(BaseHTTPMiddleware):
-    """Enforces bearer / X-API-Key / origin on the guarded A2A path."""
+    """Default-deny auth: everything except the public allowlist requires auth."""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not any(path.startswith(p) for p in _GUARDED_PREFIXES):
+
+        # Public allowlist — pass without auth.
+        if _is_public(path):
             return await call_next(request)
-        if _is_exempt(path):
-            return await call_next(request)
+
+        # SSE endpoint: accept either a valid query-string token OR a bearer header.
+        # The query token is for browser EventSource clients that cannot send headers.
+        if path == "/api/events" or path.endswith("/api/events"):
+            sse_token = request.query_params.get("token", "")
+            if _validate_sse_token(sse_token):
+                return await call_next(request)
+            # Fall through to the normal bearer/X-API-Key check below — a
+            # server-to-server caller with an Authorization header still passes.
 
         # X-API-Key (legacy) — enforced only when configured.
         api_key = _API_KEY[0]
@@ -117,7 +190,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             header = request.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return _unauthorized("Unauthorized: expected 'Authorization: Bearer <token>'")
-            if not hmac.compare_digest(header[len("Bearer "):], active):
+            if not hmac.compare_digest(header[len("Bearer ") :], active):
                 return _unauthorized("Unauthorized: invalid bearer token")
 
         # Origin — enforced only when an allowlist is set AND an Origin is
@@ -146,9 +219,7 @@ def install(app, *, bearer_token: str | None, api_key: str, allowed_origins_raw:
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
-def evaluate_open_bind(
-    host: str, *, bearer_configured: bool, allow_open: bool
-) -> tuple[bool, str | None]:
+def evaluate_open_bind(host: str, *, bearer_configured: bool, allow_open: bool) -> tuple[bool, str | None]:
     """Boot-time gate for binding a non-loopback host without an auth token.
 
     An unauthenticated non-loopback bind exposes the full operator API

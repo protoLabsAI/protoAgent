@@ -68,9 +68,15 @@ def _as_decisions(decisions: Any) -> list[dict]:
     return list(decisions)
 
 
-def telemetry(*, status: str | None = None, metrics: dict | None = None,
-              hints: list | None = None, decisions: Any = None,
-              sections: list | None = None, **extra: Any) -> dict:
+def telemetry(
+    *,
+    status: str | None = None,
+    metrics: dict | None = None,
+    hints: list | None = None,
+    decisions: Any = None,
+    sections: list | None = None,
+    **extra: Any,
+) -> dict:
     """Assemble the standard telemetry envelope — the shape a plugin's report tool returns
     and :func:`render_html` (or a future console panel) renders uniformly:
 
@@ -130,33 +136,34 @@ def render_html(envelope: dict, *, title: str = "Telemetry") -> str:
     drop into a plugin's console iframe view. All values are HTML-escaped.
     """
     env = envelope or {}
-    parts = [f"<style>{_STYLE}</style>", '<section class="pl-tele">',
-             f"<h3>{_esc(title)}</h3>"]
+    parts = [f"<style>{_STYLE}</style>", '<section class="pl-tele">', f"<h3>{_esc(title)}</h3>"]
     if env.get("status"):
         parts.append(f'<div class="pl-tele-status">{_esc(env["status"])}</div>')
 
     metrics = env.get("metrics") or {}
     if metrics:
         cards = "".join(
-            f'<div class="pl-tele-metric"><div class="v">{_esc(v)}</div>'
-            f'<div class="k">{_esc(k)}</div></div>' for k, v in metrics.items())
+            f'<div class="pl-tele-metric"><div class="v">{_esc(v)}</div><div class="k">{_esc(k)}</div></div>'
+            for k, v in metrics.items()
+        )
         parts.append(f'<div class="pl-tele-metrics">{cards}</div>')
 
     decisions = env.get("decisions") or []
     if decisions:
         rows = "".join(
             f'<tr><td><span class="pl-tele-badge">{_esc(d.get("action", ""))}</span></td>'
-            f'<td>{_esc(d.get("detail", ""))}</td></tr>' for d in reversed(decisions))
-        parts.append('<h4>Decisions</h4><table><tr><th>Move</th><th>Detail</th></tr>'
-                     f'{rows}</table>')
+            f"<td>{_esc(d.get('detail', ''))}</td></tr>"
+            for d in reversed(decisions)
+        )
+        parts.append(f"<h4>Decisions</h4><table><tr><th>Move</th><th>Detail</th></tr>{rows}</table>")
 
-    for sec in (env.get("sections") or []):
+    for sec in env.get("sections") or []:
         cols = sec.get("columns") or []
         head = "".join(f"<th>{_esc(c)}</th>" for c in cols)
-        body = "".join("<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in row) + "</tr>"
-                       for row in (sec.get("rows") or []))
-        parts.append(f'<h4>{_esc(sec.get("title", ""))}</h4>'
-                     f"<table><tr>{head}</tr>{body}</table>")
+        body = "".join(
+            "<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in row) + "</tr>" for row in (sec.get("rows") or [])
+        )
+        parts.append(f"<h4>{_esc(sec.get('title', ''))}</h4><table><tr>{head}</tr>{body}</table>")
 
     hints = env.get("hints") or []
     if hints:

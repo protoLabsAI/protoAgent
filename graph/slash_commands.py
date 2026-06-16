@@ -65,6 +65,7 @@ def slash_kind(name: str) -> str | None:
         return "workflow"
     try:
         from graph.subagents.config import SUBAGENT_REGISTRY
+
         if name in SUBAGENT_REGISTRY:
             return "subagent"
     except Exception:
@@ -94,9 +95,12 @@ def resolve_slash_commands() -> list[dict]:
             declared = wf.get("inputs", []) or []
             req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
             opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))
-            _add(wf["name"], "workflow",
-                 wf.get("description") or f"Run the {wf['name']} workflow.",
-                 f"/{wf['name']}{req}{opt}")
+            _add(
+                wf["name"],
+                "workflow",
+                wf.get("description") or f"Run the {wf['name']} workflow.",
+                f"/{wf['name']}{req}{opt}",
+            )
 
     try:
         from graph.subagents.config import SUBAGENT_REGISTRY
@@ -105,9 +109,7 @@ def resolve_slash_commands() -> list[dict]:
     for sname, cfg in SUBAGENT_REGISTRY.items():
         if slash_kind(sname) != "subagent":  # a workflow of the same name wins
             continue
-        _add(sname, "subagent",
-             getattr(cfg, "description", "") or f"Run the {sname} subagent.",
-             f"/{sname} <prompt>")
+        _add(sname, "subagent", getattr(cfg, "description", "") or f"Run the {sname} subagent.", f"/{sname} <prompt>")
 
     reader = getattr(STATE.skills_index, "user_facing_skills", None) if STATE.skills_index else None
     if reader is not None:
@@ -126,10 +128,10 @@ def resolve_slash_commands() -> list[dict]:
                     log.warning(
                         "[skills] user-facing skill %r is unreachable: /%s is already "
                         "claimed by a %s (which wins dispatch). Rename the skill's `slash:`.",
-                        skill.get("name") or token, token, kind,
+                        skill.get("name") or token,
+                        token,
+                        kind,
                     )
                 continue
-            _add(token, "skill",
-                 skill.get("description") or f"Run the {token} skill.",
-                 f"/{token} [input]")
+            _add(token, "skill", skill.get("description") or f"Run the {token} skill.", f"/{token} [input]")
     return cmds

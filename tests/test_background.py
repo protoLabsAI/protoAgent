@@ -31,8 +31,11 @@ class TestStore:
     def test_create_is_running(self, tmp_path):
         s = _store(tmp_path)
         jid = s.create(
-            agent_name="a", origin_session="s1", subagent_type="researcher",
-            description="dig", prompt="go",
+            agent_name="a",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="dig",
+            prompt="go",
         )
         assert jid.startswith("bg-")
         job = s.get(jid)
@@ -43,14 +46,12 @@ class TestStore:
 
     def test_no_drain_while_running(self, tmp_path):
         s = _store(tmp_path)
-        s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                 description="d", prompt="p")
+        s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         assert s.drain_pending("s1") == []
 
     def test_mark_complete_is_idempotent(self, tmp_path):
         s = _store(tmp_path)
-        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                       description="d", prompt="p")
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         assert s.mark_complete(jid, "completed", "the answer") is True
         # a second (e.g. delivery-failure) write must NOT clobber the real result
         assert s.mark_complete(jid, "failed", "nope") is False
@@ -59,8 +60,7 @@ class TestStore:
 
     def test_drain_is_exactly_once(self, tmp_path):
         s = _store(tmp_path)
-        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                       description="d", prompt="p")
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(jid, "completed", "result text")
         first = s.drain_pending("s1")
         assert [j.id for j in first] == [jid]
@@ -70,10 +70,8 @@ class TestStore:
 
     def test_drain_is_session_scoped(self, tmp_path):
         s = _store(tmp_path)
-        a = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                     description="d", prompt="p")
-        b = s.create(agent_name="a", origin_session="s2", subagent_type="researcher",
-                     description="d", prompt="p")
+        a = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        b = s.create(agent_name="a", origin_session="s2", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(a, "completed", "ra")
         s.mark_complete(b, "completed", "rb")
         assert [j.id for j in s.drain_pending("s1")] == [a]
@@ -81,18 +79,15 @@ class TestStore:
 
     def test_failed_jobs_drain_too(self, tmp_path):
         s = _store(tmp_path)
-        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                       description="d", prompt="p")
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(jid, "failed", "boom")
         drained = s.drain_pending("s1")
         assert [(j.id, j.status) for j in drained] == [(jid, "failed")]
 
     def test_reconcile_fails_running_jobs(self, tmp_path):
         s = _store(tmp_path)
-        running = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                           description="d", prompt="p")
-        done = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                        description="d2", prompt="p2")
+        running = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        done = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d2", prompt="p2")
         s.mark_complete(done, "completed", "ok")
         assert s.reconcile_interrupted() == 1  # only the running one
         assert s.get(running).status == "failed"
@@ -100,10 +95,8 @@ class TestStore:
 
     def test_list_filters(self, tmp_path):
         s = _store(tmp_path)
-        a = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                     description="d", prompt="p")
-        s.create(agent_name="a", origin_session="s2", subagent_type="researcher",
-                 description="d", prompt="p")
+        a = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
+        s.create(agent_name="a", origin_session="s2", subagent_type="researcher", description="d", prompt="p")
         s.mark_complete(a, "completed", "x")
         assert {j.id for j in s.list(origin_session="s1")} == {a}
         assert {j.status for j in s.list(status="completed")} == {"completed"}
@@ -167,8 +160,10 @@ class TestManager:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
         mgr = _manager(tmp_path)
         jid = await mgr.spawn(
-            origin_session="s1", subagent_type="researcher",
-            description="research X", prompt="do the thing",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="research X",
+            prompt="do the thing",
         )
         # registered as running immediately (terminal hook would settle it later)
         assert mgr.store.get(jid).status == "running"
@@ -182,7 +177,10 @@ class TestManager:
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
         mgr = _manager(tmp_path)
         jid = await mgr.spawn(
-            origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
         )
         await _drain_fire_tasks(mgr)
         cap = _FakeClient.captured
@@ -204,7 +202,10 @@ class TestManager:
         events: list = []
         mgr = _manager(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
         jid = await mgr.spawn(
-            origin_session="s1", subagent_type="researcher", description="dig", prompt="p",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="dig",
+            prompt="p",
         )
         await _drain_fire_tasks(mgr)
         started = [d for (t, d) in events if t == "background.started"]
@@ -217,11 +218,16 @@ class TestManager:
         import httpx
 
         monkeypatch.setattr(
-            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(500, "boom")),
+            httpx,
+            "AsyncClient",
+            lambda **kw: _FakeClient(_FakeResponse(500, "boom")),
         )
         mgr = _manager(tmp_path)
         jid = await mgr.spawn(
-            origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
         )
         await _drain_fire_tasks(mgr)
         assert mgr.store.get(jid).status == "failed"
@@ -230,12 +236,16 @@ class TestManager:
         import httpx
 
         monkeypatch.setattr(
-            httpx, "AsyncClient",
+            httpx,
+            "AsyncClient",
             lambda **kw: _FakeClient(None, raise_exc=RuntimeError("conn refused")),
         )
         mgr = _manager(tmp_path)
         jid = await mgr.spawn(
-            origin_session="s1", subagent_type="researcher", description="d", prompt="p",
+            origin_session="s1",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
         )
         await _drain_fire_tasks(mgr)
         assert mgr.store.get(jid).status == "failed"
@@ -249,10 +259,17 @@ class TestPhase2Wake:
         from background.store import BackgroundJob
 
         return BackgroundJob(
-            id="bg-abc", agent_name="a", origin_session="sess-X",
-            subagent_type="strategist", description="audit fleet", prompt="p",
-            status=status, result="Tuned buy_buffer to 30k.", notified=False,
-            created_at="t1", completed_at="t2",
+            id="bg-abc",
+            agent_name="a",
+            origin_session="sess-X",
+            subagent_type="strategist",
+            description="audit fleet",
+            prompt="p",
+            status=status,
+            result="Tuned buy_buffer to 30k.",
+            notified=False,
+            created_at="t1",
+            completed_at="t2",
         )
 
     def test_wake_enabled_default_and_optout(self, monkeypatch):
@@ -333,8 +350,7 @@ def test_fired_prompt_includes_task_and_prompt():
 class TestStorePhase4:
     def test_set_a2a_task_id_only_fills_blank(self, tmp_path):
         s = _store(tmp_path)
-        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                       description="d", prompt="p")
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         assert s.get(jid).a2a_task_id == ""
         s.set_a2a_task_id(jid, "task-1")
         assert s.get(jid).a2a_task_id == "task-1"
@@ -343,8 +359,7 @@ class TestStorePhase4:
 
     def test_canceled_is_terminal_and_drains(self, tmp_path):
         s = _store(tmp_path)
-        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                       description="d", prompt="p")
+        jid = s.create(agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p")
         assert s.mark_complete(jid, "canceled", "stopped") is True
         assert s.get(jid).status == "canceled"
         assert [j.status for j in s.drain_pending("s1")] == ["canceled"]
@@ -356,8 +371,9 @@ class TestManagerCancel:
 
         monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
         mgr = _manager(tmp_path)
-        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                               description="d", prompt="p")
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
         mgr.store.set_a2a_task_id(jid, "task-xyz")
         res = await mgr.cancel(jid)
         assert res["ok"] is True and res["status"] == "canceled"
@@ -368,16 +384,18 @@ class TestManagerCancel:
 
     async def test_cancel_without_task_id_marks_canceled(self, tmp_path):
         mgr = _manager(tmp_path)
-        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                               description="d", prompt="p")
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
         res = await mgr.cancel(jid)  # no a2a_task_id captured yet
         assert res["status"] == "canceled"
         assert mgr.store.get(jid).status == "canceled"
 
     async def test_cancel_noop_on_terminal_job(self, tmp_path):
         mgr = _manager(tmp_path)
-        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                               description="d", prompt="p")
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
         mgr.store.mark_complete(jid, "completed", "done")
         res = await mgr.cancel(jid)
         assert res["ok"] is False and res["status"] == "completed"
@@ -389,8 +407,9 @@ class TestProgressHook:
         from runtime.state import STATE
 
         mgr = _manager(tmp_path)
-        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                               description="d", prompt="p")
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
@@ -403,13 +422,13 @@ class TestProgressHook:
         from runtime.state import STATE
 
         mgr = _manager(tmp_path)
-        jid = mgr.store.create(agent_name="a", origin_session="s1", subagent_type="researcher",
-                               description="d", prompt="p")
+        jid = mgr.store.create(
+            agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+        )
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
-        a2a._a2a_progress(f"background:{jid}", "task-42",
-                          {"phase": "tool_start", "id": "tc1", "name": "web_search"})
+        a2a._a2a_progress(f"background:{jid}", "task-42", {"phase": "tool_start", "id": "tc1", "name": "web_search"})
         assert len(published) == 1
         topic, data = published[0]
         assert topic == "background.progress"
@@ -417,6 +436,7 @@ class TestProgressHook:
 
     def test_non_background_context_ignored(self, monkeypatch):
         import server.a2a as a2a
+
         published: list = []
         monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
         a2a._a2a_progress("some-chat-session", "task-1", {"phase": "tool_start", "name": "x"})
@@ -433,8 +453,11 @@ class TestDrainIntoChat:
 
         mgr = _manager(tmp_path)
         jid = mgr.store.create(
-            agent_name="a", origin_session="sess-X", subagent_type="researcher",
-            description="research ships", prompt="p",
+            agent_name="a",
+            origin_session="sess-X",
+            subagent_type="researcher",
+            description="research ships",
+            prompt="p",
         )
         mgr.store.mark_complete(jid, "completed", "Ships: A, B, C")
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
@@ -463,8 +486,11 @@ class TestDrainIntoChat:
 
         mgr = _manager(tmp_path)
         jid = mgr.store.create(
-            agent_name="a", origin_session="sess-Y", subagent_type="researcher",
-            description="d", prompt="p",
+            agent_name="a",
+            origin_session="sess-Y",
+            subagent_type="researcher",
+            description="d",
+            prompt="p",
         )
         mgr.store.mark_complete(jid, "completed", "x" * (_BG_RESULT_CAP + 5000))
         monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
@@ -481,6 +507,7 @@ class TestDrainIntoChat:
 # read from tracing.current_session_id(), which is empty in a tool body; it now
 # comes from injected graph state. Drives a REAL graph so a monkeypatch can't
 # mask it.
+
 
 class _ToolFake(GenericFakeChatModel):
     def bind_tools(self, tools, **kwargs):
@@ -507,17 +534,29 @@ async def test_background_task_stamps_the_turn_session_as_origin(monkeypatch):
 
     task_call = AIMessage(
         content="",
-        tool_calls=[{"name": "task", "args": {
-            "description": "deep dive", "prompt": "go research",
-            "subagent_type": "researcher", "run_in_background": True},
-            "id": "c1", "type": "tool_call"}],
+        tool_calls=[
+            {
+                "name": "task",
+                "args": {
+                    "description": "deep dive",
+                    "prompt": "go research",
+                    "subagent_type": "researcher",
+                    "run_in_background": True,
+                },
+                "id": "c1",
+                "type": "tool_call",
+            }
+        ],
     )
     fake = _ToolFake(messages=iter([task_call, AIMessage(content="started, carrying on")]))
     bg = _RecordingBG()
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
         from graph.agent import create_agent_graph
+
         graph = create_agent_graph(
-            LangGraphConfig(), include_subagents=True, background_mgr=bg,
+            LangGraphConfig(),
+            include_subagents=True,
+            background_mgr=bg,
             checkpointer=MemorySaver(),
         )
     await graph.ainvoke(

@@ -42,23 +42,29 @@ def init():
         p = _prefix()
 
         _llm_calls = Counter(
-            f"{p}_llm_calls_total", "Total LLM API calls",
+            f"{p}_llm_calls_total",
+            "Total LLM API calls",
             ["model", "finish_reason"],
         )
         _llm_latency = Histogram(
-            f"{p}_llm_latency_seconds", "LLM call latency",
-            ["model"], buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120],
+            f"{p}_llm_latency_seconds",
+            "LLM call latency",
+            ["model"],
+            buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120],
         )
         _llm_tokens = Counter(
-            f"{p}_llm_tokens_total", "Total LLM tokens consumed",
+            f"{p}_llm_tokens_total",
+            "Total LLM tokens consumed",
             ["model", "direction"],
         )
         _llm_cache_tokens = Counter(
-            f"{p}_llm_cache_tokens_total", "Prompt-cache tokens (read vs creation)",
+            f"{p}_llm_cache_tokens_total",
+            "Prompt-cache tokens (read vs creation)",
             ["model", "kind"],
         )
         _llm_cost = Counter(
-            f"{p}_llm_cost_usd_total", "Estimated LLM cost in USD",
+            f"{p}_llm_cost_usd_total",
+            "Estimated LLM cost in USD",
             ["model"],
         )
         _tools_deferred = Counter(
@@ -70,25 +76,31 @@ def init():
             "History-compaction (summarization) events (ADR 0006)",
         )
         _tool_calls = Counter(
-            f"{p}_tool_calls_total", "Total tool executions",
+            f"{p}_tool_calls_total",
+            "Total tool executions",
             ["tool_name", "success"],
         )
         _tool_latency = Histogram(
-            f"{p}_tool_latency_seconds", "Tool execution latency",
-            ["tool_name"], buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
+            f"{p}_tool_latency_seconds",
+            "Tool execution latency",
+            ["tool_name"],
+            buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30],
         )
         _active_sessions = Gauge(
-            f"{p}_active_sessions", "Active chat sessions",
+            f"{p}_active_sessions",
+            "Active chat sessions",
         )
         # A2A turn outcomes — the durable signal for "turns are failing" alerting
         # straight off /metrics (state ∈ completed|failed|canceled|…). Low
         # cardinality. Paired latency histogram for turn duration.
         _a2a_turns = Counter(
-            f"{p}_a2a_turns_total", "A2A turn outcomes by terminal state",
+            f"{p}_a2a_turns_total",
+            "A2A turn outcomes by terminal state",
             ["state"],
         )
         _a2a_turn_latency = Histogram(
-            f"{p}_a2a_turn_seconds", "A2A turn wall-clock duration",
+            f"{p}_a2a_turn_seconds",
+            "A2A turn wall-clock duration",
             buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300],
         )
         _enabled = True
@@ -101,10 +113,16 @@ def is_enabled() -> bool:
     return _enabled
 
 
-def record_llm_call(model: str, finish_reason: str, latency_s: float,
-                     tokens_input: int = 0, tokens_output: int = 0,
-                     cache_read: int = 0, cache_creation: int = 0,
-                     cost_usd: float = 0.0):
+def record_llm_call(
+    model: str,
+    finish_reason: str,
+    latency_s: float,
+    tokens_input: int = 0,
+    tokens_output: int = 0,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+    cost_usd: float = 0.0,
+):
     """Record one LLM call (ADR 0006 Slice 1). Wired from the per-call seam in
     ``server._run_turn_stream`` — previously defined but never called."""
     if not _enabled:

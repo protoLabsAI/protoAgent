@@ -10,11 +10,11 @@ from graph.config import LangGraphConfig
 def test_resolve_aux_model_precedence():
     """specific override > routing.aux_model > main model (None)."""
     cfg = LangGraphConfig()
-    assert _resolve_aux_model(cfg, "") is None            # no aux set → main model
+    assert _resolve_aux_model(cfg, "") is None  # no aux set → main model
     cfg.aux_model = "protolabs/fast"
-    assert _resolve_aux_model(cfg, "") == "protolabs/fast"        # falls back to aux
-    assert _resolve_aux_model(cfg, "explicit") == "explicit"     # specific wins
-    assert _resolve_aux_model(cfg, "  ") == "protolabs/fast"     # blank/whitespace → aux
+    assert _resolve_aux_model(cfg, "") == "protolabs/fast"  # falls back to aux
+    assert _resolve_aux_model(cfg, "explicit") == "explicit"  # specific wins
+    assert _resolve_aux_model(cfg, "  ") == "protolabs/fast"  # blank/whitespace → aux
 
 
 def test_aux_model_parsed_from_routing_yaml(tmp_path):
@@ -26,6 +26,7 @@ def test_aux_model_parsed_from_routing_yaml(tmp_path):
 
 def test_subagent_model_override_field_defaults_blank():
     from graph.subagents.config import SUBAGENT_REGISTRY
+
     assert getattr(SUBAGENT_REGISTRY["researcher"], "model", None) == ""
 
 

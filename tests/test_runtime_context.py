@@ -36,8 +36,8 @@ def test_stable_prefix_is_turn_stable_for_caching():
 
 def test_volatile_delta_reflects_retrieval_and_query():
     ctx = assemble_context(_cfg(), query="ship it", knowledge_store=_FakeStore(), skills_index=_FakeSkills())
-    assert "hit for ship it" in ctx.volatile_delta          # knowledge block, query-bound
-    assert "deploy: how to deploy" in ctx.volatile_delta     # skills block
+    assert "hit for ship it" in ctx.volatile_delta  # knowledge block, query-bound
+    assert "deploy: how to deploy" in ctx.volatile_delta  # skills block
     assert any(s.startswith("knowledge:") for s in ctx.sources)
     assert any(s.startswith("skills:") for s in ctx.sources)
 

@@ -812,8 +812,10 @@ def test_agent_runtime_nonstring_coerces_to_str(tmp_path):
 
 def test_a2a_require_routable_url_bool_coercion(tmp_path):
     """a2a.require_routable_url = bool(value) coerces truthy/falsy ints."""
-    d1 = tmp_path / "truthy"; d1.mkdir()
-    d0 = tmp_path / "falsy"; d0.mkdir()
+    d1 = tmp_path / "truthy"
+    d1.mkdir()
+    d0 = tmp_path / "falsy"
+    d0.mkdir()
     c1 = LangGraphConfig.from_yaml(_write_yaml(d1, "a2a:\n  require_routable_url: 1\n"))
     c0 = LangGraphConfig.from_yaml(_write_yaml(d0, "a2a:\n  require_routable_url: 0\n"))
     assert c1.a2a_require_routable_url is True
@@ -842,14 +844,16 @@ def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
     config lost them, and the Settings UI could never display/edit them. This
     pins the full plugins.* section round-tripping through from_dict ->
     config_to_dict with NON-default values."""
-    cfg = LangGraphConfig.from_dict({
-        "plugins": {
-            "enabled": ["alpha"],
-            "disabled": ["beta"],
-            "dir": "/custom/plugins",
-            "sources": {"allow": ["github.com/protolabsai/*"]},
-        },
-    })
+    cfg = LangGraphConfig.from_dict(
+        {
+            "plugins": {
+                "enabled": ["alpha"],
+                "disabled": ["beta"],
+                "dir": "/custom/plugins",
+                "sources": {"allow": ["github.com/protolabsai/*"]},
+            },
+        }
+    )
     d = config_to_dict(cfg)
     assert d["plugins"] == {
         "enabled": ["alpha"],

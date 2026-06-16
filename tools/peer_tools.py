@@ -34,5 +34,4 @@ _TERMINAL = {"completed", "failed", "canceled"}  # v0.3 spellings (back-compat)
 def _is_terminal(state) -> bool:
     """True for A2A 1.0 terminal task states (``TASK_STATE_COMPLETED`` / ``FAILED``
     / ``CANCELLED`` / ``REJECTED``) and their v0.3 lowercase spellings."""
-    return str(state or "").upper().endswith(
-        ("COMPLETED", "FAILED", "CANCELED", "CANCELLED", "REJECTED"))
+    return str(state or "").upper().endswith(("COMPLETED", "FAILED", "CANCELED", "CANCELLED", "REJECTED"))

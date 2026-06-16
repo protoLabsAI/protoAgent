@@ -26,6 +26,7 @@ def _cfg(**kw):
 
 # --- gating -----------------------------------------------------------------
 
+
 def test_should_run_true_for_anthropic():
     assert CacheWarmer(_cfg())._should_run() is True
 
@@ -52,6 +53,7 @@ def test_non_positive_interval_disables():
 
 # --- cache_control tiering --------------------------------------------------
 
+
 def test_cache_control_ephemeral_default():
     assert CacheWarmer(_cfg())._cache_control() == {"type": "ephemeral"}
 
@@ -62,6 +64,7 @@ def test_cache_control_persistent_tier():
 
 
 # --- lifecycle --------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_disabled_start_is_noop(monkeypatch):
@@ -103,5 +106,5 @@ async def test_loop_survives_ping_failure(monkeypatch):
     monkeypatch.setattr(warmer, "_build_caller", lambda: flaky_warm)
     await warmer.start()
     await asyncio.sleep(0.05)  # first ping raises, gets caught
-    await warmer.stop()        # interrupts the interval wait
-    assert calls["n"] >= 1     # the loop ran (and didn't crash) despite raising
+    await warmer.stop()  # interrupts the interval wait
+    assert calls["n"] >= 1  # the loop ran (and didn't crash) despite raising

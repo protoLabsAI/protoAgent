@@ -17,14 +17,14 @@ def test_default_when_no_resolver(monkeypatch):
 
 
 def test_custom_resolver_scopes_off_metadata(monkeypatch):
-    monkeypatch.setattr(STATE, "thread_id_resolver",
-                        lambda md, sid: f"proj:{md.get('project')}:{sid}", raising=False)
+    monkeypatch.setattr(STATE, "thread_id_resolver", lambda md, sid: f"proj:{md.get('project')}:{sid}", raising=False)
     assert _resolve_thread_id({"project": "acme"}, "s1") == "proj:acme:s1"
 
 
 def test_resolver_error_falls_back_to_default(monkeypatch):
     def boom(md, sid):
         raise ValueError("nope")
+
     monkeypatch.setattr(STATE, "thread_id_resolver", boom, raising=False)
     assert _resolve_thread_id({}, "s1") == "a2a:s1"  # never breaks the turn
 
@@ -43,6 +43,7 @@ def test_registry_validates_and_stores_resolver():
 
     def fn(md, sid):
         return "x"
+
     reg.register_thread_id_resolver(fn)
     assert reg.thread_id_resolver is fn
     reg.register_thread_id_resolver("not-callable")  # rejected; keeps the good one

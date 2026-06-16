@@ -30,20 +30,25 @@ class DelegateError(Exception):
 
 @dataclass
 class FieldSpec:
-    key: str                 # dotted config key, e.g. "auth.token"
+    key: str  # dotted config key, e.g. "auth.token"
     label: str
-    kind: str = "text"       # text | secret | args | path | number | textarea | select
+    kind: str = "text"  # text | secret | args | path | number | textarea | select
     required: bool = False
     help: str = ""
     placeholder: str = ""
-    options: list[str] = field(default_factory=list)   # for kind=select
+    options: list[str] = field(default_factory=list)  # for kind=select
     default: object = None
 
     def as_dict(self) -> dict:
         return {
-            "key": self.key, "label": self.label, "kind": self.kind,
-            "required": self.required, "help": self.help,
-            "placeholder": self.placeholder, "options": self.options, "default": self.default,
+            "key": self.key,
+            "label": self.label,
+            "kind": self.kind,
+            "required": self.required,
+            "help": self.help,
+            "placeholder": self.placeholder,
+            "options": self.options,
+            "default": self.default,
         }
 
 
@@ -53,18 +58,19 @@ class FieldSpec:
 @dataclass
 class Delegate:
     """One dispatch target, switched on ``type``."""
+
     name: str
     type: str
     description: str = ""
 
     # a2a
     url: str = ""
-    auth_scheme: str = ""           # "" | bearer | apiKey
-    auth_token: str = ""            # secret value (from secrets.yaml overlay)
+    auth_scheme: str = ""  # "" | bearer | apiKey
+    auth_token: str = ""  # secret value (from secrets.yaml overlay)
 
     # openai
     model: str = ""
-    api_key: str = ""               # secret value
+    api_key: str = ""  # secret value
     system_prompt: str = ""
     max_tokens: int = 1024
     temperature: float = 0.4
@@ -96,6 +102,7 @@ def _secret(raw: dict, value_key: str, env_key: str) -> str:
 
 class Adapter:
     """Base class. Subclasses set ``type`` and implement schema/parse/dispatch."""
+
     type: str = ""
     label: str = ""
     blurb: str = ""
@@ -123,13 +130,17 @@ class Adapter:
         name = str(raw.get("name", "")).strip()
         if not name:
             raise DelegateError("delegate needs a name")
-        return {"name": name, "type": str(raw.get("type", "")).strip(),
-                "description": str(raw.get("description", "")).strip()}
+        return {
+            "name": name,
+            "type": str(raw.get("type", "")).strip(),
+            "description": str(raw.get("description", "")).strip(),
+        }
 
 
 async def _timed(coro) -> tuple[object, int]:
     """Await ``coro``, returning (result, elapsed_ms)."""
     import time
+
     t0 = time.monotonic()
     res = await coro
     return res, int((time.monotonic() - t0) * 1000)
@@ -143,13 +154,27 @@ class A2aAdapter(Adapter):
 
     def config_schema(self) -> list[FieldSpec]:
         return [
-            FieldSpec("url", "URL", "text", required=True,
-                      placeholder="https://peer.example/a2a",
-                      help="The peer's A2A endpoint (usually ends in /a2a)."),
-            FieldSpec("auth.scheme", "Auth scheme", "select", options=["", "bearer", "apiKey"],
-                      help="How the peer expects credentials, if any."),
-            FieldSpec("auth.token", "Auth token", "secret",
-                      help="Stored in secrets.yaml (gitignored), never in tracked config."),
+            FieldSpec(
+                "url",
+                "URL",
+                "text",
+                required=True,
+                placeholder="https://peer.example/a2a",
+                help="The peer's A2A endpoint (usually ends in /a2a).",
+            ),
+            FieldSpec(
+                "auth.scheme",
+                "Auth scheme",
+                "select",
+                options=["", "bearer", "apiKey"],
+                help="How the peer expects credentials, if any.",
+            ),
+            FieldSpec(
+                "auth.token",
+                "Auth token",
+                "secret",
+                help="Stored in secrets.yaml (gitignored), never in tracked config.",
+            ),
         ]
 
     def parse(self, raw: dict) -> Delegate:
@@ -176,9 +201,7 @@ class A2aAdapter(Adapter):
         # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
         headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
         if d.auth_token:
-            headers["Authorization"] = (
-                f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
-            )
+            headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
             if d.auth_scheme == "apiKey":
                 headers["X-API-Key"] = d.auth_token
 
@@ -196,10 +219,17 @@ class A2aAdapter(Adapter):
         # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
         # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
         async with httpx.AsyncClient(timeout=timeout or 60) as client:
-            result = await _rpc(client, "SendMessage", {"message": {
-                "role": "ROLE_USER", "parts": [{"text": query}],
-                "messageId": str(uuid.uuid4()),
-            }})
+            result = await _rpc(
+                client,
+                "SendMessage",
+                {
+                    "message": {
+                        "role": "ROLE_USER",
+                        "parts": [{"text": query}],
+                        "messageId": str(uuid.uuid4()),
+                    }
+                },
+            )
             text = _extract_text(result)
             if text:
                 return text
@@ -222,6 +252,7 @@ class A2aAdapter(Adapter):
         import httpx
 
         from security import policy
+
         origin = d.url.split("/a2a")[0].rstrip("/") if "/a2a" in d.url else d.url.rstrip("/")
         card = f"{origin}/.well-known/agent-card.json"
         blocked = policy.check_url(card)
@@ -246,15 +277,17 @@ class OpenAiAdapter(Adapter):
 
     def config_schema(self) -> list[FieldSpec]:
         return [
-            FieldSpec("url", "Base URL", "text", required=True,
-                      placeholder="https://api.proto-labs.ai/v1",
-                      help="OpenAI-compatible base URL (the /chat/completions parent)."),
-            FieldSpec("model", "Model", "text", required=True,
-                      placeholder="protolabs/reasoning"),
-            FieldSpec("api_key", "API key", "secret",
-                      help="Stored in secrets.yaml (gitignored)."),
-            FieldSpec("system_prompt", "System prompt", "textarea",
-                      placeholder="Answer thoroughly but concisely."),
+            FieldSpec(
+                "url",
+                "Base URL",
+                "text",
+                required=True,
+                placeholder="https://api.proto-labs.ai/v1",
+                help="OpenAI-compatible base URL (the /chat/completions parent).",
+            ),
+            FieldSpec("model", "Model", "text", required=True, placeholder="protolabs/reasoning"),
+            FieldSpec("api_key", "API key", "secret", help="Stored in secrets.yaml (gitignored)."),
+            FieldSpec("system_prompt", "System prompt", "textarea", placeholder="Answer thoroughly but concisely."),
             FieldSpec("max_tokens", "Max tokens", "number", default=1024),
             FieldSpec("temperature", "Temperature", "number", default=0.4),
         ]
@@ -288,8 +321,7 @@ class OpenAiAdapter(Adapter):
         if d.api_key:
             headers["Authorization"] = f"Bearer {d.api_key}"
         url = d.url.rstrip("/") + "/chat/completions"
-        payload = {"model": d.model, "messages": messages,
-                   "max_tokens": d.max_tokens, "temperature": d.temperature}
+        payload = {"model": d.model, "messages": messages, "max_tokens": d.max_tokens, "temperature": d.temperature}
         async with httpx.AsyncClient(timeout=timeout or 60) as client:
             r = await client.post(url, json=payload, headers=headers)
             if r.status_code >= 400:
@@ -302,6 +334,7 @@ class OpenAiAdapter(Adapter):
 
     async def probe(self, d: Delegate) -> dict:
         import httpx
+
         headers = {"Authorization": f"Bearer {d.api_key}"} if d.api_key else {}
         url = d.url.rstrip("/") + "/models"
         try:
@@ -321,17 +354,34 @@ class AcpAdapter(Adapter):
 
     def config_schema(self) -> list[FieldSpec]:
         return [
-            FieldSpec("command", "Command", "text", required=True, placeholder="proto",
-                      help="Binary on PATH that speaks ACP."),
-            FieldSpec("args", "Args", "args", placeholder="--acp",
-                      help="Launch args, e.g. --acp."),
-            FieldSpec("workdir", "Workdir", "path", required=True, placeholder="~/dev/my-repo",
-                      help="Session cwd — the confinement boundary."),
-            FieldSpec("permissions", "Permissions", "select",
-                      options=["auto", "allowlist", "readonly"], default="auto",
-                      help="By-kind permission policy for the agent's actions."),
-            FieldSpec("confirm", "Confirm each call", "select", options=["false", "true"],
-                      default="false", help="Ask the operator before each call."),
+            FieldSpec(
+                "command", "Command", "text", required=True, placeholder="proto", help="Binary on PATH that speaks ACP."
+            ),
+            FieldSpec("args", "Args", "args", placeholder="--acp", help="Launch args, e.g. --acp."),
+            FieldSpec(
+                "workdir",
+                "Workdir",
+                "path",
+                required=True,
+                placeholder="~/dev/my-repo",
+                help="Session cwd — the confinement boundary.",
+            ),
+            FieldSpec(
+                "permissions",
+                "Permissions",
+                "select",
+                options=["auto", "allowlist", "readonly"],
+                default="auto",
+                help="By-kind permission policy for the agent's actions.",
+            ),
+            FieldSpec(
+                "confirm",
+                "Confirm each call",
+                "select",
+                options=["false", "true"],
+                default="false",
+                help="Ask the operator before each call.",
+            ),
             FieldSpec("timeout_s", "Timeout (s)", "number", default=600),
         ]
 
@@ -363,9 +413,14 @@ class AcpAdapter(Adapter):
         ``dataclasses.replace`` onto a disposable worktree) tears down the exact
         client it dispatched."""
         return {
-            "name": d.name, "command": d.command, "args": d.args, "workdir": d.workdir,
-            "env": d.env or None, "permissions": d.permissions,
-            "allow_kinds": d.allow_kinds, "deny_kinds": d.deny_kinds,
+            "name": d.name,
+            "command": d.command,
+            "args": d.args,
+            "workdir": d.workdir,
+            "env": d.env or None,
+            "permissions": d.permissions,
+            "allow_kinds": d.allow_kinds,
+            "deny_kinds": d.deny_kinds,
         }
 
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
@@ -391,6 +446,7 @@ class AcpAdapter(Adapter):
         handle but leaves the process alive. Returns True if a live client was
         closed; no-op (False) if none was started. Idempotent."""
         from plugins.coding_agent import evict_client
+
         return await evict_client(self._spec(d))
 
     async def forget_session(self, d: Delegate) -> bool:
@@ -400,11 +456,13 @@ class AcpAdapter(Adapter):
         resumed session's memory would reference a diff the wiped tree no longer has.
         See ``coding_agent.forget_session``. Idempotent."""
         from plugins.coding_agent import forget_session
+
         return await forget_session(self._spec(d))
 
     async def probe(self, d: Delegate) -> dict:
         import os
         import shutil
+
         if not shutil.which(d.command):
             return {"ok": False, "error": f"binary not on PATH: {d.command!r}"}
         wd = os.path.expanduser(d.workdir)
@@ -419,7 +477,6 @@ ADAPTERS: dict[str, Adapter] = {a.type: a for a in (A2aAdapter(), OpenAiAdapter(
 def delegate_types() -> list[dict]:
     """Type list + field schemas — drives the panel (PR3) and /delegate-types (PR2)."""
     return [
-        {"type": a.type, "label": a.label, "blurb": a.blurb,
-         "fields": [f.as_dict() for f in a.config_schema()]}
+        {"type": a.type, "label": a.label, "blurb": a.blurb, "fields": [f.as_dict() for f in a.config_schema()]}
         for a in ADAPTERS.values()
     ]

@@ -28,6 +28,7 @@ TERMINAL_STATUSES = ("achieved", "exhausted", "unachievable")
 @dataclass
 class VerifyResult:
     """Outcome of running a goal's verifier once."""
+
     met: bool
     reason: str = ""
     evidence: str = ""
@@ -43,6 +44,7 @@ class GoalState:
     ``checklist`` holds the model-authored ``<goal_plan>`` text, carried forward
     across iterations so the agent keeps a running plan.
     """
+
     session_id: str
     condition: str
     verifier: dict = field(default_factory=lambda: {"type": "llm"})

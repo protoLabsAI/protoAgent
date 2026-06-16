@@ -41,6 +41,7 @@ def test_marker_roundtrip(tmp_path, monkeypatch):
     import importlib
 
     import graph.config_io as cio
+
     importlib.reload(cio)
     try:
         assert cio.is_setup_complete() is False

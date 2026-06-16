@@ -93,9 +93,12 @@ def build_report(runs: list[dict], only_model: str | None = None) -> str:
         for c in cats:
             pp, tt = cper.get(c, (0, 0))
             cells.append(f"{pp}/{tt}" if tt else "—")
-        overall = f"**{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})**"
+        overall = (
+            f"**{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})**"
+        )
         lines.append(
-            f"| `{model}` | " + " | ".join(cells)
+            f"| `{model}` | "
+            + " | ".join(cells)
             + f" | {overall} | {_avg_latency(rep)}ms | {_avg_tokens(rep) or '—'} | {len(by_model[model])} |"
         )
     lines.append("")

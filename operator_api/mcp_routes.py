@@ -22,7 +22,7 @@ _TRANSPORTS = {"stdio", "http", "streamable_http", "sse"}
 def _clean_entry(body: dict) -> dict:
     """Validate + normalize an mcp.servers entry from the form."""
     name = str(body.get("name", "")).strip()
-    transport = (str(body.get("transport", "stdio")).strip() or "stdio")
+    transport = str(body.get("transport", "stdio")).strip() or "stdio"
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     if transport not in _TRANSPORTS:
@@ -64,7 +64,8 @@ def _clean_entry(body: dict) -> dict:
 
 # Map the various "transport"/"type" spellings found in shared MCP JSON to ours.
 _TRANSPORT_ALIASES = {
-    "streamable-http": "streamable_http", "streamablehttp": "streamable_http",
+    "streamable-http": "streamable_http",
+    "streamablehttp": "streamable_http",
     "http-stream": "streamable_http",
 }
 

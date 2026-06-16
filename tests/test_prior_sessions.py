@@ -15,18 +15,23 @@ from graph.middleware.memory import load_prior_sessions
 
 
 def _write(d, sid, messages, final_output=""):
-    (d / f"{sid}.json").write_text(json.dumps({
-        "session_id": sid,
-        "timestamp": "2026-06-05T00:00:00Z",
-        "messages": messages,
-        "final_output": final_output,
-    }))
+    (d / f"{sid}.json").write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "timestamp": "2026-06-05T00:00:00Z",
+                "messages": messages,
+                "final_output": final_output,
+            }
+        )
+    )
 
 
 def test_loader_strips_reasoning_from_dirty_old_files(tmp_path):
     # Simulate a file written before the persist-time strip existed.
     _write(
-        tmp_path, "s1",
+        tmp_path,
+        "s1",
         [{"role": "assistant", "content": "<scratch_pad>secret plan</scratch_pad>The answer is 42."}],
         final_output="<scratch_pad>noise</scratch_pad>Done.",
     )
@@ -38,8 +43,8 @@ def test_loader_strips_reasoning_from_dirty_old_files(tmp_path):
 
 
 def test_loader_empty_and_missing_dir(tmp_path):
-    assert load_prior_sessions(str(tmp_path)) == "<prior_sessions/>"   # empty dir
-    assert load_prior_sessions(str(tmp_path / "nope")) == ""           # missing dir
+    assert load_prior_sessions(str(tmp_path)) == "<prior_sessions/>"  # empty dir
+    assert load_prior_sessions(str(tmp_path / "nope")) == ""  # missing dir
 
 
 def test_loader_returns_block_for_clean_session(tmp_path):

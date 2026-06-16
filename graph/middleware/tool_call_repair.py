@@ -32,11 +32,7 @@ def _tc_id(tc) -> str | None:
 def repair_messages(messages: list) -> list:
     """Return replacement messages (same ids) for any assistant message that
     carries an unanswered tool_call. Empty list ⇒ nothing to repair."""
-    answered = {
-        m.tool_call_id
-        for m in messages
-        if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)
-    }
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)}
     repairs: list = []
     for m in messages:
         tool_calls = getattr(m, "tool_calls", None) or []

@@ -25,8 +25,10 @@ async def test_grade_yes_no():
 async def test_grade_accepts_bool_and_async():
     content = "x" * 100
     assert await grade_document("q", content, grade_fn=lambda q, c: True) is True
+
     async def agrade(q, c):
         return "yes"
+
     assert await grade_document("q", content, grade_fn=agrade) is True
 
 
@@ -34,6 +36,7 @@ async def test_grade_accepts_bool_and_async():
 async def test_grade_fails_open():
     def boom(q, c):
         raise RuntimeError("llm down")
+
     # error → keep the doc (fail open)
     assert await grade_document("q", "x" * 100, grade_fn=boom) is True
 
@@ -51,7 +54,9 @@ async def test_rewrite_query():
     assert await rewrite_query("moe", rewrite_fn=lambda q: "mixture of experts") == "mixture of experts"
     # empty result → original
     assert await rewrite_query("moe", rewrite_fn=lambda q: "  ") == "moe"
+
     # error → original
     def boom(q):
         raise RuntimeError("x")
+
     assert await rewrite_query("moe", rewrite_fn=boom) == "moe"

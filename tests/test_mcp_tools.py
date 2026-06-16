@@ -79,6 +79,7 @@ def _fake_client_factory(monkeypatch, *, by_server: dict):
 
     ``by_server`` maps server name → list[tool] | Exception.
     """
+
     class FakeClient:
         def __init__(self, connections, tool_name_prefix=False):
             self.name = next(iter(connections))
@@ -89,9 +90,7 @@ def _fake_client_factory(monkeypatch, *, by_server: dict):
                 raise result
             return result or []
 
-    monkeypatch.setattr(
-        "langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient
-    )
+    monkeypatch.setattr("langchain_mcp_adapters.client.MultiServerMCPClient", FakeClient)
 
 
 def _cfg(servers):
@@ -145,21 +144,26 @@ def test_plugin_server_replaces_same_named_config_entry(monkeypatch) -> None:
 def test_plugin_server_factory_error_isolated(monkeypatch) -> None:
     # A throwing factory is logged + skipped, never fatal; other config servers run.
     _fake_client_factory(monkeypatch, by_server={"echo": [SimpleNamespace(name="echo__echo")]})
+
     def _boom(c):
         raise RuntimeError("bad factory")
+
     cfg = _cfg([{"name": "echo", "transport": "stdio", "command": "python", "args": ["s.py"]}])
     _clients, tools, _meta = build_mcp_tools(cfg, plugin_servers=[_boom])
     assert [t.name for t in tools] == ["echo__echo"]
 
 
 def test_denylist_and_core_collision_filtered(monkeypatch) -> None:
-    _fake_client_factory(monkeypatch, by_server={
-        "s": [
-            SimpleNamespace(name="s__keep"),
-            SimpleNamespace(name="s__drop"),       # denylisted
-            SimpleNamespace(name="current_time"),  # collides with a core tool
-        ],
-    })
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "s": [
+                SimpleNamespace(name="s__keep"),
+                SimpleNamespace(name="s__drop"),  # denylisted
+                SimpleNamespace(name="current_time"),  # collides with a core tool
+            ],
+        },
+    )
     cfg = _cfg([{"name": "s", "transport": "stdio", "command": "python", "args": ["s.py"]}])
     cfg.mcp_denylist = ["s__drop"]
     _clients, tools, meta = build_mcp_tools(cfg)
@@ -187,67 +191,112 @@ def test_disabled_server_not_connected(monkeypatch) -> None:
 
 
 def test_include_allowlist_keeps_only_listed(monkeypatch) -> None:
-    _fake_client_factory(monkeypatch, by_server={
-        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b"), SimpleNamespace(name="s__c")],
-    })
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b"), SimpleNamespace(name="s__c")],
+        },
+    )
     # include matches the bare tool name (what you'd configure).
-    cfg = _cfg([{
-        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
-        "tools": {"include": ["a", "c"]},
-    }])
+    cfg = _cfg(
+        [
+            {
+                "name": "s",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["s.py"],
+                "tools": {"include": ["a", "c"]},
+            }
+        ]
+    )
     _clients, tools, meta = build_mcp_tools(cfg)
     assert [t.name for t in tools] == ["s__a", "s__c"]
     assert meta[0]["tool_count"] == 2
 
 
 def test_exclude_drops_listed(monkeypatch) -> None:
-    _fake_client_factory(monkeypatch, by_server={
-        "s": [SimpleNamespace(name="s__keep"), SimpleNamespace(name="s__drop")],
-    })
-    cfg = _cfg([{
-        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
-        "tools": {"exclude": ["drop"]},
-    }])
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "s": [SimpleNamespace(name="s__keep"), SimpleNamespace(name="s__drop")],
+        },
+    )
+    cfg = _cfg(
+        [
+            {
+                "name": "s",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["s.py"],
+                "tools": {"exclude": ["drop"]},
+            }
+        ]
+    )
     _clients, tools, _meta = build_mcp_tools(cfg)
     assert [t.name for t in tools] == ["s__keep"]
 
 
 def test_include_wins_over_same_server_exclude(monkeypatch) -> None:
     # A name in both include and exclude is kept — explicit inclusion wins.
-    _fake_client_factory(monkeypatch, by_server={
-        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b")],
-    })
-    cfg = _cfg([{
-        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
-        "tools": {"include": ["a"], "exclude": ["a"]},
-    }])
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__b")],
+        },
+    )
+    cfg = _cfg(
+        [
+            {
+                "name": "s",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["s.py"],
+                "tools": {"include": ["a"], "exclude": ["a"]},
+            }
+        ]
+    )
     _clients, tools, _meta = build_mcp_tools(cfg)
     assert [t.name for t in tools] == ["s__a"]
 
 
 def test_global_denylist_overrides_include(monkeypatch) -> None:
     # The cross-server denylist is the hard safety net — include cannot revive it.
-    _fake_client_factory(monkeypatch, by_server={
-        "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__danger")],
-    })
-    cfg = _cfg([{
-        "name": "s", "transport": "stdio", "command": "python", "args": ["s.py"],
-        "tools": {"include": ["a", "danger"]},
-    }])
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "s": [SimpleNamespace(name="s__a"), SimpleNamespace(name="s__danger")],
+        },
+    )
+    cfg = _cfg(
+        [
+            {
+                "name": "s",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["s.py"],
+                "tools": {"include": ["a", "danger"]},
+            }
+        ]
+    )
     cfg.mcp_denylist = ["s__danger"]
     _clients, tools, _meta = build_mcp_tools(cfg)
     assert [t.name for t in tools] == ["s__a"]
 
 
 def test_one_bad_server_does_not_break_others(monkeypatch) -> None:
-    _fake_client_factory(monkeypatch, by_server={
-        "good": [SimpleNamespace(name="good__t")],
-        "bad": RuntimeError("connection refused"),
-    })
-    cfg = _cfg([
-        {"name": "good", "transport": "stdio", "command": "python", "args": ["g.py"]},
-        {"name": "bad", "transport": "stdio", "command": "python", "args": ["b.py"]},
-    ])
+    _fake_client_factory(
+        monkeypatch,
+        by_server={
+            "good": [SimpleNamespace(name="good__t")],
+            "bad": RuntimeError("connection refused"),
+        },
+    )
+    cfg = _cfg(
+        [
+            {"name": "good", "transport": "stdio", "command": "python", "args": ["g.py"]},
+            {"name": "bad", "transport": "stdio", "command": "python", "args": ["b.py"]},
+        ]
+    )
     _clients, tools, meta = build_mcp_tools(cfg)
     assert [t.name for t in tools] == ["good__t"]
     assert [m["name"] for m in meta] == ["good"]

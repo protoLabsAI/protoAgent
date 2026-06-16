@@ -19,6 +19,7 @@ log = logging.getLogger("protoagent.server")
 
 def _theme_path():
     from graph.config_io import _live_config_dir
+
     return _live_config_dir() / "theme.json"
 
 

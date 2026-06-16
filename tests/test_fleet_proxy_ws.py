@@ -59,13 +59,12 @@ def _ws_app() -> FastAPI:
 def test_ws_proxy_relays_text_and_binary(monkeypatch):
     port, stop = _echo_ws_server()
     try:
-        monkeypatch.setattr(proxy, "_target_for_slug",
-                            lambda slug: (f"http://127.0.0.1:{port}", {}))
+        monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: (f"http://127.0.0.1:{port}", {}))
         with TestClient(_ws_app()).websocket_connect("/agents/peer/live") as ws:
             ws.send_text("ping")
-            assert ws.receive_text() == "ping"             # text round-trips through the hub
+            assert ws.receive_text() == "ping"  # text round-trips through the hub
             ws.send_bytes(b"\x00\x01\x02")
-            assert ws.receive_bytes() == b"\x00\x01\x02"   # binary round-trips too
+            assert ws.receive_bytes() == b"\x00\x01\x02"  # binary round-trips too
     finally:
         stop()
 

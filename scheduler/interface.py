@@ -31,7 +31,7 @@ class Job:
     schedule: str
     agent_name: str
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
-    next_fire: str | None = None        # ISO; None means "compute on save"
+    next_fire: str | None = None  # ISO; None means "compute on save"
     last_fire: str | None = None
     # IANA timezone the cron expression is evaluated in (e.g. "America/Chicago").
     # None = UTC. Ignored for one-shot ISO schedules (those carry their own offset).
@@ -58,8 +58,13 @@ class SchedulerBackend(Protocol):
     name: str  # short label for logs / agent-facing strings: "local", "workstacean"
 
     def add_job(
-        self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None, context_id: str | None = None,
+        self,
+        prompt: str,
+        schedule: str,
+        *,
+        job_id: str | None = None,
+        timezone: str | None = None,
+        context_id: str | None = None,
     ) -> Job:
         """Persist a new job. Returns the stored ``Job`` (with
         backend-assigned id and next_fire if the caller didn't set them).

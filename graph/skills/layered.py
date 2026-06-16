@@ -56,8 +56,9 @@ class LayeredSkillsIndex:
 
     # ── introspection + promotion ─────────────────────────────────────────────
     def all_skills(self) -> list[dict]:
-        return ([{**s, "tier": "private"} for s in self._private.all_skills()]
-                + [{**s, "tier": "commons"} for s in self._commons.all_skills()])
+        return [{**s, "tier": "private"} for s in self._private.all_skills()] + [
+            {**s, "tier": "commons"} for s in self._commons.all_skills()
+        ]
 
     def user_facing_skills(self) -> list[dict]:
         """User-facing skills (ADR 0052) from both tiers, de-duped by slash token

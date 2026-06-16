@@ -170,19 +170,23 @@ def _install_macos_launchagent(agent_name: str, port: int) -> tuple[bool, str]:
     # Unload any prior incarnation first — silently ok if absent.
     subprocess.run(
         ["launchctl", "unload", str(plist_path)],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
 
     plist_path.write_text(plist, encoding="utf-8")
 
     result = subprocess.run(
         ["launchctl", "load", str(plist_path)],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
     if result.returncode != 0:
-        err = (result.stderr.decode("utf-8", errors="replace")
-               or result.stdout.decode("utf-8", errors="replace")
-               or f"launchctl load exit={result.returncode}")
+        err = (
+            result.stderr.decode("utf-8", errors="replace")
+            or result.stdout.decode("utf-8", errors="replace")
+            or f"launchctl load exit={result.returncode}"
+        )
         return False, f"plist written but launchctl load failed: {err.strip()}"
 
     return True, f"installed • {plist_path.name} • runs `{shlex.quote(python)} -m server` on login"
@@ -195,7 +199,8 @@ def _uninstall_macos_launchagent(agent_name: str) -> tuple[bool, str]:
 
     subprocess.run(
         ["launchctl", "unload", str(plist_path)],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
 
     try:

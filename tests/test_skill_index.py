@@ -38,9 +38,7 @@ class _FakeArtifact:
     description: str
     prompt_template: str
     tools_used: list[str] = field(default_factory=list)
-    created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source_session_id: str = ""
 
 
@@ -75,24 +73,30 @@ def index(tmp_db) -> SkillsIndex:
 @pytest.fixture
 def populated_index(index) -> SkillsIndex:
     """SkillsIndex pre-populated with three skill artifacts."""
-    index.add_skill(_make_artifact(
-        name="web-research",
-        description="Research a topic using web search tools",
-        prompt_template="Search the web for: {query}",
-        tools_used=["web_search", "fetch_url"],
-    ))
-    index.add_skill(_make_artifact(
-        name="calculator-math",
-        description="Perform mathematical calculations",
-        prompt_template="Calculate the following: {expression}",
-        tools_used=["calculator"],
-    ))
-    index.add_skill(_make_artifact(
-        name="time-lookup",
-        description="Get the current time in any timezone",
-        prompt_template="What is the current time in {timezone}?",
-        tools_used=["current_time"],
-    ))
+    index.add_skill(
+        _make_artifact(
+            name="web-research",
+            description="Research a topic using web search tools",
+            prompt_template="Search the web for: {query}",
+            tools_used=["web_search", "fetch_url"],
+        )
+    )
+    index.add_skill(
+        _make_artifact(
+            name="calculator-math",
+            description="Perform mathematical calculations",
+            prompt_template="Calculate the following: {expression}",
+            tools_used=["calculator"],
+        )
+    )
+    index.add_skill(
+        _make_artifact(
+            name="time-lookup",
+            description="Get the current time in any timezone",
+            prompt_template="What is the current time in {timezone}?",
+            tools_used=["current_time"],
+        )
+    )
     return index
 
 
@@ -106,9 +110,7 @@ def test_initialize_db_creates_file(tmp_db) -> None:
     assert os.path.exists(tmp_db)
 
     conn = sqlite3.connect(tmp_db)
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='skills_fts'"
-    )
+    cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skills_fts'")
     assert cur.fetchone() is not None, "skills_fts table should exist"
     conn.close()
 
@@ -131,6 +133,7 @@ def test_schema_meta_table_exists(tmp_db) -> None:
     row = cur.fetchone()
     assert row is not None
     from graph.skills.index import _SCHEMA_VERSION
+
     assert row[0] == _SCHEMA_VERSION
     conn.close()
 
@@ -204,9 +207,7 @@ def test_retrieval_ranking(populated_index) -> None:
     """FTS5 must rank the most relevant skill first for a specific query."""
     results = populated_index.load_skills("mathematical calculation expression")
     assert len(results) > 0
-    assert results[0].name == "calculator-math", (
-        f"Expected 'calculator-math' first, got: {[r.name for r in results]}"
-    )
+    assert results[0].name == "calculator-math", f"Expected 'calculator-math' first, got: {[r.name for r in results]}"
 
 
 def test_load_skills_top_k_limit(populated_index) -> None:
@@ -317,12 +318,14 @@ def test_format_learned_skills_empty_returns_empty() -> None:
 def test_format_learned_skills_basic_formatting() -> None:
     """_format_learned_skills() must produce a valid <learned_skills> block."""
     km = _make_knowledge_middleware_no_store()
-    skills = [SkillRecord(
-        name="web-research",
-        description="Research the web",
-        prompt_template="Search for {topic}",
-        score=-1.5,
-    )]
+    skills = [
+        SkillRecord(
+            name="web-research",
+            description="Research the web",
+            prompt_template="Search for {topic}",
+            score=-1.5,
+        )
+    ]
     block = km._format_learned_skills(skills)
     assert "<learned_skills>" in block
     assert "</learned_skills>" in block
@@ -334,25 +337,33 @@ def test_format_learned_skills_basic_formatting() -> None:
 def test_format_learned_skills_surfaces_relevant_tools() -> None:
     """A skill's declared tools are emitted as <relevant_tools> (ADR 0005)."""
     km = _make_knowledge_middleware_no_store()
-    block = km._format_learned_skills([SkillRecord(
-        name="web-research",
-        description="Research the web",
-        prompt_template="Search for {topic}",
-        score=-1.5,
-        tools_used=("web_search", "fetch_url"),
-    )])
+    block = km._format_learned_skills(
+        [
+            SkillRecord(
+                name="web-research",
+                description="Research the web",
+                prompt_template="Search for {topic}",
+                score=-1.5,
+                tools_used=("web_search", "fetch_url"),
+            )
+        ]
+    )
     assert "<relevant_tools>web_search, fetch_url</relevant_tools>" in block
 
 
 def test_format_learned_skills_omits_tools_when_none() -> None:
     """No declared tools → no <relevant_tools> line (back-compat)."""
     km = _make_knowledge_middleware_no_store()
-    block = km._format_learned_skills([SkillRecord(
-        name="bare",
-        description="No tools declared",
-        prompt_template="do {thing}",
-        score=-1.0,
-    )])
+    block = km._format_learned_skills(
+        [
+            SkillRecord(
+                name="bare",
+                description="No tools declared",
+                prompt_template="do {thing}",
+                score=-1.0,
+            )
+        ]
+    )
     assert "<relevant_tools>" not in block
 
 
@@ -402,10 +413,12 @@ def test_km_load_skills_no_index_returns_empty() -> None:
 def test_km_load_skills_with_index(tmp_db) -> None:
     """load_skills() must delegate to SkillsIndex when configured."""
     idx = SkillsIndex(db_path=tmp_db)
-    idx.add_skill(_make_artifact(
-        name="test-skill",
-        description="A test skill for unit testing",
-    ))
+    idx.add_skill(
+        _make_artifact(
+            name="test-skill",
+            description="A test skill for unit testing",
+        )
+    )
 
     store = MagicMock()
     store.search.return_value = []
@@ -432,19 +445,19 @@ def test_km_load_skills_empty_query_returns_empty(tmp_db) -> None:
 def test_before_model_injects_learned_skills(tmp_db) -> None:
     """before_model() must include <learned_skills> block when index has results."""
     idx = SkillsIndex(db_path=tmp_db)
-    idx.add_skill(_make_artifact(
-        name="web-research",
-        description="Research topics using web search",
-    ))
+    idx.add_skill(
+        _make_artifact(
+            name="web-research",
+            description="Research topics using web search",
+        )
+    )
 
     store = MagicMock()
     store.search.return_value = []
     km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
     km._prior_sessions_cache = ""  # skip session loading
 
-    state = {
-        "messages": [HumanMessage(content="research web search topics")]
-    }
+    state = {"messages": [HumanMessage(content="research web search topics")]}
     result = km.before_model(state, runtime=None)
 
     assert result is not None
@@ -462,9 +475,7 @@ def test_before_model_no_skills_no_learned_block(tmp_db) -> None:
     km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
     km._prior_sessions_cache = ""
 
-    state = {
-        "messages": [HumanMessage(content="some query")]
-    }
+    state = {"messages": [HumanMessage(content="some query")]}
     result = km.before_model(state, runtime=None)
 
     # With empty store and empty index, result should be None or no learned_skills
@@ -518,10 +529,18 @@ def test_all_skills_returns_curation_fields(populated_index) -> None:
     rows = populated_index.all_skills()
     assert len(rows) == 3
     r = rows[0]
-    assert set(r) >= {"id", "name", "description", "prompt_template",
-                      "tools_used", "created_at", "confidence", "last_used"}
-    assert r["confidence"] == 1.0          # new skills start fully confident
-    assert isinstance(r["id"], int)        # rowid
+    assert set(r) >= {
+        "id",
+        "name",
+        "description",
+        "prompt_template",
+        "tools_used",
+        "created_at",
+        "confidence",
+        "last_used",
+    }
+    assert r["confidence"] == 1.0  # new skills start fully confident
+    assert isinstance(r["id"], int)  # rowid
     assert isinstance(r["tools_used"], list)
 
 
@@ -556,10 +575,14 @@ def test_user_facing_skills_storage_and_reader(index):
     import types
 
     uf = types.SimpleNamespace(
-        name="web-research", description="Research on the web.",
-        prompt_template="plan, search, cite", tools_used=["web_search"],
-        created_at=datetime.now(timezone.utc), source_session_id="s",
-        user_facing=True, slash="research",
+        name="web-research",
+        description="Research on the web.",
+        prompt_template="plan, search, cite",
+        tools_used=["web_search"],
+        created_at=datetime.now(timezone.utc),
+        source_session_id="s",
+        user_facing=True,
+        slash="research",
     )
     plain = _make_artifact(name="background-only", description="not user facing")
     index.add_skill(uf, source="disk")
@@ -581,9 +604,14 @@ def test_user_facing_slash_falls_back_to_slug(index):
     import types
 
     uf = types.SimpleNamespace(
-        name="Big Task", description="d", prompt_template="p", tools_used=[],
-        created_at=datetime.now(timezone.utc), source_session_id="s",
-        user_facing=True, slash="",
+        name="Big Task",
+        description="d",
+        prompt_template="p",
+        tools_used=[],
+        created_at=datetime.now(timezone.utc),
+        source_session_id="s",
+        user_facing=True,
+        slash="",
         slash_token=lambda: "big-task",
     )
     index.add_skill(uf, source="disk")

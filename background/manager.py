@@ -55,9 +55,7 @@ class BackgroundManager:
             self._fire_timeout_s = fire_timeout_s
         else:
             try:
-                self._fire_timeout_s = float(
-                    os.environ.get("BACKGROUND_FIRE_TIMEOUT_S", _DEFAULT_FIRE_TIMEOUT_S)
-                )
+                self._fire_timeout_s = float(os.environ.get("BACKGROUND_FIRE_TIMEOUT_S", _DEFAULT_FIRE_TIMEOUT_S))
             except ValueError:
                 self._fire_timeout_s = _DEFAULT_FIRE_TIMEOUT_S
         # Hold the detached fire tasks so they aren't GC'd mid-flight (the cause of
@@ -81,9 +79,7 @@ class BackgroundManager:
             prompt=prompt,
         )
         fired_prompt = _build_fired_prompt(subagent_type, description, prompt)
-        t = asyncio.create_task(
-            self._fire(job_id, fired_prompt), name=f"background.fire.{job_id}"
-        )
+        t = asyncio.create_task(self._fire(job_id, fired_prompt), name=f"background.fire.{job_id}")
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         log.info("[background] spawned %s (%s): %s", job_id, subagent_type, description)
@@ -131,8 +127,10 @@ class BackgroundManager:
         if self._api_key:
             headers["X-API-Key"] = self._api_key
         body = {
-            "jsonrpc": "2.0", "id": str(uuid.uuid4()),
-            "method": "CancelTask", "params": {"id": task_id},
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "CancelTask",
+            "params": {"id": task_id},
         }
         ok = True
         try:
@@ -147,7 +145,9 @@ class BackgroundManager:
         # The executor's cancel telemetry usually settles the row first (with partial
         # text); ensure it's settled regardless. mark_complete is idempotent.
         self.store.mark_complete(
-            job_id, "canceled", (self.store.get(job_id) or job).result or "Canceled.",
+            job_id,
+            "canceled",
+            (self.store.get(job_id) or job).result or "Canceled.",
         )
         return {"ok": ok, "status": "canceled", "detail": f"Canceled {job_id}."}
 
@@ -197,16 +197,14 @@ class BackgroundManager:
             if r.status_code >= 400:
                 log.error(
                     "[background] fire failed for %s: HTTP %d %s",
-                    job_id, r.status_code, r.text[:200],
+                    job_id,
+                    r.status_code,
+                    r.text[:200],
                 )
-                self.store.mark_complete(
-                    job_id, "failed", f"Background turn failed to start: HTTP {r.status_code}."
-                )
+                self.store.mark_complete(job_id, "failed", f"Background turn failed to start: HTTP {r.status_code}.")
         except Exception as exc:  # noqa: BLE001
             log.exception("[background] fire exception for %s", job_id)
-            self.store.mark_complete(
-                job_id, "failed", f"Background turn delivery error: {exc}"
-            )
+            self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
 
 
 def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> str:
@@ -225,10 +223,7 @@ def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> st
     except Exception:  # noqa: BLE001 — role guidance is best-effort
         role = ""
 
-    header = (
-        f"[Background task — running detached as the '{subagent_type}' role]\n"
-        f"Task: {description}\n"
-    )
+    header = f"[Background task — running detached as the '{subagent_type}' role]\nTask: {description}\n"
     guidance = (
         "\n\nWork autonomously to completion and end your turn with the finished result "
         "as your final message — it will be delivered back to the conversation that "

@@ -57,10 +57,20 @@ def test_export_returns_csv(monkeypatch):
     class _Store:
         def recent(self, limit=50):
             return [
-                {"task_id": "t1", "session_id": "s", "model": "m", "cost_usd": 0.01,
-                 "ended_at": "2026-06-07T10:00:00+00:00"},
-                {"task_id": "t2", "session_id": "s", "model": "m", "cost_usd": 0.02,
-                 "ended_at": "2026-06-08T10:00:00+00:00"},
+                {
+                    "task_id": "t1",
+                    "session_id": "s",
+                    "model": "m",
+                    "cost_usd": 0.01,
+                    "ended_at": "2026-06-07T10:00:00+00:00",
+                },
+                {
+                    "task_id": "t2",
+                    "session_id": "s",
+                    "model": "m",
+                    "cost_usd": 0.02,
+                    "ended_at": "2026-06-08T10:00:00+00:00",
+                },
             ]
 
     c = _client(monkeypatch, _Store())

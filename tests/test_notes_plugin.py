@@ -1,4 +1,5 @@
 """Notes plugin (ADR 0034 S4) — the single-doc store + read/write/append tools."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -6,9 +7,7 @@ from pathlib import Path
 
 
 def _load_notes():
-    spec = importlib.util.spec_from_file_location(
-        "notes_plugin_under_test", Path("plugins/notes/__init__.py")
-    )
+    spec = importlib.util.spec_from_file_location("notes_plugin_under_test", Path("plugins/notes/__init__.py"))
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(mod)

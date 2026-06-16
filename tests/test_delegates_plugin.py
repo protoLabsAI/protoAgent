@@ -23,8 +23,9 @@ from plugins.delegates.registry import DelegateRegistry
 
 
 def test_a2a_parse_ok_and_missing_url():
-    d = ADAPTERS["a2a"].parse({"name": "helm", "type": "a2a", "url": "https://h/a2a",
-                               "auth": {"scheme": "bearer", "token": "sek"}})
+    d = ADAPTERS["a2a"].parse(
+        {"name": "helm", "type": "a2a", "url": "https://h/a2a", "auth": {"scheme": "bearer", "token": "sek"}}
+    )
     assert d.name == "helm" and d.url == "https://h/a2a"
     assert d.auth_scheme == "bearer" and d.auth_token == "sek"
     with pytest.raises(DelegateError):
@@ -32,9 +33,17 @@ def test_a2a_parse_ok_and_missing_url():
 
 
 def test_openai_parse_ok_and_requires_url_model():
-    d = ADAPTERS["openai"].parse({"name": "opus", "type": "openai",
-                                  "url": "https://g/v1", "model": "protolabs/reasoning",
-                                  "api_key": "k", "max_tokens": "50", "temperature": "0.1"})
+    d = ADAPTERS["openai"].parse(
+        {
+            "name": "opus",
+            "type": "openai",
+            "url": "https://g/v1",
+            "model": "protolabs/reasoning",
+            "api_key": "k",
+            "max_tokens": "50",
+            "temperature": "0.1",
+        }
+    )
     assert d.model == "protolabs/reasoning" and d.api_key == "k"
     assert d.max_tokens == 50 and d.temperature == pytest.approx(0.1)
     with pytest.raises(DelegateError):
@@ -42,9 +51,17 @@ def test_openai_parse_ok_and_requires_url_model():
 
 
 def test_acp_parse_ok_and_requires_command_workdir():
-    d = ADAPTERS["acp"].parse({"name": "proto", "type": "acp", "command": "proto",
-                               "args": ["--acp"], "workdir": "/tmp", "permissions": "READONLY",
-                               "confirm": "true"})
+    d = ADAPTERS["acp"].parse(
+        {
+            "name": "proto",
+            "type": "acp",
+            "command": "proto",
+            "args": ["--acp"],
+            "workdir": "/tmp",
+            "permissions": "READONLY",
+            "confirm": "true",
+        }
+    )
     assert d.command == "proto" and d.args == ["--acp"] and d.workdir == "/tmp"
     assert d.permissions == "readonly" and d.confirm is True
     with pytest.raises(DelegateError):
@@ -72,16 +89,18 @@ def test_delegate_types_schema_shape():
 
 
 def test_registry_parses_and_drops_bad():
-    reg = DelegateRegistry([
-        {"name": "helm", "type": "a2a", "url": "https://h/a2a"},
-        {"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"},
-        {"name": "bad", "type": "nope"},                 # unknown type
-        {"name": "helm", "type": "a2a", "url": "https://dup/a2a"},  # duplicate
-        {"name": "incomplete", "type": "acp", "command": "proto"},  # no workdir
-        "not-a-dict",
-    ])
+    reg = DelegateRegistry(
+        [
+            {"name": "helm", "type": "a2a", "url": "https://h/a2a"},
+            {"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"},
+            {"name": "bad", "type": "nope"},  # unknown type
+            {"name": "helm", "type": "a2a", "url": "https://dup/a2a"},  # duplicate
+            {"name": "incomplete", "type": "acp", "command": "proto"},  # no workdir
+            "not-a-dict",
+        ]
+    )
     assert reg.names() == ["helm", "opus"]
-    assert reg.get("helm").url == "https://h/a2a"        # first dup wins
+    assert reg.get("helm").url == "https://h/a2a"  # first dup wins
     assert "helm" in reg.listing() and "a2a" in reg.listing()
 
 
@@ -157,6 +176,7 @@ class _FakeClient:
 
 async def test_openai_dispatch(monkeypatch):
     import httpx
+
     payload = {"choices": [{"message": {"content": "the answer"}}]}
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(payload))
     d = ADAPTERS["openai"].parse({"name": "o", "type": "openai", "url": "https://g/v1", "model": "m"})
@@ -165,10 +185,12 @@ async def test_openai_dispatch(monkeypatch):
 
 async def test_a2a_dispatch_inline_reply(monkeypatch):
     import httpx
+
     # message/send returns an artifact with text → _extract_text picks it up.
     payload = {"result": {"artifacts": [{"parts": [{"kind": "text", "text": "hi from peer"}]}]}}
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(payload))
     from security import policy
+
     monkeypatch.setattr(policy, "check_url", lambda url: None)
     d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
     assert await ADAPTERS["a2a"].dispatch(d, "q") == "hi from peer"
@@ -188,6 +210,7 @@ async def test_a2a_dispatch_sends_version_header(monkeypatch):
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CapClient(None))
     from security import policy
+
     monkeypatch.setattr(policy, "check_url", lambda url: None)
     d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
     await ADAPTERS["a2a"].dispatch(d, "q")
@@ -230,7 +253,7 @@ async def test_acp_teardown_evicts_the_workdir_scoped_client():
     assert await ADAPTERS["acp"].teardown(d) is True
     assert fake.closed is True
     assert CA._cache_key(spec) not in CA._CLIENTS
-    assert await ADAPTERS["acp"].teardown(d) is False   # idempotent
+    assert await ADAPTERS["acp"].teardown(d) is False  # idempotent
 
 
 # ── health prober (PR4) ───────────────────────────────────────────────────────
@@ -242,8 +265,9 @@ async def test_health_probe_all_populates_and_prunes(monkeypatch):
     H._HEALTH.clear()
     import plugins.delegates.store as store
 
-    monkeypatch.setattr(store, "merged_delegates",
-                        lambda: [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}])
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}]
+    )
 
     async def fake_probe(d):
         return {"ok": True, "latency_ms": 5, "detail": "ok"}
@@ -262,8 +286,10 @@ async def test_health_probe_all_populates_and_prunes(monkeypatch):
 async def test_health_probe_records_failure(monkeypatch):
     H._HEALTH.clear()
     import plugins.delegates.store as store
-    monkeypatch.setattr(store, "merged_delegates",
-                        lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}])
+
+    monkeypatch.setattr(
+        store, "merged_delegates", lambda: [{"name": "p", "type": "acp", "command": "proto", "workdir": "/tmp"}]
+    )
 
     async def boom(d):
         raise RuntimeError("nope")

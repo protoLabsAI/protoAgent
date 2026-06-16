@@ -11,8 +11,16 @@ from operator_api import console_handlers as ch
 def _reset_state(monkeypatch):
     import runtime.state as rs
 
-    for field in ("graph_config", "graph", "scheduler", "goal_controller",
-                  "workflow_registry", "inbox_store", "storm_guard", "skills_index"):
+    for field in (
+        "graph_config",
+        "graph",
+        "scheduler",
+        "goal_controller",
+        "workflow_registry",
+        "inbox_store",
+        "storm_guard",
+        "skills_index",
+    ):
         monkeypatch.setattr(rs.STATE, field, None, raising=False)
     yield
 
@@ -27,6 +35,7 @@ def test_inbox_authorized_requires_match(monkeypatch):
 
     class _Cfg:
         auth_token = "secret"
+
     monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
     assert ch._inbox_authorized("secret") is True
     assert ch._inbox_authorized("nope") is False
@@ -55,6 +64,7 @@ def test_chat_commands_lists_workflows_and_subagents(monkeypatch):
 
         def get(self, name):
             return next((w for w in self.list() if w["name"] == name), None)
+
     monkeypatch.setattr(rs.STATE, "workflow_registry", _Reg(), raising=False)
     out = ch._operator_chat_commands()
     names = [c["name"] for c in out["commands"]]

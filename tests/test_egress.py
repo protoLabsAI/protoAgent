@@ -25,9 +25,14 @@ def test_unset_allows_public_blocks_private():
     # private/loopback/link-local/metadata even without an allowlist. (IP
     # literals so the test doesn't depend on DNS.)
     assert egress.is_enabled() is False
-    assert egress.check_url("http://8.8.8.8/x") is None           # public
-    for bad in ("http://127.0.0.1/", "http://10.0.0.1/", "http://192.168.1.1/",
-                "http://169.254.169.254/latest/meta-data/", "http://[::1]/"):
+    assert egress.check_url("http://8.8.8.8/x") is None  # public
+    for bad in (
+        "http://127.0.0.1/",
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/",
+    ):
         assert egress.check_url(bad) is not None, bad
 
 
@@ -48,8 +53,8 @@ def test_exact_host_allow_and_deny():
 
 def test_subdomain_wildcard():
     egress.set_allowed_hosts(["*.proto-labs.ai"])
-    assert egress.check_url("https://api.proto-labs.ai/v1") is None   # subdomain
-    assert egress.check_url("https://proto-labs.ai/") is None          # apex
+    assert egress.check_url("https://api.proto-labs.ai/v1") is None  # subdomain
+    assert egress.check_url("https://proto-labs.ai/") is None  # apex
     assert egress.check_url("https://api.proto-labs.ai.evil.com/") is not None  # not fooled
 
 
@@ -118,8 +123,8 @@ def test_policy_reflects_projects_and_egress(tmp_path):
     # filesystem_policy: the write:true project lands under read_write, write:false
     # under read_only — verify by section ORDER, not just presence.
     rw_idx, ro_idx = policy.index("read_write:"), policy.index("read_only:")
-    assert rw_idx < policy.index("/work/pixelgen") < ro_idx   # write:true → read_write
-    assert ro_idx < policy.index("/work/ORBIS")               # write:false → read_only
+    assert rw_idx < policy.index("/work/pixelgen") < ro_idx  # write:true → read_write
+    assert ro_idx < policy.index("/work/ORBIS")  # write:false → read_only
     assert "project: pixelgen" in policy and "project: orbis" in policy
     assert "/sandbox" in policy  # data root, read-write
     # network_policies: deny-by-default egress allowlist (only listed endpoints
@@ -147,12 +152,18 @@ def test_policy_empty_config_is_default_deny(tmp_path):
 def test_allow_private_permits_lan_but_blocks_metadata():
     # Fleet remotes are normally LAN / tailnet / loopback — allow those, but ALWAYS
     # block link-local/cloud-metadata, multicast, reserved (the real SSRF targets).
-    for ok in ("http://10.0.0.5:7870/", "http://192.168.1.20/", "http://127.0.0.1:7871/",
-               "http://100.119.239.8/"):  # tailnet
+    for ok in (
+        "http://10.0.0.5:7870/",
+        "http://192.168.1.20/",
+        "http://127.0.0.1:7871/",
+        "http://100.119.239.8/",
+    ):  # tailnet
         assert egress.check_url(ok, allow_private=True) is None, ok
-    for bad in ("http://169.254.169.254/latest/meta-data/",  # cloud metadata
-                "http://224.0.0.1/",                           # multicast
-                "http://0.0.0.0/"):                            # unspecified
+    for bad in (
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://224.0.0.1/",  # multicast
+        "http://0.0.0.0/",
+    ):  # unspecified
         assert egress.check_url(bad, allow_private=True) is not None, bad
 
 

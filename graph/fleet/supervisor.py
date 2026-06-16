@@ -50,7 +50,9 @@ def _is_our_agent(pid: int) -> bool:
     try:
         out = subprocess.run(
             ["ps", "-o", "command=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True,
+            text=True,
+            timeout=2,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return True
@@ -131,12 +133,18 @@ def start(ident: str) -> dict:
         from infra.paths import package_version
 
         now = datetime.now(timezone.utc).isoformat()
-        rec = {"pid": proc.pid, "port": ws.get("port"), "id": wid,
-               "started_at": now, "last_active": now, "log": str(log_path),
-               # The spawner's app version (version-coherence P1/P2): a member is
-               # this binary until restarted, so status()/version_skew_warning()
-               # can surface a live member left behind by an app update.
-               "version": package_version()}
+        rec = {
+            "pid": proc.pid,
+            "port": ws.get("port"),
+            "id": wid,
+            "started_at": now,
+            "last_active": now,
+            "log": str(log_path),
+            # The spawner's app version (version-coherence P1/P2): a member is
+            # this binary until restarted, so status()/version_skew_warning()
+            # can surface a live member left behind by an app update.
+            "version": package_version(),
+        }
         state[wid] = rec
         _save_state(state)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
@@ -284,15 +292,13 @@ def add_remote(name: str, url: str, token: str = "") -> dict:
         )
     with _remotes_lock():
         remotes = _load_remotes()
-        taken = ({r["name"] for r in remotes.values()}
-                 | {w["name"] for w in manager.list_workspaces()})
+        taken = {r["name"] for r in remotes.values()} | {w["name"] for w in manager.list_workspaces()}
         if name in taken:
             raise FleetError(f"an agent named {name!r} already exists")
         if any(r["url"] == url for r in remotes.values()):
             raise FleetError(f"a remote at {url} is already in the fleet")
         rid = manager._new_id(name)
-        rec = {"id": rid, "name": name, "url": url, "token": token,
-               "added": datetime.now(timezone.utc).isoformat()}
+        rec = {"id": rid, "name": name, "url": url, "token": token, "added": datetime.now(timezone.utc).isoformat()}
         remotes[rid] = rec
         _save_remotes(remotes)
     log.info("[fleet] remote member added: %s (%s)", name, url)
@@ -303,8 +309,7 @@ def remove_remote(ident: str) -> dict:
     """Unregister a remote member (by id or name) — the remote agent itself is untouched."""
     with _remotes_lock():
         remotes = _load_remotes()
-        rid = ident if ident in remotes else next(
-            (k for k, r in remotes.items() if r["name"] == ident), None)
+        rid = ident if ident in remotes else next((k for k, r in remotes.items() if r["name"] == ident), None)
         if rid is None:
             raise FleetError(f"no remote member {ident!r}")
         rec = remotes.pop(rid)
@@ -377,27 +382,44 @@ def status() -> list[dict]:
         rec = state.get(ws["id"]) or {}  # state is keyed by the immutable id
         running = _alive(rec.get("pid"))
         port = ws.get("port")
-        out.append({"name": ws["name"], "id": ws.get("id", ws["name"]),
-                    "port": port, "pid": rec.get("pid") if running else None,
-                    "running": running, "bundle": ws.get("bundle", ""),
-                    # The version the member was SPAWNED at (stamped in start()) —
-                    # the console compares it against the host entry's version so a
-                    # local member left behind by an app update shows the same skew
-                    # badge a drifted remote does. Empty while stopped (a stopped
-                    # member runs whatever binary the next start() spawns).
-                    "version": rec.get("version", "") if running else "",
-                    # Direct A2A endpoint — every agent is an independent endpoint on its
-                    # own port (ADR 0042), reachable regardless of console focus, so a
-                    # focused agent can `delegate_to` an unfocused sibling here. Live only
-                    # while running, but the address is stable.
-                    "a2a": f"http://127.0.0.1:{port}/a2a" if port else None})
+        out.append(
+            {
+                "name": ws["name"],
+                "id": ws.get("id", ws["name"]),
+                "port": port,
+                "pid": rec.get("pid") if running else None,
+                "running": running,
+                "bundle": ws.get("bundle", ""),
+                # The version the member was SPAWNED at (stamped in start()) —
+                # the console compares it against the host entry's version so a
+                # local member left behind by an app update shows the same skew
+                # badge a drifted remote does. Empty while stopped (a stopped
+                # member runs whatever binary the next start() spawns).
+                "version": rec.get("version", "") if running else "",
+                # Direct A2A endpoint — every agent is an independent endpoint on its
+                # own port (ADR 0042), reachable regardless of console focus, so a
+                # focused agent can `delegate_to` an unfocused sibling here. Live only
+                # while running, but the address is stable.
+                "a2a": f"http://127.0.0.1:{port}/a2a" if port else None,
+            }
+        )
     for rec in list_remotes():
         alive = _probe_cache.get(rec["id"], (False, 0.0))[0]
-        out.append({"name": rec["name"], "id": rec["id"], "port": None, "pid": None,
-                    "running": alive, "bundle": "", "remote": True, "url": rec["url"],
-                    # Last-probed remote version (from its A2A card) — NEVER the token.
-                    "version": rec.get("version", ""),
-                    "a2a": f"{rec['url']}/a2a"})
+        out.append(
+            {
+                "name": rec["name"],
+                "id": rec["id"],
+                "port": None,
+                "pid": None,
+                "running": alive,
+                "bundle": "",
+                "remote": True,
+                "url": rec["url"],
+                # Last-probed remote version (from its A2A card) — NEVER the token.
+                "version": rec.get("version", ""),
+                "a2a": f"{rec['url']}/a2a",
+            }
+        )
     return out
 
 
@@ -454,8 +476,7 @@ def shutdown_all(*, timeout: float = 3.0) -> list[str]:
     with _state_lock():
         state = _load_state()
         # PID-reuse guard (#10): only ours; reserve all stops under the lock.
-        live = [(k, int(r["pid"])) for k, r in state.items()
-                if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
+        live = [(k, int(r["pid"])) for k, r in state.items() if _alive(r.get("pid")) and _is_our_agent(int(r["pid"]))]
         if not live:
             return []
         for k, _ in live:
@@ -569,6 +590,7 @@ def version_skew_warning() -> str | None:
 # target is resumed and the least-recently-active agents beyond the cap are stopped —
 # their sessions persist (instance.id-scoped checkpoints) and resume on the next switch.
 
+
 def _live_config():
     """The live ``LangGraphConfig`` (or ``None`` in a CLI/no-STATE context). Lazy
     import to avoid an import-time cycle — same idiom as ``_pick_port`` /
@@ -655,6 +677,5 @@ def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> 
         except FleetError:
             pass
     if evicted:
-        log.info("[fleet] keep-%d-warm: evicted %s (sessions resume on next switch)",
-                 keep, ", ".join(evicted))
+        log.info("[fleet] keep-%d-warm: evicted %s (sessions resume on next switch)", keep, ", ".join(evicted))
     return evicted

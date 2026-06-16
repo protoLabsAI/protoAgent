@@ -42,8 +42,7 @@ class SlackAdapter:
             return (False, None, "Need both a bot token (xoxb-) and an app-level token (xapp-).")
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(_API.format(method="auth.test"),
-                                         headers={"Authorization": f"Bearer {bot}"})
+                resp = await client.post(_API.format(method="auth.test"), headers={"Authorization": f"Bearer {bot}"})
             data = resp.json()
             if data.get("ok"):
                 return (True, data.get("user") or data.get("team"), None)
@@ -59,17 +58,20 @@ class SlackAdapter:
         async with httpx.AsyncClient(timeout=30) as client:
 
             async def _open_socket() -> str:
-                resp = await client.post(_API.format(method="apps.connections.open"),
-                                         headers={"Authorization": f"Bearer {app}"})
+                resp = await client.post(
+                    _API.format(method="apps.connections.open"), headers={"Authorization": f"Bearer {app}"}
+                )
                 data = resp.json()
                 if not data.get("ok"):
                     raise RuntimeError(f"apps.connections.open: {data.get('error')}")
                 return data["url"]
 
             async def _post(channel: str, text: str) -> None:
-                await client.post(_API.format(method="chat.postMessage"),
-                                  headers={"Authorization": f"Bearer {bot}"},
-                                  json={"channel": channel, "text": text})
+                await client.post(
+                    _API.format(method="chat.postMessage"),
+                    headers={"Authorization": f"Bearer {bot}"},
+                    json={"channel": channel, "text": text},
+                )
 
             log.info("[slack] gateway started (socket mode)")
             while True:
@@ -96,9 +98,14 @@ class SlackAdapter:
                             async def reply(out: str, _ch=channel) -> None:
                                 await _post(_ch, out)
 
-                            await handle(InboundMessage(
-                                text=text, user_id=str(uid or ""), channel_id=str(channel), reply=reply,
-                            ))
+                            await handle(
+                                InboundMessage(
+                                    text=text,
+                                    user_id=str(uid or ""),
+                                    channel_id=str(channel),
+                                    reply=reply,
+                                )
+                            )
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001 — transient socket/API error; reconnect

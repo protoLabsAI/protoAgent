@@ -16,6 +16,7 @@ from tools.lg_tools import _build_scheduler_tools
 
 # ── WaitYieldMiddleware ───────────────────────────────────────────────────────
 
+
 def _tool_msg(name: str, content: str = "ok", status: str | None = None) -> ToolMessage:
     kw = {"content": content, "tool_call_id": f"c-{name}", "name": name}
     if status:
@@ -63,6 +64,7 @@ def test_middleware_jumps_to_end_only_after_wait():
 
 
 # ── the `wait` tool ───────────────────────────────────────────────────────────
+
 
 class _FakeJob:
     def __init__(self, next_fire: str):
@@ -125,9 +127,7 @@ async def test_wait_reads_session_from_injected_state():
     # empty there and silently dropped the resume to the Activity thread. Passing
     # `state` directly mirrors what the ToolNode injects at runtime.
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke(
-        {"seconds": 5, "then": "continue", "state": {"session_id": "chat-xyz"}}
-    )
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue", "state": {"session_id": "chat-xyz"}})
     assert sched.last_context_id == "chat-xyz"
 
 
@@ -135,11 +135,10 @@ async def test_wait_reads_session_from_injected_state():
 async def test_wait_injected_state_wins_over_contextvar(monkeypatch):
     # State is authoritative; the contextvar is only an off-graph fallback.
     import observability.tracing as tracing
+
     monkeypatch.setattr(tracing, "current_session_id", lambda: "stale-ctxvar")
     sched = _FakeScheduler()
-    await _wait_tool(sched).ainvoke(
-        {"seconds": 5, "then": "x", "state": {"session_id": "live-state"}}
-    )
+    await _wait_tool(sched).ainvoke({"seconds": 5, "then": "x", "state": {"session_id": "live-state"}})
     assert sched.last_context_id == "live-state"
 
 
@@ -148,6 +147,7 @@ async def test_wait_falls_back_to_contextvar_off_graph(monkeypatch):
     # No injected state (tool used outside a graph turn): fall back to the
     # contextvar so existing off-graph callers keep working.
     import observability.tracing as tracing
+
     monkeypatch.setattr(tracing, "current_session_id", lambda: "chat-abc")
     sched = _FakeScheduler()
     await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
@@ -157,6 +157,7 @@ async def test_wait_falls_back_to_contextvar_off_graph(monkeypatch):
 @pytest.mark.asyncio
 async def test_wait_without_a_session_leaves_context_id_none(monkeypatch):
     import observability.tracing as tracing
+
     monkeypatch.setattr(tracing, "current_session_id", lambda: "")
     sched = _FakeScheduler()
     await _wait_tool(sched).ainvoke({"seconds": 5, "then": "continue"})
@@ -170,6 +171,7 @@ async def test_wait_without_a_session_leaves_context_id_none(monkeypatch):
 # emits a wait tool call and asserts the scheduled resume carries the turn's
 # session_id — proving session_id is a real state channel (state_schema=
 # ProtoAgentState) and InjectedState delivers it to the tool.
+
 
 class _ToolFake(GenericFakeChatModel):
     """Fake chat model that supports bind_tools (returns itself) so it can drop
@@ -190,15 +192,17 @@ async def test_wait_in_a_real_graph_stamps_the_turn_session(monkeypatch):
 
     wait_call = AIMessage(
         content="",
-        tool_calls=[{"name": "wait", "args": {"seconds": 30, "then": "resume"},
-                     "id": "c1", "type": "tool_call"}],
+        tool_calls=[{"name": "wait", "args": {"seconds": 30, "then": "resume"}, "id": "c1", "type": "tool_call"}],
     )
     fake = _ToolFake(messages=iter([wait_call, AIMessage(content="done")]))
     sched = _FakeScheduler()
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
         from graph.agent import create_agent_graph
+
         graph = create_agent_graph(
-            LangGraphConfig(), scheduler=sched, include_subagents=False,
+            LangGraphConfig(),
+            scheduler=sched,
+            include_subagents=False,
             checkpointer=MemorySaver(),
         )
     await graph.ainvoke(

@@ -32,6 +32,7 @@ def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=()):
     monkeypatch.setitem(sys.modules, "server.agent_init", fake)
 
     import runtime.state as rs
+
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
@@ -40,18 +41,16 @@ def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=()):
 
 
 def test_enable_moves_lists_and_hot_reloads(monkeypatch):
-    captured = _wire(monkeypatch, enabled=["discord"], disabled=["github"],
-                     meta=[{"id": "github", "views": []}])
+    captured = _wire(monkeypatch, enabled=["discord"], disabled=["github"], meta=[{"id": "github", "views": []}])
     body = _client().post("/api/plugins/github/enabled", json={"enabled": True}).json()
     assert body == {"ok": True, "enabled": True, "reloaded": True, "restart_recommended": False}
     plugins = captured["config"]["plugins"]
     assert set(plugins["enabled"]) == {"discord", "github"}  # added, no dupes
-    assert plugins["disabled"] == []                          # removed from disabled
+    assert plugins["disabled"] == []  # removed from disabled
 
 
 def test_disable_moves_to_disabled(monkeypatch):
-    captured = _wire(monkeypatch, enabled=["discord", "github"], disabled=[],
-                     meta=[{"id": "github", "views": []}])
+    captured = _wire(monkeypatch, enabled=["discord", "github"], disabled=[], meta=[{"id": "github", "views": []}])
     body = _client().post("/api/plugins/github/enabled", json={"enabled": False}).json()
     assert body["enabled"] is False
     plugins = captured["config"]["plugins"]
@@ -62,8 +61,7 @@ def test_disable_moves_to_disabled(monkeypatch):
 def test_enabling_a_view_plugin_does_not_recommend_restart(monkeypatch):
     # #822 hot-mounts the router that serves the view on the same reload, so enabling a
     # view-contributing plugin is fully live — NO restart (the P0 fix: enable → it works).
-    _wire(monkeypatch, enabled=[], disabled=["boardy"],
-          meta=[{"id": "boardy", "views": [{"id": "board"}]}])
+    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[{"id": "boardy", "views": [{"id": "board"}]}])
     body = _client().post("/api/plugins/boardy/enabled", json={"enabled": True}).json()
     assert body == {"ok": True, "enabled": True, "reloaded": True, "restart_recommended": False}
 
@@ -71,8 +69,7 @@ def test_enabling_a_view_plugin_does_not_recommend_restart(monkeypatch):
 def test_disabling_a_view_plugin_recommends_restart(monkeypatch):
     # DISABLE is the residual restart case — FastAPI can't unmount the view's router, so
     # the stale route lingers until a process restart.
-    _wire(monkeypatch, enabled=["boardy"], disabled=[],
-          meta=[{"id": "boardy", "views": [{"id": "board"}]}])
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "views": [{"id": "board"}]}])
     body = _client().post("/api/plugins/boardy/enabled", json={"enabled": False}).json()
     assert body["enabled"] is False
     assert body["restart_recommended"] is True
@@ -81,16 +78,14 @@ def test_disabling_a_view_plugin_recommends_restart(monkeypatch):
 def test_disabling_a_route_only_plugin_recommends_restart(monkeypatch):
     # A plugin with no views but a contributed router (e.g. delegates) still leaves a
     # stale route on disable → restart recommended.
-    _wire(monkeypatch, enabled=["delegates"], disabled=[],
-          meta=[{"id": "delegates", "views": [], "routers": 1}])
+    _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[{"id": "delegates", "views": [], "routers": 1}])
     body = _client().post("/api/plugins/delegates/enabled", json={"enabled": False}).json()
     assert body["restart_recommended"] is True
 
 
 def test_disabling_a_plain_plugin_does_not_recommend_restart(monkeypatch):
     # A tools-only plugin (no view/route/surface) tears down cleanly on the reload — no restart.
-    _wire(monkeypatch, enabled=["github"], disabled=[],
-          meta=[{"id": "github", "views": []}])
+    _wire(monkeypatch, enabled=["github"], disabled=[], meta=[{"id": "github", "views": []}])
     body = _client().post("/api/plugins/github/enabled", json={"enabled": False}).json()
     assert body["restart_recommended"] is False
 
@@ -98,11 +93,18 @@ def test_disabling_a_plain_plugin_does_not_recommend_restart(monkeypatch):
 # ── auto-enable on install (trust-by-default; install = enabled + running) ────────
 def test_install_auto_enables_and_runs(monkeypatch):
     from graph.plugins import installer
+
     captured = _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[])
-    monkeypatch.setattr(installer, "install",
-                        lambda url, ref=None, **k: {"id": "spacetraders", "name": "SpaceTraders", "version": "1.0.0"})
-    body = _client().post("/api/plugins/install",
-                          json={"url": "https://github.com/protoLabsAI/spacetraders-plugin"}).json()
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"id": "spacetraders", "name": "SpaceTraders", "version": "1.0.0"},
+    )
+    body = (
+        _client()
+        .post("/api/plugins/install", json={"url": "https://github.com/protoLabsAI/spacetraders-plugin"})
+        .json()
+    )
     assert body["enabled"] == ["spacetraders"] and body["reloaded"] is True and body["enable_error"] is None
     # added to plugins.enabled + persisted via the same _apply_settings_changes path the enable toggle uses
     assert set(captured["config"]["plugins"]["enabled"]) == {"delegates", "spacetraders"}
@@ -110,42 +112,61 @@ def test_install_auto_enables_and_runs(monkeypatch):
 
 def test_install_bundle_enables_declared_members(monkeypatch):
     from graph.plugins import installer
+
     captured = _wire(monkeypatch, enabled=[], disabled=[], meta=[])
-    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
-        "bundle": "pm-stack", "installed": [{"id": "board"}, {"id": "browser"}], "enabled": ["board"]})
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {
+            "bundle": "pm-stack",
+            "installed": [{"id": "board"}, {"id": "browser"}],
+            "enabled": ["board"],
+        },
+    )
     body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack"}).json()
-    assert body["enabled"] == ["board"]                       # the bundle's declared enable set
+    assert body["enabled"] == ["board"]  # the bundle's declared enable set
     assert captured["config"]["plugins"]["enabled"] == ["board"]
 
 
 def test_install_bundle_without_declared_enable_enables_every_member(monkeypatch):
     from graph.plugins import installer
+
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
-    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
-        "bundle": "x", "installed": [{"id": "a"}, {"id": "b"}], "enabled": []})
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "x", "installed": [{"id": "a"}, {"id": "b"}], "enabled": []},
+    )
     body = _client().post("/api/plugins/install", json={"url": "https://x/y"}).json()
     assert body["enabled"] == ["a", "b"]
 
 
 def test_install_opt_out_stays_install_not_enable(monkeypatch):
     from graph.plugins import installer
+
     monkeypatch.setenv("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "1")
     captured = _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[])
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
     body = _client().post("/api/plugins/install", json={"url": "https://x"}).json()
     assert body["enabled"] == [] and body["reloaded"] is False
-    assert "config" not in captured                          # _apply_settings_changes never called
+    assert "config" not in captured  # _apply_settings_changes never called
 
 
 def test_install_succeeds_even_if_enable_reload_fails(monkeypatch):
     from graph.plugins import installer
+
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
-    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (False, ["graph compile failed"])
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (
+        False,
+        ["graph compile failed"],
+    )
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "demo"})
     resp = _client().post("/api/plugins/install", json={"url": "https://x"})
-    assert resp.status_code == 200                            # the install itself didn't 500
+    assert resp.status_code == 200  # the install itself didn't 500
     body = resp.json()
-    assert body["installed"]["id"] == "demo" and body["enabled"] == [] and "graph compile failed" in body["enable_error"]
+    assert (
+        body["installed"]["id"] == "demo" and body["enabled"] == [] and "graph compile failed" in body["enable_error"]
+    )
 
 
 # ── force re-install over a LIVE plugin can't hot-swap its router (#942) ──────────
@@ -153,6 +174,7 @@ def test_fresh_install_hot_mounts_no_restart(monkeypatch):
     # First install: nothing mounted yet, the reload hot-mounts the router (#822) —
     # fully live, no restart. The pre-#942 posture, preserved.
     from graph.plugins import installer
+
     _wire(monkeypatch, enabled=[], disabled=[], meta=[])
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/boardy"}).json()
@@ -165,8 +187,8 @@ def test_force_reinstall_over_mounted_router_recommends_restart(monkeypatch):
     # mount DROPS the new one (FastAPI can't swap in place) — the fresh routes don't
     # serve until a process restart. The response must say so, not claim hot-mount.
     from graph.plugins import installer
-    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[],
-          router_keys={("boardy", "/plugins/boardy")})
+
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[], router_keys={("boardy", "/plugins/boardy")})
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
     assert body["reloaded"] is True
@@ -177,8 +199,8 @@ def test_force_reinstall_over_disabled_lingering_router_recommends_restart(monke
     # Disable doesn't unmount, so the router lingers with NO plugin_meta entry —
     # the mount registry is the signal that survives (the meta check alone misses it).
     from graph.plugins import installer
-    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[],
-          router_keys={("boardy", "/plugins/boardy")})
+
+    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")})
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
     assert body["restart_recommended"] is True
@@ -188,11 +210,17 @@ def test_bundle_reinstall_flags_restart_only_for_mounted_members(monkeypatch):
     # A bundle re-install over one live member + one fresh member → restart (the
     # live member's routes are stale); builtin members are never fetched → ignored.
     from graph.plugins import installer
-    _wire(monkeypatch, enabled=["board"], disabled=[], meta=[],
-          router_keys={("board", "/plugins/board")})
-    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {
-        "bundle": "pm-stack", "installed": [{"id": "board"}, {"id": "browser"}],
-        "enabled": ["board", "browser"]})
+
+    _wire(monkeypatch, enabled=["board"], disabled=[], meta=[], router_keys={("board", "/plugins/board")})
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {
+            "bundle": "pm-stack",
+            "installed": [{"id": "board"}, {"id": "browser"}],
+            "enabled": ["board", "browser"],
+        },
+    )
     body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack", "force": True}).json()
     assert body["restart_recommended"] is True
 
@@ -203,8 +231,8 @@ def test_force_reinstall_purges_module_subtree(monkeypatch):
     # fresh checkout is what actually runs.
     from graph.plugins import installer
     from graph.plugins.loader import _plugin_module_name
-    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[],
-          router_keys={("boardy", "/plugins/boardy")})
+
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[], router_keys={("boardy", "/plugins/boardy")})
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     mod = _plugin_module_name("boardy")
     monkeypatch.setitem(sys.modules, mod, types.ModuleType(mod))
@@ -218,11 +246,16 @@ def test_sync_fetches_missing_and_reloads_enabled(monkeypatch):
     # A locked plugin that's missing AND enabled (restored data dir): sync fetches it
     # and hot-reloads so it comes up live — fresh code, no mounted router, no restart.
     from graph.plugins import installer
+
     captured = _wire(monkeypatch, enabled=["artifact"], disabled=[], meta=[])
-    monkeypatch.setattr(installer, "sync", lambda allow=None: [
-        {"id": "artifact", "status": "installed"},
-        {"id": "doom", "status": "present"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "sync",
+        lambda allow=None: [
+            {"id": "artifact", "status": "installed"},
+            {"id": "doom", "status": "present"},
+        ],
+    )
     body = _client().post("/api/plugins/sync").json()
     assert body["reloaded"] is True and body["reload_error"] is None
     assert captured["config"]["plugins"]["enabled"] == ["artifact"]
@@ -233,25 +266,37 @@ def test_sync_skips_reload_when_nothing_fetched_is_enabled(monkeypatch):
     # Fresh clone: locked plugins fetched but none enabled → no reload (fetch ≠ enable,
     # ADR 0027 — turning them on stays the operator's explicit step).
     from graph.plugins import installer
+
     captured = _wire(monkeypatch, enabled=["discord"], disabled=[], meta=[])
-    monkeypatch.setattr(installer, "sync", lambda allow=None: [
-        {"id": "artifact", "status": "installed"},
-    ])
+    monkeypatch.setattr(
+        installer,
+        "sync",
+        lambda allow=None: [
+            {"id": "artifact", "status": "installed"},
+        ],
+    )
     body = _client().post("/api/plugins/sync").json()
     assert body["reloaded"] is False and body["reload_error"] is None
-    assert "config" not in captured                           # no reload triggered
+    assert "config" not in captured  # no reload triggered
 
 
 def test_sync_surfaces_reload_failure_without_500(monkeypatch):
     from graph.plugins import installer
+
     _wire(monkeypatch, enabled=["artifact"], disabled=[], meta=[])
-    sys.modules["server.agent_init"]._apply_settings_changes = (
-        lambda config=None, soul=None: (False, ["graph compile failed"]))
-    monkeypatch.setattr(installer, "sync", lambda allow=None: [
-        {"id": "artifact", "status": "installed"},
-    ])
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (
+        False,
+        ["graph compile failed"],
+    )
+    monkeypatch.setattr(
+        installer,
+        "sync",
+        lambda allow=None: [
+            {"id": "artifact", "status": "installed"},
+        ],
+    )
     resp = _client().post("/api/plugins/sync")
-    assert resp.status_code == 200                            # the fetch itself landed
+    assert resp.status_code == 200  # the fetch itself landed
     body = resp.json()
     assert body["reloaded"] is False and "graph compile failed" in body["reload_error"]
 
@@ -260,12 +305,14 @@ def test_update_route_flags_restart_for_disabled_lingering_router(monkeypatch):
     # The update route's restart heuristic also reads the mount registry now — a
     # disabled-but-still-mounted plugin (no meta) updating at its ref needs a restart.
     from graph.plugins import installer
-    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[],
-          router_keys={("boardy", "/plugins/boardy")})
-    monkeypatch.setattr(installer, "list_installed", lambda: [
-        {"id": "boardy", "source_url": "https://x/boardy", "requested_ref": "v1"}])
-    monkeypatch.setattr(installer, "install",
-                        lambda url, ref=None, **k: {"id": "boardy", "version": "2", "resolved_sha": "b" * 40})
+
+    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setattr(
+        installer, "list_installed", lambda: [{"id": "boardy", "source_url": "https://x/boardy", "requested_ref": "v1"}]
+    )
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"id": "boardy", "version": "2", "resolved_sha": "b" * 40}
+    )
     body = _client().post("/api/plugins/boardy/update").json()
-    assert body["reloaded"] is False                          # disabled → nothing to reload
+    assert body["reloaded"] is False  # disabled → nothing to reload
     assert body["restart_recommended"] is True

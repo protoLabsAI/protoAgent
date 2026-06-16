@@ -23,13 +23,19 @@ TASKS = json.loads((Path(__file__).parent.parent / "evals" / "tasks.json").read_
 
 def test_judge_parses_verdict_and_scores_fraction(monkeypatch):
     criteria = ["A", "B", "C"]
-    monkeypatch.setattr(judge, "_invoke_grader", lambda prompt, model: json.dumps({
-        "criteria": [
-            {"criterion": "A", "met": True, "why": "yes"},
-            {"criterion": "B", "met": False, "why": "no"},
-            {"criterion": "C", "met": True, "why": "yes"},
-        ]
-    }))
+    monkeypatch.setattr(
+        judge,
+        "_invoke_grader",
+        lambda prompt, model: json.dumps(
+            {
+                "criteria": [
+                    {"criterion": "A", "met": True, "why": "yes"},
+                    {"criterion": "B", "met": False, "why": "no"},
+                    {"criterion": "C", "met": True, "why": "yes"},
+                ]
+            }
+        ),
+    )
     res = judge.score_rubric("some output", criteria)
     assert res.score == pytest.approx(2 / 3)
     assert res.met == {"A": True, "B": False, "C": True}
@@ -37,8 +43,9 @@ def test_judge_parses_verdict_and_scores_fraction(monkeypatch):
 
 
 def test_judge_tolerates_code_fenced_json(monkeypatch):
-    monkeypatch.setattr(judge, "_invoke_grader", lambda p, m:
-                        '```json\n{"criteria": [{"criterion": "A", "met": true}]}\n```')
+    monkeypatch.setattr(
+        judge, "_invoke_grader", lambda p, m: '```json\n{"criteria": [{"criterion": "A", "met": true}]}\n```'
+    )
     res = judge.score_rubric("o", ["A"])
     assert res.score == 1.0
 
@@ -52,6 +59,7 @@ def test_judge_reports_error_on_garbage(monkeypatch):
 def test_judge_never_raises_on_grader_failure(monkeypatch):
     def boom(prompt, model):
         raise RuntimeError("gateway down")
+
     monkeypatch.setattr(judge, "_invoke_grader", boom)
     res = judge.score_rubric("o", ["A"])
     assert res.score == 0.0 and "gateway down" in res.error
@@ -66,7 +74,8 @@ def test_empty_rubric_is_a_pass():
 
 def test_check_rubric_passes_at_threshold(monkeypatch):
     monkeypatch.setattr(
-        judge, "score_rubric",
+        judge,
+        "score_rubric",
         lambda text, criteria, model=None: judge.RubricScore(score=0.8, met={"a": True}),
     )
     case = {"verify_rubric": {"criteria": ["a"], "threshold": 0.66}}
@@ -75,7 +84,8 @@ def test_check_rubric_passes_at_threshold(monkeypatch):
 
 def test_check_rubric_fails_below_threshold(monkeypatch):
     monkeypatch.setattr(
-        judge, "score_rubric",
+        judge,
+        "score_rubric",
         lambda text, criteria, model=None: judge.RubricScore(score=0.4, met={"a": False}),
     )
     case = {"verify_rubric": {"criteria": ["a"], "threshold": 0.75}}
@@ -125,13 +135,18 @@ class _FakeClient:
 
 def test_workflow_case_passes_on_pattern_and_rubric(monkeypatch):
     monkeypatch.setattr(
-        judge, "score_rubric",
+        judge,
+        "score_rubric",
         lambda text, criteria, model=None: judge.RubricScore(score=1.0),
     )
     client = _FakeClient("# Report\n\n## Counterpoints & caveats\nthings [1]")
     case = {
-        "id": "wf", "category": "workflow", "kind": "workflow",
-        "name": "wf", "workflow": "deep-research", "inputs": {"topic": "x"},
+        "id": "wf",
+        "category": "workflow",
+        "kind": "workflow",
+        "name": "wf",
+        "workflow": "deep-research",
+        "inputs": {"topic": "x"},
         "expected_patterns": ["counterpoint"],
         "verify_rubric": {"criteria": ["balanced"], "threshold": 0.75},
     }
@@ -143,18 +158,32 @@ def test_workflow_case_passes_on_pattern_and_rubric(monkeypatch):
 def test_workflow_case_fails_on_missing_pattern():
     client = _FakeClient("a report with no opposing view")
     case = {
-        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
-        "workflow": "deep-research", "inputs": {}, "expected_patterns": ["counterpoint"],
+        "id": "wf",
+        "category": "workflow",
+        "kind": "workflow",
+        "name": "wf",
+        "workflow": "deep-research",
+        "inputs": {},
+        "expected_patterns": ["counterpoint"],
     }
     res = asyncio.run(runner._run_workflow_case(client, case))
     assert not res.passed and "counterpoint" in res.detail
 
 
 def test_workflow_case_fails_on_empty_output():
-    res = asyncio.run(runner._run_workflow_case(_FakeClient("  "), {
-        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
-        "workflow": "research-and-brief", "inputs": {},
-    }))
+    res = asyncio.run(
+        runner._run_workflow_case(
+            _FakeClient("  "),
+            {
+                "id": "wf",
+                "category": "workflow",
+                "kind": "workflow",
+                "name": "wf",
+                "workflow": "research-and-brief",
+                "inputs": {},
+            },
+        )
+    )
     assert not res.passed and "empty" in res.detail
 
 
@@ -163,8 +192,12 @@ def test_workflow_case_asserts_expected_tool_fired(monkeypatch):
     monkeypatch.setattr(verify, "audit_entries_since", lambda since: _audit("backtest_strategy"))
     client = _FakeClient("# Desk call\nGO — Sharpe 1.2, beat buy-and-hold.")
     case = {
-        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
-        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "id": "wf",
+        "category": "workflow",
+        "kind": "workflow",
+        "name": "wf",
+        "workflow": "quant-desk",
+        "inputs": {"idea": "x"},
         "expected_tools": ["backtest_strategy"],
     }
     res = asyncio.run(runner._run_workflow_case(client, case))
@@ -179,8 +212,12 @@ def test_workflow_case_fails_when_expected_tool_missing(monkeypatch):
     monkeypatch.setattr(runner, "_AUDIT_POLL_DEADLINE_S", 0.0)
     client = _FakeClient("# Desk call\nNO-GO — here's the backtest code I'd run: ...")
     case = {
-        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
-        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "id": "wf",
+        "category": "workflow",
+        "kind": "workflow",
+        "name": "wf",
+        "workflow": "quant-desk",
+        "inputs": {"idea": "x"},
         "expected_tools": ["backtest_strategy"],
     }
     res = asyncio.run(runner._run_workflow_case(client, case))
@@ -192,8 +229,12 @@ def test_workflow_case_asserts_any_tool_fired(monkeypatch):
     monkeypatch.setattr(verify, "audit_entries_since", lambda since: _audit("factor_zoo"))
     client = _FakeClient("# Factors\nmomentum alive, IR 1.1.")
     case = {
-        "id": "wf", "category": "workflow", "kind": "workflow", "name": "wf",
-        "workflow": "quant-desk", "inputs": {"idea": "x"},
+        "id": "wf",
+        "category": "workflow",
+        "kind": "workflow",
+        "name": "wf",
+        "workflow": "quant-desk",
+        "inputs": {"idea": "x"},
         "expected_any_tools": ["factor_eval", "factor_zoo"],
     }
     res = asyncio.run(runner._run_workflow_case(client, case))
@@ -253,7 +294,7 @@ def test_no_requirements_runs():
 def test_acp_delegation_eval_case_present_and_gated():
     case = {c["id"]: c for c in TASKS}.get("acp_delegation")
     assert case is not None, "acp_delegation case missing"
-    assert case["requires_env"] == ["EVAL_CODING_AGENT"]   # skips by default
+    assert case["requires_env"] == ["EVAL_CODING_AGENT"]  # skips by default
     assert case["expected_tools"] == ["delegate_to"]
     assert case["kind"] == "ask"
 

@@ -119,9 +119,13 @@ def register_plugin_routes(app) -> None:
             m = load_manifest(root / e["id"]) if e.get("present") else None
             if m is not None:
                 item["manifest"] = {
-                    "name": m.name, "version": m.version, "description": m.description,
-                    "repository": m.repository, "homepage": m.homepage,
-                    "capabilities": m.capabilities, "requires_env": m.requires_env,
+                    "name": m.name,
+                    "version": m.version,
+                    "description": m.description,
+                    "repository": m.repository,
+                    "homepage": m.homepage,
+                    "capabilities": m.capabilities,
+                    "requires_env": m.requires_env,
                     "requires_pip": m.requires_pip,
                     "views": [v.get("label") for v in m.views],
                     "secrets": m.secrets,
@@ -135,11 +139,15 @@ def register_plugin_routes(app) -> None:
         url = str(body.get("url", "")).strip()
         if not url:
             raise HTTPException(status_code=400, detail="url is required")
-        ref = (str(body.get("ref", "")).strip() or None)
+        ref = str(body.get("ref", "")).strip() or None
         force = bool(body.get("force"))
         try:
             summary = installer.install(
-                url, ref, force=force, by="console", allow=_sources_allowlist(),
+                url,
+                ref,
+                force=force,
+                by="console",
+                allow=_sources_allowlist(),
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -159,9 +167,7 @@ def register_plugin_routes(app) -> None:
         fresh = _installed_ids_from_summary(summary)
         mounted = _mounted_router_ids()
         prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
-        stale_after_reload = [
-            pid for pid in fresh if pid in mounted or _has_surface(prev_meta.get(pid))
-        ]
+        stale_after_reload = [pid for pid in fresh if pid in mounted or _has_surface(prev_meta.get(pid))]
         # Same parity for code the reload CAN swap: drop each re-installed plugin's
         # module subtree so tools/middleware re-exec from the fresh checkout (the
         # update route's multi-file fix; a first install is a no-op here).
@@ -193,7 +199,7 @@ def register_plugin_routes(app) -> None:
 
         return {
             "installed": summary,
-            "enabled": enabled_now,        # the ids now live
+            "enabled": enabled_now,  # the ids now live
             "reloaded": reloaded,
             # A FIRST install hot-mounts fully live (#822); a force re-install over a
             # live router serves stale routes until restart (#942).
@@ -240,7 +246,6 @@ def register_plugin_routes(app) -> None:
         restart = bool(not want and _has_surface(prev_meta))
         return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
 
-
     @app.get("/api/plugins/updates")
     async def _updates():
         """Per-plugin update status (behind / up-to-date / pinned / error).
@@ -271,14 +276,17 @@ def register_plugin_routes(app) -> None:
             from server.agent_init import _apply_settings_changes
 
             ok, messages = _apply_settings_changes(
-                config={"plugins": {"enabled": sorted(enabled_now),
-                                    "disabled": list(getattr(cfg, "plugins_disabled", []) or [])}},
+                config={
+                    "plugins": {
+                        "enabled": sorted(enabled_now),
+                        "disabled": list(getattr(cfg, "plugins_disabled", []) or []),
+                    }
+                },
             )
             if not ok:
                 # The fetch itself succeeded — surface the reload failure per row
                 # semantics rather than 500ing (mirrors the install route).
-                return {"plugins": results, "reloaded": False,
-                        "reload_error": "; ".join(messages) or "reload failed"}
+                return {"plugins": results, "reloaded": False, "reload_error": "; ".join(messages) or "reload failed"}
             reloaded = True
         return {"plugins": results, "reloaded": reloaded, "reload_error": None}
 
@@ -292,9 +300,7 @@ def register_plugin_routes(app) -> None:
         reload (so tools/middleware/MCP rebuild and the router re-mounts, #822); if
         it's installed-but-disabled we just re-install (nothing to reload yet).
         """
-        entry = next(
-            (e for e in installer.list_installed() if e.get("id") == plugin_id), None
-        )
+        entry = next((e for e in installer.list_installed() if e.get("id") == plugin_id), None)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} is not installed")
         source_url = entry.get("source_url", "")
@@ -303,10 +309,14 @@ def register_plugin_routes(app) -> None:
                 status_code=400,
                 detail=f"plugin {plugin_id!r} has no source_url — cannot update",
             )
-        ref = (entry.get("requested_ref", "") or None)
+        ref = entry.get("requested_ref", "") or None
         try:
             summary = installer.install(
-                source_url, ref, force=True, by="console", allow=_sources_allowlist(),
+                source_url,
+                ref,
+                force=True,
+                by="console",
+                allow=_sources_allowlist(),
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -344,9 +354,7 @@ def register_plugin_routes(app) -> None:
             "version": summary.get("version"),
             "resolved_sha": summary.get("resolved_sha"),
             "reloaded": reloaded,
-            "restart_recommended": bool(
-                _has_surface(meta) or plugin_id in _mounted_router_ids()
-            ),
+            "restart_recommended": bool(_has_surface(meta) or plugin_id in _mounted_router_ids()),
         }
 
     @app.delete("/api/plugins/{plugin_id}")

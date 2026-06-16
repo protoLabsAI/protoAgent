@@ -108,6 +108,7 @@ def _get_acp_runtime(thread_id: str):
     rt = _ACP_RUNTIMES.get(thread_id)
     if rt is None:
         from runtime.acp_runtime import AcpRuntime
+
         rt = AcpRuntime(STATE.graph_config)
         _ACP_RUNTIMES[thread_id] = rt
     return rt
@@ -121,19 +122,22 @@ def _setup_required_message() -> list[dict[str, Any]]:
     UI state — so they emit a plain-text "finish setup first"
     message instead of 500ing on ``STATE.graph is None``.
     """
-    return [{
-        "role": "assistant",
-        "content": (
-            "**Setup required.** The setup wizard has not been completed. "
-            "Open the UI and finish the wizard, or POST the completed config "
-            "to `/api/config/setup` before calling chat endpoints."
-        ),
-    }]
+    return [
+        {
+            "role": "assistant",
+            "content": (
+                "**Setup required.** The setup wizard has not been completed. "
+                "Open the UI and finish the wizard, or POST the completed config "
+                "to `/api/config/setup` before calling chat endpoints."
+            ),
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Chat backend — called by the A2A handler + OpenAI-compat endpoint
 # ---------------------------------------------------------------------------
+
 
 async def chat(message: str, session_id: str, *, model: str | None = None) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
@@ -306,16 +310,20 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
             # card so the user sees the rendered widget, not raw wire JSON.
             if isinstance(coerced, str):
                 from graph.components import extract_component, strip_component
+
                 comp = extract_component(coerced)
                 if comp is not None:
                     yield ("component", comp)
                     coerced = strip_component(coerced)
-            yield ("tool_end", {
-                "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
-                "name": name,
-                "output": coerced,
-                "error": getattr(output, "status", None) == "error",
-            })
+            yield (
+                "tool_end",
+                {
+                    "id": getattr(output, "tool_call_id", None) or event.get("run_id") or name,
+                    "name": name,
+                    "output": coerced,
+                    "error": getattr(output, "status", None) == "error",
+                },
+            )
         elif kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
             if chunk is None:
@@ -324,7 +332,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
             # before the call is fully formed or executed — so the UI shows
             # "<tool> · running" instead of a bare loading wheel. Keyed by the
             # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
-            for tcc in (getattr(chunk, "tool_call_chunks", None) or []):
+            for tcc in getattr(chunk, "tool_call_chunks", None) or []:
                 tcid, tcname = tcc.get("id"), tcc.get("name")
                 if tcid and tcname and tcid not in announced_tools:
                     announced_tools.add(tcid)
@@ -350,12 +358,14 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
             # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
             # for any tool the stream path didn't announce (e.g. a non-streaming model)
             # without re-emitting an early start already sent earlier this turn.
-            for tc in (getattr(output, "tool_calls", None) or []):
+            for tc in getattr(output, "tool_calls", None) or []:
                 tcid = tc.get("id")
                 if tcid:
                     announced_tools.add(tcid)
-                    yield ("tool_start", {"id": tcid, "name": tc.get("name", ""),
-                                          "input": _coerce_tool_value(tc.get("args", ""))})
+                    yield (
+                        "tool_start",
+                        {"id": tcid, "name": tc.get("name", ""), "input": _coerce_tool_value(tc.get("args", ""))},
+                    )
             usage = getattr(output, "usage_metadata", None) if output else None
             rid = event.get("run_id")
             latency_s = max(0.0, time.monotonic() - _llm_started.pop(rid, time.monotonic())) if rid else 0.0
@@ -378,10 +388,7 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                     "cache_creation_input_tokens": cache_creation,
                 }
                 cost = pricing.cost_usd(model, usage_out)
-                finish_reason = (
-                    getattr(output, "response_metadata", {}).get("finish_reason", "")
-                    or "stop"
-                )
+                finish_reason = getattr(output, "response_metadata", {}).get("finish_reason", "") or "stop"
                 # Wire the per-call Prometheus seam (no-op when unconfigured);
                 # previously record_llm_call was defined but never called. The
                 # per-call Langfuse generation span comes from the LiteLLM
@@ -389,10 +396,13 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
                 # that would bypass trace_session's nesting (see tracing.py).
                 try:
                     metrics.record_llm_call(
-                        model, finish_reason, latency_s,
+                        model,
+                        finish_reason,
+                        latency_s,
                         tokens_input=usage_out["input_tokens"],
                         tokens_output=usage_out["output_tokens"],
-                        cache_read=cache_read, cache_creation=cache_creation,
+                        cache_read=cache_read,
+                        cache_creation=cache_creation,
                         cost_usd=cost,
                     )
                 except Exception:  # noqa: BLE001 — telemetry must never break a turn
@@ -618,11 +628,14 @@ async def _chat_langgraph_stream(
         yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
-    async with tracing.trace_session(
-        session_id=session_id,
-        name="a2a-stream",
-        metadata=trace_meta,
-    ), request_metadata_scope(request_metadata):
+    async with (
+        tracing.trace_session(
+            session_id=session_id,
+            name="a2a-stream",
+            metadata=trace_meta,
+        ),
+        request_metadata_scope(request_metadata),
+    ):
         try:
             # Goal control messages (/goal ...) short-circuit the turn: set /
             # status / clear a goal and return the reply without running the graph.
@@ -653,8 +666,14 @@ async def _chat_langgraph_stream(
 
                 runner = asyncio.create_task(_runner())
                 # An umbrella card for the whole workflow, then one per step.
-                yield ("tool_start", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}",
-                                      "input": _coerce_tool_value(wf_inputs)})
+                yield (
+                    "tool_start",
+                    {
+                        "id": f"workflow:{wf_name}",
+                        "name": f"workflow:{wf_name}",
+                        "input": _coerce_tool_value(wf_inputs),
+                    },
+                )
                 while True:
                     event = await step_q.get()
                     if event is _WF_DONE:
@@ -663,11 +682,16 @@ async def _chat_langgraph_stream(
                     step_tool_id = f"workflow:{wf_name}:{sid}"
                     label = f"{wf_name} · {sid}"
                     if event.get("phase") == "start":
-                        yield ("tool_start", {"id": step_tool_id, "name": label,
-                                              "input": event.get("subagent", "")})
+                        yield ("tool_start", {"id": step_tool_id, "name": label, "input": event.get("subagent", "")})
                     else:
-                        yield ("tool_end", {"id": step_tool_id, "name": label,
-                                            "output": extract_output(event.get("output", "")) or event.get("output", "")})
+                        yield (
+                            "tool_end",
+                            {
+                                "id": step_tool_id,
+                                "name": label,
+                                "output": extract_output(event.get("output", "")) or event.get("output", ""),
+                            },
+                        )
                 wf_out = await runner
                 yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
                 yield ("done", wf_out)
@@ -701,6 +725,7 @@ async def _chat_langgraph_stream(
             # external coding agent (proto/codex/claude/…) drives the turn over ACP
             # instead of the native LangGraph loop. One stateful ACP session per thread.
             from runtime.acp_runtime import is_acp_runtime
+
             if is_acp_runtime(STATE.graph_config):
                 rt = _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
                 # Bridge the agent's reader-loop callbacks (answer-text deltas + tool events)
@@ -714,11 +739,23 @@ async def _chat_langgraph_stream(
 
                 async def _on_tool(ev: dict) -> None:
                     if ev.get("phase") == "start":
-                        await frame_q.put(("tool_start", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
-                                                          "input": ev.get("input", "")}))
+                        await frame_q.put(
+                            (
+                                "tool_start",
+                                {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "input": ev.get("input", "")},
+                            )
+                        )
                     elif ev.get("phase") == "end":
-                        await frame_q.put(("tool_end", {"id": ev.get("id", ""), "name": ev.get("name", "tool"),
-                                                        "output": ev.get("output", "")}))
+                        await frame_q.put(
+                            (
+                                "tool_end",
+                                {
+                                    "id": ev.get("id", ""),
+                                    "name": ev.get("name", "tool"),
+                                    "output": ev.get("output", ""),
+                                },
+                            )
+                        )
 
                 async def _drive():
                     try:
@@ -731,7 +768,7 @@ async def _chat_langgraph_stream(
                     frame = await frame_q.get()
                     if frame is _ACP_DONE:
                         break
-                    yield frame   # (kind, payload) — already normalized
+                    yield frame  # (kind, payload) — already normalized
                 try:
                     answer = await driver
                 except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
@@ -742,12 +779,17 @@ async def _chat_langgraph_stream(
                 # gateway model (`protolabs/reasoning`), which never ran. Gateway tokens/cost are
                 # 0: the external agent's own subscription meters its usage, not us. (The model
                 # label `acp:<agent>` is the honest signal that this turn wasn't gateway-metered.)
-                yield ("usage", {
-                    "model": f"acp:{rt.agent}",
-                    "input_tokens": 0, "output_tokens": 0,
-                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
-                    "cost_usd": 0.0,
-                })
+                yield (
+                    "usage",
+                    {
+                        "model": f"acp:{rt.agent}",
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cost_usd": 0.0,
+                    },
+                )
                 # The answer already streamed as text deltas; `done` finalizes (executor appends
                 # only meta when text was streamed, so no duplication).
                 yield ("done", answer)
@@ -773,8 +815,7 @@ async def _chat_langgraph_stream(
             # suppress cross-session prior_sessions on the initial turn (and the
             # kicker retry below), matching the continuation turns.
             goal_active = (
-                STATE.goal_controller is not None
-                and STATE.goal_controller.active_goal(session_id) is not None
+                STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
             )
 
             # One graph turn (model tokens accumulated silently; A2A consumers
@@ -784,9 +825,12 @@ async def _chat_langgraph_stream(
             paused = False
             with goal_turn(goal_active):
                 async for kind, payload in _run_turn_stream(
-                    message, session_id, config,
+                    message,
+                    session_id,
+                    config,
                     resume_value=(message if resume else None),
-                    images=images, model=_model,
+                    images=images,
+                    model=_model,
                 ):
                     if kind == "__raw__":
                         accumulated_raw = payload
@@ -819,7 +863,9 @@ async def _chat_langgraph_stream(
                 yield ("tool_start", "↻ retry: prior turn dropped scratch-only")
                 retry_raw = ""
                 with goal_turn(goal_active):
-                    async for kind, payload in _run_turn_stream(DROPPED_SCRATCH_KICKER, session_id, config, model=_model):
+                    async for kind, payload in _run_turn_stream(
+                        DROPPED_SCRATCH_KICKER, session_id, config, model=_model
+                    ):
                         if kind == "__raw__":
                             retry_raw = payload
                         else:
@@ -856,9 +902,7 @@ async def _chat_langgraph_stream(
                     if goal_state and goal_state.fresh_context:
                         base_tid = _resolve_thread_id(request_metadata, session_id)
                         cont_config = {
-                            "configurable": {
-                                "thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"
-                            },
+                            "configurable": {"thread_id": f"{base_tid}:goal-iter-{goal_state.iteration}"},
                             "recursion_limit": 200,
                         }
                     else:
@@ -866,7 +910,9 @@ async def _chat_langgraph_stream(
 
                     cont_raw = ""
                     with goal_turn():
-                        async for kind, payload in _run_turn_stream(decision.message, session_id, cont_config, model=_model):
+                        async for kind, payload in _run_turn_stream(
+                            decision.message, session_id, cont_config, model=_model
+                        ):
                             if kind == "__raw__":
                                 cont_raw = payload
                             else:
@@ -900,7 +946,8 @@ async def _chat_langgraph_stream(
         except Exception as e:
             log.exception(
                 "[a2a-stream] unhandled exception for session=%s: %s",
-                session_id, e,
+                session_id,
+                e,
             )
             yield ("error", str(e))
         finally:
@@ -956,8 +1003,7 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn too.
             goal_active = (
-                STATE.goal_controller is not None
-                and STATE.goal_controller.active_goal(session_id) is not None
+                STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id) is not None
             )
             with goal_turn(goal_active):
                 result = await STATE.graph.ainvoke(
@@ -979,10 +1025,7 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     # prompt; the caller answers with a follow-up message, which
                     # continues the thread (the checkpointer kept the history).
                     payload = _interrupt_payload(interrupt_val)
-                    question = (
-                        payload.get("question") or payload.get("title")
-                        or "The agent needs input to continue."
-                    )
+                    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
                     return [{"role": "assistant", "content": f"🙋 **Input needed:** {question}"}]
 
                 # Dropped scratch-only turn (no <output>, no tool call): re-prompt
@@ -991,7 +1034,11 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     log.warning("[chat] dropped scratch-only turn (session=%s) — kicker retry", session_id)
                     with goal_turn(goal_active):
                         result = await STATE.graph.ainvoke(
-                            {"messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)], "session_id": session_id, **_model_extra},
+                            {
+                                "messages": [HumanMessage(content=DROPPED_SCRATCH_KICKER)],
+                                "session_id": session_id,
+                                **_model_extra,
+                            },
                             config=config,
                         )
                     response = extract_output(_last_ai(result))
@@ -1019,16 +1066,18 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     goal_state = decision.state
                     if goal_state and goal_state.fresh_context:
                         cont_config = {
-                            "configurable": {
-                                "thread_id": f"chat:{session_id}:goal-iter-{goal_state.iteration}"
-                            },
+                            "configurable": {"thread_id": f"chat:{session_id}:goal-iter-{goal_state.iteration}"},
                         }
                     else:
                         cont_config = config
 
                     with goal_turn():
                         result = await STATE.graph.ainvoke(
-                            {"messages": [HumanMessage(content=decision.message)], "session_id": session_id, **_model_extra},
+                            {
+                                "messages": [HumanMessage(content=decision.message)],
+                                "session_id": session_id,
+                                **_model_extra,
+                            },
                             config=cont_config,
                         )
                     nxt = extract_output(_last_ai(result))
@@ -1041,7 +1090,8 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
         except Exception as e:
             log.exception(
                 "[chat] unhandled exception for session=%s: %s",
-                session_id, e,
+                session_id,
+                e,
             )
             return [{"role": "assistant", "content": f"**Error:** {e}"}]
         finally:

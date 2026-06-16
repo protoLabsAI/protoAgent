@@ -1,4 +1,5 @@
 """chat_example plugin (ADR 0045) — the reference chat-slot panel."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -12,9 +13,7 @@ _PLUGIN_DIR = Path("examples/plugins/chat_example")
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location(
-        "chat_example_under_test", _PLUGIN_DIR / "__init__.py"
-    )
+    spec = importlib.util.spec_from_file_location("chat_example_under_test", _PLUGIN_DIR / "__init__.py")
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(mod)
@@ -58,6 +57,6 @@ def test_panel_route_serves_the_contract_page() -> None:
     page = TestClient(app).get("/plugins/chat_example/panel")
     assert page.status_code == 200
     body = page.text
-    assert "protoagent:init" in body          # bearer + theme handshake (ADR 0038)
-    assert 'split("/plugins/")' in body       # slug-aware base (ADR 0042)
-    assert "/api/chat" in body                # the documented non-streaming turn
+    assert "protoagent:init" in body  # bearer + theme handshake (ADR 0038)
+    assert 'split("/plugins/")' in body  # slug-aware base (ADR 0042)
+    assert "/api/chat" in body  # the documented non-streaming turn

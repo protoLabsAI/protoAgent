@@ -69,7 +69,9 @@ def register_telemetry_routes(app) -> None:
         # the dominant model's input rate (the per-turn store keeps no per-call
         # model breakdown of cache reads).
         by_model = s.get("by_model") or []
-        dom_model = by_model[0]["model"] if by_model else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
+        dom_model = (
+            by_model[0]["model"] if by_model else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
+        )
         cache_saved = pricing.cache_read_savings_usd(dom_model, s.get("cache_read_input_tokens", 0))
         return {
             "enabled": True,
