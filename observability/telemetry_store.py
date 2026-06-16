@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -121,6 +122,25 @@ class TelemetryStore:
                 (max(1, int(limit)),),
             ).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            db.close()
+
+    def stream_rows(self, since_iso: str | None = None) -> Iterator[dict]:
+        """Yield rows one at a time from the cursor — for streaming exports.
+
+        Filters by ``ended_at >= since_iso`` in SQL (not Python post-filter).
+        Does NOT materialize all rows into a list."""
+        where, params = "", []
+        if since_iso:
+            where, params = "WHERE ended_at >= ?", [since_iso]
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"SELECT * FROM turns {where} ORDER BY ended_at DESC",
+                params,
+            )
+            for row in cur:
+                yield dict(row)
         finally:
             db.close()
 

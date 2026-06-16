@@ -139,10 +139,14 @@ def _validate_sse_token(token: str) -> bool:
         raw = base64.urlsafe_b64decode(token.encode())
     except Exception:
         return False
-    parts = raw.rsplit(b".", 1)
-    if len(parts) != 2:
+    # HMAC-SHA256 is always 32 bytes; the delimiter "." is the byte before it.
+    # Split by known offset instead of rsplit to avoid ambiguity when the
+    # signature bytes happen to contain 0x2e (".").
+    _SIG_LEN = 32
+    if len(raw) < _SIG_LEN + 2 or raw[-_SIG_LEN - 1 : -_SIG_LEN] != b".":
         return False
-    payload_bytes, sig = parts
+    payload_bytes = raw[: -_SIG_LEN - 1]
+    sig = raw[-_SIG_LEN:]
     expected = hmac.new(key.encode(), payload_bytes, hashlib.sha256).digest()
     if not hmac.compare_digest(sig, expected):
         return False

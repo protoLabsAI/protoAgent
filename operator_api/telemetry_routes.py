@@ -32,25 +32,61 @@ def register_telemetry_routes(app) -> None:
 
     @app.get("/api/telemetry/export")
     async def _api_telemetry_export(since: str | None = None):
-        """Download every recorded turn as CSV (optionally those ended at/after
-        ``since``). Read-only; empty CSV when the store is off."""
+        """Download every recorded turn as CSV, streamed in chunks from a
+        background thread (off the event loop).  Read-only; empty CSV (header
+        only) when the store is off.
+
+        Starlette wraps sync generators with ``iterate_in_threadpool``, so the
+        DB cursor iteration + CSV serialization run in a thread automatically —
+        no ``run_in_executor`` boilerplate needed, and backpressure is natural
+        (the thread blocks until the next chunk is consumed by the client).
+        """
         import csv
         import io
+        import re
 
-        from fastapi.responses import PlainTextResponse
+        from fastapi.responses import StreamingResponse
 
         from observability.telemetry_store import _COLUMNS
 
-        rows = STATE.telemetry_store.recent(limit=10_000_000) if STATE.telemetry_store else []
-        if since:
-            rows = [r for r in rows if (r.get("ended_at") or "") >= since]
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=list(_COLUMNS), extrasaction="ignore")
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-        return PlainTextResponse(
-            buf.getvalue(),
+        store = STATE.telemetry_store
+        _header_line = ",".join(_COLUMNS) + "\n"
+
+        # Empty-CSV fast path when the store is off.
+        if store is None:
+            return StreamingResponse(
+                iter([_header_line]),
+                media_type="text/csv",
+                headers={"Content-Disposition": 'attachment; filename="telemetry.csv"'},
+            )
+
+        # Normalise ``since``: URL decoders turn ``+`` in ``+00:00`` into a
+        # space.  Restore before passing to SQL.
+        since_iso = since
+        if since_iso:
+            since_iso = re.sub(r" (\d{2}:\d{2})$", r"+\1", since_iso)
+
+        CHUNK_ROWS = 500
+
+        def _csv_chunks():
+            """Sync generator — runs in a thread via Starlette's threadpool."""
+            yield _header_line
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=list(_COLUMNS), extrasaction="ignore")
+            count = 0
+            for row in store.stream_rows(since_iso=since_iso):
+                writer.writerow(row)
+                count += 1
+                if count >= CHUNK_ROWS:
+                    yield buf.getvalue()
+                    buf = io.StringIO()
+                    writer = csv.DictWriter(buf, fieldnames=list(_COLUMNS), extrasaction="ignore")
+                    count = 0
+            if count > 0:
+                yield buf.getvalue()
+
+        return StreamingResponse(
+            _csv_chunks(),
             media_type="text/csv",
             headers={"Content-Disposition": 'attachment; filename="telemetry.csv"'},
         )

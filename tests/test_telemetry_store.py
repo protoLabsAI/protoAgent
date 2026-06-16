@@ -56,6 +56,26 @@ def test_record_noop_without_task_id(store):
     assert store.recent() == []
 
 
+def test_stream_rows_yields_in_order(store):
+    """stream_rows yields rows in descending ended_at order (newest first)."""
+    store.record(_row("t1", ended_at="2026-06-01T00:00:00+00:00"))
+    store.record(_row("t2", ended_at="2026-06-03T00:00:00+00:00"))
+    store.record(_row("t3", ended_at="2026-06-02T00:00:00+00:00"))
+    rows = list(store.stream_rows())
+    assert [r["task_id"] for r in rows] == ["t2", "t3", "t1"]
+
+
+def test_stream_rows_since_filter(store):
+    """stream_rows(since_iso=...) filters in SQL, returning only matching rows."""
+    store.record(_row("old", ended_at="2026-05-01T00:00:00+00:00"))
+    store.record(_row("mid", ended_at="2026-05-15T00:00:00+00:00"))
+    store.record(_row("new", ended_at="2026-06-01T00:00:00+00:00"))
+    rows = list(store.stream_rows(since_iso="2026-05-10T00:00:00+00:00"))
+    ids = [r["task_id"] for r in rows]
+    assert "new" in ids and "mid" in ids
+    assert "old" not in ids
+
+
 def test_summary_aggregates(store):
     store.record(_row("t1", cost_usd=0.02, input_tokens=1000, cache_read_input_tokens=500, duration_ms=1000, success=1))
     store.record(
