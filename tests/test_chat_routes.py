@@ -55,12 +55,13 @@ def test_openai_completion_honors_model_override(monkeypatch):
 def test_delete_session_harvest_is_opt_in(monkeypatch):
     # Deleting a chat must NOT silently copy it into the knowledge base: the
     # route defaults harvest=False and forwards the dialog checkbox explicitly.
+    # Both a2a: and chat: prefixes are retired; only a2a: is harvested.
     import operator_api.chat_routes as cr
 
     calls: list[tuple] = []
 
-    async def _fake_retire(thread_id, *, harvest=None):
-        calls.append((thread_id, harvest))
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
+        calls.append((thread_id, harvest, cascade))
         return "chunk-1" if harvest else None
 
     monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
@@ -70,7 +71,12 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     assert body == {"deleted": True, "harvested": False}
     body = c.delete("/api/chat/sessions/s2?harvest=true").json()
     assert body == {"deleted": True, "harvested": True}
-    assert calls == [("a2a:s1", False), ("a2a:s2", True)]
+    assert calls == [
+        ("a2a:s1", False, True),
+        ("chat:s1", False, True),
+        ("a2a:s2", True, True),
+        ("chat:s2", False, True),
+    ]
 
 
 def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
@@ -78,7 +84,7 @@ def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_retire(thread_id, *, harvest=None):
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
         return None
 
     ns: list[str] = []
