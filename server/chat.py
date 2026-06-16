@@ -102,10 +102,39 @@ def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
 # One ACP runtime per thread (the ACP session is stateful — the coding agent holds
 # history, so we reuse it across turns; ADR 0033 slice 4).
 _ACP_RUNTIMES: dict[str, Any] = {}
+_ACP_RUNTIME_ACCESS: dict[str, float] = {}  # thread_id → time.monotonic() last access
+_ACP_IDLE_TTL_S = 1800  # 30 min idle before eviction
+_ACP_MAX_RUNTIMES = 100  # hard cap — evict LRU when exceeded
 
 
-def _get_acp_runtime(thread_id: str):
+async def _evict_acp_runtimes(now: float) -> None:
+    """Sweep idle ACP runtimes and enforce the hard cap."""
+    # Phase 1 — evict entries older than the idle TTL.
+    for tid in list(_ACP_RUNTIMES):
+        last = _ACP_RUNTIME_ACCESS.get(tid, 0)
+        if now - last >= _ACP_IDLE_TTL_S:
+            rt = _ACP_RUNTIMES.pop(tid)
+            _ACP_RUNTIME_ACCESS.pop(tid, None)
+            await rt.close()
+            agent = getattr(rt, "agent", "?")
+            log.info("[acp-runtime] evicted idle runtime for thread=%s agent=%s", tid, agent)
+
+    # Phase 2 — if still over cap, evict LRU entries until at or below _ACP_MAX_RUNTIMES.
+    while len(_ACP_RUNTIMES) > _ACP_MAX_RUNTIMES:
+        lru_tid = min(_ACP_RUNTIME_ACCESS, key=lambda k: _ACP_RUNTIME_ACCESS[k])
+        rt = _ACP_RUNTIMES.pop(lru_tid)
+        _ACP_RUNTIME_ACCESS.pop(lru_tid, None)
+        await rt.close()
+        agent = getattr(rt, "agent", "?")
+        log.info("[acp-runtime] evicted LRU runtime for thread=%s agent=%s", lru_tid, agent)
+
+
+async def _get_acp_runtime(thread_id: str):
+    now = time.monotonic()
+    await _evict_acp_runtimes(now)
+
     rt = _ACP_RUNTIMES.get(thread_id)
+    _ACP_RUNTIME_ACCESS[thread_id] = now  # bump on every call (hit or miss)
     if rt is None:
         from runtime.acp_runtime import AcpRuntime
 
@@ -727,7 +756,7 @@ async def _chat_langgraph_stream(
             from runtime.acp_runtime import is_acp_runtime
 
             if is_acp_runtime(STATE.graph_config):
-                rt = _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
+                rt = await _get_acp_runtime(_resolve_thread_id(request_metadata, session_id))
                 # Bridge the agent's reader-loop callbacks (answer-text deltas + tool events)
                 # into the same text / tool_start / tool_end frames the native runtime yields,
                 # in arrival order → live streaming + tool cards.

@@ -118,7 +118,7 @@ def test_constructing_for_native_raises():
         AcpRuntime(types.SimpleNamespace(agent_runtime="native"))
 
 
-def test_chat_caches_acp_runtime_per_thread(monkeypatch):
+async def test_chat_caches_acp_runtime_per_thread(monkeypatch):
     import importlib
 
     chat = importlib.import_module("server.chat")  # the `server.chat` attr is the re-exported fn
@@ -131,9 +131,10 @@ def test_chat_caches_acp_runtime_per_thread(monkeypatch):
         raising=False,
     )
     chat._ACP_RUNTIMES.clear()
-    r1 = chat._get_acp_runtime("t1")
-    r2 = chat._get_acp_runtime("t1")
-    r3 = chat._get_acp_runtime("t2")
+    chat._ACP_RUNTIME_ACCESS.clear()
+    r1 = await chat._get_acp_runtime("t1")
+    r2 = await chat._get_acp_runtime("t1")
+    r3 = await chat._get_acp_runtime("t2")
     assert r1 is r2  # same thread → same stateful ACP session
     assert r1 is not r3  # different thread → its own session
     assert r1.agent == "codex"
@@ -292,3 +293,138 @@ async def test_persona_written_to_copilot_instructions(tmp_path, monkeypatch):
     # Copilot reads its own canonical file (under .github/) — and we still write AGENTS.md.
     assert (tmp_path / "AGENTS.md").read_text() == "# id\nYou are Aria."
     assert (tmp_path / ".github" / "copilot-instructions.md").read_text() == "# id\nYou are Aria."
+
+
+# ---------------------------------------------------------------------------
+# ACP runtime eviction (idle-TTL + LRU cap)
+# ---------------------------------------------------------------------------
+
+
+class _MockRuntime:
+    """Lightweight stand-in for AcpRuntime that tracks close() calls."""
+
+    def __init__(self, agent="mock"):
+        self.agent = agent
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
+def _chat_module():
+    import importlib
+
+    return importlib.import_module("server.chat")
+
+
+async def test_evict_idle_runtime():
+    """Runtimes whose last access exceeds _ACP_IDLE_TTL_S are evicted."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+
+    rt_old = _MockRuntime("old-agent")
+    rt_fresh = _MockRuntime("fresh-agent")
+
+    now = 100_000.0
+    chat._ACP_RUNTIMES["old"] = rt_old
+    chat._ACP_RUNTIME_ACCESS["old"] = now - chat._ACP_IDLE_TTL_S - 1  # expired
+    chat._ACP_RUNTIMES["fresh"] = rt_fresh
+    chat._ACP_RUNTIME_ACCESS["fresh"] = now - 10  # still warm
+
+    await chat._evict_acp_runtimes(now)
+
+    assert "old" not in chat._ACP_RUNTIMES
+    assert "old" not in chat._ACP_RUNTIME_ACCESS
+    assert rt_old.closed is True
+
+    assert "fresh" in chat._ACP_RUNTIMES
+    assert rt_fresh.closed is False
+
+
+async def test_evict_lru_when_over_cap(monkeypatch):
+    """When the number of runtimes exceeds _ACP_MAX_RUNTIMES, LRU entries are evicted."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+
+    original_cap = chat._ACP_MAX_RUNTIMES
+    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", 2)
+
+    now = 100_000.0
+    runtimes = {}
+    for i, name in enumerate(["a", "b", "c"]):
+        rt = _MockRuntime(name)
+        chat._ACP_RUNTIMES[name] = rt
+        chat._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest, c newest
+        runtimes[name] = rt
+
+    await chat._evict_acp_runtimes(now)
+
+    # "a" was least-recently-used → evicted
+    assert "a" not in chat._ACP_RUNTIMES
+    assert runtimes["a"].closed is True
+    # "b" and "c" survive (at or below cap)
+    assert "b" in chat._ACP_RUNTIMES
+    assert "c" in chat._ACP_RUNTIMES
+    assert runtimes["b"].closed is False
+    assert runtimes["c"].closed is False
+
+    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", original_cap)
+
+
+async def test_get_acp_runtime_bumps_access(monkeypatch):
+    """Calling _get_acp_runtime on an existing thread bumps its access timestamp."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        types.SimpleNamespace(agent_runtime="acp:codex", operator_mcp_tools=[], acp_agents={}),
+        raising=False,
+    )
+
+    rt1 = await chat._get_acp_runtime("bump-test")
+    ts1 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+
+    # Nudge monotonic forward (any subsequent call will have a later timestamp).
+    rt2 = await chat._get_acp_runtime("bump-test")
+    ts2 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+
+    assert rt1 is rt2  # same runtime returned
+    assert ts2 >= ts1  # access timestamp bumped
+
+
+async def test_eviction_during_get_acp_runtime(monkeypatch):
+    """_get_acp_runtime evicts idle entries before creating/returning the requested one."""
+    chat = _chat_module()
+    chat._ACP_RUNTIMES.clear()
+    chat._ACP_RUNTIME_ACCESS.clear()
+
+    from runtime.state import STATE
+
+    monkeypatch.setattr(
+        STATE,
+        "graph_config",
+        types.SimpleNamespace(agent_runtime="acp:codex", operator_mcp_tools=[], acp_agents={}),
+        raising=False,
+    )
+
+    # Pre-populate an expired entry.
+    stale = _MockRuntime("stale")
+    chat._ACP_RUNTIMES["stale-thread"] = stale
+    chat._ACP_RUNTIME_ACCESS["stale-thread"] = 0.0  # ancient
+
+    rt = await chat._get_acp_runtime("new-thread")
+
+    # The stale entry was evicted.
+    assert "stale-thread" not in chat._ACP_RUNTIMES
+    assert stale.closed is True
+
+    # The requested runtime was created and returned.
+    assert rt is chat._ACP_RUNTIMES["new-thread"]
+    assert "new-thread" in chat._ACP_RUNTIME_ACCESS
