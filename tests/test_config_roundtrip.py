@@ -51,6 +51,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "checkpoint_keep_per_thread": 5,
     "checkpoint_max_age_days": 30,
     "checkpoint_prune_interval_hours": 6,
+    "checkpoint_vacuum": True,
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
@@ -184,6 +185,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "keep_per_thread": 5,
         "max_age_days": 30,
         "prune_interval_hours": 6,
+        "vacuum": True,
     },
     "commons": {
         "path": "",

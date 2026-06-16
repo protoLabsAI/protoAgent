@@ -51,6 +51,10 @@ def build_sqlite_checkpointer(db_path: str) -> ThreadedSqliteSaver:
     # writes; busy_timeout avoids spurious "database is locked" under contention.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    # auto_vacuum=INCREMENTAL must be set BEFORE any tables are created so
+    # freed pages are tracked in the freelist — the pruner can then reclaim
+    # them on demand without a full VACUUM rewrite.
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     saver = ThreadedSqliteSaver(conn)
     saver.setup()  # create the checkpoint tables if absent (idempotent)
     return saver
