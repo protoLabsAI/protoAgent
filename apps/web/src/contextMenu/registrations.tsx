@@ -43,7 +43,7 @@ registerContextMenu({
           u.moveSurface(ctx.id, to);
           if (to === "left") {
             u.setSurface(ctx.id);
-            if (u.rightPanel === ctx.id) u.setRightPanel(u.railOrder.right[0] ?? "notes");
+            if (u.rightPanel === ctx.id) u.setRightPanel(u.railOrder.right[0] ?? "beads");
           } else {
             u.setRightPanel(ctx.id);
             u.setRightCollapsed(false);
