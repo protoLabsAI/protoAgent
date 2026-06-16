@@ -1,4 +1,4 @@
-import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import {
 
@@ -423,21 +423,14 @@ export function SetupWizard({
               {state.runtimeKind === "acp" ? (
                 <label className="field">
                   <span>Coding agent</span>
-                  <select
+                  <Select
                     value={state.acpAgent}
                     onChange={(event) => update({ acpAgent: event.target.value })}
-                    style={{
-                      padding: "0.5rem",
-                      borderRadius: 8,
-                      color: "inherit",
-                      background: "var(--bg-panel, #1a1a1a)",
-                      border: "1px solid var(--border, #333)",
-                    }}
                   >
                     {ACP_AGENTS.map((a) => (
                       <option key={a.id} value={a.id}>{a.label}</option>
                     ))}
-                  </select>
+                  </Select>
                   <small style={{ opacity: 0.7 }}>
                     {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
                     <code>acp:{state.acpAgent}</code>. The gateway below is <strong>optional</strong> (only for native delegates / fallback).
@@ -540,14 +533,13 @@ export function SetupWizard({
             <StepBody icon={<ShieldCheck size={20} />} title="Tools" kicker="Middleware">
               <div className="toggle-grid">
                 {Object.entries(state.middleware).map(([key, value]) => (
-                  <label className="toggle-row" key={key}>
+                  <div className="toggle-row" key={key}>
                     <span>{key}</span>
-                    <input
-                      type="checkbox"
+                    <Switch
                       checked={value}
-                      onChange={(event) => setMiddleware(key as keyof WizardState["middleware"], event.target.checked)}
+                      onCheckedChange={(checked) => setMiddleware(key as keyof WizardState["middleware"], checked)}
                     />
-                  </label>
+                  </div>
                 ))}
               </div>
               <label className="field">
