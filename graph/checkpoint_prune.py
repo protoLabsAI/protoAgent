@@ -14,12 +14,20 @@ weight. This trims the DB two ways:
 
 All pure SQL on a short-lived connection (the saver runs WAL mode, so this
 coexists with live writes); failures are caught by the caller and never block.
+
+After row deletions, ``reclaim()`` truncates the WAL and vacuum-frees pages
+back to the OS so the on-disk file shrinks rather than holding freed space
+forever.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import sqlite3
 import uuid
+
+_log = logging.getLogger("protoagent.checkpoint_prune")
 
 # 100ns intervals between the UUID (Gregorian, 1582-10-15) and Unix epochs.
 _GREGORIAN_OFFSET = 0x01B21DD213814000
@@ -161,3 +169,54 @@ def prune_checkpoints(
     finally:
         conn.close()
     return {"threads_deleted": threads_deleted, "checkpoints_deleted": checkpoints_deleted}
+
+
+def reclaim(db_path: str) -> dict[str, int]:
+    """Truncate the WAL and free unused DB pages back to the OS.
+
+    Designed as a best-effort companion to ``prune_checkpoints``: after rows
+    are deleted the DB file still holds their disk space (and the WAL may
+    contain stale frames).  This call compacts both.
+
+    * ``PRAGMA wal_checkpoint(TRUNCATE)`` — checkpoints the WAL and truncates
+      it to zero, so the ``-wal`` file disappears.
+    * ``PRAGMA incremental_vacuum`` — when ``auto_vacuum=INCREMENTAL``, frees
+      pages from the freelist back to the OS (``page_count`` drops). On a
+      legacy DB with ``auto_vacuum=NONE``, a full ``VACUUM`` rewrites the
+      entire file — slower but still shrinks it.
+
+    Returns ``{"wal_truncated": int, "pages_reclaimed": int}``.
+    Best-effort: any error is caught and logged; the returned counts are zero
+    on failure.  Never raises.
+    """
+    result: dict[str, int] = {"wal_truncated": 0, "pages_reclaimed": 0}
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+    except Exception:
+        _log.exception("[checkpoint-prune] reclaim failed on connect")
+        return result
+    try:
+        # 1. Truncate the WAL so the -wal file shrinks / disappears.
+        wal_path = db_path + "-wal"
+        had_wal = os.path.exists(wal_path)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        result["wal_truncated"] = 1 if (had_wal and not os.path.exists(wal_path)) else 0
+
+        # 2. Determine auto_vacuum mode.  INCREMENTAL (2) → use the cheap
+        #    incremental_vacuum PRAGMA; NONE (0) → fall back to full VACUUM.
+        av_row = conn.execute("PRAGMA auto_vacuum").fetchone()
+        av_mode = av_row[0] if av_row else 0
+        page_count_before = conn.execute("PRAGMA page_count").fetchone()[0]
+
+        if av_mode == 2:  # INCREMENTAL
+            conn.execute("PRAGMA incremental_vacuum")
+        else:
+            conn.execute("VACUUM")
+
+        page_count_after = conn.execute("PRAGMA page_count").fetchone()[0]
+        result["pages_reclaimed"] = max(0, page_count_before - page_count_after)
+    except Exception:
+        _log.exception("[checkpoint-prune] reclaim failed")
+    finally:
+        conn.close()
+    return result

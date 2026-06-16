@@ -691,6 +691,20 @@ async def _checkpoint_prune_loop() -> None:
                         res["threads_deleted"],
                         res["checkpoints_deleted"],
                     )
+                    # Reclaim freed space back to the OS (compact WAL + pages).
+                    if getattr(cfg, "checkpoint_vacuum", True):
+                        try:
+                            from graph.checkpoint_prune import reclaim as _reclaim
+
+                            vac = await asyncio.to_thread(_reclaim, path)
+                            if vac["wal_truncated"] or vac["pages_reclaimed"]:
+                                log.info(
+                                    "[checkpoint-prune] reclaimed WAL=%d pages=%d",
+                                    vac["wal_truncated"],
+                                    vac["pages_reclaimed"],
+                                )
+                        except Exception:
+                            log.exception("[checkpoint-prune] reclaim failed")
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
         # Telemetry retention guardrail (ADR 0006) — drop turns older than the

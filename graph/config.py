@@ -466,6 +466,10 @@ class LangGraphConfig:
     # knowledge base before dropping the raw checkpoints — so past conversations
     # stay searchable via memory_recall. Needs the knowledge store enabled.
     checkpoint_harvest_enabled: bool = True
+    # Vacuum reclaim — after the prune sweep deletes rows, compact the DB file
+    # (truncate WAL + free unused pages back to the OS). Best-effort; never
+    # blocks pruning on error. True by default so the DB shrinks after deletes.
+    checkpoint_vacuum: bool = True
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
     # the conversation (aux model) and consolidate them into the store as
     # finding_type="fact". Rides the harvest pass; needs harvest enabled.
@@ -828,6 +832,7 @@ class LangGraphConfig:
             checkpoint_harvest_enabled=data.get("checkpoint", {}).get(
                 "harvest_enabled", cls.checkpoint_harvest_enabled
             ),
+            checkpoint_vacuum=data.get("checkpoint", {}).get("vacuum", cls.checkpoint_vacuum),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
