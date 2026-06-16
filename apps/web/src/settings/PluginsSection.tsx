@@ -292,7 +292,7 @@ function PluginRow({
           </p>
         ) : null}
       </div>
-      <Button icon variant="ghost" title="Uninstall" disabled={removing} onClick={onRemove} aria-label={`uninstall ${p.id}`}>
+      <Button icon variant="danger" title="Uninstall" disabled={removing} onClick={onRemove} aria-label={`uninstall ${p.id}`}>
         <Trash2 size={15} />
       </Button>
     </li>
