@@ -42,9 +42,11 @@ export type Surface =
   | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "box" | "settings" | (string & {});
 // `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
 // (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
-export type RightPanel = "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
+export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<viewId>
 export type PluginsTab = "local" | "market" | "download";
-export type ActivityTab = "thread" | "inbox";
+// "schedule" joins thread/inbox here (#1075): cron is a trigger, so timed turns are a
+// tab of the Activity surface rather than a standalone rail surface.
+export type ActivityTab = "thread" | "inbox" | "schedule";
 // The Box surface (PR4 / ADR 0048 §5) — box-level operations that aren't per-agent
 // cascade settings, moved out of the Settings ▸ Global home into their own rail surface.
 export type BoxTab = "fleet" | "telemetry" | "commons";
@@ -126,6 +128,15 @@ export function migrateUiState(persisted: unknown): unknown {
       left.splice(at >= 0 ? at : left.length, 0, "box");
       rest.railOrder = { ...ro, left };
     }
+    // v5 (#1075): "schedule" folded into the Activity surface (a tab), so prune it from a
+    // persisted railOrder — otherwise it lingers as a dead rail id with no surface metadata.
+    const ro2 = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
+    if (ro2 && (Array.isArray(ro2.left) || Array.isArray(ro2.right))) {
+      rest.railOrder = {
+        left: (ro2.left ?? []).filter((x) => x !== "schedule"),
+        right: (ro2.right ?? []).filter((x) => x !== "schedule"),
+      };
+    }
     return rest;
   }
   return persisted;
@@ -147,7 +158,7 @@ export const useUI = create<UIState>()(
       rightWidth: 360,
       railOrder: {
         left: ["chat", "activity", "studio", "knowledge", "plugins", "box", "settings"],
-        right: ["beads", "goals", "schedule"],
+        right: ["beads", "goals"],
       },
       moveSurface: (id, side) =>
         set((s) => {
@@ -222,7 +233,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 4, // v2: railOf→railOrder. v3: settingsTab→scope+section. v4: +Box rail surface (PR4)
+      version: 5, // v2 railOf→railOrder · v3 settingsTab→scope+section · v4 +Box surface · v5 Schedule→Activity tab (#1075)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
     },
   ),

@@ -24,8 +24,9 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
-test("schedule is a right-rail panel that lists scheduled jobs", async ({ page }) => {
-  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+test("schedule is a tab of the Activity surface that lists scheduled jobs (#1075)", async ({ page }) => {
+  await page.locator(".pl-rail").getByRole("button", { name: "Activity", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Schedule", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });

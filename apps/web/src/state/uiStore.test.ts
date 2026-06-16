@@ -42,6 +42,16 @@ describe("migrateUiState", () => {
     expect(out.railOrder.left).toEqual(["chat", "box", "settings"]);
   });
 
+  // v4→v5 (#1075): "schedule" folded into the Activity surface (a tab), so it's pruned
+  // from a persisted railOrder rather than lingering as a dead rail id.
+  it("prunes the obsolete 'schedule' rail surface", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "settings"], right: ["beads", "goals", "schedule"] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.right).toEqual(["beads", "goals"]);
+    expect(out.railOrder.left).not.toContain("schedule");
+  });
+
   it("does not mutate the input object", () => {
     const input = { railOf: { chat: "left" }, leftActive: "chat" };
     migrateUiState(input);

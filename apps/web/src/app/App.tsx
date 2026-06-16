@@ -496,7 +496,7 @@ export function App() {
     { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
     { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
-    { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
+    // "schedule" is now a tab inside the Activity surface (#1075), not a rail surface.
   ];
   // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core AND plugin views are
   // first-class railOrder members — reconciled below — so all are reorderable/movable, including
@@ -532,11 +532,14 @@ export function App() {
       case "activity":
         return (
           <>
+            {/* Schedule is a third Activity tab (#1075): cron is a TRIGGER, so timed
+                turns belong alongside the thread + inbox triggers, not in their own rail. */}
             <Tabs responsive active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
               { id: "thread", label: "Thread", icon: Activity },
               { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
+              { id: "schedule", label: "Schedule", icon: CalendarClock },
             ].map(toTab)} />
-            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
+            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : activityTab === "inbox" ? <InboxPanel /> : <SchedulePanel />}
           </>
         );
       // The Agent surface folded into Settings ▸ Workspace (ADR 0048 S-C). Its tabs
@@ -569,8 +572,7 @@ export function App() {
         return <BeadsPanel confirm={setConfirmState} />;
       case "goals":
         return <GoalsPanel />;
-      case "schedule":
-        return <SchedulePanel />;
+      // "schedule" folded into the Activity surface as a 3rd tab (#1075) — no rail surface.
       default: {
         // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
         // Skip a requiresPlugin surface when its plugin is off (e.g. a stale saved order).
