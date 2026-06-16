@@ -62,10 +62,7 @@ def register_knowledge_routes(app) -> None:
             return {"enabled": True, "playbooks": []}
         # Drop the (potentially large) prompt_template from the list payload;
         # the table only needs metadata. Sort pinned-first, then by confidence.
-        out = [
-            {k: v for k, v in s.items() if k != "prompt_template"}
-            for s in skills
-        ]
+        out = [{k: v for k, v in s.items() if k != "prompt_template"} for s in skills]
         out.sort(key=lambda s: (s.get("source") != "disk", -(s.get("confidence") or 0)))
         return {"enabled": True, "playbooks": out}
 
@@ -100,11 +97,7 @@ def register_knowledge_routes(app) -> None:
             }
         try:
             match = next(
-                (
-                    s
-                    for s in idx.all_skills()
-                    if s.get("id") == skill_id and s.get("tier", "private") == "private"
-                ),
+                (s for s in idx.all_skills() if s.get("id") == skill_id and s.get("tier", "private") == "private"),
                 None,
             )
             if match is None:
@@ -131,12 +124,13 @@ def register_knowledge_routes(app) -> None:
             if q and q.strip():
                 # search() embeds the query over HTTP on hybrid stores — run it
                 # off the event loop (same pattern as graph/checkpointer.py).
-                rows = await asyncio.to_thread(
-                    STATE.knowledge_store.search, q, k=k, domain=domain or None
-                )
+                rows = await asyncio.to_thread(STATE.knowledge_store.search, q, k=k, domain=domain or None)
                 results = [_knowledge_row(r) for r in rows]
             else:
-                results = [_knowledge_row(c.as_dict()) for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)]
+                results = [
+                    _knowledge_row(c.as_dict())
+                    for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)
+                ]
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] search failed")
         try:
@@ -223,8 +217,8 @@ def register_knowledge_routes(app) -> None:
             if file is not None:
                 data = await file.read()
                 result = await asyncio.to_thread(
-                    extract_bytes, file.filename or "upload", data, file.content_type,
-                    transcribe=transcribe)
+                    extract_bytes, file.filename or "upload", data, file.content_type, transcribe=transcribe
+                )
                 source = file.filename or "upload"
             elif url:
                 result = await asyncio.to_thread(extract_url, url, transcribe=transcribe)
@@ -232,8 +226,7 @@ def register_knowledge_routes(app) -> None:
             elif text:
                 result = ExtractResult(text=text, title=title or None, source_type="text")
             else:
-                return JSONResponse(
-                    {"detail": "provide a file, url, or text"}, status_code=400)
+                return JSONResponse({"detail": "provide a file, url, or text"}, status_code=400)
         except MissingDependency as exc:
             return JSONResponse({"detail": str(exc)}, status_code=501)
         except UnsupportedSource as exc:
@@ -254,8 +247,7 @@ def register_knowledge_routes(app) -> None:
             )
         )
         if not ids:
-            return JSONResponse(
-                {"detail": "nothing ingested (no text after extraction)"}, status_code=400)
+            return JSONResponse({"detail": "nothing ingested (no text after extraction)"}, status_code=400)
         return {
             "enabled": True,
             "ids": ids,
@@ -302,8 +294,7 @@ def register_knowledge_routes(app) -> None:
         name = file.filename or "attachment"
         try:
             data = await file.read()
-            result = await asyncio.to_thread(
-                extract_bytes, name, data, file.content_type, transcribe=transcribe)
+            result = await asyncio.to_thread(extract_bytes, name, data, file.content_type, transcribe=transcribe)
         except MissingDependency as exc:
             return JSONResponse({"detail": str(exc)}, status_code=501)
         except UnsupportedSource as exc:
@@ -318,17 +309,24 @@ def register_knowledge_routes(app) -> None:
         if len(text) <= budget:
             context = f"[Attached file: {name}]\n{text}\n[end of {name}]"
             return {
-                "enabled": True, "mode": "inline", "name": name,
-                "source_type": result.source_type, "chars": len(text),
-                "chunks": 0, "context": context,
+                "enabled": True,
+                "mode": "inline",
+                "name": name,
+                "source_type": result.source_type,
+                "chars": len(text),
+                "chunks": 0,
+                "context": context,
             }
 
         # Large → index for retrieval (session-scoped, ephemeral) + inline a lede.
         ids = await asyncio.to_thread(
             lambda: add_document(
-                STATE.knowledge_store, text,
-                domain="attachment", namespace=f"attach:{sid}",
-                source=name, source_type=result.source_type,
+                STATE.knowledge_store,
+                text,
+                domain="attachment",
+                namespace=f"attach:{sid}",
+                source=name,
+                source_type=result.source_type,
             )
         )
         lede = text[:budget]
@@ -338,9 +336,13 @@ def register_knowledge_routes(app) -> None:
             f"[Ask about its contents to retrieve more from {name}.]"
         )
         return {
-            "enabled": True, "mode": "indexed", "name": name,
-            "source_type": result.source_type, "chars": len(text),
-            "chunks": len(ids), "context": context,
+            "enabled": True,
+            "mode": "indexed",
+            "name": name,
+            "source_type": result.source_type,
+            "chars": len(text),
+            "chunks": len(ids),
+            "context": context,
         }
 
     @app.put("/api/knowledge/chunks/{chunk_id}")

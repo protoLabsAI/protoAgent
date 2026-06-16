@@ -134,8 +134,7 @@ def _build_router(host):
         try:
             from mcp_servers.google.auth import connection_status
         except Exception as e:  # noqa: BLE001 — google extra may be absent
-            return {"configured": False, "connected": False, "email": None,
-                    "error": f"google support unavailable: {e}"}
+            return {"configured": False, "connected": False, "email": None, "error": f"google support unavailable: {e}"}
         _env_from_config(_live_config())
         try:
             return await asyncio.to_thread(connection_status)

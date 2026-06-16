@@ -77,9 +77,7 @@ async def run_subagent(
     )
 
 
-async def complete(
-    prompt: str, *, system: str | None = None, model_name: str | None = None
-) -> str:
+async def complete(prompt: str, *, system: str | None = None, model_name: str | None = None) -> str:
     """Run a single **bare** LLM completion and return the text — no tools, no agent
     loop, no persona, no memory. The clean primitive for a plugin that just needs the
     model to answer a prompt (e.g. an interactive artifact calling back to the agent,
@@ -138,10 +136,20 @@ def _to_cron(every: str) -> str:
     return f"0 0 */{n} * *"
 
 
-def start_goal_loop(*, session_id: str, goal: str, verifier: str, every: str, prompt: str,
-                    verifier_args: dict | None = None, mode: str = "monitor",
-                    timezone: str | None = None, no_progress_limit: int | None = None,
-                    max_iterations: int | None = None, job_id: str | None = None) -> dict:
+def start_goal_loop(
+    *,
+    session_id: str,
+    goal: str,
+    verifier: str,
+    every: str,
+    prompt: str,
+    verifier_args: dict | None = None,
+    mode: str = "monitor",
+    timezone: str | None = None,
+    no_progress_limit: int | None = None,
+    max_iterations: int | None = None,
+    job_id: str | None = None,
+) -> dict:
     """Wire a goal-driven recurring loop in ONE call (the OODA / self-improving pattern):
     set a goal verified by a plugin verifier, and schedule a recurring prompt that drives it
     until the verifier passes — at which point the goal's ``on_achieved`` hook winds the work
@@ -181,18 +189,25 @@ def start_goal_loop(*, session_id: str, goal: str, verifier: str, every: str, pr
     except ValueError as e:
         return {"ok": False, "message": str(e)}
     spec = {"type": "plugin", "check": verifier, "args": verifier_args or {}}
-    ok, msg = controller.set_goal_safe(session_id, goal, spec, max_iterations=max_iterations,
-                                       no_progress_limit=no_progress_limit, mode=mode)
+    ok, msg = controller.set_goal_safe(
+        session_id, goal, spec, max_iterations=max_iterations, no_progress_limit=no_progress_limit, mode=mode
+    )
     if not ok:
         return {"ok": False, "message": f"goal not set: {msg}"}
     try:
-        job = scheduler.add_job(prompt, schedule, job_id=job_id, timezone=timezone,
-                                context_id=session_id)  # tick runs IN the goal's session
+        job = scheduler.add_job(
+            prompt, schedule, job_id=job_id, timezone=timezone, context_id=session_id
+        )  # tick runs IN the goal's session
     except ValueError as e:
         controller.store.clear(session_id)  # roll back the goal if scheduling failed
         return {"ok": False, "message": f"bad schedule {every!r}: {e}"}
-    return {"ok": True, "goal": goal, "job_id": job.id, "schedule": schedule,
-            "message": f"goal loop started — {goal} · tick {schedule} · {msg}"}
+    return {
+        "ok": True,
+        "goal": goal,
+        "job_id": job.id,
+        "schedule": schedule,
+        "message": f"goal loop started — {goal} · tick {schedule} · {msg}",
+    }
 
 
 def stop_goal_loop(*, session_id: str, job_id: str | None = None) -> dict:

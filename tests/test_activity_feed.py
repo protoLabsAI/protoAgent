@@ -35,9 +35,13 @@ def test_terminal_hook_logs_provenance_and_tags_event(tmp_path, monkeypatch):
     monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
 
     out = TurnOutcome(
-        task_id="t1", context_id=server.ACTIVITY_CONTEXT, state="completed",
+        task_id="t1",
+        context_id=server.ACTIVITY_CONTEXT,
+        state="completed",
         text="<scratch_pad>thinking</scratch_pad><output>Overnight: 3 PRs merged.</output>",
-        origin="scheduler", trigger="daily-brief", priority="",
+        origin="scheduler",
+        trigger="daily-brief",
+        priority="",
     )
     server._a2a_terminal(out)
 
@@ -66,11 +70,16 @@ def test_terminal_hook_surfaces_scheduler_resume_into_chat(tmp_path, monkeypatch
     published: list = []
     monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
 
-    server._a2a_terminal(TurnOutcome(
-        task_id="t9", context_id="chat-xyz", state="completed",
-        text="<output>Ship arrived; sold the ore.</output>",
-        origin="scheduler", trigger="wait-resume",
-    ))
+    server._a2a_terminal(
+        TurnOutcome(
+            task_id="t9",
+            context_id="chat-xyz",
+            state="completed",
+            text="<output>Ship arrived; sold the ore.</output>",
+            origin="scheduler",
+            trigger="wait-resume",
+        )
+    )
     resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
     assert resumed is not None
     assert resumed["session_id"] == "chat-xyz"
@@ -85,8 +94,13 @@ def test_terminal_hook_skips_non_scheduler_chat_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(server.STATE, "activity_log", log)
     published: list = []
     monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
-    server._a2a_terminal(TurnOutcome(
-        task_id="t", context_id="chat-xyz", state="completed",
-        text="<output>hi</output>", origin="operator",
-    ))
+    server._a2a_terminal(
+        TurnOutcome(
+            task_id="t",
+            context_id="chat-xyz",
+            state="completed",
+            text="<output>hi</output>",
+            origin="operator",
+        )
+    )
     assert not any(ev == "chat.resumed" for ev, _ in published)

@@ -88,9 +88,9 @@ class Supervisor:
 
         self._task: asyncio.Task | None = None
         self._watchdog: asyncio.Task | None = None
-        self._want = False        # operator wants it running; the watchdog keeps it there
-        self._stop = False        # graceful wind-down after the current unit
-        self._crashed = False     # last runner exit was an exception (vs clean / cancelled)
+        self._want = False  # operator wants it running; the watchdog keeps it there
+        self._stop = False  # graceful wind-down after the current unit
+        self._crashed = False  # last runner exit was an exception (vs clean / cancelled)
         self._result: Any = None
         self._restarts = 0
         self._events: list[str] = []
@@ -175,9 +175,9 @@ class Supervisor:
 
     async def _restart_runner(self) -> None:
         old = self._task
-        self._task = None                 # detach first (the guarded finally won't fight us)
+        self._task = None  # detach first (the guarded finally won't fight us)
         if old is not None and not old.done():
-            old.cancel()                  # fire-and-forget; its finally is guarded
+            old.cancel()  # fire-and-forget; its finally is guarded
         self._restarts += 1
         self._spawn_runner()
 
@@ -185,7 +185,7 @@ class Supervisor:
         frozen = 0
         rekicks = 0
         recovered = False
-        last_token: Any = object()        # sentinel so the first compare is never "frozen"
+        last_token: Any = object()  # sentinel so the first compare is never "frozen"
         while True:
             try:
                 await asyncio.sleep(self._interval)

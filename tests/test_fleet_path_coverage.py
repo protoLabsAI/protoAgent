@@ -93,10 +93,15 @@ def test_shared_commons_skill_visible_across_agents(tmp_path):
 
     a = SkillsIndex(db_path=path_a)
     a.initialize_db()
-    a.add_skill(types.SimpleNamespace(
-        name="warp_jump", description="navigate via a warp gate",
-        prompt_template="do warp", tools_used=(), source_session_id="",
-    ))
+    a.add_skill(
+        types.SimpleNamespace(
+            name="warp_jump",
+            description="navigate via a warp gate",
+            prompt_template="do warp",
+            tools_used=(),
+            source_session_id="",
+        )
+    )
     if hasattr(a, "close"):
         a.close()
 

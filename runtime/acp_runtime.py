@@ -118,6 +118,7 @@ def persona_doc(config) -> str:
     system prompt (which carries loop-specific bits like the <output> response format)."""
     try:
         from graph.config_io import read_soul
+
         soul = _strip_injection((read_soul() or "").strip())
     except Exception:  # noqa: BLE001
         soul = ""
@@ -134,8 +135,7 @@ def persona_doc(config) -> str:
         "(your own TaskCreate/todo is ephemeral to this session and is invisible in protoAgent). "
         "Saving a note → `notes_*`; remembering a fact → `memory_ingest`; a standing goal → "
         "`set_goal`; future work → `schedule_task`. Use your own file/shell tools for code as usual.\n\n"
-        "---\n\n"
-        + soul
+        "---\n\n" + soul
     )
 
 
@@ -161,6 +161,7 @@ class AcpRuntime:
             self.cwd = cwd
         else:
             from infra.paths import workspace_dir
+
             self.cwd = str(workspace_dir(create=True))
         self._context = context or self._default_context()
         self._client_factory = client_factory or self._default_client_factory
@@ -168,6 +169,7 @@ class AcpRuntime:
 
     def _default_context(self) -> ContextAssembler:
         from runtime.state import STATE
+
         return ContextAssembler(
             config=self.config,
             knowledge_store=getattr(STATE, "knowledge_store", None),
@@ -194,14 +196,18 @@ class AcpRuntime:
         spec = adapter_for(self.agent, self.config)
         mcp = operator_mcp_server_spec(self.config)
         from plugins.coding_agent.acp_client import AcpClient
+
         return AcpClient(
-            spec["command"], spec.get("args"), cwd=self.cwd, name=self.agent,
+            spec["command"],
+            spec.get("args"),
+            cwd=self.cwd,
+            name=self.agent,
             mcp_servers=[mcp] if mcp else [],
         )
 
     def _ensure_client(self):
         if self._client is None:
-            self._write_persona_files()   # before the session starts → agent loads it
+            self._write_persona_files()  # before the session starts → agent loads it
             self._client = self._client_factory()
         return self._client
 
@@ -214,8 +220,10 @@ class AcpRuntime:
         ctx = self._context.assemble(query=message)
         prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
         answer = await client.prompt(
-            prompt, progress_callback=progress_callback,
-            tool_callback=tool_callback, text_callback=text_callback,
+            prompt,
+            progress_callback=progress_callback,
+            tool_callback=tool_callback,
+            text_callback=text_callback,
         )
         self._context.after_turn(user=message, response=answer)
         return answer
@@ -244,6 +252,7 @@ async def _aux_prompt(agent: str, config, text: str) -> str:
     if client is None:
         spec = adapter_for(agent, config)
         from plugins.coding_agent.acp_client import AcpClient
+
         client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux")
         _AUX_CLIENTS[agent] = client
     return await client.prompt(text)

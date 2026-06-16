@@ -124,11 +124,13 @@ def test_run_command_executes_in_project_cwd(workspace):
     _, a, _ = workspace
     # Approval off here so the unit test exercises execution directly (the gate
     # calls interrupt(), which needs a graph runtime — covered separately).
-    t = _tools(_Cfg(
-        filesystem_projects=[{"name": "a", "path": str(a)}],
-        filesystem_allow_run=True,
-        filesystem_run_requires_approval=False,
-    ))
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
+    )
     out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
     assert "README.md" in out
 
@@ -142,11 +144,13 @@ def test_run_command_declined_raises(workspace, monkeypatch):
 
     _, a, _ = workspace
     monkeypatch.setattr(langgraph.types, "interrupt", lambda payload: "denied")
-    t = _tools(_Cfg(
-        filesystem_projects=[{"name": "a", "path": str(a)}],
-        filesystem_allow_run=True,
-        filesystem_run_requires_approval=True,
-    ))
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=True,
+        )
+    )
     with pytest.raises(ToolException):
         asyncio.run(t["run_command"].ainvoke({"project": "a", "command": "ls"}))
 
@@ -159,11 +163,7 @@ def test_config_parses_filesystem(tmp_path):
 
     p = tmp_path / "c.yaml"
     p.write_text(
-        "filesystem:\n"
-        "  enabled: true\n"
-        "  allow_run: true\n"
-        "  projects:\n"
-        "    - {name: orbis, path: /tmp, write: false}\n"
+        "filesystem:\n  enabled: true\n  allow_run: true\n  projects:\n    - {name: orbis, path: /tmp, write: false}\n"
     )
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.filesystem_enabled is True

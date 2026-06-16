@@ -6,8 +6,7 @@ from graph.goals.types import GoalState
 
 def test_set_get_round_trip(tmp_path):
     store = GoalStore(tmp_path)
-    state = GoalState(session_id="s1", condition="all tests pass",
-                      verifier={"type": "command", "command": "true"})
+    state = GoalState(session_id="s1", condition="all tests pass", verifier={"type": "command", "command": "true"})
     store.set(state)
     loaded = store.get("s1")
     assert loaded is not None

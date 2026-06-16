@@ -31,8 +31,7 @@ def _clean_modules():
     """Drop the fixture's synthetic package + any phantom stubs between tests."""
     yield
     pkg = testkit.plugin_module_name(PID)
-    for m in [n for n in list(sys.modules)
-              if n == pkg or n.startswith(pkg + ".") or n.split(".")[0] == "phantom_host"]:
+    for m in [n for n in list(sys.modules) if n == pkg or n.startswith(pkg + ".") or n.split(".")[0] == "phantom_host"]:
         sys.modules.pop(m, None)
 
 

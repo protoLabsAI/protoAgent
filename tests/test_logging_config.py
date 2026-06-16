@@ -61,9 +61,7 @@ def test_json_formatter_passes_through_extra_fields():
 def _has_json_handler() -> bool:
     # Scan all root handlers (pytest's caplog handler also lives here) rather than
     # assume ours is first — configure_logging appends ours.
-    return any(
-        isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers
-    )
+    return any(isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers)
 
 
 def test_configure_logging_human_by_default(monkeypatch):

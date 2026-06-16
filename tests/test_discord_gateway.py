@@ -51,7 +51,9 @@ def _api_recorder(monkeypatch):
 
 def _msg(*, content, channel="chan", mid="m1", user="u1", dm=True, mentions=()):
     return {
-        "channel_id": channel, "id": mid, "content": content,
+        "channel_id": channel,
+        "id": mid,
+        "content": content,
         "author": {"id": user, "username": "kj"},
         "guild_id": None if dm else "g1",
         "mentions": [{"id": m} for m in mentions],
@@ -85,8 +87,7 @@ async def test_guild_without_mention_is_ignored(monkeypatch):
 @pytest.mark.asyncio
 async def test_guild_mention_is_buffered_and_stripped(monkeypatch):
     _api_recorder(monkeypatch)
-    await gw._handle_message(
-        _msg(content=f"<@{BOT}> what's up", dm=False, mentions=[BOT]), BOT)
+    await gw._handle_message(_msg(content=f"<@{BOT}> what's up", dm=False, mentions=[BOT]), BOT)
     entry = gw._message_buffers.get("chan:u1")
     assert entry and entry["messages"][0]["content"] == "what's up"  # mention stripped
     _cancel_timers()
@@ -121,8 +122,12 @@ def _seed_buffer(*, channel="chan", user="u1", is_dm=True, is_new=True, contents
     cid, _new, _t = gw._conversations.get_or_create(channel, user, timeout_s=900)
     gw._message_buffers[f"{channel}:{user}"] = {
         "messages": [{"id": f"m{i}", "content": c} for i, c in enumerate(contents)],
-        "channel_id": channel, "user_id": user, "is_dm": is_dm,
-        "conversation_id": cid, "is_new_conversation": is_new, "timer": None,
+        "channel_id": channel,
+        "user_id": user,
+        "is_dm": is_dm,
+        "conversation_id": cid,
+        "is_new_conversation": is_new,
+        "timer": None,
     }
 
 
@@ -202,4 +207,5 @@ def test_start_in_background_off_without_token(monkeypatch):
 def _coro(value):
     async def _c():
         return value
+
     return _c()

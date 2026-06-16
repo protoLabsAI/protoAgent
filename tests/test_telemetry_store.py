@@ -14,11 +14,21 @@ def store(tmp_path):
 
 def _row(task_id, **over):
     base = dict(
-        task_id=task_id, session_id="s1", state="completed", success=1,
-        model="claude-opus-4-8", input_tokens=1000, output_tokens=200,
-        total_tokens=1200, cache_read_input_tokens=400,
-        cache_creation_input_tokens=0, cost_usd=0.03, duration_ms=2000,
-        llm_calls=2, tool_calls=1, created_at="2026-06-01T00:00:00+00:00",
+        task_id=task_id,
+        session_id="s1",
+        state="completed",
+        success=1,
+        model="claude-opus-4-8",
+        input_tokens=1000,
+        output_tokens=200,
+        total_tokens=1200,
+        cache_read_input_tokens=400,
+        cache_creation_input_tokens=0,
+        cost_usd=0.03,
+        duration_ms=2000,
+        llm_calls=2,
+        tool_calls=1,
+        created_at="2026-06-01T00:00:00+00:00",
         ended_at="2026-06-01T00:00:02+00:00",
     )
     base.update(over)
@@ -47,10 +57,18 @@ def test_record_noop_without_task_id(store):
 
 
 def test_summary_aggregates(store):
-    store.record(_row("t1", cost_usd=0.02, input_tokens=1000, cache_read_input_tokens=500,
-                       duration_ms=1000, success=1))
-    store.record(_row("t2", cost_usd=0.04, input_tokens=3000, cache_read_input_tokens=0,
-                       duration_ms=3000, success=0, state="failed"))
+    store.record(_row("t1", cost_usd=0.02, input_tokens=1000, cache_read_input_tokens=500, duration_ms=1000, success=1))
+    store.record(
+        _row(
+            "t2",
+            cost_usd=0.04,
+            input_tokens=3000,
+            cache_read_input_tokens=0,
+            duration_ms=3000,
+            success=0,
+            state="failed",
+        )
+    )
     s = store.summary()
     assert s["turns"] == 2
     assert s["cost_usd"] == 0.06
@@ -92,6 +110,7 @@ def test_prune(store):
     store.record(_row("old", ended_at="2026-01-01T00:00:00+00:00"))
     store.record(_row("new", ended_at="2026-06-01T00:00:00+00:00"))
     import datetime
+
     removed = store.prune(keep_days=30, now=datetime.datetime(2026, 6, 1, tzinfo=datetime.timezone.utc))
     assert removed == 1
     assert [r["task_id"] for r in store.recent()] == ["new"]
@@ -101,8 +120,8 @@ def test_outliers_flags_expensive_and_slow_turns(store):
     # A baseline of cheap/fast turns + one expensive + one slow.
     for i in range(8):
         store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500))
-    store.record(_row("pricey", cost_usd=0.20, duration_ms=500))   # ≥5× median cost
-    store.record(_row("slow", cost_usd=0.01, duration_ms=9000))    # ≥5× median latency
+    store.record(_row("pricey", cost_usd=0.20, duration_ms=500))  # ≥5× median cost
+    store.record(_row("slow", cost_usd=0.01, duration_ms=9000))  # ≥5× median latency
     flagged = {f["task_id"]: f for f in store.outliers(cost_multiple=5, latency_multiple=5)}
     assert "pricey" in flagged and "slow" in flagged
     assert "base0" not in flagged
@@ -166,15 +185,25 @@ def _outcome(**kw):
 def test_record_telemetry_writes_row_from_turn_outcome(store, telemetry_server):
     """The terminal writer maps a TurnOutcome → a telemetry row (ADR 0006)."""
     server = telemetry_server
-    server._record_a2a_telemetry(_outcome(
-        task_id="task-x", context_id="sess-1", state="completed", text="hi",
-        usage={
-            "input_tokens": 1200, "output_tokens": 300,
-            "cache_read_input_tokens": 600, "cache_creation_input_tokens": 0,
-        },
-        cost_usd=0.042, duration_ms=3000, llm_calls=3, tool_calls=2,
-        models=["claude-opus-4-8"],
-    ))
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-x",
+            context_id="sess-1",
+            state="completed",
+            text="hi",
+            usage={
+                "input_tokens": 1200,
+                "output_tokens": 300,
+                "cache_read_input_tokens": 600,
+                "cache_creation_input_tokens": 0,
+            },
+            cost_usd=0.042,
+            duration_ms=3000,
+            llm_calls=3,
+            tool_calls=2,
+            models=["claude-opus-4-8"],
+        )
+    )
 
     turns = store.recent()
     assert len(turns) == 1
@@ -193,14 +222,20 @@ def test_record_telemetry_uses_actual_models(store, telemetry_server):
     """The primary model is the first one actually used this turn, and the
     distinct set is stored (ADR 0006 Slice 4b — routing proof)."""
     server = telemetry_server
-    server._record_a2a_telemetry(_outcome(
-        task_id="task-rt", context_id="s", state="completed", text="hi",
-        usage={"input_tokens": 100, "output_tokens": 10},
-        cost_usd=0.001, duration_ms=1000,
-        models=["protolabs/reasoning", "claude-haiku-4-5"],
-    ))
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-rt",
+            context_id="s",
+            state="completed",
+            text="hi",
+            usage={"input_tokens": 100, "output_tokens": 10},
+            cost_usd=0.001,
+            duration_ms=1000,
+            models=["protolabs/reasoning", "claude-haiku-4-5"],
+        )
+    )
     row = store.recent()[0]
-    assert row["model"] == "protolabs/reasoning"          # primary = first actual
+    assert row["model"] == "protolabs/reasoning"  # primary = first actual
     assert row["models"] == "protolabs/reasoning,claude-haiku-4-5"
 
 
@@ -227,9 +262,7 @@ def test_executor_accumulates_distinct_models_in_first_seen_order():
 
     async def run():
         q = EventQueue()
-        req = SendMessageRequest(
-            message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="hi")])
-        )
+        req = SendMessageRequest(message=Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="hi")]))
         ctx = RequestContext(call_context=ServerCallContext(), request=req, task_id="t", context_id="c")
         await ProtoAgentExecutor(stream).execute(ctx, q)
 
@@ -254,10 +287,16 @@ def test_record_telemetry_noop_when_store_unset():
     prev = server.STATE.telemetry_store
     server.STATE.telemetry_store = None
     try:
-        server._record_a2a_telemetry(_outcome(
-            task_id="t", context_id="c", state="completed", text="x",
-            usage={"input_tokens": 1, "output_tokens": 1}, duration_ms=1000,
-        ))  # must not raise
+        server._record_a2a_telemetry(
+            _outcome(
+                task_id="t",
+                context_id="c",
+                state="completed",
+                text="x",
+                usage={"input_tokens": 1, "output_tokens": 1},
+                duration_ms=1000,
+            )
+        )  # must not raise
     finally:
         server.STATE.telemetry_store = prev
 
@@ -280,4 +319,5 @@ def test_config_telemetry_default_on():
 
 def test_retention_config_default_is_bounded():
     from graph.config import LangGraphConfig
+
     assert LangGraphConfig().telemetry_retention_days == 90  # guardrail on by default

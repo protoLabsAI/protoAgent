@@ -40,7 +40,7 @@ _TOOL_STUB = '''
     registry.register_tool({id_us}_hello)
 '''
 
-_VIEW_STUB = '''
+_VIEW_STUB = """
     from fastapi import APIRouter
     from fastapi.responses import HTMLResponse
     router = APIRouter()
@@ -64,7 +64,7 @@ _VIEW_STUB = '''
     # The PAGE is PUBLIC: an iframe page-load can't carry a bearer, so it must NOT be
     # gated. Mount any DATA routes under /api/plugins/{id} for the operator bearer gate.
     registry.register_router(router, prefix="/plugins/{id}")
-'''
+"""
 
 _MANIFEST_STUB = """id: {id}
 name: {name}
@@ -383,12 +383,8 @@ def scaffold_plugin(
     # Communication plugin (ADR 0029) — different shape from the default tool plugin.
     if with_comms:
         cls = _class_name(name, id_us)
-        (target / "protoagent.plugin.yaml").write_text(
-            _COMMS_MANIFEST_STUB.format(id=pid, name=name, summary=summary)
-        )
-        (target / "__init__.py").write_text(
-            _COMMS_INIT_STUB.format(id=pid, name=name, cls=cls)
-        )
+        (target / "protoagent.plugin.yaml").write_text(_COMMS_MANIFEST_STUB.format(id=pid, name=name, summary=summary))
+        (target / "__init__.py").write_text(_COMMS_INIT_STUB.format(id=pid, name=name, cls=cls))
         made = ["protoagent.plugin.yaml", "__init__.py (ChatAdapter)"]
         if with_skill:
             sk = target / "skills" / f"{pid}-skill"
@@ -398,8 +394,7 @@ def scaffold_plugin(
         return Scaffolded(id=pid, path=target, made=made, kind="comms")
 
     views_block = (
-        f"views:\n  - {{ id: main, label: \"{name}\", icon: Boxes, path: /plugins/{pid}/view }}\n"
-        if with_view else ""
+        f'views:\n  - {{ id: main, label: "{name}", icon: Boxes, path: /plugins/{pid}/view }}\n' if with_view else ""
     )
     (target / "protoagent.plugin.yaml").write_text(
         _MANIFEST_STUB.format(id=pid, name=name, summary=summary, id_us=id_us, views_block=views_block)
@@ -496,8 +491,11 @@ def scaffold_bundle(
     enabled_ids = enabled if enabled is not None else member_ids
     (target / "protoagent.bundle.yaml").write_text(
         _BUNDLE_STUB.format(
-            id=bid, name=name, summary=summary,
-            members=members_block, enabled=", ".join(enabled_ids),
+            id=bid,
+            name=name,
+            summary=summary,
+            members=members_block,
+            enabled=", ".join(enabled_ids),
         )
     )
     return Scaffolded(id=bid, path=target, made=["protoagent.bundle.yaml"], kind="bundle")

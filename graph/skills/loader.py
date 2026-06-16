@@ -64,9 +64,7 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
         log.warning("[skills] %s missing required 'name'/'description' — skipping", path)
         return None
     if len(description) > _MAX_DESCRIPTION:
-        log.warning(
-            "[skills] %s description exceeds %d chars — truncating", path, _MAX_DESCRIPTION
-        )
+        log.warning("[skills] %s description exceeds %d chars — truncating", path, _MAX_DESCRIPTION)
         description = description[:_MAX_DESCRIPTION]
 
     # Optional advisory tool hints (frontmatter `tools:` or `metadata.tools:`).
@@ -104,7 +102,7 @@ def _split_frontmatter(text: str) -> tuple[str | None, str]:
     # First line is the opening fence; find the closing fence.
     for i in range(1, len(lines)):
         if lines[i].strip() == "---":
-            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1 :])
     return None, text
 
 

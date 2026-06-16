@@ -95,7 +95,8 @@ class HybridKnowledgeStore(KnowledgeStore):
             self._breaker_open_until = time.monotonic() + self._breaker_cooldown_s
             log.warning(
                 "[knowledge] embedding circuit opened for %.0fs after %d failures",
-                self._breaker_cooldown_s, self._embed_failures,
+                self._breaker_cooldown_s,
+                self._embed_failures,
             )
 
     def _record_embed_success(self) -> None:
@@ -148,10 +149,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         if db is None:
             return
         try:
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS chunk_vectors "
-                "(chunk_id INTEGER PRIMARY KEY, vec TEXT NOT NULL)"
-            )
+            db.execute("CREATE TABLE IF NOT EXISTS chunk_vectors (chunk_id INTEGER PRIMARY KEY, vec TEXT NOT NULL)")
             db.commit()
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] could not create chunk_vectors: %s", exc)
@@ -190,8 +188,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         first, so an embed failure still leaves FTS5-searchable chunks."""
         # Pull the chunk-knob + enrich kwargs out for _chunk_and_enrich; the rest
         # (domain/heading/source/…) are chunk-write kwargs.
-        prep_kw = {k: kw.pop(k) for k in ("max_chars", "overlap_chars", "min_chars", "enrich")
-                   if k in kw}
+        prep_kw = {k: kw.pop(k) for k in ("max_chars", "overlap_chars", "min_chars", "enrich") if k in kw}
         texts = self._chunk_and_enrich(content, **prep_kw)
         batchable = (
             len(texts) > 1
@@ -248,8 +245,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         if db is not None:
             try:
                 db.execute(
-                    "DELETE FROM chunk_vectors WHERE chunk_id IN "
-                    "(SELECT id FROM chunks WHERE namespace = ?)",
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM chunks WHERE namespace = ?)",
                     (namespace,),
                 )
                 db.commit()
@@ -352,4 +348,4 @@ class HybridKnowledgeStore(KnowledgeStore):
             return None
         d = dict(row)
         preview = (d.get("heading") + ": " if d.get("heading") else "") + d.get("content", "")
-        return {"table": "chunks", "preview": preview[:self._preview_chars], **d}
+        return {"table": "chunks", "preview": preview[: self._preview_chars], **d}

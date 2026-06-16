@@ -43,5 +43,5 @@ def test_unwritable_path_degrades_gracefully(tmp_path, monkeypatch):
     # the cache must construct + no-op without raising.
     monkeypatch.setattr("pathlib.Path.mkdir", lambda *a, **k: (_ for _ in ()).throw(OSError()))
     c = ResponseCache("/definitely/not/writable/c.db")
-    c.set("v", "q")          # no raise
+    c.set("v", "q")  # no raise
     assert c.get("q") is None

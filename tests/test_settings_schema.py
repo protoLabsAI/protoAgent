@@ -78,22 +78,24 @@ def test_current_values_reflect_config():
 
 
 def test_validate_rejects_bad_types_and_bounds():
-    assert validate_flat({"compaction.enabled": "yes"})[0] is False     # not bool
-    assert validate_flat({"model.temperature": 5})[0] is False          # > max 2
-    assert validate_flat({"model.max_iterations": 0})[0] is False        # < min 1
-    assert validate_flat({"routing.fallback_models": "x"})[0] is False   # not list
-    assert validate_flat({"prompt_cache.ttl": "9m"})[0] is False         # not in options
-    assert validate_flat({"nope.nope": 1})[0] is False                   # unknown key
+    assert validate_flat({"compaction.enabled": "yes"})[0] is False  # not bool
+    assert validate_flat({"model.temperature": 5})[0] is False  # > max 2
+    assert validate_flat({"model.max_iterations": 0})[0] is False  # < min 1
+    assert validate_flat({"routing.fallback_models": "x"})[0] is False  # not list
+    assert validate_flat({"prompt_cache.ttl": "9m"})[0] is False  # not in options
+    assert validate_flat({"nope.nope": 1})[0] is False  # unknown key
     assert validate_flat({"model.temperature": 0.5, "compaction.enabled": True})[0] is True
 
 
 def test_nest_updates_builds_yaml_shape_and_drops_blank_secrets():
-    nested = nest_updates({
-        "model.temperature": 0.5,
-        "prompt_cache.warm.enabled": True,   # 3-level
-        "auth.token": "",                    # blank secret → dropped (leave existing)
-        "model.api_key": "sk-new",           # set secret → kept
-    })
+    nested = nest_updates(
+        {
+            "model.temperature": 0.5,
+            "prompt_cache.warm.enabled": True,  # 3-level
+            "auth.token": "",  # blank secret → dropped (leave existing)
+            "model.api_key": "sk-new",  # set secret → kept
+        }
+    )
     assert nested == {
         "model": {"temperature": 0.5, "api_key": "sk-new"},
         "prompt_cache": {"warm": {"enabled": True}},
@@ -126,9 +128,12 @@ def _fake_plugin_specs(monkeypatch, specs: list[dict]):
 def test_text_field_renders_as_text_and_validates_like_string(monkeypatch):
     """#964 — a scalar `text` field surfaces its type verbatim and validates like a
     plain string (a multiline value is fine; no list/number coercion)."""
-    _fake_plugin_specs(monkeypatch, [
-        {"key": "ask_system", "label": "Ask system", "type": "text", "default": ""},
-    ])
+    _fake_plugin_specs(
+        monkeypatch,
+        [
+            {"key": "ask_system", "label": "Ask system", "type": "text", "default": ""},
+        ],
+    )
     fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
     assert fields["artifact.ask_system"]["type"] == "text"
     assert validate_flat({"artifact.ask_system": "line 1\nline 2"})[0] is True
@@ -137,18 +142,27 @@ def test_text_field_renders_as_text_and_validates_like_string(monkeypatch):
 def test_depends_on_resolves_plugin_short_key_to_full_key(monkeypatch):
     """#963 — a plugin spec's `depends_on.key` is a SHORT sibling key; build_schema
     resolves it to the full dotted path the console matches against."""
-    _fake_plugin_specs(monkeypatch, [
-        {"key": "ask_enabled", "label": "Interactive", "type": "bool", "default": False},
-        {"key": "ask_system", "label": "Ask system", "type": "text",
-         "depends_on": {"key": "ask_enabled", "equals": True}},
-    ])
+    _fake_plugin_specs(
+        monkeypatch,
+        [
+            {"key": "ask_enabled", "label": "Interactive", "type": "bool", "default": False},
+            {
+                "key": "ask_system",
+                "label": "Ask system",
+                "type": "text",
+                "depends_on": {"key": "ask_enabled", "equals": True},
+            },
+        ],
+    )
     fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
     assert fields["artifact.ask_system"]["depends_on"] == {"key": "artifact.ask_enabled", "equals": True}
     # An already-qualified key is left as-is (no double prefix).
-    _fake_plugin_specs(monkeypatch, [
-        {"key": "x", "label": "X", "type": "text",
-         "depends_on": {"key": "artifact.ask_enabled", "equals": True}},
-    ])
+    _fake_plugin_specs(
+        monkeypatch,
+        [
+            {"key": "x", "label": "X", "type": "text", "depends_on": {"key": "artifact.ask_enabled", "equals": True}},
+        ],
+    )
     fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
     assert fields["artifact.x"]["depends_on"]["key"] == "artifact.ask_enabled"
 
@@ -157,8 +171,14 @@ def test_core_field_depends_on_passed_through(monkeypatch):
     """#963 — a core Field's `depends_on` (full dotted key) flows through unchanged."""
     from graph.settings_schema import Field
 
-    demo = Field("demo.child", "compaction_keep_messages", "Child", "number", "Demo",
-                 depends_on={"key": "compaction.enabled", "equals": True})
+    demo = Field(
+        "demo.child",
+        "compaction_keep_messages",
+        "Child",
+        "number",
+        "Demo",
+        depends_on={"key": "compaction.enabled", "equals": True},
+    )
     monkeypatch.setattr("graph.settings_schema.FIELDS", [demo])
     groups = build_schema(LangGraphConfig())
     entry = next(e for g in groups for e in g["fields"] if e["key"] == "demo.child")

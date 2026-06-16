@@ -61,9 +61,7 @@ class ConversationManager:
     def _key(channel_id: str, user_id: str) -> str:
         return f"{channel_id}:{user_id}"
 
-    def get_or_create(
-        self, channel_id: str, user_id: str, *, timeout_s: float = 300.0
-    ) -> tuple[str, bool, int]:
+    def get_or_create(self, channel_id: str, user_id: str, *, timeout_s: float = 300.0) -> tuple[str, bool, int]:
         """Return ``(conversation_id, is_new, turn_number)``. An active
         (unexpired) conversation bumps the turn number; otherwise a fresh one
         starts."""
@@ -108,15 +106,14 @@ class ConversationManager:
 
     def _sweep_once(self) -> None:
         now = time.monotonic()
-        expired = [
-            key
-            for key, entry in self._conversations.items()
-            if (now - entry.last_activity) >= entry.timeout_s
-        ]
+        expired = [key for key, entry in self._conversations.items() if (now - entry.last_activity) >= entry.timeout_s]
         for key in expired:
             entry = self._conversations.pop(key, None)
             if entry is not None:
                 log.info(
                     "[conversation] timed out %s (%d turn(s), user %s in %s)",
-                    entry.conversation_id, entry.turn_number, entry.user_id, entry.channel_id,
+                    entry.conversation_id,
+                    entry.turn_number,
+                    entry.user_id,
+                    entry.channel_id,
                 )

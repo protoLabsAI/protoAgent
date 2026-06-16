@@ -9,6 +9,7 @@ from graph.plugins.chat_surface import InboundMessage, _chunk, register_chat_sur
 
 # --- fakes -------------------------------------------------------------------
 
+
 class FakeHost:
     def __init__(self, answer="RESPONSE"):
         self.answer = answer
@@ -69,6 +70,7 @@ def _wire(config, host=None):
 
 # --- chunking ----------------------------------------------------------------
 
+
 def test_chunk_respects_limit_and_prefers_boundaries():
     assert _chunk("", 10) == []
     assert _chunk("short", 10) == ["short"]
@@ -78,6 +80,7 @@ def test_chunk_respects_limit_and_prefers_boundaries():
 
 
 # --- wiring ------------------------------------------------------------------
+
 
 def test_registers_surface_test_route_and_no_tools():
     reg, _, _ = _wire({"enabled": True, "bot_token": "t"})
@@ -89,6 +92,7 @@ def test_registers_surface_test_route_and_no_tools():
 
 # --- handle glue (admin-gate, session key, invoke, chunked reply) ------------
 
+
 @pytest.mark.asyncio
 async def test_handle_invokes_and_replies_with_session_key():
     reg, adapter, host = _wire({"enabled": True, "bot_token": "t"})
@@ -96,14 +100,15 @@ async def test_handle_invokes_and_replies_with_session_key():
     await __import__("asyncio").sleep(0)  # let run() capture handle
     sent = []
     await adapter.handle(InboundMessage("hi there", "u1", "c9", lambda s: _collect(sent, s)))
-    assert host.invoked == [("hi there", "fake:c9")]   # session = "<id>:<channel>"
+    assert host.invoked == [("hi there", "fake:c9")]  # session = "<id>:<channel>"
     assert sent == ["RESPONSE"]
 
 
 @pytest.mark.asyncio
 async def test_handle_chunks_long_answers():
     reg, adapter, host = _wire({"enabled": True, "bot_token": "t"}, FakeHost(answer="A" * 25))
-    reg.surface["start"](); await __import__("asyncio").sleep(0)
+    reg.surface["start"]()
+    await __import__("asyncio").sleep(0)
     sent = []
     await adapter.handle(InboundMessage("x", "u", "c", lambda s: _collect(sent, s)))
     assert len(sent) == 3 and all(len(p) <= 10 for p in sent)  # 25 / chunk_limit 10
@@ -112,7 +117,8 @@ async def test_handle_chunks_long_answers():
 @pytest.mark.asyncio
 async def test_handle_admin_gating():
     reg, adapter, host = _wire({"enabled": True, "bot_token": "t", "admin_ids": ["123"]})
-    reg.surface["start"](); await __import__("asyncio").sleep(0)
+    reg.surface["start"]()
+    await __import__("asyncio").sleep(0)
     sent = []
     await adapter.handle(InboundMessage("hi", "999", "c", lambda s: _collect(sent, s)))  # not admin
     assert host.invoked == [] and sent == []
@@ -122,16 +128,18 @@ async def test_handle_admin_gating():
 
 @pytest.mark.asyncio
 async def test_handle_invoke_error_replies_gracefully():
-    host = FakeHost(); host.raise_exc = True
+    host = FakeHost()
+    host.raise_exc = True
     reg, adapter, _ = _wire({"enabled": True, "bot_token": "t"}, host)
-    reg.surface["start"](); await __import__("asyncio").sleep(0)
+    reg.surface["start"]()
+    await __import__("asyncio").sleep(0)
     sent = []
     await adapter.handle(InboundMessage("x", "u", "c", lambda s: _collect(sent, s)))
     assert len(sent) == 1 and "went wrong" in sent[0]
 
 
 def test_start_skips_when_not_configured_or_disabled():
-    reg, _, _ = _wire({"enabled": True})            # no token
+    reg, _, _ = _wire({"enabled": True})  # no token
     assert reg.surface["start"]() is None
     reg2, _, _ = _wire({"enabled": False, "bot_token": "t"})  # disabled
     assert reg2.surface["start"]() is None

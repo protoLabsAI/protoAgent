@@ -18,13 +18,26 @@ def _cfg(backend=""):
 
 
 class _FakeBackend:
-    def add_chunk(self, content, domain="general", **kw): return 1
-    def search(self, query, k=5, *, domain=None): return []
-    def get_hot_memory(self, max_chars=6000): return ""
-    def list_chunks(self, *a, **kw): return []
-    def stats(self): return {}
-    def delete_by_id(self, chunk_id): return True
-    def add_finding(self, *a, **kw): return None
+    def add_chunk(self, content, domain="general", **kw):
+        return 1
+
+    def search(self, query, k=5, *, domain=None):
+        return []
+
+    def get_hot_memory(self, max_chars=6000):
+        return ""
+
+    def list_chunks(self, *a, **kw):
+        return []
+
+    def stats(self):
+        return {}
+
+    def delete_by_id(self, chunk_id):
+        return True
+
+    def add_finding(self, *a, **kw):
+        return None
 
 
 def test_builtin_store_satisfies_protocol(tmp_path):
@@ -36,12 +49,13 @@ def test_registry_register_guards():
     reg = PluginRegistry("p", Path("."))
     reg.register_knowledge_store("pgvector", lambda config: _FakeBackend())
     reg.register_knowledge_store("", lambda config: _FakeBackend())  # bad name → ignored
-    reg.register_knowledge_store("x", None)                          # non-callable → ignored
+    reg.register_knowledge_store("x", None)  # non-callable → ignored
     assert set(reg.knowledge_stores) == {"pgvector"}
 
 
 def test_config_parses_backend(tmp_path):
     import yaml
+
     p = tmp_path / "config.yaml"
     p.write_text(yaml.safe_dump({"knowledge": {"backend": "pgvector"}}))
     cfg = LangGraphConfig.from_yaml(str(p))
@@ -69,13 +83,23 @@ def test_apply_unregistered_degrades_to_builtin():
 
 def test_apply_none_or_error_degrades_to_builtin():
     builtin = object()
-    def _none(config): return None
-    def _boom(config): raise RuntimeError("db down")
-    assert _apply_plugin_knowledge_backend(_cfg("b"), builtin, SimpleNamespace(knowledge_stores={"b": _none})) is builtin
-    assert _apply_plugin_knowledge_backend(_cfg("b"), builtin, SimpleNamespace(knowledge_stores={"b": _boom})) is builtin
+
+    def _none(config):
+        return None
+
+    def _boom(config):
+        raise RuntimeError("db down")
+
+    assert (
+        _apply_plugin_knowledge_backend(_cfg("b"), builtin, SimpleNamespace(knowledge_stores={"b": _none})) is builtin
+    )
+    assert (
+        _apply_plugin_knowledge_backend(_cfg("b"), builtin, SimpleNamespace(knowledge_stores={"b": _boom})) is builtin
+    )
 
 
 # ── register_embedder (ADR 0031 follow-up) ───────────────────────────────────
+
 
 def _embed_factory(config):
     return lambda text: [0.0, 1.0, 0.0]
@@ -84,13 +108,14 @@ def _embed_factory(config):
 def test_registry_register_embedder_guards():
     reg = PluginRegistry("p", Path("."))
     reg.register_embedder("local", _embed_factory)
-    reg.register_embedder("", _embed_factory)   # bad name → ignored
-    reg.register_embedder("x", None)            # non-callable → ignored
+    reg.register_embedder("", _embed_factory)  # bad name → ignored
+    reg.register_embedder("x", None)  # non-callable → ignored
     assert set(reg.embedders) == {"local"}
 
 
 def test_config_parses_embedder(tmp_path):
     import yaml
+
     p = tmp_path / "config.yaml"
     p.write_text(yaml.safe_dump({"knowledge": {"embedder": "local"}}))
     assert LangGraphConfig.from_yaml(str(p)).knowledge_embedder == "local"
@@ -98,6 +123,7 @@ def test_config_parses_embedder(tmp_path):
 
 def test_apply_embedder_builds_hybrid(tmp_path):
     from knowledge.hybrid_store import HybridKnowledgeStore
+
     cfg = _cfg("")
     cfg.knowledge_embedder = "local"
     cfg.knowledge_db_path = str(tmp_path / "kb.db")
@@ -112,9 +138,15 @@ def test_apply_embedder_unregistered_or_error_keeps_builtin(tmp_path):
     cfg.knowledge_db_path = str(tmp_path / "kb.db")
     cfg.knowledge_embedder = "nope"
     assert _apply_plugin_knowledge_backend(cfg, builtin, SimpleNamespace(knowledge_stores={}, embedders={})) is builtin
-    def _boom(config): raise RuntimeError("no model")
+
+    def _boom(config):
+        raise RuntimeError("no model")
+
     cfg.knowledge_embedder = "b"
-    assert _apply_plugin_knowledge_backend(cfg, builtin, SimpleNamespace(knowledge_stores={}, embedders={"b": _boom})) is builtin
+    assert (
+        _apply_plugin_knowledge_backend(cfg, builtin, SimpleNamespace(knowledge_stores={}, embedders={"b": _boom}))
+        is builtin
+    )
 
 
 def test_backend_takes_precedence_over_embedder(tmp_path):

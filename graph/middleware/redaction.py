@@ -42,33 +42,35 @@ PATTERNS: dict[str, re.Pattern] = {
 }
 
 # Known environment variable key names whose dict values should be redacted.
-_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
-    "OPENAI_API_KEY",
-    "LANGFUSE_SECRET_KEY",
-    "LANGFUSE_PUBLIC_KEY",
-    "A2A_AUTH_TOKEN",
-    "API_KEY",
-    "SECRET_KEY",
-    "AUTH_TOKEN",
-    "ACCESS_TOKEN",
-    "PRIVATE_KEY",
-    "authorization",
-    "Authorization",
-    "api_key",
-    "apikey",
-    "secret_key",
-    "auth_token",
-    "access_token",
-    "private_key",
-    "DISCORD_BOT_TOKEN",
-    "bot_token",
-    "GATEWAY_API_KEY",
-    "GH_PAT",
-    "client_secret",
-    "CLIENT_SECRET",
-    "refresh_token",
-    "REFRESH_TOKEN",
-})
+_SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_PUBLIC_KEY",
+        "A2A_AUTH_TOKEN",
+        "API_KEY",
+        "SECRET_KEY",
+        "AUTH_TOKEN",
+        "ACCESS_TOKEN",
+        "PRIVATE_KEY",
+        "authorization",
+        "Authorization",
+        "api_key",
+        "apikey",
+        "secret_key",
+        "auth_token",
+        "access_token",
+        "private_key",
+        "DISCORD_BOT_TOKEN",
+        "bot_token",
+        "GATEWAY_API_KEY",
+        "GH_PAT",
+        "client_secret",
+        "CLIENT_SECRET",
+        "refresh_token",
+        "REFRESH_TOKEN",
+    }
+)
 
 _PLACEHOLDER = "[REDACTED]"
 _MAX_DEPTH = 10
@@ -80,6 +82,7 @@ def _redact_string_simple(value: str) -> str:
     value = PATTERNS["bearer_token"].sub(r"\1[REDACTED]", value)
     # OpenAI-style key
     value = PATTERNS["openai_key"].sub(_PLACEHOLDER, value)
+
     # Generic api_key — redact the captured credential value group
     def _replace_api_key(m: re.Match) -> str:
         full = m.group(0)
@@ -87,12 +90,13 @@ def _redact_string_simple(value: str) -> str:
         return full[: len(full) - len(cred)] + _PLACEHOLDER
 
     value = PATTERNS["generic_api_key"].sub(_replace_api_key, value)
+
     # env var assignment — keep the key name, redact value after =/:
     def _replace_env_var(m: re.Match) -> str:
         full = m.group(0)
         key = m.group(1)
         # find the separator and everything after
-        rest = full[len(key):]
+        rest = full[len(key) :]
         sep_match = re.match(r"\s*[=:]\s*", rest)
         if sep_match:
             return key + sep_match.group(0) + _PLACEHOLDER
@@ -101,8 +105,7 @@ def _redact_string_simple(value: str) -> str:
     value = PATTERNS["env_var_assignment"].sub(_replace_env_var, value)
 
     # Provider token shapes — full-match redaction.
-    for _name in ("google_oauth", "google_api_key", "github_token",
-                  "slack_token", "aws_access_key", "discord_token"):
+    for _name in ("google_oauth", "google_api_key", "github_token", "slack_token", "aws_access_key", "discord_token"):
         value = PATTERNS[_name].sub(_PLACEHOLDER, value)
 
     # client_secret — redact the captured credential value group.
@@ -134,9 +137,7 @@ def redact(data: Any, _depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for k, v in data.items():
             # Redact values for known sensitive keys unconditionally
-            if k in _SENSITIVE_ENV_KEYS or (
-                isinstance(k, str) and k.upper() in _SENSITIVE_ENV_KEYS
-            ):
+            if k in _SENSITIVE_ENV_KEYS or (isinstance(k, str) and k.upper() in _SENSITIVE_ENV_KEYS):
                 result[k] = _PLACEHOLDER
             else:
                 result[k] = redact(v, _depth + 1)

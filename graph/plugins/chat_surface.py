@@ -33,7 +33,7 @@ class InboundMessage:
     """One inbound chat message, normalized across platforms."""
 
     text: str
-    user_id: str   # platform user id — for admin-gating
+    user_id: str  # platform user id — for admin-gating
     channel_id: str  # platform channel/DM id — for the session/thread key
     reply: Callable[[str], Awaitable[None]]  # adapter-provided send-back
 
@@ -43,7 +43,7 @@ class ChatAdapter(Protocol):
     """The transport half of a communication plugin. Implement these; the wirer
     does everything else."""
 
-    id: str          # config section + route suffix, e.g. "telegram"
+    id: str  # config section + route suffix, e.g. "telegram"
     chunk_limit: int  # max outbound message length (0 = no chunking)
 
     def configured(self, cfg: dict) -> bool:
@@ -53,8 +53,7 @@ class ChatAdapter(Protocol):
         """Verify the credentials (the console Test button). Returns
         ``(ok, identity, error)`` — identity is e.g. the bot's username."""
 
-    async def run(self, handle: Callable[[InboundMessage], Awaitable[None]], *,
-                  cfg: dict, host) -> None:
+    async def run(self, handle: Callable[[InboundMessage], Awaitable[None]], *, cfg: dict, host) -> None:
         """Connect and loop: for each inbound message, build an ``InboundMessage``
         (with a ``reply`` that sends back) and ``await handle(msg)``. Runs until
         cancelled. ``host`` exposes ``publish``/``subscribe`` for extras."""
@@ -113,8 +112,9 @@ def register_chat_surface(registry, adapter: ChatAdapter) -> None:
     def _start():
         cfg = registry.config
         if not _should_start(cfg):
-            log.info("[%s] not started (enabled=%s, configured=%s)",
-                     adapter.id, cfg.get("enabled"), adapter.configured(cfg))
+            log.info(
+                "[%s] not started (enabled=%s, configured=%s)", adapter.id, cfg.get("enabled"), adapter.configured(cfg)
+            )
             return None
         if not (host and host.invoke):
             log.warning("[%s] no agent invoke available — not started", adapter.id)

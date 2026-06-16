@@ -8,6 +8,7 @@ any failure degrades to FTS5, never KB-less.
 from __future__ import annotations
 
 import graph.agent  # noqa: F401 — bind graph.agent.create_llm to the REAL fn before
+
 #   any test monkeypatches graph.llm.create_llm. create_context_fn lazily imports from
 #   graph.agent; if that first import happened under the patch, graph.agent would
 #   capture the fake create_llm permanently and leak into later middleware-wiring tests.
@@ -48,7 +49,7 @@ def test_create_embed_fn_callable_with_model():
 def test_create_embed_batch_fn():
     cfg = LangGraphConfig()
     cfg.api_base, cfg.api_key = "http://gateway.test/v1", "k"
-    assert callable(create_embed_batch_fn(cfg))   # OpenAIEmbeddings.embed_documents
+    assert callable(create_embed_batch_fn(cfg))  # OpenAIEmbeddings.embed_documents
     cfg.embed_model = ""
     assert create_embed_batch_fn(cfg) is None
 
@@ -56,7 +57,7 @@ def test_create_embed_batch_fn():
 def test_hybrid_store_gets_a_batch_embedder(tmp_path):
     store = server._build_knowledge_store(_cfg(tmp_path, embeddings=True))
     assert type(store).__name__ == "HybridKnowledgeStore"
-    assert store._embed_batch_fn is not None       # batched ingest wired in
+    assert store._embed_batch_fn is not None  # batched ingest wired in
 
 
 def test_create_embed_fn_sends_raw_strings(monkeypatch):
@@ -122,6 +123,7 @@ def test_create_context_fn_builds_doc_aware_prompt(monkeypatch):
 
             class _R:
                 content = "<scratch_pad>noise</scratch_pad>The Q3 finance section."
+
             return _R()
 
     monkeypatch.setattr(llm, "create_llm", lambda config, model_name=None: _FakeLLM())
@@ -130,7 +132,7 @@ def test_create_context_fn_builds_doc_aware_prompt(monkeypatch):
     cfg.knowledge_context_max_doc_chars = 50
     fn = create_context_fn(cfg)
     out = fn("D" * 500, "the chunk text")
-    assert out == "The Q3 finance section."          # reasoning stripped
+    assert out == "The Q3 finance section."  # reasoning stripped
     assert "the chunk text" in captured["content"]
     assert "D" * 50 in captured["content"] and "D" * 51 not in captured["content"]  # doc capped
 
@@ -190,7 +192,7 @@ def test_create_transcribe_fn_posts_audio_to_gateway(monkeypatch):
     cfg.api_base, cfg.api_key, cfg.transcribe_model = "http://gw.test/v1", "k", "whisper-1"
     fn = create_transcribe_fn(cfg)
     out = fn(b"audio-bytes", "clip.mp3")
-    assert out == "hello from whisper"                     # stripped
+    assert out == "hello from whisper"  # stripped
     assert captured["url"] == "http://gw.test/v1/audio/transcriptions"
     assert captured["data"] == {"model": "whisper-1"}
     assert captured["files"]["file"][0] == "clip.mp3"

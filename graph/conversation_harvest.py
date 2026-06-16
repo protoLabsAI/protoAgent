@@ -120,7 +120,9 @@ async def harvest_thread(
         chunk_id = chunk_ids[0] if chunk_ids else None
         log.info(
             "[harvest] summarized thread %s into knowledge (%d chunk(s), first %s)",
-            thread_id, len(chunk_ids), chunk_id,
+            thread_id,
+            len(chunk_ids),
+            chunk_id,
         )
 
         # Semantic facts — the second half of the session-end pass (ADR 0021).

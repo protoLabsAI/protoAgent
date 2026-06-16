@@ -32,10 +32,7 @@ def test_beads_list_uses_br_json_and_filters_tombstones(monkeypatch, tmp_path) -
         calls.append((args, kwargs))
         return _completed(
             args[0],
-            stdout=(
-                '[{"id":"bd-1","status":"open"},'
-                '{"id":"bd-2","status":"tombstone"}]'
-            ),
+            stdout=('[{"id":"bd-1","status":"open"},{"id":"bd-2","status":"tombstone"}]'),
         )
 
     monkeypatch.setattr("operator_api.beads.subprocess.run", fake_run)

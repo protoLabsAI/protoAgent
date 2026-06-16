@@ -23,18 +23,21 @@ from ingestion import engine
 # ── youtube_id (pure) ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("url,expected", [
-    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s", "dQw4w9WgXcQ"),
-    ("https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://m.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
-    ("https://example.com/watch?v=dQw4w9WgXcQ", None),   # not youtube
-    ("https://www.youtube.com/watch?v=short", None),     # not 11 chars
-    ("https://www.youtube.com/", None),
-    ("not a url", None),
-])
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s", "dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://m.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://example.com/watch?v=dQw4w9WgXcQ", None),  # not youtube
+        ("https://www.youtube.com/watch?v=short", None),  # not 11 chars
+        ("https://www.youtube.com/", None),
+        ("not a url", None),
+    ],
+)
 def test_youtube_id(url, expected):
     assert youtube_id(url) == expected
 
@@ -43,9 +46,11 @@ def test_youtube_id(url, expected):
 
 
 def test_html_to_text_strips_chrome():
-    html = (b"<html><head><title>T</title><style>x{}</style></head><body>"
-            b"<nav>menu home</nav><script>evil()</script>"
-            b"<h1>Heading</h1><p>Hello world.</p><footer>copyright</footer></body></html>")
+    html = (
+        b"<html><head><title>T</title><style>x{}</style></head><body>"
+        b"<nav>menu home</nav><script>evil()</script>"
+        b"<h1>Heading</h1><p>Hello world.</p><footer>copyright</footer></body></html>"
+    )
     text = engine.html_to_text(html)
     assert "Heading" in text and "Hello world." in text
     assert "evil()" not in text and "menu home" not in text and "copyright" not in text
@@ -104,13 +109,18 @@ def test_extract_bytes_content_type_sniff():
 
 def test_extract_pdf_joins_pages(monkeypatch):
     class _Page:
-        def __init__(self, t): self._t = t
-        def extract_text(self): return self._t
+        def __init__(self, t):
+            self._t = t
+
+        def extract_text(self):
+            return self._t
 
     class _Reader:
-        def __init__(self, _stream): self.pages = [_Page("page one"), _Page(""), _Page("page two")]
+        def __init__(self, _stream):
+            self.pages = [_Page("page one"), _Page(""), _Page("page two")]
 
     import pypdf
+
     monkeypatch.setattr(pypdf, "PdfReader", _Reader)
     r = extract_bytes("doc.pdf", b"%PDF-1.4 ...")
     assert r.source_type == "pdf" and r.text == "page one\n\npage two"
@@ -119,7 +129,9 @@ def test_extract_pdf_joins_pages(monkeypatch):
 def test_extract_pdf_parse_error_raises_extraction_error(monkeypatch):
     import pypdf
 
-    def _boom(_stream): raise ValueError("corrupt")
+    def _boom(_stream):
+        raise ValueError("corrupt")
+
     monkeypatch.setattr(pypdf, "PdfReader", _boom)
     with pytest.raises(ExtractionError):
         extract_bytes("doc.pdf", b"not really a pdf")
@@ -131,6 +143,7 @@ def test_extract_pdf_parse_error_raises_extraction_error(monkeypatch):
 def test_extract_url_html_with_injected_fetch():
     def fake_fetch(url):
         return b"<title>Article</title><p>Body text here.</p>", "text/html; charset=utf-8"
+
     r = extract_url("https://example.com/post", fetch=fake_fetch)
     assert r.source_type == "html" and r.title == "Article" and "Body text here." in r.text
 
@@ -147,7 +160,8 @@ def test_extract_url_rejects_unknown_content_type():
 
 def test_extract_url_youtube(monkeypatch):
     class _Snippet:
-        def __init__(self, t): self.text = t
+        def __init__(self, t):
+            self.text = t
 
     class _FakeApi:
         def fetch(self, video_id, *a, **k):
@@ -155,6 +169,7 @@ def test_extract_url_youtube(monkeypatch):
             return [_Snippet("never gonna"), _Snippet("give you up")]
 
     import youtube_transcript_api
+
     monkeypatch.setattr(youtube_transcript_api, "YouTubeTranscriptApi", _FakeApi)
     r = extract_url("https://youtu.be/dQw4w9WgXcQ")
     assert r.source_type == "youtube" and r.text == "never gonna give you up"
@@ -182,8 +197,7 @@ def test_extract_bytes_audio_transcribes():
 
 
 def test_extract_bytes_audio_by_content_type():
-    r = extract_bytes("blob", b"\x00", content_type="audio/mpeg",
-                      transcribe=lambda d, n: "heard it")
+    r = extract_bytes("blob", b"\x00", content_type="audio/mpeg", transcribe=lambda d, n: "heard it")
     assert r.source_type == "audio" and r.text == "heard it"
 
 
@@ -223,8 +237,10 @@ def test_audio_from_video_invokes_ffmpeg(monkeypatch):
     def fake_run(cmd, **kw):
         with open(cmd[-1], "wb") as f:  # ffmpeg's output path is the last arg
             f.write(b"MP3-BYTES")
+
         class _R:
             returncode = 0
+
         return _R()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -233,6 +249,7 @@ def test_audio_from_video_invokes_ffmpeg(monkeypatch):
 
 def test_audio_from_video_missing_ffmpeg(monkeypatch):
     import shutil
+
     monkeypatch.setattr(shutil, "which", lambda name: None)
     with pytest.raises(MissingDependency):
         engine._audio_from_video(b"x", ".mp4")

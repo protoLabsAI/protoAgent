@@ -39,9 +39,9 @@ def test_dangling_tool_call_is_dropped():
     repairs = repair_messages(msgs)
     assert len(repairs) == 1
     fixed = repairs[0]
-    assert fixed.id == orphan.id          # replaces the orphan in place (same id)
-    assert fixed.tool_calls == []         # the dangling call is gone
-    assert fixed.content                  # pure-tool_call message gets placeholder text
+    assert fixed.id == orphan.id  # replaces the orphan in place (same id)
+    assert fixed.tool_calls == []  # the dangling call is gone
+    assert fixed.content  # pure-tool_call message gets placeholder text
 
 
 def test_keeps_answered_drops_only_dangling():
@@ -53,7 +53,7 @@ def test_keeps_answered_drops_only_dangling():
     repairs = repair_messages(msgs)
     assert len(repairs) == 1
     kept_ids = [tc["id"] for tc in repairs[0].tool_calls]
-    assert kept_ids == ["c1"]             # answered call kept, dangling c2 dropped
+    assert kept_ids == ["c1"]  # answered call kept, dangling c2 dropped
     assert repairs[0].content == "calling two"
 
 
@@ -84,5 +84,5 @@ def test_repair_applied_through_the_langgraph_reducer():
     # Nothing in the merged history is left with an unanswered tool_call.
     answered = {m.tool_call_id for m in merged if isinstance(m, ToolMessage)}
     for m in merged:
-        for tc in (getattr(m, "tool_calls", None) or []):
+        for tc in getattr(m, "tool_calls", None) or []:
             assert tc["id"] in answered

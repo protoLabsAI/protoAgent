@@ -43,9 +43,7 @@ def _message_text(msg) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
-        )
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return str(content)
 
 
@@ -99,6 +97,7 @@ class ToolDeferralMiddleware(AgentMiddleware):
         # Prove the lever: count withheld tool schemas (ADR 0006 Slice 4b).
         try:
             from observability import metrics
+
             metrics.record_tools_deferred(deferred)
         except Exception:  # noqa: BLE001 — telemetry must never break a model call
             pass

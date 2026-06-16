@@ -50,20 +50,22 @@ def test_rename_changes_display_not_id(root):
 
     manager.create("taken")
     with pytest.raises(manager.WorkspaceError):
-        manager.rename("nova", "taken")          # display names stay unique
+        manager.rename("nova", "taken")  # display names stay unique
     with pytest.raises(manager.WorkspaceError):
-        manager.rename("nova", "host")           # reserved slug
+        manager.rename("nova", "host")  # reserved slug
 
 
 def test_from_config_clones_and_restamps(root, tmp_path):
-    src = tmp_path / "src"; src.mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
     (src / "langgraph-config.yaml").write_text(
-        "identity: { name: orig }\ninstance: { id: orig }\nmodel: { name: keep-me }\n")
+        "identity: { name: orig }\ninstance: { id: orig }\nmodel: { name: keep-me }\n"
+    )
     (src / "secrets.yaml").write_text("model: { api_key: k }\n")
     s = manager.create("clone", from_config=str(src), shared_skills=True)
     cfg = yaml.safe_load((root / s["id"] / "langgraph-config.yaml").read_text())
     assert cfg["identity"]["name"] == "clone" and cfg["instance"]["id"] == s["id"]
-    assert cfg["model"]["name"] == "keep-me"          # other config preserved
+    assert cfg["model"]["name"] == "keep-me"  # other config preserved
     assert cfg["skills"]["shared"] is True
     assert (root / s["id"] / "secrets.yaml").exists()  # secrets cloned too
 

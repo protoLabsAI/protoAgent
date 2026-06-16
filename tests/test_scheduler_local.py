@@ -264,10 +264,10 @@ async def test_start_retries_owner_lock_then_polls(tmp_path):
     try:
         await s.start()
         assert s._task is not None  # scheduled a retry — did NOT give up
-        assert s._lock_fd is None   # not acquired yet (still held)
+        assert s._lock_fd is None  # not acquired yet (still held)
 
         sl._LOCKED_PATHS.discard(key)  # the other instance exits → lock frees
-        for _ in range(60):            # let the background retry acquire it
+        for _ in range(60):  # let the background retry acquire it
             if s._lock_fd is not None:
                 break
             await asyncio.sleep(0.05)
@@ -338,6 +338,7 @@ async def test_due_job_fires(tmp_path, monkeypatch):
             return _FakeResponse()
 
     import httpx
+
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
     await s.start()
@@ -362,8 +363,11 @@ async def test_fire_publishes_scheduler_fired_event(tmp_path, monkeypatch):
     """A dispatched job publishes `scheduler.fired` on the bus (ADR 0051)."""
     events: list = []
     s = LocalScheduler(
-        agent_name="gina-test", invoke_url="http://127.0.0.1:7870",
-        api_key="k", bearer_token="b", db_dir=tmp_path,
+        agent_name="gina-test",
+        invoke_url="http://127.0.0.1:7870",
+        api_key="k",
+        bearer_token="b",
+        db_dir=tmp_path,
         event_publish=lambda topic, data: events.append((topic, data)),
     )
     past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
@@ -387,6 +391,7 @@ async def test_fire_publishes_scheduler_fired_event(tmp_path, monkeypatch):
             return _FakeResponse()
 
     import httpx
+
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     await s.start()
     await asyncio.sleep(1.5)
@@ -428,6 +433,7 @@ async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):
             return _FakeResponse()
 
     import httpx
+
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
     await s.start()
@@ -554,11 +560,11 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
     assert cap.url.endswith("/a2a")
 
     body = cap.json
-    assert body["method"] == "SendMessage"          # not 0.3 "message/send"
-    assert "contextId" not in body["params"]          # moved onto the message
+    assert body["method"] == "SendMessage"  # not 0.3 "message/send"
+    assert "contextId" not in body["params"]  # moved onto the message
     msg = body["params"]["message"]
-    assert msg["role"] == "ROLE_USER"                 # not "user"
-    assert msg["parts"] == [{"text": "do the thing"}] # not [{"kind":"text",...}]
+    assert msg["role"] == "ROLE_USER"  # not "user"
+    assert msg["parts"] == [{"text": "do the thing"}]  # not [{"kind":"text",...}]
     assert msg["contextId"] == ACTIVITY_CONTEXT
     assert msg["metadata"]["scheduler_job_id"] == job.id
     assert msg["metadata"]["origin"] == "scheduler"
@@ -621,14 +627,15 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
             return _R()
 
     import httpx
+
     monkeypatch.setattr(httpx, "AsyncClient", _SlowClient)
 
     await s.start()
     await asyncio.sleep(2.8)  # several ticks elapse during the single slow turn
     await s.stop()
 
-    assert len(calls) == 1          # fired once, not once-per-tick
-    assert s.list_jobs() == []      # one-shot deleted after the turn finally landed
+    assert len(calls) == 1  # fired once, not once-per-tick
+    assert s.list_jobs() == []  # one-shot deleted after the turn finally landed
 
 
 def test_per_job_timezone_evaluates_cron_in_that_zone(tmp_path):

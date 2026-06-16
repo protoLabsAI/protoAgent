@@ -56,8 +56,11 @@ def live_plugins_dir() -> Path:
 
 def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> str:
     proc = subprocess.run(
-        ["git", *args], cwd=str(cwd) if cwd else None,
-        capture_output=True, text=True, timeout=timeout,
+        ["git", *args],
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
     if proc.returncode != 0:
         raise InstallError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -66,9 +69,7 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> s
 
 def _validate_url(url: str) -> None:
     if not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
-        raise InstallError(
-            f"unsupported source {url!r} — use https://, ssh://, git@, or a local path."
-        )
+        raise InstallError(f"unsupported source {url!r} — use https://, ssh://, git@, or a local path.")
 
 
 def _source_allowed(url: str, allow: list[str] | None) -> bool:
@@ -77,6 +78,7 @@ def _source_allowed(url: str, allow: list[str] | None) -> bool:
     if not allow:
         return True
     import fnmatch
+
     norm = re.sub(r"^(https?://|git://|ssh://|git@)", "", url).replace(":", "/")
     return any(fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(norm, pat + "*") for pat in allow)
 
@@ -99,9 +101,14 @@ def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> No
     """Record install/uninstall/install-deps to the audit log (ADR 0027 D5)."""
     try:
         from observability.audit import audit_logger
+
         audit_logger.log(
-            session_id="plugins", tool=f"plugin.{action}", args=args,
-            result_summary=summary, duration_ms=0, success=success,
+            session_id="plugins",
+            tool=f"plugin.{action}",
+            args=args,
+            result_summary=summary,
+            duration_ms=0,
+            success=success,
         )
     except Exception:  # noqa: BLE001 — auditing must never block the operation
         log.debug("[plugins] audit log failed for %s", action, exc_info=True)
@@ -112,6 +119,7 @@ def configured_allowlist() -> list[str] | None:
     runs without a loaded LangGraphConfig). None = open."""
     try:
         import yaml
+
         cfg_path = _live_config_dir() / "langgraph-config.yaml"
         if not cfg_path.exists():
             return None
@@ -124,11 +132,19 @@ def configured_allowlist() -> list[str] | None:
 
 def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
     return {
-        "id": m.id, "name": m.name, "version": m.version, "description": m.description,
-        "source_url": source, "requested_ref": ref, "resolved_sha": sha,
-        "repository": m.repository, "homepage": m.homepage,
-        "capabilities": m.capabilities, "requires_env": m.requires_env,
-        "requires_pip": m.requires_pip, "min_protoagent_version": m.min_protoagent_version,
+        "id": m.id,
+        "name": m.name,
+        "version": m.version,
+        "description": m.description,
+        "source_url": source,
+        "requested_ref": ref,
+        "resolved_sha": sha,
+        "repository": m.repository,
+        "homepage": m.homepage,
+        "capabilities": m.capabilities,
+        "requires_env": m.requires_env,
+        "requires_pip": m.requires_pip,
+        "min_protoagent_version": m.min_protoagent_version,
         # what it contributes — surfaced in the install review (ADR 0027 D3)
         "contributes": {
             "tools": bool(m.config_section),  # heuristic; real tool list needs import
@@ -154,8 +170,9 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
-def install(url: str, ref: str | None = None, *, force: bool = False,
-            by: str = "cli", allow: list[str] | None = None) -> dict:
+def install(
+    url: str, ref: str | None = None, *, force: bool = False, by: str = "cli", allow: list[str] | None = None
+) -> dict:
     """Clone a plugin from ``url`` (at ``ref``) into the live plugins dir, pinned
     to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
     install its deps. Returns the install summary."""
@@ -181,8 +198,7 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
         manifest = load_manifest(staging)
         if manifest is None:
             raise InstallError(
-                f"{url!r} has no protoagent.plugin.yaml or protoagent.bundle.yaml — "
-                "not a protoAgent plugin or bundle."
+                f"{url!r} has no protoagent.plugin.yaml or protoagent.bundle.yaml — not a protoAgent plugin or bundle."
             )
         pid = manifest.id
 
@@ -203,13 +219,18 @@ def install(url: str, ref: str | None = None, *, force: bool = False,
     summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
     lock = _read_lock()
     lock["plugins"] = [e for e in lock["plugins"] if e.get("id") != pid]
-    lock["plugins"].append({
-        "id": pid, "source_url": url, "requested_ref": ref or "",
-        "resolved_sha": sha, "installed_at": datetime.now(timezone.utc).isoformat(), "by": by,
-    })
+    lock["plugins"].append(
+        {
+            "id": pid,
+            "source_url": url,
+            "requested_ref": ref or "",
+            "resolved_sha": sha,
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "by": by,
+        }
+    )
     _write_lock(lock)
-    _audit("install", {"url": url, "ref": ref or "", "sha": sha, "id": pid},
-           f"installed {pid}@{sha[:10]}")
+    _audit("install", {"url": url, "ref": ref or "", "sha": sha, "id": pid}, f"installed {pid}@{sha[:10]}")
     log.info("[plugins] installed %s@%s from %s", pid, sha[:10], url)
     return summary
 
@@ -223,6 +244,7 @@ def load_bundle(repo: Path) -> dict | None:
     repos (``{id, url, ref}`` or ``{id, builtin: true}``) to install together, plus a
     suggested ``enabled`` list + ``config``. It carries no plugin code of its own."""
     import yaml
+
     f = repo / BUNDLE_FILENAME
     if not f.exists():
         return None
@@ -235,8 +257,9 @@ def load_bundle(repo: Path) -> dict | None:
     return doc
 
 
-def _install_bundle(bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None,
-                    *, force: bool, by: str, allow: list[str] | None) -> dict:
+def _install_bundle(
+    bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None, *, force: bool, by: str, allow: list[str] | None
+) -> dict:
     """Install every plugin a bundle names (reusing single-plugin ``install()`` for
     each — so each member is allow-checked + pinned in ``plugins.lock`` exactly as a
     direct install), then record the bundle for provenance. Enable + config are
@@ -253,29 +276,41 @@ def _install_bundle(bundle: dict, bundle_url: str, bundle_sha: str, ref: str | N
         purl = entry.get("url")
         if not purl:
             raise InstallError(f"bundle {bid!r}: plugin {entry.get('id', '?')!r} has no url")
-        installed.append(install(str(purl), entry.get("ref"), force=force,
-                                 by=f"bundle:{bid}", allow=allow))
+        installed.append(install(str(purl), entry.get("ref"), force=force, by=f"bundle:{bid}", allow=allow))
 
     lock = _read_lock()
     lock.setdefault("bundles", [])
     lock["bundles"] = [b for b in lock["bundles"] if b.get("id") != bid]
-    lock["bundles"].append({
-        "id": bid, "source_url": bundle_url, "requested_ref": ref or "",
-        "resolved_sha": bundle_sha, "plugins": [s["id"] for s in installed],
-        # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
-        # this bundle as a starter type without re-reading its manifest.
-        "archetype": bundle.get("archetype") or {},
-        "installed_at": datetime.now(timezone.utc).isoformat(), "by": by,
-    })
+    lock["bundles"].append(
+        {
+            "id": bid,
+            "source_url": bundle_url,
+            "requested_ref": ref or "",
+            "resolved_sha": bundle_sha,
+            "plugins": [s["id"] for s in installed],
+            # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
+            # this bundle as a starter type without re-reading its manifest.
+            "archetype": bundle.get("archetype") or {},
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "by": by,
+        }
+    )
     _write_lock(lock)
-    _audit("install-bundle", {"url": bundle_url, "sha": bundle_sha, "id": bid},
-           f"installed bundle {bid} ({len(installed)} plugin(s))")
-    log.info("[plugins] installed bundle %s@%s (%d plugins) from %s",
-             bid, bundle_sha[:10], len(installed), bundle_url)
+    _audit(
+        "install-bundle",
+        {"url": bundle_url, "sha": bundle_sha, "id": bid},
+        f"installed bundle {bid} ({len(installed)} plugin(s))",
+    )
+    log.info("[plugins] installed bundle %s@%s (%d plugins) from %s", bid, bundle_sha[:10], len(installed), bundle_url)
     return {
-        "bundle": bid, "name": bundle.get("name", ""), "description": bundle.get("description", ""),
-        "resolved_sha": bundle_sha, "installed": installed, "skipped_builtin": skipped,
-        "enabled": list(bundle.get("enabled") or []), "config": bundle.get("config") or {},
+        "bundle": bid,
+        "name": bundle.get("name", ""),
+        "description": bundle.get("description", ""),
+        "resolved_sha": bundle_sha,
+        "installed": installed,
+        "skipped_builtin": skipped,
+        "enabled": list(bundle.get("enabled") or []),
+        "config": bundle.get("config") or {},
     }
 
 
@@ -285,6 +320,7 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
     broken); with ``purge`` also the plugin's `config_section` block. Comment-safe
     (ruamel). Returns True if anything changed."""
     from graph.config_io import load_yaml_doc, save_yaml_doc
+
     cfg = _live_config_dir() / "langgraph-config.yaml"
     if not cfg.exists():
         return False
@@ -311,6 +347,7 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
 def _clean_secrets(section: str) -> bool:
     """Remove the plugin's section from the live secrets.yaml overlay (purge only)."""
     from graph.config_io import load_yaml_doc, save_yaml_doc
+
     sec = _live_config_dir() / "secrets.yaml"
     if not sec.exists():
         return False
@@ -373,7 +410,9 @@ def install_deps(plugin_id: str) -> list[str]:
     if not deps:
         return []
     proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", *deps], capture_output=True, text=True,
+        [sys.executable, "-m", "pip", "install", *deps],
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         _audit("install_deps", {"id": plugin_id, "deps": deps}, "pip install failed", success=False)
@@ -417,11 +456,18 @@ def list_installed() -> list[dict]:
             if locked is not None:
                 out.append({**locked, "present": True, "tracked": True})
             else:
-                out.append({
-                    "id": pid, "source_url": "", "requested_ref": "",
-                    "resolved_sha": "", "installed_at": "", "by": "local",
-                    "present": True, "tracked": False,
-                })
+                out.append(
+                    {
+                        "id": pid,
+                        "source_url": "",
+                        "requested_ref": "",
+                        "resolved_sha": "",
+                        "installed_at": "",
+                        "by": "local",
+                        "present": True,
+                        "tracked": False,
+                    }
+                )
 
     # Locked but gone from disk — keep visible so the UI can offer `sync`.
     for pid, locked in lock_by_id.items():
@@ -481,9 +527,14 @@ def check_plugin_update(entry: dict) -> dict:
 
     pinned = bool(_SHA_RE.match(requested_ref))
     result = {
-        "id": pid, "source_url": source_url, "requested_ref": requested_ref,
-        "current_sha": current_sha, "latest_sha": None,
-        "behind": False, "pinned": pinned, "error": None,
+        "id": pid,
+        "source_url": source_url,
+        "requested_ref": requested_ref,
+        "current_sha": current_sha,
+        "latest_sha": None,
+        "behind": False,
+        "pinned": pinned,
+        "error": None,
     }
     if pinned or not source_url:
         if not source_url:
@@ -530,8 +581,13 @@ def sync(*, allow: list[str] | None = None) -> list[dict]:
             results.append({"id": pid, "status": "present"})
             continue
         try:
-            install(e["source_url"], e.get("resolved_sha") or e.get("requested_ref") or None,
-                    force=True, by="sync", allow=allow)
+            install(
+                e["source_url"],
+                e.get("resolved_sha") or e.get("requested_ref") or None,
+                force=True,
+                by="sync",
+                allow=allow,
+            )
             results.append({"id": pid, "status": "installed"})
         except InstallError as exc:
             results.append({"id": pid, "status": "failed", "error": str(exc)})

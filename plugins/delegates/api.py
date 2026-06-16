@@ -44,10 +44,7 @@ def _public_view(raw: dict) -> dict:
         except DelegateError as e:
             configured, error = False, str(e)
     name = raw.get("name")
-    has_secret = bool(
-        adapter and adapter.secret_field
-        and store.secret_overlay().get(f"{name}.{adapter.secret_field}")
-    )
+    has_secret = bool(adapter and adapter.secret_field and store.secret_overlay().get(f"{name}.{adapter.secret_field}"))
     # Drop any secret-bearing top-level field (api_key, *_token, auth, …).
     view = {k: v for k, v in raw.items() if not _is_secretish(k)}
     # keep auth.scheme (not the token) for a2a so the form can prefill it
@@ -56,9 +53,16 @@ def _public_view(raw: dict) -> dict:
     # the acp env dict is free-form — redact secret-named values inside it too.
     if isinstance(view.get("env"), dict):
         view["env"] = _redact_env(view["env"])
-    view.update({"name": name, "type": raw.get("type"),
-                 "description": raw.get("description", ""),
-                 "configured": configured, "error": error, "has_secret": has_secret})
+    view.update(
+        {
+            "name": name,
+            "type": raw.get("type"),
+            "description": raw.get("description", ""),
+            "configured": configured,
+            "error": error,
+            "has_secret": has_secret,
+        }
+    )
     return view
 
 
@@ -86,7 +90,7 @@ def _validate(entry: dict):
     if adapter is None:
         raise ValueError(f"unknown type {entry.get('type')!r} (want one of {', '.join(ADAPTERS)})")
     try:
-        adapter.parse(dict(entry))   # secrets not required to validate shape
+        adapter.parse(dict(entry))  # secrets not required to validate shape
     except DelegateError as e:
         raise ValueError(str(e))
     return name, adapter
@@ -98,6 +102,7 @@ def _inject_stored_secret(entry: dict, adapter) -> dict:
     if not adapter.secret_field:
         return entry
     import copy
+
     entry = copy.deepcopy(entry)
     if store._pop_dotted(copy.deepcopy(entry), adapter.secret_field):
         return entry  # caller supplied one
@@ -111,6 +116,7 @@ async def _reload():
     import asyncio
 
     from server.agent_init import _reload_langgraph_agent
+
     return await asyncio.to_thread(_reload_langgraph_agent)
 
 

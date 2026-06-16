@@ -104,9 +104,7 @@ def test_sse_event_stream_preamble_and_frame():
     assert preamble == ": connected\n\n"
     # Frame is an unnamed SSE event carrying the topic in the payload + the seq as the
     # SSE id (ADR 0039 — client routes by topic; id enables Last-Event-ID reconnect).
-    assert frame == (
-        'id: 1\ndata: {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}\n\n'
-    )
+    assert frame == ('id: 1\ndata: {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}\n\n')
 
 
 def test_sse_event_stream_emits_keepalive_when_idle():
@@ -134,9 +132,9 @@ def test_topic_matches_wildcards():
     assert topic_matches("artifact.created", "artifact.created")
     assert topic_matches("artifact.*", "artifact.created")
     assert not topic_matches("artifact.*", "artifact.created.again")  # * is one segment
-    assert topic_matches("artifact.#", "artifact.created.again")      # # is the tail
-    assert topic_matches("artifact.#", "artifact")                    # # matches empty tail
-    assert not topic_matches("notes.*", "artifact.created")           # different namespace
+    assert topic_matches("artifact.#", "artifact.created.again")  # # is the tail
+    assert topic_matches("artifact.#", "artifact")  # # matches empty tail
+    assert not topic_matches("notes.*", "artifact.created")  # different namespace
 
 
 def test_subscribe_handler_topic_filtered():
@@ -177,6 +175,7 @@ def test_unsubscribe_handler():
 
 def test_ring_replay_since():
     """A reconnecting subscriber with ?since= replays missed events then streams live."""
+
     async def run():
         bus = EventBus()
         bus.publish("a.1", {"i": 1})
@@ -201,8 +200,8 @@ def test_registry_emit_namespaces_topic():
     sent: list[tuple[str, dict]] = []
     reg = PluginRegistry("artifact", Path("."))
     reg.host = SimpleNamespace(publish=lambda t, d: sent.append((t, d)), on=None)  # isolate from HOST
-    reg.emit("created", {"id": "a1"})            # bare → namespaced
-    reg.emit("artifact.deleted", {"id": "x"})    # already namespaced → unchanged
+    reg.emit("created", {"id": "a1"})  # bare → namespaced
+    reg.emit("artifact.deleted", {"id": "x"})  # already namespaced → unchanged
     assert sent == [("artifact.created", {"id": "a1"}), ("artifact.deleted", {"id": "x"})]
 
 

@@ -75,5 +75,5 @@ def test_request_metadata_scope_survives_cross_context_exit():
 
     scope = request_metadata_scope({"project": "x"})
     contextvars.copy_context().run(scope.__enter__)  # token born in a different Context
-    scope.__exit__(None, None, None)                 # must not raise
+    scope.__exit__(None, None, None)  # must not raise
     assert current_request_metadata() == {}

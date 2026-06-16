@@ -122,9 +122,7 @@ def test_apply_settings_changes_serialized(monkeypatch):
     monkeypatch.setattr(agent_init, "_reload_langgraph_agent", fake_reload)
     monkeypatch.setattr(agent_init, "_sync_autostart_with_config", lambda c: "")
 
-    threads = [
-        threading.Thread(target=agent_init._apply_settings_changes) for _ in range(4)
-    ]
+    threads = [threading.Thread(target=agent_init._apply_settings_changes) for _ in range(4)]
     for t in threads:
         t.start()
     for t in threads:

@@ -63,13 +63,15 @@ logging.getLogger("opentelemetry.context").addFilter(
 # logging + error handlers read this to cross-reference records back to
 # the trace that produced them.
 _trace_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "_protoagent_trace_id", default="",
+    "_protoagent_trace_id",
+    default="",
 )
 
 # Holds the A2A/chat session_id so middleware (AuditMiddleware) and
 # audit logging can stamp it without needing access to graph state.
 _session_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "_protoagent_session_id", default="",
+    "_protoagent_session_id",
+    default="",
 )
 
 
@@ -79,10 +81,7 @@ def init() -> None:
 
     public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
     secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-    host = (
-        os.environ.get("LANGFUSE_HOST")
-        or os.environ.get("LANGFUSE_URL", "http://host.docker.internal:3001")
-    )
+    host = os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_URL", "http://host.docker.internal:3001")
 
     if not public_key or not secret_key:
         print("[tracing] Langfuse not configured. Tracing disabled.")
@@ -92,7 +91,9 @@ def init() -> None:
         from langfuse import Langfuse
 
         _langfuse = Langfuse(
-            public_key=public_key, secret_key=secret_key, host=host,
+            public_key=public_key,
+            secret_key=secret_key,
+            host=host,
         )
         _enabled = True
         print(f"[tracing] Langfuse initialized -> {host}")

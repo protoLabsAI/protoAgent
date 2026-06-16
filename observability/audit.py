@@ -16,9 +16,9 @@ from typing import Any
 
 # Rotate the JSONL when it crosses this; keep one ``.1`` backup. Reads only ever
 # touch the live file's tail.
-_MAX_BYTES = 50 * 1024 * 1024      # 50 MB
-_TAIL_BYTES = 512 * 1024           # get_recent reads at most the last 512 KB
-_MAX_SESSIONS = 1000               # cap the in-memory per-session stats dict
+_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+_TAIL_BYTES = 512 * 1024  # get_recent reads at most the last 512 KB
+_MAX_SESSIONS = 1000  # cap the in-memory per-session stats dict
 
 _DEFAULT_LEAF = Path("/sandbox") / "audit" / "audit.jsonl"
 
@@ -80,6 +80,7 @@ class AuditLogger:
         trace_id = None
         try:
             from observability import tracing
+
             trace_id = tracing.current_trace_id() or None
         except Exception:
             pass
@@ -171,6 +172,7 @@ def scope_leaf_safe(p: Path) -> Path:
     """``scope_leaf`` without raising — used only for the ``.path`` fallback."""
     try:
         from infra.paths import scope_leaf
+
         return scope_leaf(p)
     except Exception:
         return p

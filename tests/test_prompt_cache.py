@@ -11,6 +11,7 @@ from graph.middleware.prompt_cache import PromptCacheMiddleware
 class _Req:
     """Minimal stand-in for langchain's ModelRequest (the fields the
     middleware touches), with an override() that returns an updated copy."""
+
     def __init__(self, model_name, system_message, state=None):
         self.model = SimpleNamespace(model_name=model_name)
         self.system_message = system_message
@@ -31,8 +32,7 @@ def _run(mw, req):
 
 def test_anthropic_caches_stable_prefix_and_delivers_context():
     mw = PromptCacheMiddleware()
-    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE PROMPT"),
-               state={"context": "retrieved knowledge"})
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE PROMPT"), state={"context": "retrieved knowledge"})
     out = _run(mw, req)
     blocks = out.system_message.content
     assert isinstance(blocks, list)
@@ -45,8 +45,7 @@ def test_anthropic_caches_stable_prefix_and_delivers_context():
 
 def test_non_anthropic_delivers_context_without_cache_control():
     mw = PromptCacheMiddleware()
-    req = _Req("protolabs/reasoning", SystemMessage(content="PROMPT"),
-               state={"context": "knowledge here"})
+    req = _Req("protolabs/reasoning", SystemMessage(content="PROMPT"), state={"context": "knowledge here"})
     out = _run(mw, req)
     # plain string append, no cache_control blocks (safe for any provider)
     assert isinstance(out.system_message.content, str)
@@ -97,6 +96,7 @@ def test_config_wires_middleware():
 
     from graph.config import LangGraphConfig
     from graph.agent import _build_middleware
+
     mw = _build_middleware(LangGraphConfig(), knowledge_store=None)
     names = [m.__class__.__name__ for m in mw]
     # ToolCallRepairMiddleware runs first — heal a dangling-tool_call history before
@@ -108,11 +108,7 @@ def test_config_wires_middleware():
     # per-tab model FIRST, so PromptCacheMiddleware (the next wrapper) sees the
     # ACTUAL model when deciding whether to cache. ModelOverride doesn't touch the
     # system message, so the cache breakpoint still lands on the stable prefix.
-    wrappers = [
-        m.__class__.__name__
-        for m in mw
-        if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call
-    ]
+    wrappers = [m.__class__.__name__ for m in mw if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call]
     assert wrappers[:2] == ["ModelOverrideMiddleware", "PromptCacheMiddleware"]
 
 
@@ -121,8 +117,10 @@ async def test_async_path():
     mw = PromptCacheMiddleware()
     req = _Req("claude-opus-4-7", SystemMessage(content="P"), state={"context": "c"})
     captured = {}
+
     async def handler(r):
         captured["req"] = r
         return "resp"
+
     await mw.awrap_model_call(req, handler)
     assert captured["req"].system_message.content[0]["cache_control"]

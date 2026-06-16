@@ -106,7 +106,9 @@ def _parse_views(views, plugin_id: str) -> list[dict]:
             log.warning(
                 "[plugins] %s: view %r path %r is not same-origin relative — a scheme/host "
                 "breaks the fleet proxy + the postMessage token handshake; use a relative path",
-                plugin_id, v.get("id"), path,
+                plugin_id,
+                v.get("id"),
+                path,
             )
         kept.append(v)
     return kept

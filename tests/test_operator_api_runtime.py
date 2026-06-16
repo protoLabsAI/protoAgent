@@ -62,11 +62,9 @@ def test_runtime_status_handles_missing_config() -> None:
 def test_runtime_status_carries_version() -> None:
     # The console↔server /api/* surface has no other versioning (hub↔remote skew,
     # ADR 0042 §I) — runtime status carries the app version in both shapes.
-    s = build_runtime_status(config=None, setup_complete=False, graph_loaded=False,
-                             version="0.32.0")
+    s = build_runtime_status(config=None, setup_complete=False, graph_loaded=False, version="0.32.0")
     assert s["version"] == "0.32.0"
-    s2 = build_runtime_status(config=LangGraphConfig(), setup_complete=True,
-                              graph_loaded=True, version="0.32.0")
+    s2 = build_runtime_status(config=LangGraphConfig(), setup_complete=True, graph_loaded=True, version="0.32.0")
     assert s2["version"] == "0.32.0"
 
 

@@ -115,9 +115,7 @@ def _email_for(creds) -> str:
 
 def connection_status() -> dict:
     """Report (configured, connected, email) for the UI without forcing consent."""
-    configured = _client_config() is not None or _path(
-        "GOOGLE_CREDENTIALS_PATH", "credentials.json"
-    ).exists()
+    configured = _client_config() is not None or _path("GOOGLE_CREDENTIALS_PATH", "credentials.json").exists()
     creds = None
     try:
         creds = _load_cached()
@@ -175,8 +173,7 @@ def build_services():
     creds = _load_cached()
     if not creds:
         raise RuntimeError(
-            "Google not connected — open System → Settings → Google and click "
-            "“Connect Google” to authorize."
+            "Google not connected — open System → Settings → Google and click “Connect Google” to authorize."
         )
     gmail = build("gmail", "v1", credentials=creds, cache_discovery=False)
     calendar = build("calendar", "v3", credentials=creds, cache_discovery=False)

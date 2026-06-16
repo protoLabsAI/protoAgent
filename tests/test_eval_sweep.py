@@ -62,7 +62,9 @@ def test_save_report_tags_model_and_base_url(tmp_path):
     out = tmp_path / "run.json"
     _save_report(
         [CaseResult("c1", "tool", "n", True, "OK")],
-        out, model="vendor/m1", base_url="http://x:7990",
+        out,
+        model="vendor/m1",
+        base_url="http://x:7990",
     )
     payload = json.loads(out.read_text())
     assert payload["model"] == "vendor/m1"
@@ -101,19 +103,13 @@ def test_aggregate_runs_counts_passes_per_case():
 def test_repeat_matrix_majority_pass_and_ranking():
     # m1: a 3/3, b 2/3 → both clear majority (2/3) → best-of-3 = 2/2.
     # m2: a 1/3 (fails majority), b 3/3 → best-of-3 = 1/2.
-    m1 = [
-        _fake_report("m1", ts=str(i), rows=[("a", "tool", True), ("b", "tool", i != 2)])
-        for i in range(3)
-    ]
-    m2 = [
-        _fake_report("m2", ts=str(i), rows=[("a", "tool", i == 0), ("b", "tool", True)])
-        for i in range(3)
-    ]
+    m1 = [_fake_report("m1", ts=str(i), rows=[("a", "tool", True), ("b", "tool", i != 2)]) for i in range(3)]
+    m2 = [_fake_report("m2", ts=str(i), rows=[("a", "tool", i == 0), ("b", "tool", True)]) for i in range(3)]
     md = _render_repeat_matrix({"m1": m1, "m2": m2}, repeat=3)
     assert "best-of-3" in md
-    assert "**2/2**" in md and "**1/2**" in md      # per-model best-of-N scores
-    assert md.index("m1") < md.index("m2")          # m1 ranked first
-    assert "1/3 ✗" in md                            # m2's case `a` flagged as majority-fail
+    assert "**2/2**" in md and "**1/2**" in md  # per-model best-of-N scores
+    assert md.index("m1") < md.index("m2")  # m1 ranked first
+    assert "1/3 ✗" in md  # m2's case `a` flagged as majority-fail
     assert "3/3" in md and "2/3" in md
 
 

@@ -58,7 +58,9 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
         plugins = data.get("plugins") or {}
         roots = plugin_roots_from(config_dir, str(plugins.get("dir") or ""))
         schemas = discover_plugin_config(
-            roots, set(plugins.get("enabled") or []), set(plugins.get("disabled") or []),
+            roots,
+            set(plugins.get("enabled") or []),
+            set(plugins.get("disabled") or []),
         )
     except Exception as e:  # noqa: BLE001 — plugin config is best-effort, but say so
         log.warning(
@@ -84,6 +86,7 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
 
 
 # ── App→Host→Agent settings cascade (ADR 0047) ───────────────────────────────
+
 
 def _deep_merge_dicts(base: dict, overlay: dict) -> dict:
     """Deep-merge ``overlay`` onto ``base`` in place — overlay wins on leaf
@@ -224,11 +227,13 @@ class LangGraphConfig:
     # are the YAML-overridable layer.
     # Defaults derived from the registry entry (SSOT) so the YAML-overridable layer
     # always matches the runtime default — an un-overridden config is a true no-op.
-    researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=list(RESEARCHER_CONFIG.tools),
-        max_turns=RESEARCHER_CONFIG.max_turns,
-        model=RESEARCHER_CONFIG.model,
-    ))
+    researcher: SubagentDef = field(
+        default_factory=lambda: SubagentDef(
+            tools=list(RESEARCHER_CONFIG.tools),
+            max_turns=RESEARCHER_CONFIG.max_turns,
+            model=RESEARCHER_CONFIG.model,
+        )
+    )
 
     # Sub-agent fan-out — the `task_batch` tool runs delegations concurrently.
     # ``subagent_max_concurrency`` caps in-flight subagents (protects the
@@ -277,8 +282,8 @@ class LangGraphConfig:
     # model (create_agent doesn't read the `context` state key), so it's wired
     # unconditionally; the flags below only control the caching half.
     prompt_cache_enabled: bool = True
-    prompt_cache_ttl: str = "5m"          # "5m" (ephemeral) or "1h" (persistent)
-    prompt_cache_force: bool = False      # bypass the Anthropic-name heuristic
+    prompt_cache_ttl: str = "5m"  # "5m" (ephemeral) or "1h" (persistent)
+    prompt_cache_force: bool = False  # bypass the Anthropic-name heuristic
 
     # Cache-warming heartbeat — optional background ping that reproduces the
     # agent's cached system+tools prefix on an interval so the FIRST real
@@ -299,7 +304,7 @@ class LangGraphConfig:
     compaction_enabled: bool = True
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
-    compaction_model: str = ""            # blank = summarize with the main model
+    compaction_model: str = ""  # blank = summarize with the main model
 
     # Programmatic tool calling — the `execute_code` tool. Lets the model write
     # one Python script that calls several tools, loops/filters/composes their
@@ -351,11 +356,11 @@ class LangGraphConfig:
     # flagged unachievable (no-progress streak, or the model gives up). See
     # graph/goals/ and docs/guides/goal-mode.
     goal_enabled: bool = True
-    goal_max_iterations: int = 8          # continuation budget per goal
-    goal_no_progress_limit: int = 3       # identical verifier evidence N times -> unachievable
-    goal_monitor_interval: int = 60       # seconds between out-of-band monitor-goal checks (ADR 0030)
-    goal_eval_model: str = ""             # blank = main model (llm verifier / fuzzy goals)
-    goal_verify_timeout: float = 120.0    # seconds for command/test/ci verifiers
+    goal_max_iterations: int = 8  # continuation budget per goal
+    goal_no_progress_limit: int = 3  # identical verifier evidence N times -> unachievable
+    goal_monitor_interval: int = 60  # seconds between out-of-band monitor-goal checks (ADR 0030)
+    goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
+    goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
 
     # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
     # The default path lives under ``/sandbox/`` to play well with the
@@ -590,13 +595,15 @@ class LangGraphConfig:
     # host process (uvicorn bind / workspace port picker / fleet discovery + warm
     # supervisor) — a workspace leaf override is a silent no-op (the host process
     # reads its own config), see ADR §5.
-    bind_host: str = "127.0.0.1"          # uvicorn bind interface; env: PROTOAGENT_HOST
-    fleet_port_base: int = 7870           # workspace agents get port_base+1, +2, …
-    discovery_port_min: int = 7860        # fleet discovery scan window (inclusive)
+    bind_host: str = "127.0.0.1"  # uvicorn bind interface; env: PROTOAGENT_HOST
+    fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
+    discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
-    discovery_mdns: bool = True           # advertise + browse the _protoagent._tcp mDNS channel
-    fleet_max_warm: int = 0               # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
-    fleet_warm_grace_seconds: int = 0     # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE
+    discovery_mdns: bool = True  # advertise + browse the _protoagent._tcp mDNS channel
+    fleet_max_warm: int = 0  # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
+    fleet_warm_grace_seconds: int = (
+        0  # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE
+    )
 
     # Operator-console directory allowlist — the extra directories the
     # React console's beads/notes APIs may read and write. The protoAgent
@@ -661,6 +668,7 @@ class LangGraphConfig:
         if not self.filesystem_enabled:
             return []
         from infra.paths import workspace_dir
+
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
 
     @classmethod
@@ -759,19 +767,19 @@ class LangGraphConfig:
             memory_middleware=middleware.get("memory", cls.memory_middleware),
             scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
             enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
-            enforcement_disallowed_tools=(
-                data.get("enforcement", {}).get("disallowed_tools", [])
-            ),
-            enforcement_rate_limits=(
-                data.get("enforcement", {}).get("rate_limits", {})
-            ),
+            enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
+            enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
             ingest_enabled=middleware.get("ingest", cls.ingest_enabled),
             ingest_tools=data.get("ingest", {}).get("tools", []),
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
             prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
-            cache_warming_enabled=data.get("prompt_cache", {}).get("warm", {}).get("enabled", cls.cache_warming_enabled),
-            cache_warming_interval_seconds=data.get("prompt_cache", {}).get("warm", {}).get("interval_seconds", cls.cache_warming_interval_seconds),
+            cache_warming_enabled=data.get("prompt_cache", {})
+            .get("warm", {})
+            .get("enabled", cls.cache_warming_enabled),
+            cache_warming_interval_seconds=data.get("prompt_cache", {})
+            .get("warm", {})
+            .get("interval_seconds", cls.cache_warming_interval_seconds),
             compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
@@ -779,7 +787,9 @@ class LangGraphConfig:
             execute_code_enabled=data.get("execute_code", {}).get("enabled", cls.execute_code_enabled),
             execute_code_timeout=data.get("execute_code", {}).get("timeout", cls.execute_code_timeout),
             execute_code_tools=data.get("execute_code", {}).get("tools", []),
-            execute_code_output_truncate=data.get("execute_code", {}).get("output_truncate", cls.execute_code_output_truncate),
+            execute_code_output_truncate=data.get("execute_code", {}).get(
+                "output_truncate", cls.execute_code_output_truncate
+            ),
             tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
             tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
@@ -802,10 +812,16 @@ class LangGraphConfig:
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
             inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
-            checkpoint_keep_per_thread=data.get("checkpoint", {}).get("keep_per_thread", cls.checkpoint_keep_per_thread),
+            checkpoint_keep_per_thread=data.get("checkpoint", {}).get(
+                "keep_per_thread", cls.checkpoint_keep_per_thread
+            ),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
-            checkpoint_prune_interval_hours=data.get("checkpoint", {}).get("prune_interval_hours", cls.checkpoint_prune_interval_hours),
-            checkpoint_harvest_enabled=data.get("checkpoint", {}).get("harvest_enabled", cls.checkpoint_harvest_enabled),
+            checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
+                "prune_interval_hours", cls.checkpoint_prune_interval_hours
+            ),
+            checkpoint_harvest_enabled=data.get("checkpoint", {}).get(
+                "harvest_enabled", cls.checkpoint_harvest_enabled
+            ),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
@@ -815,24 +831,19 @@ class LangGraphConfig:
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),
-            knowledge_recall_preview_chars=knowledge.get(
-                "recall_preview_chars", cls.knowledge_recall_preview_chars),
+            knowledge_recall_preview_chars=knowledge.get("recall_preview_chars", cls.knowledge_recall_preview_chars),
             knowledge_embed_breaker_threshold=knowledge.get(
-                "embed_breaker_threshold", cls.knowledge_embed_breaker_threshold),
+                "embed_breaker_threshold", cls.knowledge_embed_breaker_threshold
+            ),
             knowledge_embed_breaker_cooldown_s=knowledge.get(
-                "embed_breaker_cooldown_s", cls.knowledge_embed_breaker_cooldown_s),
-            knowledge_chunk_max_chars=knowledge.get(
-                "chunk_max_chars", cls.knowledge_chunk_max_chars),
-            knowledge_chunk_overlap_chars=knowledge.get(
-                "chunk_overlap_chars", cls.knowledge_chunk_overlap_chars),
-            knowledge_chunk_min_chars=knowledge.get(
-                "chunk_min_chars", cls.knowledge_chunk_min_chars),
-            knowledge_contextual_enrichment=knowledge.get(
-                "contextual_enrichment", cls.knowledge_contextual_enrichment),
-            knowledge_context_max_doc_chars=knowledge.get(
-                "context_max_doc_chars", cls.knowledge_context_max_doc_chars),
-            knowledge_attach_inline_budget=knowledge.get(
-                "attach_inline_budget", cls.knowledge_attach_inline_budget),
+                "embed_breaker_cooldown_s", cls.knowledge_embed_breaker_cooldown_s
+            ),
+            knowledge_chunk_max_chars=knowledge.get("chunk_max_chars", cls.knowledge_chunk_max_chars),
+            knowledge_chunk_overlap_chars=knowledge.get("chunk_overlap_chars", cls.knowledge_chunk_overlap_chars),
+            knowledge_chunk_min_chars=knowledge.get("chunk_min_chars", cls.knowledge_chunk_min_chars),
+            knowledge_contextual_enrichment=knowledge.get("contextual_enrichment", cls.knowledge_contextual_enrichment),
+            knowledge_context_max_doc_chars=knowledge.get("context_max_doc_chars", cls.knowledge_context_max_doc_chars),
+            knowledge_attach_inline_budget=knowledge.get("attach_inline_budget", cls.knowledge_attach_inline_budget),
             skills_enabled=skills.get("enabled", cls.skills_enabled),
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),
@@ -887,11 +898,15 @@ class LangGraphConfig:
         for name in ("researcher",):
             if name in subagents:
                 sub = subagents[name]
-                setattr(config, name, SubagentDef(
-                    enabled=sub.get("enabled", True),
-                    tools=sub.get("tools", getattr(config, name).tools),
-                    max_turns=sub.get("max_turns", getattr(config, name).max_turns),
-                    model=sub.get("model", getattr(config, name).model),
-                ))
+                setattr(
+                    config,
+                    name,
+                    SubagentDef(
+                        enabled=sub.get("enabled", True),
+                        tools=sub.get("tools", getattr(config, name).tools),
+                        max_turns=sub.get("max_turns", getattr(config, name).max_turns),
+                        model=sub.get("model", getattr(config, name).model),
+                    ),
+                )
 
         return config

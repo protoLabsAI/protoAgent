@@ -145,7 +145,10 @@ def _now_iso() -> str:
 
 
 def _compute_next_fire(
-    schedule: str, *, after: datetime | None = None, tz: str | None = None,
+    schedule: str,
+    *,
+    after: datetime | None = None,
+    tz: str | None = None,
 ) -> str:
     """Resolve a schedule string to the next ISO (UTC) timestamp it fires.
 
@@ -272,8 +275,13 @@ class LocalScheduler:
     # ── public API (matches SchedulerBackend) ───────────────────────────────
 
     def add_job(
-        self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None, context_id: str | None = None,
+        self,
+        prompt: str,
+        schedule: str,
+        *,
+        job_id: str | None = None,
+        timezone: str | None = None,
+        context_id: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -295,9 +303,18 @@ class LocalScheduler:
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job.id, job.prompt, job.schedule, job.agent_name,
-                 job.next_fire, job.last_fire, int(job.enabled), job.created_at,
-                 job.timezone, job.context_id),
+                (
+                    job.id,
+                    job.prompt,
+                    job.schedule,
+                    job.agent_name,
+                    job.next_fire,
+                    job.last_fire,
+                    int(job.enabled),
+                    job.created_at,
+                    job.timezone,
+                    job.context_id,
+                ),
             )
             db.commit()
         except sqlite3.IntegrityError as exc:
@@ -354,7 +371,8 @@ class LocalScheduler:
                 "[scheduler] jobs.db at %s is owned by another instance — retrying "
                 "every %.0fs in the background until it's free (if this persists, run "
                 "each instance with a distinct PROTOAGENT_INSTANCE).",
-                self.path, self._LOCK_RETRY_SECONDS,
+                self.path,
+                self._LOCK_RETRY_SECONDS,
             )
             self._stopping = False
             self._task = asyncio.create_task(self._await_lock_then_poll(), name="scheduler.local.lockwait")
@@ -364,7 +382,8 @@ class LocalScheduler:
         self._task = asyncio.create_task(self._poll_loop(), name="scheduler.local.poll")
         log.info(
             "[scheduler] local backend started: agent=%s db=%s",
-            self.agent_name, self.path,
+            self.agent_name,
+            self.path,
         )
 
     async def _await_lock_then_poll(self) -> None:
@@ -378,8 +397,9 @@ class LocalScheduler:
             if fd is not None:
                 self._lock_fd = fd
                 log.info(
-                    "[scheduler] acquired jobs.db owner-lock after waiting — starting poll loop "
-                    "(agent=%s db=%s)", self.agent_name, self.path,
+                    "[scheduler] acquired jobs.db owner-lock after waiting — starting poll loop (agent=%s db=%s)",
+                    self.agent_name,
+                    self.path,
                 )
                 self._recover_missed_fires()
                 await self._poll_loop()
@@ -464,7 +484,8 @@ class LocalScheduler:
                     )
             elif not ok:
                 log.warning(
-                    "[scheduler] cron fire failed for job %s; will fire next slot", job.id,
+                    "[scheduler] cron fire failed for job %s; will fire next slot",
+                    job.id,
                 )
         finally:
             self._inflight_ids.discard(job.id)
@@ -483,8 +504,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 "
-                "AND next_fire <= ? ORDER BY next_fire ASC",
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ? ORDER BY next_fire ASC",
                 (self.agent_name, now.isoformat()),
             ).fetchall()
         except sqlite3.DatabaseError as exc:
@@ -528,8 +548,7 @@ class LocalScheduler:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 "
-                "AND next_fire <= ?",
+                "SELECT * FROM jobs WHERE agent_name = ? AND enabled = 1 AND next_fire <= ?",
                 (self.agent_name, cutoff_recent.isoformat()),
             ).fetchall()
             for row in rows:
@@ -542,7 +561,8 @@ class LocalScheduler:
                     )
                     log.info(
                         "[scheduler] dropped stale fire for job %s; next at %s",
-                        job.id, next_iso,
+                        job.id,
+                        next_iso,
                     )
                 else:
                     db.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
@@ -580,11 +600,14 @@ class LocalScheduler:
         # scheduled job firing — before the POST, which blocks for the whole turn.
         if self._publish is not None:
             try:
-                self._publish("scheduler.fired", {
-                    "job_id": job.id,
-                    "schedule": job.schedule,
-                    "prompt": (job.prompt or "")[:200],
-                })
+                self._publish(
+                    "scheduler.fired",
+                    {
+                        "job_id": job.id,
+                        "schedule": job.schedule,
+                        "prompt": (job.prompt or "")[:200],
+                    },
+                )
             except Exception:  # noqa: BLE001 — the event is best-effort
                 log.exception("[scheduler] fired-event publish failed for %s", job.id)
 
@@ -620,7 +643,9 @@ class LocalScheduler:
             if r.status_code >= 400:
                 log.error(
                     "[scheduler] fire failed for job %s: HTTP %d %s",
-                    job.id, r.status_code, r.text[:200],
+                    job.id,
+                    r.status_code,
+                    r.text[:200],
                 )
                 return False
             log.info("[scheduler] fired job %s", job.id)
@@ -632,7 +657,8 @@ class LocalScheduler:
             # so log concisely instead of a scary ERROR traceback (bd-3vp).
             log.info(
                 "[scheduler] deferring fire for job %s — agent not reachable yet (%s); will retry",
-                job.id, type(exc).__name__,
+                job.id,
+                type(exc).__name__,
             )
             return False
         except Exception:  # noqa: BLE001

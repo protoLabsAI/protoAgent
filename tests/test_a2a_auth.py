@@ -1,16 +1,15 @@
-"""Tests for the A2A auth/origin middleware (#482).
+"""Tests for the A2A auth/origin middleware — default-deny posture (#870).
 
-Two correctness fixes, each pinned here:
+Covers the inverted auth model (default-deny + public allowlist), the
+short-lived SSE query-string token, plugin prefix enforcement, and the
+boot gate.
 
-1. ``configure(bearer_token=...)`` is authoritative — only ``None`` falls back
-   to ``A2A_AUTH_TOKEN``; an explicit ``""`` keeps bearer off even if the env
-   var is set (an apiKey-only agent must not silently enable bearer auth its
-   card never advertises).
-2. The origin guard only fires when an ``Origin`` header is actually present —
-   server-to-server callers (hub, scheduler loopback) send none and must pass.
+Acceptance criteria: AC1–AC14 from the #870 spec.
 """
 
 from __future__ import annotations
+
+import time
 
 import pytest
 from starlette.applications import Starlette
@@ -98,17 +97,266 @@ def test_origin_guard_disabled_when_unset():
     assert _client().post("/a2a", headers={"Origin": "https://anything.example"}).status_code == 200
 
 
-# ── 3. guard covers the console + OpenAI-compat APIs (prod-readiness) ──────────
+# ── 3. default-deny: non-public paths are guarded ─────────────────────────────
+
+_ALL_ROUTES = [
+    Route(p, lambda r: PlainTextResponse("ok"), methods=["GET", "POST"])
+    for p in (
+        "/a2a",
+        "/api/config",
+        "/api/events",
+        "/api/sse-token",
+        "/api/subagents/run",
+        "/v1/chat/completions",
+        "/healthz",
+        "/metrics",
+        "/.well-known/agent-card.json",
+        "/app",
+        "/app/settings",
+        "/manifest.json",
+        "/sw.js",
+        "/favicon.svg",
+        "/favicon.ico",
+        "/plugins/example/status",
+        "/active/foo/api/config",
+        "/agents/slug/api/config",
+    )
+]
 
 
 def _client_multi() -> TestClient:
-    routes = [
-        Route(p, lambda r: PlainTextResponse("ok"), methods=["GET", "POST"])
-        for p in ("/a2a", "/api/config", "/api/events", "/v1/chat/completions", "/healthz")
-    ]
-    app = Starlette(routes=routes)
+    app = Starlette(routes=_ALL_ROUTES)
     app.add_middleware(auth.A2AAuthMiddleware)
     return TestClient(app)
+
+
+# AC1: non-public paths return 401 without bearer
+def test_ac1_default_deny_non_public_paths(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    for p in (
+        "/a2a",
+        "/api/config",
+        "/api/subagents/run",
+        "/v1/chat/completions",
+        "/plugins/example/status",
+        "/active/foo/api/config",
+        "/agents/slug/api/config",
+    ):
+        assert c.get(p).status_code == 401, f"{p} should be 401"
+        assert c.post(p).status_code == 401, f"POST {p} should be 401"
+
+
+# AC2: /healthz is public
+def test_ac2_healthz_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    assert _client_multi().get("/healthz").status_code == 200
+
+
+# AC3: /metrics is public
+def test_ac3_metrics_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    assert _client_multi().get("/metrics").status_code == 200
+
+
+# AC4: /.well-known/agent-card.json is public
+def test_ac4_agent_card_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    assert _client_multi().get("/.well-known/agent-card.json").status_code == 200
+
+
+# AC5: /app is public (SPA served without auth)
+def test_ac5_app_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/app").status_code == 200
+    assert c.get("/app/settings").status_code == 200
+
+
+# AC6: /favicon.svg is public
+def test_ac6_favicon_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/favicon.svg").status_code == 200
+    assert c.get("/favicon.ico").status_code == 200
+
+
+# AC7: SSE with valid query token passes
+def test_ac7_sse_valid_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token("test-session")
+    c = _client_multi()
+    assert c.get(f"/api/events?token={token}").status_code == 200
+
+
+# AC8: SSE without token returns 401
+def test_ac8_sse_no_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/api/events").status_code == 401
+
+
+# AC9: SSE with stale/forged token returns 401
+def test_ac9_sse_bad_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/api/events?token=forged-garbage").status_code == 401
+
+
+def test_ac9_sse_expired_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    # Generate a token, then move time forward past the lifetime.
+    token = auth.generate_sse_token("test")
+    original_time = time.time
+    monkeypatch.setattr(time, "time", lambda: original_time() + auth._SSE_TOKEN_LIFETIME + 5)
+    c = _client_multi()
+    assert c.get(f"/api/events?token={token}").status_code == 401
+
+
+# AC10: valid bearer on /api/* passes
+def test_ac10_bearer_passes_api(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    hdr = {"Authorization": "Bearer secret"}
+    assert c.post("/api/subagents/run", headers=hdr).status_code == 200
+    assert c.post("/api/config", headers=hdr).status_code == 200
+
+
+# AC11: plugin routes are guarded by default-deny
+def test_ac11_plugin_routes_guarded(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/plugins/example/status").status_code == 401
+    # With bearer: passes
+    assert c.get("/plugins/example/status", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
+# AC12: open mode — no 401 on any path
+def test_ac12_open_mode_no_401(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    for p in (
+        "/a2a",
+        "/api/config",
+        "/api/events",
+        "/v1/chat/completions",
+        "/healthz",
+        "/metrics",
+        "/app",
+        "/plugins/example/status",
+        "/api/subagents/run",
+    ):
+        resp = c.get(p)
+        assert resp.status_code != 401, f"GET {p} should not be 401 in open mode"
+
+
+# AC13: tested in test_plugin_route_hotmount.py — _mount_plugin_routers warning
+# (see test_mount_warns_non_conforming_prefix below for the core logic)
+
+
+def test_ac13_mount_warns_non_conforming_prefix(monkeypatch, caplog):
+    """_mount_plugin_routers logs a WARNING for a non-conforming prefix."""
+    import logging
+
+    from fastapi import APIRouter, FastAPI
+
+    from runtime.state import STATE
+    from server.agent_init import _mount_plugin_routers
+
+    app = FastAPI()
+    monkeypatch.setattr(STATE, "fastapi_app", app)
+    monkeypatch.setattr(STATE, "plugin_router_keys", set())
+
+    r = APIRouter()
+
+    @r.get("/ping")
+    def _ping():
+        return {"ok": True}
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        _mount_plugin_routers([{"plugin_id": "myplugin", "router": r, "prefix": "/custom/path"}])
+
+    # The router was still mounted (not rejected).
+    assert ("myplugin", "/custom/path") in STATE.plugin_router_keys
+    # A warning was logged.
+    assert any("does not start with /plugins/myplugin/" in m for m in caplog.messages)
+
+
+# AC14: /api/sse-token endpoint returns a token
+def test_ac14_sse_token_endpoint():
+    """generate_sse_token returns a valid token when bearer is configured."""
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token("session-1")
+    assert token  # non-empty
+    assert auth._validate_sse_token(token)
+
+
+def test_ac14_sse_token_empty_in_open_mode(monkeypatch):
+    """generate_sse_token returns empty string when no bearer is configured."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token()
+    assert token == ""
+
+
+# ── 4. SSE token mechanics ──────────────────────────────────────────────────
+
+
+def test_sse_token_roundtrip():
+    auth.configure(bearer_token="my-secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token("sess-42")
+    assert auth._validate_sse_token(token)
+
+
+def test_sse_token_rejects_wrong_key():
+    auth.configure(bearer_token="my-secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token("sess")
+    # Swap the bearer to a different key — token should no longer validate.
+    auth._BEARER[0] = "different-secret"
+    assert not auth._validate_sse_token(token)
+
+
+def test_sse_token_rejects_garbage():
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    assert not auth._validate_sse_token("not-base64-!!!")
+    assert not auth._validate_sse_token("")
+
+
+def test_sse_bearer_header_still_works_for_events(monkeypatch):
+    """Server-to-server callers with Authorization header pass /api/events."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _client_multi()
+    assert c.get("/api/events", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
+def test_sse_proxied_events_path(monkeypatch):
+    """/agents/<slug>/api/events with a valid token passes."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token()
+    routes = [Route("/agents/myagent/api/events", lambda r: PlainTextResponse("ok"), methods=["GET"])]
+    app = Starlette(routes=routes)
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    assert c.get(f"/agents/myagent/api/events?token={token}").status_code == 200
+    assert c.get("/agents/myagent/api/events").status_code == 401
+
+
+# ── 5. guard covers the console + OpenAI-compat APIs (prod-readiness) ──────────
 
 
 def test_api_and_v1_are_guarded_when_token_set(monkeypatch):
@@ -124,14 +372,19 @@ def test_api_and_v1_are_guarded_when_token_set(monkeypatch):
     assert c.post("/v1/chat/completions", headers=hdr).status_code == 200
 
 
-def test_events_stream_and_healthz_stay_public_when_token_set(monkeypatch):
+def test_public_paths_stay_public_when_token_set(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
     c = _client_multi()
-    # EventSource can't send a bearer; the read-only event stream is exempt.
-    assert c.get("/api/events").status_code == 200
-    # /healthz is outside the guarded prefixes (probes/scrapers stay open).
+    # Public allowlist paths are always accessible.
     assert c.get("/healthz").status_code == 200
+    assert c.get("/metrics").status_code == 200
+    assert c.get("/.well-known/agent-card.json").status_code == 200
+    assert c.get("/app").status_code == 200
+    assert c.get("/manifest.json").status_code == 200
+    assert c.get("/sw.js").status_code == 200
+    assert c.get("/favicon.svg").status_code == 200
+    assert c.get("/favicon.ico").status_code == 200
 
 
 def test_apis_open_when_no_token(monkeypatch):
@@ -143,7 +396,7 @@ def test_apis_open_when_no_token(monkeypatch):
         assert c.post(p).status_code in (200, 405)  # 405 only if method not allowed
 
 
-# ── 4. boot gate: non-loopback bind without a token ──────────────────────────
+# ── 6. boot gate: non-loopback bind without a token ──────────────────────────
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
@@ -167,3 +420,35 @@ def test_open_bind_optin_allowed_with_warning():
     allowed, msg = auth.evaluate_open_bind("0.0.0.0", bearer_configured=False, allow_open=True)
     assert allowed
     assert msg is not None and "0.0.0.0" in msg and "PROTOAGENT_ALLOW_OPEN" in msg
+
+
+# ── 7. _is_public coverage ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/healthz", True),
+        ("/metrics", True),
+        ("/.well-known/agent-card.json", True),
+        ("/.well-known/other", True),
+        ("/app", True),
+        ("/app/settings/auth", True),
+        ("/manifest.json", True),
+        ("/sw.js", True),
+        ("/favicon.svg", True),
+        ("/favicon.ico", True),
+        ("/static/js/main.js", True),
+        ("/_ds/plugin-kit.css", True),
+        ("/_ds/plugin-kit.js", True),
+        ("/a2a", False),
+        ("/api/config", False),
+        ("/api/events", False),
+        ("/v1/chat/completions", False),
+        ("/plugins/foo/bar", False),
+        ("/", False),
+        ("/random", False),
+    ],
+)
+def test_is_public(path, expected):
+    assert auth._is_public(path) is expected

@@ -39,7 +39,8 @@ async def run_gh(args: list[str], timeout: int = _COMMAND_TIMEOUT) -> tuple[int,
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "gh", *args,
+            "gh",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,

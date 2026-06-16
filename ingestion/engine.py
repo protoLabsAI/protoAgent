@@ -57,15 +57,12 @@ _MD_EXTS = {".md", ".markdown", ".mdown", ".mkd", ".mdx"}
 _HTML_EXTS = {".html", ".htm", ".xhtml"}
 _PDF_EXTS = {".pdf"}
 # Audio → transcribed directly via the gateway STT endpoint.
-_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac",
-               ".wma", ".aiff", ".aif"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
 _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg", ".wmv"}
 
-SUPPORTED_EXTENSIONS = sorted(
-    _TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
-SUPPORTED_DESCRIPTION = (
-    "text, Markdown, HTML, PDF, audio + video files, and web/YouTube URLs")
+SUPPORTED_EXTENSIONS = sorted(_TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
+SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF, audio + video files, and web/YouTube URLs"
 
 
 # ── decoding / parsing helpers (pure) ────────────────────────────────────────
@@ -106,8 +103,7 @@ def html_to_text(data: bytes | str) -> str:
 
     html = _decode(data) if isinstance(data, bytes) else data
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "template", "svg",
-                     "nav", "footer", "aside", "form"]):
+    for tag in soup(["script", "style", "noscript", "template", "svg", "nav", "footer", "aside", "form"]):
         tag.decompose()
     text = soup.get_text(separator="\n")
     # Collapse runs of blank lines / trailing spaces the tag soup leaves behind.
@@ -138,8 +134,7 @@ def html_title(data: bytes | str) -> str | None:
     return None
 
 
-_YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
-             "youtu.be", "www.youtu.be"}
+_YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtu.be"}
 
 
 def youtube_id(url: str) -> str | None:
@@ -159,7 +154,7 @@ def youtube_id(url: str) -> str | None:
         return cand if _valid_yt_id(cand) else None
     for prefix in ("/shorts/", "/embed/", "/live/", "/v/"):
         if u.path.startswith(prefix):
-            cand = u.path[len(prefix):].split("/")[0]
+            cand = u.path[len(prefix) :].split("/")[0]
             return cand if _valid_yt_id(cand) else None
     return None
 
@@ -175,8 +170,7 @@ def _extract_pdf(data: bytes) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
-        raise MissingDependency(
-            "PDF ingestion needs the 'pypdf' package (pip install pypdf).") from exc
+        raise MissingDependency("PDF ingestion needs the 'pypdf' package (pip install pypdf).") from exc
     import io
 
     try:
@@ -202,14 +196,13 @@ def _youtube_transcript(video_id: str) -> str:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError as exc:
         raise MissingDependency(
-            "YouTube ingestion needs the 'youtube-transcript-api' package "
-            "(pip install youtube-transcript-api).") from exc
+            "YouTube ingestion needs the 'youtube-transcript-api' package (pip install youtube-transcript-api)."
+        ) from exc
     try:
         # 1.x instance API (`fetch`); FetchedTranscript is iterable of snippets.
         fetched = YouTubeTranscriptApi().fetch(video_id)
     except Exception as exc:  # noqa: BLE001 — no captions / disabled / unavailable
-        raise ExtractionError(
-            f"no transcript available for video {video_id}: {exc}") from exc
+        raise ExtractionError(f"no transcript available for video {video_id}: {exc}") from exc
     parts = [_snippet_text(s) for s in fetched]
     return " ".join(p for p in parts if p)
 
@@ -225,8 +218,7 @@ def _audio_from_video(data: bytes, suffix: str) -> bytes:
     import tempfile
 
     if not shutil.which("ffmpeg"):
-        raise MissingDependency(
-            "video ingestion needs ffmpeg on PATH (brew install ffmpeg / apt install ffmpeg)")
+        raise MissingDependency("video ingestion needs ffmpeg on PATH (brew install ffmpeg / apt install ffmpeg)")
     src = tempfile.NamedTemporaryFile(suffix=suffix or ".mp4", delete=False)
     out_path = src.name + ".mp3"
     try:
@@ -235,7 +227,9 @@ def _audio_from_video(data: bytes, suffix: str) -> bytes:
         src.close()
         subprocess.run(
             ["ffmpeg", "-y", "-i", src.name, "-vn", "-acodec", "libmp3lame", "-q:a", "4", out_path],
-            check=True, capture_output=True, timeout=_FFMPEG_TIMEOUT_S,
+            check=True,
+            capture_output=True,
+            timeout=_FFMPEG_TIMEOUT_S,
         )
         with open(out_path, "rb") as f:
             return f.read()
@@ -258,7 +252,8 @@ def _transcribe_media(data: bytes, filename: str, transcribe, *, video: bool) ->
     if transcribe is None:
         raise MissingDependency(
             "audio/video ingestion needs a transcription model — set "
-            "knowledge.transcribe_model and a gateway that serves it (e.g. whisper-1)")
+            "knowledge.transcribe_model and a gateway that serves it (e.g. whisper-1)"
+        )
     audio, name = data, filename
     if video:
         audio = _audio_from_video(data, Path(filename or "").suffix or ".mp4")
@@ -304,13 +299,11 @@ def extract_bytes(
     elif not ext and not ct and _looks_textual(data):
         text, source_type = _decode(data), "text"
     else:
-        raise UnsupportedSource(
-            f"unsupported file type {ext or ct or 'unknown'!r}; supported: {SUPPORTED_DESCRIPTION}")
+        raise UnsupportedSource(f"unsupported file type {ext or ct or 'unknown'!r}; supported: {SUPPORTED_DESCRIPTION}")
 
     if not text.strip():
         raise ExtractionError("no extractable text in the file")
-    return ExtractResult(text=text, title=title, source_type=source_type,
-                         meta={"filename": filename})
+    return ExtractResult(text=text, title=title, source_type=source_type, meta={"filename": filename})
 
 
 def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
@@ -329,8 +322,9 @@ def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
         text = _youtube_transcript(vid)
         if not text.strip():
             raise ExtractionError(f"empty transcript for video {vid}")
-        return ExtractResult(text=text, title=f"YouTube transcript ({vid})",
-                             source_type="youtube", meta={"url": url, "video_id": vid})
+        return ExtractResult(
+            text=text, title=f"YouTube transcript ({vid})", source_type="youtube", meta={"url": url, "video_id": vid}
+        )
 
     data, ct = (fetch or _http_fetch)(url)
     ct = (ct or "").split(";")[0].strip().lower()
@@ -355,8 +349,7 @@ def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
 
     if not text.strip():
         raise ExtractionError(f"no extractable text at {url}")
-    return ExtractResult(text=text, title=title, source_type=source_type,
-                         meta={"url": url, "content_type": ct})
+    return ExtractResult(text=text, title=title, source_type=source_type, meta={"url": url, "content_type": ct})
 
 
 def _media_filename(url: str, url_ext: str, default_ext: str) -> str:
@@ -371,12 +364,10 @@ def _media_filename(url: str, url_ext: str, default_ext: str) -> str:
 def _http_fetch(url: str) -> tuple[bytes, str]:
     import httpx
 
-    with httpx.Client(follow_redirects=True, timeout=_FETCH_TIMEOUT_S,
-                      headers={"User-Agent": _FETCH_UA}) as client:
+    with httpx.Client(follow_redirects=True, timeout=_FETCH_TIMEOUT_S, headers={"User-Agent": _FETCH_UA}) as client:
         resp = client.get(url)
         resp.raise_for_status()
         content = resp.content
         if len(content) > _MAX_FETCH_BYTES:
-            raise ExtractionError(
-                f"document too large ({len(content)} bytes > {_MAX_FETCH_BYTES})")
+            raise ExtractionError(f"document too large ({len(content)} bytes > {_MAX_FETCH_BYTES})")
         return content, resp.headers.get("content-type", "")

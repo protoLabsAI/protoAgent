@@ -76,9 +76,9 @@ async def test_crash_is_rekicked_after_on_crash_recovery():
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash)
     sv.start()
     await asyncio.sleep(0.15)
-    assert calls >= 2                       # crashed once, watchdog re-kicked, ran again
-    assert len(recovered) == 1              # on_crash fired exactly once for the down-streak
-    assert "error" in recovered[0]          # got the crash result
+    assert calls >= 2  # crashed once, watchdog re-kicked, ran again
+    assert len(recovered) == 1  # on_crash fired exactly once for the down-streak
+    assert "error" in recovered[0]  # got the crash result
     await sv.aclose()
 
 
@@ -102,9 +102,11 @@ async def test_stall_is_detected_and_restarted():
         await asyncio.sleep(10)  # hangs — running but making no progress
 
     sv = supervise(
-        work, interval=0.02, stall_ticks=2,
-        progress=lambda: 0,            # constant token → frozen progress
-        stall_check=lambda: True,      # confirmed stalled
+        work,
+        interval=0.02,
+        stall_ticks=2,
+        progress=lambda: 0,  # constant token → frozen progress
+        stall_check=lambda: True,  # confirmed stalled
     )
     sv.start()
     await asyncio.sleep(0.2)
@@ -117,9 +119,11 @@ async def test_stall_check_prevents_false_trip():
         await asyncio.sleep(10)
 
     sv = supervise(
-        work, interval=0.02, stall_ticks=2,
-        progress=lambda: 0,            # frozen…
-        stall_check=lambda: False,     # …but NOT a real stall (e.g. legit long work)
+        work,
+        interval=0.02,
+        stall_ticks=2,
+        progress=lambda: 0,  # frozen…
+        stall_check=lambda: False,  # …but NOT a real stall (e.g. legit long work)
     )
     sv.start()
     await asyncio.sleep(0.15)
@@ -139,7 +143,7 @@ async def test_request_stop_is_graceful():
     sv = supervise(work, interval=10, breath=0.0)
     sv.start()
     await asyncio.sleep(0.05)
-    sv.request_stop()                  # finish the current window, then stop — no re-kick
+    sv.request_stop()  # finish the current window, then stop — no re-kick
     await asyncio.sleep(0.1)
     assert not sv.running()
     assert sv.status()["want_running"] is False

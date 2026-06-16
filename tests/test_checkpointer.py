@@ -33,8 +33,8 @@ def test_threaded_sqlite_saver_persists_across_restart(tmp_path):
         state = await app.aget_state(cfg)
         return len(state.values["messages"])
 
-    n1 = asyncio.run(turn("hello"))   # 1 human + 1 ai
-    n2 = asyncio.run(turn("again"))   # reopened DB → accumulates on top
+    n1 = asyncio.run(turn("hello"))  # 1 human + 1 ai
+    n2 = asyncio.run(turn("again"))  # reopened DB → accumulates on top
     assert n1 == 2
     assert n2 == 4  # history persisted across the simulated restart
 

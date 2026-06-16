@@ -100,10 +100,13 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
         "initialized": True,
         "project_path": notes_path,
     }
-    assert client.post(
-        "/api/beads/issues",
-        json={"project_path": notes_path, "title": "Task"},
-    ).json()["issue"]["id"] == "bd-2"
+    assert (
+        client.post(
+            "/api/beads/issues",
+            json={"project_path": notes_path, "title": "Task"},
+        ).json()["issue"]["id"]
+        == "bd-2"
+    )
     assert client.patch(
         "/api/beads/issues/bd-1",
         json={"project_path": notes_path, "status": "in_progress"},

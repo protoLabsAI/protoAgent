@@ -1,4 +1,5 @@
 """graph.sdk.complete — a bare LLM completion for plugins (ADR 0043 consumption SDK)."""
+
 from __future__ import annotations
 
 import pytest

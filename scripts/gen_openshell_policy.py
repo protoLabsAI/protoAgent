@@ -85,9 +85,7 @@ def build_policy(cfg: LangGraphConfig) -> str:
             endpoints.append((host, port, ""))
 
     def _paths(items: list[tuple[str, str]]) -> str:
-        return "\n".join(
-            f"    - {p}" + (f"  # {note}" if note else "") for p, note in items
-        )
+        return "\n".join(f"    - {p}" + (f"  # {note}" if note else "") for p, note in items)
 
     def _endpoints() -> str:
         if not endpoints:

@@ -65,19 +65,26 @@ def test_telemetry_passes_extra_keys_through():
 def test_render_html_includes_metrics_decisions_and_hints():
     log = DecisionLog()
     log.record("tune", "min_margin 30→15")
-    env = telemetry(status="running · 1,000,000 cr", metrics={"credits": 1_000_000},
-                    hints=["idle capital — reinvest"], decisions=log)
+    env = telemetry(
+        status="running · 1,000,000 cr",
+        metrics={"credits": 1_000_000},
+        hints=["idle capital — reinvest"],
+        decisions=log,
+    )
     out = render_html(env, title="Fleet")
     assert "<section" in out and "pl-tele" in out
     assert "Fleet" in out and "running · 1,000,000 cr" in out
-    assert "1,000,000" in out          # int metric comma-formatted
+    assert "1,000,000" in out  # int metric comma-formatted
     assert "min_margin 30→15" in out and "idle capital — reinvest" in out
-    assert "--pl-color-fg" in out      # themed via DS tokens (with fallbacks)
+    assert "--pl-color-fg" in out  # themed via DS tokens (with fallbacks)
 
 
 def test_render_html_renders_section_tables():
-    env = telemetry(sections=[{"title": "Fleet", "columns": ["ship", "role"],
-                               "rows": [["DRONE-1", "miner"], ["HAULER-1", "trader"]]}])
+    env = telemetry(
+        sections=[
+            {"title": "Fleet", "columns": ["ship", "role"], "rows": [["DRONE-1", "miner"], ["HAULER-1", "trader"]]}
+        ]
+    )
     out = render_html(env)
     assert "<th>ship</th>" in out and "<td>DRONE-1</td>" in out and "<td>miner</td>" in out
 

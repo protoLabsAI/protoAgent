@@ -62,16 +62,20 @@ def _live_enable(pid: str) -> tuple[bool, str]:
         disabled = [p for p in (getattr(cfg, "plugins_disabled", []) or []) if p != pid]
         from server.agent_init import _apply_settings_changes
 
-        ok, msgs = _apply_settings_changes(
-            config={"plugins": {"enabled": enabled, "disabled": disabled}}
-        )
+        ok, msgs = _apply_settings_changes(config={"plugins": {"enabled": enabled, "disabled": disabled}})
         if not ok:
             return (False, "; ".join(msgs) or "reload failed")
         meta = _plugin_meta(pid)
         if meta is None:
-            return (False, "enabled in config, but the loader didn't discover it — check the id and that it's in the plugins dir")
+            return (
+                False,
+                "enabled in config, but the loader didn't discover it — check the id and that it's in the plugins dir",
+            )
         if not meta.get("loaded"):
-            return (False, f"enabled, but it FAILED to load: {meta.get('error') or 'unknown error'} — fix __init__.py, then call reload_plugins")
+            return (
+                False,
+                f"enabled, but it FAILED to load: {meta.get('error') or 'unknown error'} — fix __init__.py, then call reload_plugins",
+            )
         return (True, "enabled + loaded live")
     except Exception as e:  # noqa: BLE001 — enable is best-effort; the skeleton still landed
         return (False, f"auto-enable failed: {e}")
@@ -116,9 +120,15 @@ def _build_scaffold_tool(config: dict | None):
         """
         try:
             res = scaffold.scaffold_plugin(
-                name, summary=summary, with_tool=with_tool, with_view=with_view,
-                with_skill=with_skill, with_workflow=with_workflow, with_comms=with_comms,
-                with_tests=with_tests, target_dir=target_dir,
+                name,
+                summary=summary,
+                with_tool=with_tool,
+                with_view=with_view,
+                with_skill=with_skill,
+                with_workflow=with_workflow,
+                with_comms=with_comms,
+                with_tests=with_tests,
+                target_dir=target_dir,
             )
         except FileExistsError as e:
             return f"✗ {scaffold.slug(name)!r} already exists at {e} — pick another name or remove it first."
@@ -174,7 +184,11 @@ def _build_scaffold_bundle_tool(config: dict | None):
         """
         try:
             res = scaffold.scaffold_bundle(
-                name, summary=summary, members=members, enabled=enabled, target_dir=target_dir,
+                name,
+                summary=summary,
+                members=members,
+                enabled=enabled,
+                target_dir=target_dir,
             )
         except FileExistsError as e:
             return f"✗ {scaffold.slug(name)!r} already exists at {e} — pick another name or remove it first."
@@ -336,12 +350,12 @@ def _build_guide_router():
 def register(registry) -> None:
     """Every contribution type, in one plugin (the point of the devkit)."""
     global _REGISTRY
-    _REGISTRY = registry                                              # for the bus emit (ADR 0039)
-    registry.register_tool(_build_scaffold_tool(registry.config))    # scaffold a plugin (+ enable live)
+    _REGISTRY = registry  # for the bus emit (ADR 0039)
+    registry.register_tool(_build_scaffold_tool(registry.config))  # scaffold a plugin (+ enable live)
     registry.register_tool(_build_scaffold_bundle_tool(registry.config))  # scaffold a bundle
-    registry.register_tool(enable_plugin)                            # turn on an on-disk plugin live
-    registry.register_tool(reload_plugins)                           # pick up edits live
-    registry.register_subagent(_plugin_architect())                  # a subagent
+    registry.register_tool(enable_plugin)  # turn on an on-disk plugin live
+    registry.register_tool(reload_plugins)  # pick up edits live
+    registry.register_subagent(_plugin_architect())  # a subagent
     # PUBLIC /plugins/plugin-devkit (ADR 0026) — the console iframes /guide, and an
     # iframe page-load can't carry a bearer, so the page route must NOT be gated.
     registry.register_router(_build_guide_router(), prefix="/plugins/plugin-devkit")

@@ -81,8 +81,13 @@ def _make_permission(spec: dict) -> Callable[[dict], str | None]:
 
 def _cache_key(spec: dict) -> tuple:
     return (
-        spec["name"], spec["command"], tuple(spec["args"]), spec["workdir"],
-        spec["permissions"], tuple(sorted(spec["allow_kinds"])), tuple(sorted(spec["deny_kinds"])),
+        spec["name"],
+        spec["command"],
+        tuple(spec["args"]),
+        spec["workdir"],
+        spec["permissions"],
+        tuple(sorted(spec["allow_kinds"])),
+        tuple(sorted(spec["deny_kinds"])),
     )
 
 

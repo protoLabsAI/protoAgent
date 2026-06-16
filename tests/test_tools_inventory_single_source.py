@@ -40,10 +40,10 @@ def test_tools_tab_exactly_matches_the_bound_graph(monkeypatch):
     listed = {t["name"] for t in ch._operator_tools_list()["tools"]}
     bound = {getattr(t, "name", None) for t in g.bound_tools}
 
-    assert listed == bound                      # no drift, either direction
-    assert "task" in listed                     # subagent delegation now visible
-    assert "read_file" in listed                # filesystem now visible (was omitted)
-    assert "set_goal" in listed                 # bound when goal_enabled (bd-2aa)
+    assert listed == bound  # no drift, either direction
+    assert "task" in listed  # subagent delegation now visible
+    assert "read_file" in listed  # filesystem now visible (was omitted)
+    assert "set_goal" in listed  # bound when goal_enabled (bd-2aa)
 
 
 def test_tools_tab_omits_set_goal_when_goal_disabled(monkeypatch):
@@ -74,4 +74,4 @@ def test_pre_setup_fallback_without_a_graph(monkeypatch):
     monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
 
     names = {t["name"] for t in ch._operator_tools_list()["tools"]}
-    assert "current_time" in names              # the keyless base is always present
+    assert "current_time" in names  # the keyless base is always present

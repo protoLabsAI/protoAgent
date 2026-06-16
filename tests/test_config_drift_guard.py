@@ -119,9 +119,7 @@ _SERIALIZE_REASON = (
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "field", [_param(f, ATTR_MISSING_KEYS, _ATTR_REASON) for f in FIELDS]
-)
+@pytest.mark.parametrize("field", [_param(f, ATTR_MISSING_KEYS, _ATTR_REASON) for f in FIELDS])
 def test_every_fields_attr_exists_on_dataclass(field):
     """Each settings Field must point at a real ``LangGraphConfig`` attribute.
 
@@ -218,18 +216,15 @@ def test_fields_types_match_dataclass(field):
     val = getattr(cfg, field.attr)
     if field.type == "bool":
         assert isinstance(val, bool), (
-            f"{field.key!r} is type 'bool' but {field.attr} defaults to "
-            f"{type(val).__name__} ({val!r})."
+            f"{field.key!r} is type 'bool' but {field.attr} defaults to {type(val).__name__} ({val!r})."
         )
     elif field.type == "number":
         assert isinstance(val, (int, float)) and not isinstance(val, bool), (
-            f"{field.key!r} is type 'number' but {field.attr} defaults to "
-            f"{type(val).__name__} ({val!r})."
+            f"{field.key!r} is type 'number' but {field.attr} defaults to {type(val).__name__} ({val!r})."
         )
     elif field.type == "string_list":
         assert isinstance(val, list), (
-            f"{field.key!r} is type 'string_list' but {field.attr} defaults to "
-            f"{type(val).__name__} ({val!r})."
+            f"{field.key!r} is type 'string_list' but {field.attr} defaults to {type(val).__name__} ({val!r})."
         )
 
 
@@ -242,19 +237,29 @@ def test_fields_types_match_dataclass(field):
 # Everything else is "agent". Locked here so a new Field can't silently land in the
 # wrong cascade layer.
 HOST_SCOPED_KEYS = {
-    "model.api_base", "model.provider", "model.name",
-    "routing.aux_model", "routing.fallback_models",
-    "prompt_cache.enabled", "prompt_cache.ttl",
-    "prompt_cache.warm.enabled", "prompt_cache.warm.interval_seconds",
-    "telemetry.enabled", "telemetry.retention_days",
+    "model.api_base",
+    "model.provider",
+    "model.name",
+    "routing.aux_model",
+    "routing.fallback_models",
+    "prompt_cache.enabled",
+    "prompt_cache.ttl",
+    "prompt_cache.warm.enabled",
+    "prompt_cache.warm.interval_seconds",
+    "telemetry.enabled",
+    "telemetry.retention_days",
     "identity.org",
     # commons.path is box-level (ADR 0041 commons read by every agent on the box);
     # skills.scope stays "agent" (each agent picks its own sharing mode).
     "commons.path",
     # Box runtime (ADR 0047 D8) — env/CLI knobs promoted into the Host layer.
-    "network.bind", "fleet.port_base",
-    "fleet.discovery.port_min", "fleet.discovery.port_max", "fleet.discovery.mdns",
-    "fleet.warm.max", "fleet.warm.grace_seconds",
+    "network.bind",
+    "fleet.port_base",
+    "fleet.discovery.port_min",
+    "fleet.discovery.port_max",
+    "fleet.discovery.mdns",
+    "fleet.warm.max",
+    "fleet.warm.grace_seconds",
 }
 
 

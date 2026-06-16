@@ -112,10 +112,14 @@ async def test_run_subagent_persists_emitted_skill(tmp_path, monkeypatch) -> Non
 
     class _FakeAgent:
         async def ainvoke(self, *_a, **_k):
-            return {"messages": [AIMessage(
-                content="found the answer",
-                tool_calls=[{"name": "web_search", "args": {}, "id": "tc1"}],
-            )]}
+            return {
+                "messages": [
+                    AIMessage(
+                        content="found the answer",
+                        tool_calls=[{"name": "web_search", "args": {}, "id": "tc1"}],
+                    )
+                ]
+            }
 
     monkeypatch.setattr(agentmod, "create_agent", lambda **_k: _FakeAgent())
 
@@ -137,8 +141,7 @@ async def test_run_subagent_persists_emitted_skill(tmp_path, monkeypatch) -> Non
     )
     assert "found the answer" in out
     persisted = idx.all_skills()
-    assert any(s["name"] == "find the capital of France" and s["source"] == "emitted"
-               for s in persisted)
+    assert any(s["name"] == "find the capital of France" and s["source"] == "emitted" for s in persisted)
 
 
 async def test_run_subagent_no_persist_without_index(tmp_path, monkeypatch) -> None:
@@ -160,7 +163,13 @@ async def test_run_subagent_no_persist_without_index(tmp_path, monkeypatch) -> N
         return ""
 
     out = await agentmod._run_subagent(
-        config=LangGraphConfig(), tool_map={"web_search": web_search}, available_subagents="researcher",
-        description="x", prompt="y", subagent_type="researcher", emit_skill=True, skills_index=None,
+        config=LangGraphConfig(),
+        tool_map={"web_search": web_search},
+        available_subagents="researcher",
+        description="x",
+        prompt="y",
+        subagent_type="researcher",
+        emit_skill=True,
+        skills_index=None,
     )
     assert "ok" in out

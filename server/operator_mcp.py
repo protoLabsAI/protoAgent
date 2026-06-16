@@ -50,12 +50,14 @@ def _boot_stores_only(config):
     STATE.inbox_store = ai._build_inbox_store(config)
     if STATE.beads_store is None:
         from beads import BeadsStore
+
         STATE.beads_store = BeadsStore()
 
     plugins = ai._build_plugins(
         config,
         existing_tools=get_all_tools(
-            STATE.knowledge_store, scheduler=STATE.scheduler,
+            STATE.knowledge_store,
+            scheduler=STATE.scheduler,
             goal_enabled=getattr(config, "goal_enabled", True),
         ),
     )
@@ -71,13 +73,15 @@ def operator_tools(config):
     allow = set(getattr(config, "operator_mcp_tools", []) or [])
     if not allow:
         return []
-    tools = list(get_all_tools(
-        STATE.knowledge_store,
-        scheduler=STATE.scheduler,
-        inbox_store=STATE.inbox_store,
-        beads_store=STATE.beads_store,
-        goal_enabled=bool(getattr(config, "goal_enabled", False)),
-    ))
+    tools = list(
+        get_all_tools(
+            STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            inbox_store=STATE.inbox_store,
+            beads_store=STATE.beads_store,
+            goal_enabled=bool(getattr(config, "goal_enabled", False)),
+        )
+    )
     tools += list(getattr(STATE, "plugin_tools", None) or [])
     # "*" = expose everything (minus a small danger set you must opt into by name) — so you
     # don't have to enumerate every tool. List specific names instead for tight control.
@@ -115,7 +119,8 @@ def build_server(config, *, name: str = "protoAgent-operator"):
     server = FastMCP(name, tools=fast_tools)
     log.info(
         "[operator-mcp] exposing %d tool(s): %s",
-        len(exposed), ", ".join(exposed) or "(none — set operator_mcp.tools)",
+        len(exposed),
+        ", ".join(exposed) or "(none — set operator_mcp.tools)",
     )
     return server, exposed
 

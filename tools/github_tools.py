@@ -38,8 +38,7 @@ _CI_ERR_RE = re.compile(
 def _bad_repo(repo: str) -> str | None:
     if not repo or not _REPO_RE.match(repo):
         return (
-            f"Error: 'repo' must be 'owner/name' (got {repo!r}). "
-            "Pass it explicitly — there is no default repository."
+            f"Error: 'repo' must be 'owner/name' (got {repo!r}). Pass it explicitly — there is no default repository."
         )
     return None
 
@@ -60,10 +59,17 @@ def get_github_tools() -> list:
         err = _bad_repo(repo)
         if err:
             return err
-        rc, out, serr = await run_gh([
-            "pr", "view", str(number), "--repo", repo,
-            "--json", "number,title,state,author,body,additions,deletions,files,url",
-        ])
+        rc, out, serr = await run_gh(
+            [
+                "pr",
+                "view",
+                str(number),
+                "--repo",
+                repo,
+                "--json",
+                "number,title,state,author,body,additions,deletions,files,url",
+            ]
+        )
         gh_err = check_gh_error(rc, serr)
         if gh_err:
             return gh_err
@@ -91,10 +97,17 @@ def get_github_tools() -> list:
         err = _bad_repo(repo)
         if err:
             return err
-        rc, out, serr = await run_gh([
-            "issue", "view", str(number), "--repo", repo,
-            "--json", "number,title,state,author,labels,body,url",
-        ])
+        rc, out, serr = await run_gh(
+            [
+                "issue",
+                "view",
+                str(number),
+                "--repo",
+                repo,
+                "--json",
+                "number,title,state,author,labels,body,url",
+            ]
+        )
         gh_err = check_gh_error(rc, serr)
         if gh_err:
             return gh_err
@@ -125,10 +138,20 @@ def get_github_tools() -> list:
         if state not in ("open", "closed", "all"):
             return f"Error: state must be open|closed|all (got {state!r})."
         limit = max(1, min(int(limit), 50))
-        rc, out, serr = await run_gh([
-            "issue", "list", "--repo", repo, "--state", state, "--limit", str(limit),
-            "--json", "number,title,state,labels",
-        ])
+        rc, out, serr = await run_gh(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                state,
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,state,labels",
+            ]
+        )
         gh_err = check_gh_error(rc, serr)
         if gh_err:
             return gh_err
@@ -141,8 +164,9 @@ def get_github_tools() -> list:
         lines = [f"{len(items)} {state} issue(s) in {repo}:"]
         for it in items:
             labels = ",".join(lbl.get("name", "") for lbl in (it.get("labels") or []))
-            lines.append(f"  #{it.get('number')} [{it.get('state')}] {it.get('title')}"
-                         + (f"  ({labels})" if labels else ""))
+            lines.append(
+                f"  #{it.get('number')} [{it.get('state')}] {it.get('title')}" + (f"  ({labels})" if labels else "")
+            )
         return "\n".join(lines)
 
     @tool
@@ -159,10 +183,14 @@ def get_github_tools() -> list:
         if err:
             return err
         # The diff media type returns a raw unified diff via the REST API.
-        rc, out, serr = await run_gh([
-            "api", f"repos/{repo}/commits/{ref}",
-            "-H", "Accept: application/vnd.github.diff",
-        ])
+        rc, out, serr = await run_gh(
+            [
+                "api",
+                f"repos/{repo}/commits/{ref}",
+                "-H",
+                "Accept: application/vnd.github.diff",
+            ]
+        )
         gh_err = check_gh_error(rc, serr)
         if gh_err:
             return gh_err
@@ -189,9 +217,14 @@ def get_github_tools() -> list:
         if err:
             return err
         args = [
-            "run", "list", "--repo", repo,
-            "--limit", str(max(1, min(int(limit), 50))),
-            "--json", "databaseId,name,status,conclusion,headBranch,event,createdAt,url",
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--limit",
+            str(max(1, min(int(limit), 50))),
+            "--json",
+            "databaseId,name,status,conclusion,headBranch,event,createdAt,url",
         ]
         if branch.strip():
             args += ["--branch", branch.strip()]
@@ -231,9 +264,7 @@ def get_github_tools() -> list:
         if err:
             return err
         cap = max(5, min(int(max_lines), 80))
-        rc, out, serr = await run_gh(
-            ["run", "view", str(run_id), "--repo", repo, "--log-failed"], timeout=60
-        )
+        rc, out, serr = await run_gh(["run", "view", str(run_id), "--repo", repo, "--log-failed"], timeout=60)
         gh_err = check_gh_error(rc, serr)
         if gh_err:
             return gh_err
@@ -250,10 +281,7 @@ def get_github_tools() -> list:
                     uniq.append(msg[:200])
         picked = uniq[-cap:] if uniq else [ln.split("\t")[-1][:200] for ln in raw[-cap:]]
         if not picked:
-            return (
-                f"Run {run_id} in {repo}: no failed-step log lines "
-                "(run may not have failed, or its logs expired)."
-            )
+            return f"Run {run_id} in {repo}: no failed-step log lines (run may not have failed, or its logs expired)."
         return f"{repo} run {run_id} — failure log ({len(picked)} line(s)):\n" + "\n".join(picked)
 
     return [

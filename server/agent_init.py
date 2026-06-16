@@ -85,12 +85,14 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Warn loudly if running UNSCOPED while the data home already has state — an unscoped
     # instance shares the loose root and can clobber a co-located sibling (#706).
     from infra.paths import unscoped_warning
+
     _unscoped = unscoped_warning()
     if _unscoped:
         log.warning("[instance] %s", _unscoped)
 
     # Data-dir version check (migration anchor): stamp or warn before any store opens.
     from infra.paths import check_data_version
+
     _dv_warn = check_data_version()
     if _dv_warn:
         log.warning("[data-version] %s", _dv_warn)
@@ -103,12 +105,15 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # Fork tool denylist (config ``tools.disabled``) — applied before any
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
+
     set_disabled_tools(STATE.graph_config.tools_disabled)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
     from security import egress
+
     egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts)
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     from security import policy
+
     policy.set_callback_allowlist(STATE.graph_config.security_callback_allowlist)
     # Multi-instance scoping (ADR 0004): seed PROTOAGENT_INSTANCE from config so
     # every store (incl. the env-reading knowledge/scheduler/memory modules) nests
@@ -142,7 +147,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
             # the graph are (re)loaded when setup completes and the graph builds.
             _pre = _build_plugins(STATE.graph_config)
             STATE.plugin_routers, STATE.plugin_surfaces, STATE.plugin_meta = (
-                _pre.routers, _pre.surfaces, _pre.meta,
+                _pre.routers,
+                _pre.surfaces,
+                _pre.meta,
             )
             _register_plugin_subagents(_pre.subagents)
             log.info(
@@ -175,11 +182,16 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # (<server>__<tool>) so they can't be shadowed by a plugin tool anyway.
     _plugins = _build_plugins(
         STATE.graph_config,
-        existing_tools=get_all_tools(STATE.knowledge_store, scheduler=STATE.scheduler,
-                                     goal_enabled=getattr(STATE.graph_config, "goal_enabled", True)),
+        existing_tools=get_all_tools(
+            STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            goal_enabled=getattr(STATE.graph_config, "goal_enabled", True),
+        ),
     )
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
-        _plugins.tools, _plugins.skill_dirs, _plugins.meta,
+        _plugins.tools,
+        _plugins.skill_dirs,
+        _plugins.meta,
     )
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
@@ -187,12 +199,12 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # A plugin may provide the knowledge backend (ADR 0031) — swap it in now (the
     # graph compiles below with STATE.knowledge_store). Default built-in store stays
     # the collision-check binding + the degrade-safe fallback.
-    STATE.knowledge_store = _apply_plugin_knowledge_backend(
-        STATE.graph_config, STATE.knowledge_store, _plugins)
+    STATE.knowledge_store = _apply_plugin_knowledge_backend(STATE.graph_config, STATE.knowledge_store, _plugins)
     # Register plugin-contributed goal verifiers (ADR 0028) — re-set on each
     # (re)load so a config change refreshes the available `plugin` verifiers.
     from graph.goals import hooks as _goal_hooks
     from graph.goals import verifiers as _goal_verifiers
+
     _goal_verifiers.set_plugin_verifiers(_plugins.goal_verifiers)
     _goal_hooks.set_goal_hooks(_plugins.goal_hooks)
     # Surfaces / routes / subagents (ADR 0018). Routers + surfaces are captured
@@ -223,10 +235,12 @@ def _init_langgraph_agent(headless_setup: bool = False):
     if STATE.activity_log is None:
         STATE.activity_log = _build_activity_log(STATE.graph_config)
     from beads import BeadsStore
+
     if STATE.beads_store is None:  # may have been created early (pre-setup) for the routes
         STATE.beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
     if STATE.storm_guard is None:
         from inbox import StormGuard
+
         STATE.storm_guard = StormGuard()
 
     # Background subagent manager (ADR 0050) — must exist before the graph build so
@@ -234,25 +248,33 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
 
     STATE.graph = create_agent_graph(
-        STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
-        skills_index=STATE.skills_index, extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+        STATE.graph_config,
+        knowledge_store=STATE.knowledge_store,
+        scheduler=STATE.scheduler,
+        skills_index=STATE.skills_index,
+        extra_tools=STATE.mcp_tools + STATE.plugin_tools,
         extra_middleware=STATE.plugin_middleware,
         checkpointer=STATE.checkpointer,
-        inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
+        inbox_store=STATE.inbox_store,
+        beads_store=STATE.beads_store,
         background_mgr=STATE.background_mgr,
     )
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
     # for an Anthropic-family model (see graph/cache_warmer.py).
     from graph.cache_warmer import CacheWarmer
+
     STATE.cache_warmer = CacheWarmer(
-        STATE.graph_config, knowledge_store=STATE.knowledge_store, scheduler=STATE.scheduler,
+        STATE.graph_config,
+        knowledge_store=STATE.knowledge_store,
+        scheduler=STATE.scheduler,
     )
 
     # Goal mode — parses /goal control messages and runs the goal-completion
     # loop around graph invocations. Machinery only; no goal is active until set.
     if STATE.graph_config.goal_enabled:
         from graph.goals import GoalController, GoalStore
+
         STATE.goal_controller = GoalController(STATE.graph_config, GoalStore())
     else:
         STATE.goal_controller = None
@@ -277,6 +299,7 @@ def _build_knowledge_store(config):
         return None
     try:
         from knowledge import KnowledgeStore
+
         # Contextual Retrieval (ADR 0021): build the (doc, chunk) -> context fn
         # once and pass it to whichever store we construct. Helps FTS5 + vector
         # alike, so it's wired for both tiers. Off → None (no enrichment cost).
@@ -380,6 +403,7 @@ def _apply_plugin_embedder(config, store, plugins, name):
         return store
     try:
         from knowledge.hybrid_store import HybridKnowledgeStore
+
         rebuilt = HybridKnowledgeStore(db_path=config.knowledge_db_path, embed_fn=embed_fn)
         log.info("[server] knowledge: hybrid store with plugin embedder %r", name)
         return rebuilt
@@ -419,6 +443,7 @@ def _build_skills_index(config, extra_skill_dirs=None):
         commons = _commons_dir(config)
         if scope == "layered":
             from graph.skills.layered import LayeredSkillsIndex
+
             private_path = _resolve_skills_db(config.skills_db_path, shared=False)
             shared_path = _resolve_skills_db(config.skills_db_path, shared=True, commons=commons)
             index = LayeredSkillsIndex(SkillsIndex(db_path=private_path), SkillsIndex(db_path=shared_path))
@@ -427,9 +452,7 @@ def _build_skills_index(config, extra_skill_dirs=None):
             db_path = _resolve_skills_db(config.skills_db_path, shared=(scope == "shared"), commons=commons)
             index = SkillsIndex(db_path=db_path)
 
-        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (
-            _live_config_dir() / "skills"
-        )
+        live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_live_config_dir() / "skills")
         roots = [_BUNDLE_CONFIG_DIR / "skills", live_root]  # bundle first, live overrides
         roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
         count = seed_skills_index(index, roots)
@@ -496,7 +519,7 @@ def _resolve_plugin_middleware(config, factories) -> list:
     instances (ADR 0032). Best-effort: a factory that raises or returns None is
     skipped + logged, so one bad plugin can't take down the graph build."""
     out = []
-    for factory in (factories or []):
+    for factory in factories or []:
         try:
             mw = factory(config)
         except Exception:  # noqa: BLE001
@@ -561,8 +584,7 @@ def _build_plugins(config, existing_tools=None):
         result = load_plugins(config, core_tool_names=core_names)
         loaded = [m for m in result.meta if m.get("loaded")]
         if loaded:
-            log.info("[plugins] loaded %d plugin(s): %s",
-                     len(loaded), ", ".join(m["id"] for m in loaded))
+            log.info("[plugins] loaded %d plugin(s): %s", len(loaded), ", ".join(m["id"] for m in loaded))
         return result
     except Exception as exc:  # noqa: BLE001 — plugins are optional, never fatal
         log.warning("[plugins] init failed: %s; running without plugins", exc)
@@ -608,9 +630,11 @@ def _build_checkpointer(config):
     SQLite saver can't be built so a bad path never blocks boot."""
     if not getattr(config, "checkpoint_db_path", ""):
         from langgraph.checkpoint.memory import MemorySaver
+
         return MemorySaver()
     try:
         from graph.checkpointer import build_sqlite_checkpointer
+
         path = _resolve_checkpoint_db(config.checkpoint_db_path)
         saver = build_sqlite_checkpointer(path)
         STATE.checkpoint_path = path
@@ -619,6 +643,7 @@ def _build_checkpointer(config):
     except Exception:
         log.exception("[checkpointer] SQLite init failed; using in-memory (history won't persist)")
         from langgraph.checkpoint.memory import MemorySaver
+
         return MemorySaver()
 
 
@@ -639,9 +664,7 @@ async def _checkpoint_prune_loop() -> None:
         interval_h = getattr(cfg, "checkpoint_prune_interval_hours", 0) if cfg else 0
         if path and cfg and interval_h > 0:
             try:
-                max_age = (
-                    cfg.checkpoint_max_age_days * 86400 if cfg.checkpoint_max_age_days else None
-                )
+                max_age = cfg.checkpoint_max_age_days * 86400 if cfg.checkpoint_max_age_days else None
                 harvest = bool(
                     max_age
                     and cfg.checkpoint_harvest_enabled
@@ -664,7 +687,8 @@ async def _checkpoint_prune_loop() -> None:
                 if res["threads_deleted"] or res["checkpoints_deleted"]:
                     log.info(
                         "[checkpoint-prune] removed %d idle thread(s), %d old checkpoint(s)",
-                        res["threads_deleted"], res["checkpoints_deleted"],
+                        res["threads_deleted"],
+                        res["checkpoints_deleted"],
                     )
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
@@ -713,9 +737,8 @@ async def _checkpoint_prune_loop() -> None:
                 # Drop push-notification configs orphaned by the task sweep (ADR 0051).
                 if STATE.a2a_push_engine is not None:
                     from a2a_impl.stores import sweep_orphaned_push_configs
-                    orphaned = await sweep_orphaned_push_configs(
-                        STATE.a2a_task_engine, STATE.a2a_push_engine
-                    )
+
+                    orphaned = await sweep_orphaned_push_configs(STATE.a2a_task_engine, STATE.a2a_push_engine)
                     if orphaned:
                         log.info("[a2a-task-prune] removed %d orphaned push-config(s)", orphaned)
             except Exception:
@@ -760,13 +783,10 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None) -> str 
     from graph.checkpoint_prune import delete_thread
 
     chunk_id = None
-    do_harvest = (
-        getattr(STATE.graph_config, "checkpoint_harvest_enabled", False)
-        if harvest is None
-        else harvest
-    )
+    do_harvest = getattr(STATE.graph_config, "checkpoint_harvest_enabled", False) if harvest is None else harvest
     if STATE.graph_config is not None and do_harvest:
         from graph.conversation_harvest import harvest_thread
+
         chunk_id = await harvest_thread(
             thread_id,
             checkpointer=STATE.checkpointer,
@@ -842,7 +862,8 @@ def _build_background_manager(config):
         log.exception("[background] startup reconcile failed")
 
     invoke_url = os.environ.get(
-        "SCHEDULER_INVOKE_URL", f"http://127.0.0.1:{STATE.active_port}",
+        "SCHEDULER_INVOKE_URL",
+        f"http://127.0.0.1:{STATE.active_port}",
     )
     bearer = (config.auth_token or os.environ.get("A2A_AUTH_TOKEN", "")).strip()
     # Match the X-API-Key the A2A handler reads (env-derived name, NOT identity.name) —
@@ -853,6 +874,7 @@ def _build_background_manager(config):
     # this builder import-cheap; tolerate its absence.
     try:
         from server import _event_bus
+
         publish = _event_bus.publish
     except Exception:  # noqa: BLE001
         publish = None
@@ -1046,6 +1068,7 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         if workstacean_base and workstacean_key:
             try:
                 from scheduler import WorkstaceanScheduler
+
                 return WorkstaceanScheduler(
                     agent_name=name,
                     base_url=workstacean_base,
@@ -1065,6 +1088,7 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
 
     try:
         from scheduler import LocalScheduler
+
         invoke_url = os.environ.get(
             "SCHEDULER_INVOKE_URL",
             f"http://127.0.0.1:{STATE.active_port}",
@@ -1078,6 +1102,7 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         api_key = os.environ.get(api_key_env, "").strip()
         try:
             from server import _event_bus
+
             publish = _event_bus.publish
         except Exception:  # noqa: BLE001
             publish = None
@@ -1104,6 +1129,12 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
     but routes bind at startup"). FastAPI accepts ``include_router`` after
     startup; new routes are appended (no existing /api catch-all shadows them).
 
+    Plugin prefix enforcement (#870): plugin routes SHOULD live under
+    ``/plugins/<id>/...``. Routes at non-conforming prefixes are still mounted
+    (many plugins legitimately use ``/api/...`` prefixes for their data routes)
+    but a WARNING is logged. The default-deny auth middleware guards all
+    non-public paths regardless of prefix, so the security gap is closed.
+
     Disabling can't UNmount (FastAPI has no route-removal API) — a disabled
     plugin's routes stay until restart, same as before this helper existed.
     Best-effort per router so one bad plugin can't break boot or a reload."""
@@ -1111,7 +1142,9 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
     if app is None:
         return
     for r in routers:
-        key = (r.get("plugin_id"), r.get("prefix"))
+        plugin_id = r.get("plugin_id", "")
+        prefix = r.get("prefix") or ""
+        key = (plugin_id, prefix)
         if key in STATE.plugin_router_keys:
             # A plugin registered a SECOND router at the SAME prefix — the first
             # already won the slot, so this one is silently dropped and its routes
@@ -1121,15 +1154,30 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             log.warning(
                 "[plugins] %s registered a second router at prefix %s — dropped "
                 "(its routes won't be served; mount each router at a distinct prefix)",
-                r.get("plugin_id"), r.get("prefix") or "/",
+                plugin_id,
+                prefix or "/",
             )
             continue
+        # Warn for non-conforming prefixes (#870 plugin prefix enforcement).
+        # The convention is /plugins/<id>/...; routes under other prefixes are
+        # still mounted (existing plugins use /api/... for data routes) but
+        # the warning surfaces mis-configurations. The default-deny middleware
+        # guards all non-public paths regardless of prefix.
+        if plugin_id and prefix and not prefix.startswith(f"/plugins/{plugin_id}"):
+            log.warning(
+                "[plugins] %s: router prefix %r does not start with /plugins/%s/ "
+                "— plugin routes SHOULD live under /plugins/<id>/ (mounted as-is; "
+                "the default-deny auth middleware guards it)",
+                plugin_id,
+                prefix,
+                plugin_id,
+            )
         try:
-            app.include_router(r["router"], prefix=r.get("prefix") or "")
+            app.include_router(r["router"], prefix=prefix)
             STATE.plugin_router_keys.add(key)
-            log.info("[plugins] mounted router from %s at %s", r["plugin_id"], r.get("prefix") or "/")
+            log.info("[plugins] mounted router from %s at %s", plugin_id, prefix or "/")
         except Exception:  # noqa: BLE001
-            log.exception("[plugins] failed to mount router from %s", r.get("plugin_id"))
+            log.exception("[plugins] failed to mount router from %s", plugin_id)
 
 
 @_serialized_config_write
@@ -1165,6 +1213,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # Fork tool denylist — apply the new config's denylist before the rebuild's
     # get_all_tools() calls (live-reloadable like the rest of the config).
     from tools.lg_tools import set_disabled_tools
+
     set_disabled_tools(new_config.tools_disabled)
 
     # Build the graph FIRST (when setup is complete) — only commit
@@ -1213,8 +1262,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             # is injected into the MCP discovery below (matches _main ordering).
             new_plugins = _build_plugins(
                 new_config,
-                existing_tools=get_all_tools(new_store, scheduler=next_scheduler,
-                                             goal_enabled=getattr(new_config, "goal_enabled", True)),
+                existing_tools=get_all_tools(
+                    new_store, scheduler=next_scheduler, goal_enabled=getattr(new_config, "goal_enabled", True)
+                ),
             )
             new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(
                 new_config, plugin_servers=[s["factory"] for s in new_plugins.mcp_servers]
@@ -1230,8 +1280,11 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_inbox_store = _build_inbox_store(new_config)
             new_graph = create_agent_graph(
-                new_config, knowledge_store=new_store, scheduler=next_scheduler,
-                skills_index=new_skills, extra_tools=new_mcp_tools + new_plugin_tools,
+                new_config,
+                knowledge_store=new_store,
+                scheduler=next_scheduler,
+                skills_index=new_skills,
+                extra_tools=new_mcp_tools + new_plugin_tools,
                 extra_middleware=new_middleware,
                 checkpointer=STATE.checkpointer,
                 inbox_store=new_inbox_store,
@@ -1260,7 +1313,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     STATE.skills_index = new_skills
     STATE.mcp_clients, STATE.mcp_tools, STATE.mcp_meta = new_mcp_clients, new_mcp_tools, new_mcp_meta
     STATE.plugin_tools, STATE.plugin_skill_dirs, STATE.plugin_meta = (
-        new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta,
+        new_plugin_tools,
+        new_plugin_skill_dirs,
+        new_plugin_meta,
     )
     try:
         from security import egress
@@ -1316,10 +1371,7 @@ async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:
     """Agent invoke exposed to plugin surfaces via the plugin host (ADR 0018) — a
     chat turn joined to its assistant text (mirrors the Discord surface invoker)."""
     result = await chat(prompt, session_id)
-    return "\n\n".join(
-        m["content"] for m in result
-        if m.get("role") == "assistant" and m.get("content")
-    )
+    return "\n\n".join(m["content"] for m in result if m.get("role") == "assistant" and m.get("content"))
 
 
 def _populate_plugin_host() -> None:
@@ -1358,6 +1410,7 @@ def _reload_plugin_surfaces(new_config) -> None:
                         await res
                 except Exception:
                     log.exception("[plugins] surface %s reload failed", name)
+
             return _run()
 
         _run_on_server_loop(_make, f"surface reload ({h.get('name')})")

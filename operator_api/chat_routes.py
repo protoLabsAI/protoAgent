@@ -94,6 +94,7 @@ def register_chat_routes(app, ui: str) -> None:
     @app.get("/healthz", include_in_schema=False)
     async def _healthz():
         from graph.config_io import is_setup_complete
+
         ready = STATE.graph is not None
         return JSONResponse(
             {
@@ -135,30 +136,42 @@ def register_chat_routes(app, ui: str) -> None:
         completion_id = f"{agent_name()}-{session_id}"
 
         if stream:
+
             async def _stream():
                 chunk = {
-                    "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": agent_name(),
-                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": agent_name(),
+                    "choices": [
+                        {"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}
+                    ],
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
                 done_chunk = {
-                    "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": agent_name(),
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": agent_name(),
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
                 yield f"data: {json.dumps(done_chunk)}\n\n"
                 yield "data: [DONE]\n\n"
+
             return StreamingResponse(_stream(), media_type="text/event-stream")
 
         return {
-            "id": completion_id, "object": "chat.completion",
-            "created": created, "model": agent_name(),
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }],
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": agent_name(),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 

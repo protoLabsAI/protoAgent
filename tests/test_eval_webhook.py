@@ -1,6 +1,5 @@
 """Tests for the eval webhook listener."""
 
-
 import httpx
 import pytest
 
@@ -11,8 +10,9 @@ from evals.webhook import WebhookCapture, webhook_listener
 async def test_captures_posted_json():
     async with webhook_listener() as (url, capture):
         async with httpx.AsyncClient() as client:
-            r = await client.post(url, json={"taskId": "t1", "state": "completed"},
-                                  headers={"Authorization": "Bearer xyz"})
+            r = await client.post(
+                url, json={"taskId": "t1", "state": "completed"}, headers={"Authorization": "Bearer xyz"}
+            )
         assert r.status_code == 200
     assert len(capture.received) == 1
     assert capture.received[0] == {"taskId": "t1", "state": "completed"}

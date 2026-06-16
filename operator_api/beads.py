@@ -48,9 +48,7 @@ class BeadsService:
             return {"initialized": True}
         if self._error_code(result.stderr, result.stdout) == "NOT_INITIALIZED":
             return {"initialized": False}
-        raise BeadsCommandError(
-            ["list", "--json"], result.returncode, result.stdout, result.stderr
-        )
+        raise BeadsCommandError(["list", "--json"], result.returncode, result.stdout, result.stderr)
 
     def init(self, project_path: str, prefix: str | None = None) -> dict[str, bool]:
         args = ["init"]

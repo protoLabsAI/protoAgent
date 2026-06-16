@@ -9,8 +9,9 @@ from graph.skills.layered import LayeredSkillsIndex
 
 
 def _art(name: str, desc: str):
-    return types.SimpleNamespace(name=name, description=desc, prompt_template="do " + name,
-                                 tools_used=(), source_session_id="")
+    return types.SimpleNamespace(
+        name=name, description=desc, prompt_template="do " + name, tools_used=(), source_session_id=""
+    )
 
 
 def _idx(tmp_path):
@@ -35,7 +36,7 @@ def test_layered_union_write_private_promote(tmp_path):
     tiers = {(s["name"], s["tier"]) for s in idx.all_skills()}
     assert ("new_one", "private") in tiers and ("new_one", "commons") not in tiers
 
-    assert idx.promote("new_one") is True                    # promote private → commons
+    assert idx.promote("new_one") is True  # promote private → commons
     assert ("new_one", "commons") in {(s["name"], s["tier"]) for s in idx.all_skills()}
     assert idx.promote("does_not_exist") is False
     idx.close()
@@ -43,6 +44,7 @@ def test_layered_union_write_private_promote(tmp_path):
 
 def test_skills_scope_config_parses(tmp_path):
     from graph.config import LangGraphConfig
+
     cfg = tmp_path / "c.yaml"
     cfg.write_text("skills: { scope: layered }\n")
     assert LangGraphConfig.from_yaml(str(cfg)).skills_scope == "layered"
@@ -61,9 +63,15 @@ def test_layered_dedup_best_match_wins(tmp_path):
 
 
 def _uf_art(name, desc, slash):
-    return types.SimpleNamespace(name=name, description=desc, prompt_template="do " + name,
-                                 tools_used=(), source_session_id="",
-                                 user_facing=True, slash=slash)
+    return types.SimpleNamespace(
+        name=name,
+        description=desc,
+        prompt_template="do " + name,
+        tools_used=(),
+        source_session_id="",
+        user_facing=True,
+        slash=slash,
+    )
 
 
 def test_layered_user_facing_union_private_wins(tmp_path):
@@ -76,8 +84,8 @@ def test_layered_user_facing_union_private_wins(tmp_path):
     idx = LayeredSkillsIndex(private, commons)
 
     ufs = {s["slash"]: s for s in idx.user_facing_skills()}
-    assert set(ufs) == {"research", "triage"}                  # union, de-duped
+    assert set(ufs) == {"research", "triage"}  # union, de-duped
     assert ufs["research"]["description"] == "private research override"
-    assert ufs["research"]["tier"] == "private"                # private wins
+    assert ufs["research"]["tier"] == "private"  # private wins
     assert ufs["triage"]["tier"] == "commons"
     idx.close()

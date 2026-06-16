@@ -20,7 +20,7 @@ def test_render_transcript_cleans_and_skips_noise():
     ]
     t = render_transcript(msgs)
     assert "User: what is 2+2?" in t
-    assert "Assistant: It's 4." in t       # extracted from <output>, scratch dropped
+    assert "Assistant: It's 4." in t  # extracted from <output>, scratch dropped
     assert "scratch_pad" not in t
 
 
@@ -36,12 +36,15 @@ class _FakeKnowledge:
 def _seed(db, thread="a2a:chat-1"):
     g = StateGraph(MessagesState)
     g.add_node("n", lambda s: {"messages": [AIMessage(content="<output>noted</output>")]})
-    g.add_edge(START, "n"); g.add_edge("n", END)
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
 
     async def main():
         app = g.compile(checkpointer=build_sqlite_checkpointer(db))
-        await app.ainvoke({"messages": [HumanMessage(content="my favorite color is teal")]},
-                          {"configurable": {"thread_id": thread}})
+        await app.ainvoke(
+            {"messages": [HumanMessage(content="my favorite color is teal")]}, {"configurable": {"thread_id": thread}}
+        )
+
     asyncio.run(main())
 
 
@@ -55,10 +58,15 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
         assert "teal" in transcript  # got the real conversation
         return "User prefers teal."
 
-    cid = asyncio.run(harvest_thread(
-        "a2a:chat-1", checkpointer=saver, knowledge_store=kb, config=object(),
-        summarizer=fake_summarizer,
-    ))
+    cid = asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=saver,
+            knowledge_store=kb,
+            config=object(),
+            summarizer=fake_summarizer,
+        )
+    )
     assert cid == "chunk-1"
     assert kb.chunks[0]["domain"] == "conversation"
     assert "teal" in kb.chunks[0]["content"]
@@ -83,10 +91,17 @@ def test_harvest_extracts_facts_when_enabled(tmp_path):
     async def fake_facts(transcript, config):
         return ["The user's favorite color is teal"]
 
-    cid = asyncio.run(harvest_thread(
-        "a2a:chat-1", checkpointer=saver, knowledge_store=store, config=cfg,
-        summarizer=fake_summarizer, namespace="proj-x", fact_extractor=fake_facts,
-    ))
+    cid = asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=saver,
+            knowledge_store=store,
+            config=cfg,
+            summarizer=fake_summarizer,
+            namespace="proj-x",
+            fact_extractor=fake_facts,
+        )
+    )
     assert cid is not None
     # Episodic summary (conversation) + semantic fact (fact), both namespaced.
     assert len(store.list_chunks(domain="conversation", namespace="proj-x")) == 1
@@ -110,11 +125,16 @@ def test_harvest_skips_facts_when_disabled(tmp_path):
     async def boom_facts(transcript, config):
         raise AssertionError("fact extractor must not run when disabled")
 
-    asyncio.run(harvest_thread(
-        "a2a:chat-1", checkpointer=saver, knowledge_store=store,
-        config=SimpleNamespace(knowledge_facts=False),
-        summarizer=fake_summarizer, fact_extractor=boom_facts,
-    ))
+    asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=saver,
+            knowledge_store=store,
+            config=SimpleNamespace(knowledge_facts=False),
+            summarizer=fake_summarizer,
+            fact_extractor=boom_facts,
+        )
+    )
     assert store.list_chunks(domain="fact") == []
 
 
@@ -122,9 +142,7 @@ def test_harvest_noop_without_knowledge_store(tmp_path):
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
-    assert asyncio.run(
-        harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, config=object())
-    ) is None
+    assert asyncio.run(harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, config=object())) is None
 
 
 def test_harvest_noop_on_unknown_thread(tmp_path):
@@ -144,6 +162,7 @@ def test_harvest_noop_on_unknown_thread(tmp_path):
 
 def test_find_aged_threads_and_delete(tmp_path):
     import sqlite3
+
     db = str(tmp_path / "c.db")
     _seed(db, thread="recent")
     conn = sqlite3.connect(db)
@@ -152,7 +171,8 @@ def test_find_aged_threads_and_delete(tmp_path):
         "VALUES (?,?,?,?,?,?,?)",
         ("stale", "", "1dc8b9f0-0000-6000-8000-000000000000", None, "", b"{}", b"{}"),
     )
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
     aged = find_aged_threads(db, max_age_seconds=86400)
     assert aged == ["stale"]

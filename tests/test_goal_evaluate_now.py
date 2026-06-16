@@ -27,6 +27,7 @@ async def test_evaluate_now_met_finishes_and_fires_hook(tmp_path):
 
     async def _yes(spec, ctx):
         return VerifyResult(True, "done", "1M")
+
     set_plugin_verifiers({"p:c": _yes})
     try:
         c = _ctrl(tmp_path)
@@ -42,6 +43,7 @@ async def test_evaluate_now_met_finishes_and_fires_hook(tmp_path):
 async def test_evaluate_now_not_met_records_without_drive_bookkeeping(tmp_path):
     async def _no(spec, ctx):
         return VerifyResult(False, "waiting", "5")
+
     set_plugin_verifiers({"p:c": _no})
     try:
         c = _ctrl(tmp_path)

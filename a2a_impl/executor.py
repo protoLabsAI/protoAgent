@@ -167,9 +167,7 @@ def _hitl_prompt(payload: Any) -> str:
     that don't parse the hitl-v1 DataPart. Forms/approvals fall back to their
     title; a plain ask uses its question."""
     if isinstance(payload, dict):
-        return str(
-            payload.get("question") or payload.get("title") or "Input required."
-        )
+        return str(payload.get("question") or payload.get("title") or "Input required.")
     return str(payload) if payload is not None else "Input required."
 
 
@@ -200,9 +198,7 @@ class ProtoAgentExecutor(AgentExecutor):
         # from the skill registry (no circular import).
         self._structured_finalizer = structured_finalizer
 
-    async def _append_structured(
-        self, parts: list[Part], context: RequestContext, final_text: str
-    ) -> list[Part]:
+    async def _append_structured(self, parts: list[Part], context: RequestContext, final_text: str) -> list[Part]:
         """If the turn targets a structured skill (``skillHint`` + a declared
         schema), append the schema-enforced result as a DataPart (#476). No-op
         otherwise; a finalizer error degrades to the text-only parts."""
@@ -247,19 +243,16 @@ class ProtoAgentExecutor(AgentExecutor):
         _md = _request_metadata(context)
         _origin = str(_md.get("origin", "") or "")
         _priority = str(_md.get("priority", "") or "")
-        _trigger = str(
-            _md.get("trigger")
-            or _md.get("scheduler_job_id")
-            or _md.get("inbox_source")
-            or ""
-        )
+        _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")
 
         started = time.monotonic()
         accumulated = ""
         deltas: list[dict] = []
         usage = {
-            "input_tokens": 0, "output_tokens": 0,
-            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
         }
         cost_usd = 0.0
         had_usage = False
@@ -287,8 +280,10 @@ class ProtoAgentExecutor(AgentExecutor):
             if not _text_buf:
                 return
             await updater.add_artifact(
-                [_text_part(_text_buf)], artifact_id=answer_aid,
-                append=_answer_started, last_chunk=False,
+                [_text_part(_text_buf)],
+                artifact_id=answer_aid,
+                append=_answer_started,
+                last_chunk=False,
             )
             _answer_started = True
             _text_buf = ""
@@ -301,14 +296,21 @@ class ProtoAgentExecutor(AgentExecutor):
             # text="" yields a dataparts-only list (the text part is conditional).
             body = "" if _answer_started else final_text
             parts = _terminal_parts(
-                body, deltas, usage if had_usage else None,
-                cost_usd, confidence, confidence_expl, success=True,
+                body,
+                deltas,
+                usage if had_usage else None,
+                cost_usd,
+                confidence,
+                confidence_expl,
+                success=True,
             )
             parts = await self._append_structured(parts, context, final_text)
             if parts:
                 await updater.add_artifact(
-                    parts, artifact_id=answer_aid,
-                    append=_answer_started, last_chunk=True,
+                    parts,
+                    artifact_id=answer_aid,
+                    append=_answer_started,
+                    last_chunk=True,
                 )
 
         def _outcome(state: str, final_text: str) -> TurnOutcome:
@@ -330,8 +332,12 @@ class ProtoAgentExecutor(AgentExecutor):
 
         try:
             async for event_type, payload in self._stream_factory(
-                text, context.context_id, resume=resume, caller_trace=caller_trace,
-                request_metadata=_md, images=images,
+                text,
+                context.context_id,
+                resume=resume,
+                caller_trace=caller_trace,
+                request_metadata=_md,
+                images=images,
             ):
                 if event_type == "text":
                     accumulated += payload
@@ -350,9 +356,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         )
                     # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
                     if isinstance(payload, dict):
-                        _notify_progress(
-                            context.context_id, context.task_id, {"phase": event_type, **payload}
-                        )
+                        _notify_progress(context.context_id, context.task_id, {"phase": event_type, **payload})
 
                 elif event_type == "component":
                     # A renderable UI component (ADR 0051 Slice 2) — emit it as a
@@ -361,9 +365,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message(
-                                [_data_part_proto(payload, COMPONENT_MIME)]
-                            ),
+                            message=updater.new_agent_message([_data_part_proto(payload, COMPONENT_MIME)]),
                         )
 
                 elif event_type == "reasoning":
@@ -373,7 +375,8 @@ class ProtoAgentExecutor(AgentExecutor):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message(
-                                [_data_part_proto({"text": str(payload)}, REASONING_MIME)]),
+                                [_data_part_proto({"text": str(payload)}, REASONING_MIME)]
+                            ),
                         )
 
                 elif event_type == "delta":
@@ -407,9 +410,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     parts = [_text_part(_hitl_prompt(payload))]
                     if isinstance(payload, dict):
                         parts.append(_data_part_proto(payload, HITL_MIME))
-                    await updater.requires_input(
-                        message=updater.new_agent_message(parts)
-                    )
+                    await updater.requires_input(message=updater.new_agent_message(parts))
                     return  # parked — the caller resumes via message/send on this task
 
                 elif event_type == "done":
@@ -421,9 +422,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     return
 
                 elif event_type == "error":
-                    await updater.failed(
-                        message=updater.new_agent_message([_text_part(str(payload))])
-                    )
+                    await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
                     _notify_terminal(_outcome("failed", accumulated))
                     return
 
@@ -444,9 +443,7 @@ class ProtoAgentExecutor(AgentExecutor):
 
         except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
             logger.exception("[a2a] execute crashed for task %s", context.task_id)
-            await updater.failed(
-                message=updater.new_agent_message([_text_part(str(exc))])
-            )
+            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
             _notify_terminal(_outcome("failed", accumulated))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -507,7 +504,7 @@ def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
 
     out: list[tuple[str, str]] = []
     msg = getattr(context, "message", None)
-    for p in (getattr(msg, "parts", None) or []):
+    for p in getattr(msg, "parts", None) or []:
         mt = (getattr(p, "media_type", "") or "").lower()
         if not mt.startswith("image/"):
             continue
@@ -581,13 +578,23 @@ def _terminal_parts(
     if deltas:
         parts.append(_ext_data_part(pa.emit_worldstate_delta(deltas)))
     if usage and (usage.get("input_tokens", 0) or usage.get("output_tokens", 0)):
-        parts.append(_ext_data_part(pa.emit_cost(
-            usage,
-            cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
-            success=success,
-        )))
+        parts.append(
+            _ext_data_part(
+                pa.emit_cost(
+                    usage,
+                    cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
+                    success=success,
+                )
+            )
+        )
     if confidence is not None:
-        parts.append(_ext_data_part(pa.emit_confidence(
-            confidence, explanation=confidence_expl, success=success,
-        )))
+        parts.append(
+            _ext_data_part(
+                pa.emit_confidence(
+                    confidence,
+                    explanation=confidence_expl,
+                    success=success,
+                )
+            )
+        )
     return parts

@@ -31,51 +31,60 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     # ("insufficient tool messages following tool_calls"). No-op on a healthy
     # history, so it never affects a normal turn.
     from graph.middleware.tool_call_repair import ToolCallRepairMiddleware
+
     middleware.append(ToolCallRepairMiddleware())
 
     # End the turn after the `wait` tool runs (yield-and-resume instead of
     # busy-polling). No-op on any turn that didn't call `wait`.
     from graph.middleware.wait_yield import WaitYieldMiddleware
+
     middleware.append(WaitYieldMiddleware())
 
     # Per-turn model override (per chat tab). Outermost wrap_model_call so the
     # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
     # the turn carries state["model"].
     from graph.middleware.model_override import ModelOverrideMiddleware
+
     middleware.append(ModelOverrideMiddleware(config))
 
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
     # first/outermost so the cache breakpoint lands on the stable system
     # prefix; KnowledgeMiddleware's context is delivered just after it.
     from graph.middleware.prompt_cache import PromptCacheMiddleware
-    middleware.append(PromptCacheMiddleware(
-        enabled=config.prompt_cache_enabled,
-        ttl=config.prompt_cache_ttl,
-        force=config.prompt_cache_force,
-    ))
+
+    middleware.append(
+        PromptCacheMiddleware(
+            enabled=config.prompt_cache_enabled,
+            ttl=config.prompt_cache_ttl,
+            force=config.prompt_cache_force,
+        )
+    )
 
     # Enforcement gate first (outermost) so disallowed/rate-limited tool
     # calls are blocked before any execution. Opt-in via config.
-    if config.enforcement_enabled and (
-        config.enforcement_disallowed_tools or config.enforcement_rate_limits
-    ):
+    if config.enforcement_enabled and (config.enforcement_disallowed_tools or config.enforcement_rate_limits):
         from graph.middleware.enforcement import EnforcementMiddleware
-        middleware.append(EnforcementMiddleware(
-            disallowed_tools=config.enforcement_disallowed_tools,
-            rate_limits=config.enforcement_rate_limits,
-        ))
+
+        middleware.append(
+            EnforcementMiddleware(
+                disallowed_tools=config.enforcement_disallowed_tools,
+                rate_limits=config.enforcement_rate_limits,
+            )
+        )
 
     # KnowledgeMiddleware also carries human-authored skill retrieval (the
     # <learned_skills> injection). Build it when knowledge OR skills is active,
     # so skills work even on a KB-less agent (the store is None-tolerant).
     _skills_index = skills_index if config.skills_enabled else None
     if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
-        middleware.append(KnowledgeMiddleware(
-            knowledge_store if config.knowledge_middleware else None,
-            top_k=config.knowledge_top_k,
-            skills_index=_skills_index,
-            skills_top_k=config.skills_top_k,
-        ))
+        middleware.append(
+            KnowledgeMiddleware(
+                knowledge_store if config.knowledge_middleware else None,
+                top_k=config.knowledge_top_k,
+                skills_index=_skills_index,
+                skills_top_k=config.skills_top_k,
+            )
+        )
 
     # Deferred-tool disclosure (ADR 0005 #3) — trims the per-call tool set to
     # base + agent-loaded. Opt-in; the search_tools meta-tool is added to the
@@ -83,6 +92,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     if config.tools_deferred_enabled:
         from graph.middleware.tool_deferral import ToolDeferralMiddleware
         from tools.lg_tools import resolve_deferred_keep
+
         middleware.append(ToolDeferralMiddleware(resolve_deferred_keep(config.tools_deferred_keep)))
 
     if config.audit_middleware:
@@ -93,15 +103,20 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
 
     if config.ingest_enabled and knowledge_store is not None:
         from graph.middleware.knowledge_ingest import KnowledgeIngestMiddleware
-        middleware.append(KnowledgeIngestMiddleware(
-            knowledge_store, ingest_tools=config.ingest_tools or None,
-        ))
+
+        middleware.append(
+            KnowledgeIngestMiddleware(
+                knowledge_store,
+                ingest_tools=config.ingest_tools or None,
+            )
+        )
 
     # Context compaction — summarize old history near the context limit.
     # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
     # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).
     if config.compaction_enabled:
         from graph.middleware.compaction import CountingSummarizationMiddleware
+
         summ_model = create_llm(config, model_name=_resolve_aux_model(config, config.compaction_model))
         keep = ("messages", config.compaction_keep_messages)
         try:
@@ -116,11 +131,13 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
             # raises here. Fall back to a message-count trigger so compaction
             # still runs instead of taking down the whole graph at load.
             import logging
+
             fallback = max(config.compaction_keep_messages * 3, 60)
             logging.getLogger(__name__).warning(
-                "[compaction] trigger %r needs a model profile that %r lacks; "
-                "falling back to messages:%d",
-                config.compaction_trigger, config.model_name, fallback,
+                "[compaction] trigger %r needs a model profile that %r lacks; falling back to messages:%d",
+                config.compaction_trigger,
+                config.model_name,
+                fallback,
             )
             mw = CountingSummarizationMiddleware(model=summ_model, trigger=("messages", fallback), keep=keep)
         middleware.append(mw)
@@ -128,6 +145,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     # Model routing / failover — retry on fallback models (same gateway).
     if config.routing_fallback_models:
         from langchain.agents.middleware import ModelFallbackMiddleware
+
         fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
         middleware.append(ModelFallbackMiddleware(*fallbacks))
 
@@ -135,7 +153,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     # before MessageCapture, so their before/after-model + tool hooks run and the
     # turn is still captured. Each is already an instance (factories resolved in
     # agent_init); skip falsy entries (a factory may opt out by returning None).
-    for mw in (extra_middleware or []):
+    for mw in extra_middleware or []:
         if mw is not None:
             middleware.append(mw)
 
@@ -222,10 +240,14 @@ async def _run_subagent(
         config.enforcement_disallowed_tools or config.enforcement_rate_limits
     ):
         from graph.middleware.enforcement import EnforcementMiddleware
-        sub_middleware.insert(0, EnforcementMiddleware(
-            disallowed_tools=config.enforcement_disallowed_tools,
-            rate_limits=config.enforcement_rate_limits,
-        ))
+
+        sub_middleware.insert(
+            0,
+            EnforcementMiddleware(
+                disallowed_tools=config.enforcement_disallowed_tools,
+                rate_limits=config.enforcement_rate_limits,
+            ),
+        )
 
     subagent = create_agent(
         model=sub_llm,
@@ -271,6 +293,7 @@ async def _run_subagent(
         if emit_skill and sub_config.allow_skill_emission:
             if not tools_used:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     "[skill] emit_skill=True but no tool usage metadata "
                     "captured for subagent '%s'; skipping skill emission.",
@@ -295,14 +318,13 @@ async def _run_subagent(
                             skills_index.add_emitted_skill(artifact)
                         except Exception as exc:
                             import logging
-                            logging.getLogger(__name__).error(
-                                "[skill] persisting emitted skill failed: %s", exc
-                            )
+
+                            logging.getLogger(__name__).error("[skill] persisting emitted skill failed: %s", exc)
                 except Exception as exc:
                     import logging
+
                     logging.getLogger(__name__).error(
-                        "[skill] skill-v1 artifact construction failed: %s; "
-                        "skipping emission.",
+                        "[skill] skill-v1 artifact construction failed: %s; skipping emission.",
                         exc,
                     )
 
@@ -341,9 +363,12 @@ async def run_manual_subagent(
     # propose path) silently degrade. inbox/beads come from STATE (not threaded
     # through every caller); goal mode from config.
     from runtime.state import STATE
+
     all_tools = get_all_tools(
-        knowledge_store, scheduler=scheduler,
-        inbox_store=STATE.inbox_store, beads_store=STATE.beads_store,
+        knowledge_store,
+        scheduler=scheduler,
+        inbox_store=STATE.inbox_store,
+        beads_store=STATE.beads_store,
         goal_enabled=getattr(config, "goal_enabled", False),
     )
     if extra_tools:
@@ -479,6 +504,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 duplicate — just continue with other work. Leave False (the
                 default) when you need the result to finish the current turn.
         """
+
         async def _spawn_bg() -> str:
             # Resolve the originating session from injected graph state, not the
             # tracing contextvar — the contextvar reads empty in a tool body, so
@@ -506,11 +532,19 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
         # transparently detaches so it can't freeze the turn. Off unless BACKGROUND_AUTO_S>0.
         auto_s = _auto_background_seconds()
         if auto_s > 0 and background_mgr is not None and subagent_type in SUBAGENT_REGISTRY:
-            inline = asyncio.ensure_future(_run_subagent(
-                config=config, tool_map=tool_map, available_subagents=available_subagents,
-                description=description, prompt=prompt, subagent_type=subagent_type,
-                emit_skill=emit_skill, truncate=None, skills_index=skills_index,
-            ))
+            inline = asyncio.ensure_future(
+                _run_subagent(
+                    config=config,
+                    tool_map=tool_map,
+                    available_subagents=available_subagents,
+                    description=description,
+                    prompt=prompt,
+                    subagent_type=subagent_type,
+                    emit_skill=emit_skill,
+                    truncate=None,
+                    skills_index=skills_index,
+                )
+            )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
             if inline in done:
                 return inline.result()
@@ -587,9 +621,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                     skills_index=skills_index,
                 )
 
-        results = await asyncio.gather(
-            *(_one(s) for s in tasks), return_exceptions=True
-        )
+        results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
 
         parts = []
         for i, res in enumerate(results, start=1):
@@ -682,7 +714,10 @@ def create_agent_graph(
     llm = create_llm(config)
 
     all_tools = get_all_tools(
-        knowledge_store, scheduler=scheduler, inbox_store=inbox_store, beads_store=beads_store,
+        knowledge_store,
+        scheduler=scheduler,
+        inbox_store=inbox_store,
+        beads_store=beads_store,
         # Thread the goal flag so the agent-facing set_goal tool (ADR 0028) is
         # actually BOUND, not just advertised. Without this it defaults False and
         # set_goal silently never reaches the model (it stayed in /api/tools,
@@ -696,15 +731,21 @@ def create_agent_graph(
         all_tools.extend(extra_tools)
 
     if include_subagents:
-        all_tools.extend(_build_task_tools(
-            config, all_tools, skills_index=skills_index, background_mgr=background_mgr,
-        ))
+        all_tools.extend(
+            _build_task_tools(
+                config,
+                all_tools,
+                skills_index=skills_index,
+                background_mgr=background_mgr,
+            )
+        )
 
     # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
     # Opt-in; inert unless filesystem.enabled + a non-empty projects registry.
     # Added before execute_code/deferred so they're wrappable + discoverable.
     if config.filesystem_enabled:
         from tools.fs_tools import build_fs_tools
+
         all_tools.extend(build_fs_tools(config))
 
     # Programmatic tool calling — opt-in. Built last so it can wrap every
@@ -717,6 +758,7 @@ def create_agent_graph(
     if config.execute_code_enabled:
         import logging
         import sys as _sys
+
         if getattr(_sys, "frozen", False):
             logging.getLogger(__name__).warning(
                 "execute_code is enabled but unavailable in the packaged desktop build "
@@ -724,6 +766,7 @@ def create_agent_graph(
             )
         else:
             from tools.execute_code import build_execute_code_tool
+
             all_tools.append(build_execute_code_tool(all_tools, config=config))
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
@@ -732,10 +775,13 @@ def create_agent_graph(
     # loaded. Every tool stays callable; only the model's view is trimmed.
     if config.tools_deferred_enabled:
         from tools.lg_tools import build_search_tools_tool, resolve_deferred_keep
+
         keep = resolve_deferred_keep(config.tools_deferred_keep)
         all_tools.append(build_search_tools_tool(all_tools, keep))
 
-    middleware = _build_middleware(config, knowledge_store, skills_index=skills_index, extra_middleware=extra_middleware)
+    middleware = _build_middleware(
+        config, knowledge_store, skills_index=skills_index, extra_middleware=extra_middleware
+    )
 
     system_prompt = build_system_prompt(
         include_subagents=include_subagents,

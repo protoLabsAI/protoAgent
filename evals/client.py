@@ -41,8 +41,8 @@ import httpx
 @dataclass
 class TaskResult:
     task_id: str
-    state: str                              # completed / failed / canceled / timeout
-    text: str = ""                          # extracted user-facing reply
+    state: str  # completed / failed / canceled / timeout
+    text: str = ""  # extracted user-facing reply
     artifacts: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
     duration_ms: int = 0
@@ -77,10 +77,7 @@ class AgentClient:
         api_key: str | None = None,
     ):
         self.base_url = (
-            base_url
-            or os.environ.get("EVAL_BASE_URL")
-            or os.environ.get("AGENT_BASE_URL")
-            or "http://localhost:7870"
+            base_url or os.environ.get("EVAL_BASE_URL") or os.environ.get("AGENT_BASE_URL") or "http://localhost:7870"
         ).rstrip("/")
 
         env_bearer, env_api_key = _resolve_auth_env()
@@ -186,7 +183,8 @@ class AgentClient:
                 r = await client.post(f"{self.base_url}/a2a", headers=self.headers, json=payload)
             except httpx.TimeoutException:
                 return TaskResult(
-                    task_id="", state="timeout",
+                    task_id="",
+                    state="timeout",
                     duration_ms=int((time.time() - start) * 1000),
                 )
             r.raise_for_status()
@@ -219,13 +217,16 @@ class AgentClient:
                 if _is_terminal((res.get("status") or {}).get("state", "")):
                     return _finish(res, task_id)
             return TaskResult(
-                task_id=task_id, state="timeout",
+                task_id=task_id,
+                state="timeout",
                 duration_ms=int((time.time() - start) * 1000),
             )
 
     # ── SendStreamingMessage (SSE) ──────────────────────────────────────────
 
-    async def stream(self, prompt: str, *, timeout_s: int = 90, context_id: str | None = None) -> tuple[list[dict], TaskResult | None]:
+    async def stream(
+        self, prompt: str, *, timeout_s: int = 90, context_id: str | None = None
+    ) -> tuple[list[dict], TaskResult | None]:
         """Stream a turn over SSE. Returns (event_log, final TaskResult).
 
         Each SSE ``data:`` frame is an A2A 1.0 oneof under ``result`` — one of
@@ -258,13 +259,12 @@ class AgentClient:
         task_id = ""
         start = time.time()
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            async with client.stream(
-                "POST", f"{self.base_url}/a2a", headers=self.headers, json=payload
-            ) as r:
+            async with client.stream("POST", f"{self.base_url}/a2a", headers=self.headers, json=payload) as r:
                 if r.status_code >= 400:
                     body = await r.aread()
                     return events, TaskResult(
-                        task_id="", state="failed",
+                        task_id="",
+                        state="failed",
                         error=f"HTTP {r.status_code}: {body.decode()[:300]}",
                     )
                 async for line in r.aiter_lines():
@@ -298,9 +298,7 @@ class AgentClient:
                         status = payload_obj.get("status") or {}
                         state = status.get("state", "")
                         if payload_obj.get("final") or _is_terminal(state):
-                            text, usage = _extract(
-                                {"artifacts": artifacts, "status": status}
-                            )
+                            text, usage = _extract({"artifacts": artifacts, "status": status})
                             final = TaskResult(
                                 task_id=task_id,
                                 state=_norm_state(state) or "unknown",
@@ -326,7 +324,9 @@ class AgentClient:
         """DELETE ``/api/goal/{session_id}`` → ``{enabled, cleared}``."""
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.request(
-                "DELETE", f"{self.base_url}/api/goal/{session_id}", headers=self.headers,
+                "DELETE",
+                f"{self.base_url}/api/goal/{session_id}",
+                headers=self.headers,
             )
             r.raise_for_status()
             return r.json()
@@ -352,7 +352,7 @@ def _norm_state(state: str) -> str:
     """``TASK_STATE_COMPLETED`` → ``completed``; pass through already-lowercased
     legacy states unchanged. The runner asserts on the lowercase names."""
     if state.startswith("TASK_STATE_"):
-        return state[len("TASK_STATE_"):].lower()
+        return state[len("TASK_STATE_") :].lower()
     return state
 
 

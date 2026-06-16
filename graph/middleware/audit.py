@@ -52,12 +52,20 @@ class AuditMiddleware(AgentMiddleware):
             safe_content = redact(content)
 
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=safe_args,
-                result_summary=safe_content, duration_ms=duration_ms, success=success,
+                session_id=session_id,
+                tool=tool_name,
+                args=safe_args,
+                result_summary=safe_content,
+                duration_ms=duration_ms,
+                success=success,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=safe_args, result=safe_content,
-                duration_ms=duration_ms, success=success, session_id=session_id,
+                tool_name=tool_name,
+                args=safe_args,
+                result=safe_content,
+                duration_ms=duration_ms,
+                success=success,
+                session_id=session_id,
             )
             metrics.record_tool_call(tool_name, success, duration_ms / 1000)
 
@@ -67,12 +75,20 @@ class AuditMiddleware(AgentMiddleware):
             safe_args = redact(args)
             safe_exc = redact(str(exc)[:200])
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=safe_args,
-                result_summary=safe_exc, duration_ms=duration_ms, success=False,
+                session_id=session_id,
+                tool=tool_name,
+                args=safe_args,
+                result_summary=safe_exc,
+                duration_ms=duration_ms,
+                success=False,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=safe_args, result=safe_exc,
-                duration_ms=duration_ms, success=False, session_id=session_id,
+                tool_name=tool_name,
+                args=safe_args,
+                result=safe_exc,
+                duration_ms=duration_ms,
+                success=False,
+                session_id=session_id,
             )
             metrics.record_tool_call(tool_name, False, duration_ms / 1000)
             raise
@@ -105,12 +121,20 @@ class AuditMiddleware(AgentMiddleware):
             safe_content = redact(content)
 
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=safe_args,
-                result_summary=safe_content, duration_ms=duration_ms, success=success,
+                session_id=session_id,
+                tool=tool_name,
+                args=safe_args,
+                result_summary=safe_content,
+                duration_ms=duration_ms,
+                success=success,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=safe_args, result=safe_content,
-                duration_ms=duration_ms, success=success, session_id=session_id,
+                tool_name=tool_name,
+                args=safe_args,
+                result=safe_content,
+                duration_ms=duration_ms,
+                success=success,
+                session_id=session_id,
             )
             metrics.record_tool_call(tool_name, success, duration_ms / 1000)
 
@@ -120,12 +144,20 @@ class AuditMiddleware(AgentMiddleware):
             safe_args = redact(args)
             safe_exc = redact(str(exc)[:200])
             audit_logger.log(
-                session_id=session_id, tool=tool_name, args=safe_args,
-                result_summary=safe_exc, duration_ms=duration_ms, success=False,
+                session_id=session_id,
+                tool=tool_name,
+                args=safe_args,
+                result_summary=safe_exc,
+                duration_ms=duration_ms,
+                success=False,
             )
             tracing.trace_tool_call(
-                tool_name=tool_name, args=safe_args, result=safe_exc,
-                duration_ms=duration_ms, success=False, session_id=session_id,
+                tool_name=tool_name,
+                args=safe_args,
+                result=safe_exc,
+                duration_ms=duration_ms,
+                success=False,
+                session_id=session_id,
             )
             metrics.record_tool_call(tool_name, False, duration_ms / 1000)
             raise

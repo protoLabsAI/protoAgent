@@ -30,13 +30,13 @@ class PluginLoadResult:
     skill_dirs: list = field(default_factory=list)
     workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
-    goal_hooks: list = field(default_factory=list)       # {on_achieved, on_failed} (ADR 0028)
+    goal_hooks: list = field(default_factory=list)  # {on_achieved, on_failed} (ADR 0028)
     knowledge_stores: dict = field(default_factory=dict)  # name -> backend factory (ADR 0031)
-    embedders: dict = field(default_factory=dict)        # name -> embed_fn factory (ADR 0031)
+    embedders: dict = field(default_factory=dict)  # name -> embed_fn factory (ADR 0031)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
-    routers: list = field(default_factory=list)    # {plugin_id, router, prefix} (ADR 0018)
-    surfaces: list = field(default_factory=list)    # {plugin_id, name, start, stop}
-    subagents: list = field(default_factory=list)   # SubagentConfig
+    routers: list = field(default_factory=list)  # {plugin_id, router, prefix} (ADR 0018)
+    surfaces: list = field(default_factory=list)  # {plugin_id, name, start, stop}
+    subagents: list = field(default_factory=list)  # SubagentConfig
     middleware: list = field(default_factory=list)  # factories: (config) -> AgentMiddleware|None (ADR 0032)
     mcp_servers: list = field(default_factory=list)  # factories: config -> entry|None (ADR 0019)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
@@ -91,9 +91,7 @@ def _load_plugin_module(manifest: PluginManifest, entry: Path):
     # load this is a no-op (nothing cached). Previously only the update route purged.
     for _name in [n for n in list(sys.modules) if n == mod_name or n.startswith(mod_name + ".")]:
         sys.modules.pop(_name, None)
-    spec = importlib.util.spec_from_file_location(
-        mod_name, str(entry), submodule_search_locations=[str(manifest.path)]
-    )
+    spec = importlib.util.spec_from_file_location(mod_name, str(entry), submodule_search_locations=[str(manifest.path)])
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not create import spec for {entry}")
     module = importlib.util.module_from_spec(spec)
@@ -195,7 +193,9 @@ def _min_version_gate(manifest: PluginManifest) -> str | None:
     except InvalidVersion:
         log.warning(
             "[plugins] %s: unparseable min_protoagent_version %r (host %r) — loading anyway",
-            manifest.id, declared, host_raw,
+            manifest.id,
+            declared,
+            host_raw,
         )
         return None
     if needed > host:
@@ -240,7 +240,9 @@ def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
                 "[plugins] %s: view %r declares path %r but no registered router serves it "
                 "— it will render a blank/404 iframe (did you forget register_router, "
                 "or is the path a typo?)",
-                manifest.id, view.get("id"), view.get("path"),
+                manifest.id,
+                view.get("id"),
+                view.get("path"),
             )
 
 
@@ -322,8 +324,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         kept = []
         for tool in registry.tools:
             if tool.name in seen_tool_names:
-                log.warning("[plugins] %s: tool %s collides with an existing tool — skipped",
-                            manifest.id, tool.name)
+                log.warning("[plugins] %s: tool %s collides with an existing tool — skipped", manifest.id, tool.name)
                 continue
             seen_tool_names.add(tool.name)
             kept.append(tool)
@@ -344,8 +345,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         result.a2a_skills.extend(registry.a2a_skills)
         if registry.thread_id_resolver is not None:  # last plugin wins (#571)
             if result.thread_id_resolver is not None:
-                log.warning("[plugins] %s overrides a thread_id resolver already set by "
-                            "another plugin", manifest.id)
+                log.warning("[plugins] %s overrides a thread_id resolver already set by another plugin", manifest.id)
             result.thread_id_resolver = registry.thread_id_resolver
         # Surfaces / routes / subagents (ADR 0018) — tagged with the plugin id so
         # the server can namespace + report them.
@@ -385,11 +385,17 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
         entry["mcp_servers"] = len(registry.mcp_servers)
         result.meta.append(entry)
-        log.info("[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "
-                 "%d surface(s), %d subagent(s), %d mcp server(s)",
-                 manifest.id, len(kept), len(registry.skill_dirs),
-                 len(registry.routers), len(registry.surfaces),
-                 len(registry.subagents), len(registry.mcp_servers))
+        log.info(
+            "[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "
+            "%d surface(s), %d subagent(s), %d mcp server(s)",
+            manifest.id,
+            len(kept),
+            len(registry.skill_dirs),
+            len(registry.routers),
+            len(registry.surfaces),
+            len(registry.subagents),
+            len(registry.mcp_servers),
+        )
 
     return result
 

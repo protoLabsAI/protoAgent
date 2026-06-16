@@ -23,11 +23,23 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _COLUMNS = (
-    "task_id", "session_id", "state", "success", "model", "models",
-    "input_tokens", "output_tokens", "total_tokens",
-    "cache_read_input_tokens", "cache_creation_input_tokens",
-    "cost_usd", "duration_ms", "llm_calls", "tool_calls",
-    "created_at", "ended_at",
+    "task_id",
+    "session_id",
+    "state",
+    "success",
+    "model",
+    "models",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "cost_usd",
+    "duration_ms",
+    "llm_calls",
+    "tool_calls",
+    "created_at",
+    "ended_at",
 )
 
 
@@ -39,7 +51,7 @@ class TelemetryStore:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         db.row_factory = sqlite3.Row
         return db
@@ -93,8 +105,7 @@ class TelemetryStore:
         db = self._connect()
         try:
             db.execute(
-                f"INSERT INTO turns ({cols}) VALUES ({placeholders}) "
-                f"ON CONFLICT(task_id) DO UPDATE SET {updates}",
+                f"INSERT INTO turns ({cols}) VALUES ({placeholders}) ON CONFLICT(task_id) DO UPDATE SET {updates}",
                 values,
             )
             db.commit()
@@ -149,9 +160,9 @@ class TelemetryStore:
             out["cache_hit_ratio"] = round((out.get("cache_read_input_tokens", 0) or 0) / inp, 4) if inp else 0.0
             # Latency percentiles (Python-side; bounded by typical volumes).
             durations = [
-                r[0] for r in db.execute(
-                    f"SELECT duration_ms FROM turns {where} ORDER BY duration_ms", params
-                ).fetchall() if r[0] is not None
+                r[0]
+                for r in db.execute(f"SELECT duration_ms FROM turns {where} ORDER BY duration_ms", params).fetchall()
+                if r[0] is not None
             ]
             out["p50_duration_ms"] = _percentile(durations, 50)
             out["p95_duration_ms"] = _percentile(durations, 95)
@@ -166,15 +177,14 @@ class TelemetryStore:
                 """,
                 params,
             ).fetchall()
-            out["by_model"] = [
-                {**dict(r), "cost_usd": round(r["cost_usd"] or 0.0, 6)} for r in by_model
-            ]
+            out["by_model"] = [{**dict(r), "cost_usd": round(r["cost_usd"] or 0.0, 6)} for r in by_model]
             return out
         finally:
             db.close()
 
-    def outliers(self, *, cost_multiple: float = 5.0, latency_multiple: float = 5.0,
-                 sample: int = 200, limit: int = 20) -> list[dict]:
+    def outliers(
+        self, *, cost_multiple: float = 5.0, latency_multiple: float = 5.0, sample: int = 200, limit: int = 20
+    ) -> list[dict]:
         """Flag recent turns whose cost or duration exceeds ``N×`` the median
         (over the last ``sample`` turns). Advise-only signal for the flywheel —
         read-only, no action taken. Each flagged turn carries a ``reasons`` list

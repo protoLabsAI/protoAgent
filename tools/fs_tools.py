@@ -62,9 +62,7 @@ class ProjectRegistry:
         (writes create new files)."""
         proj = self._by_name.get(project)
         if proj is None:
-            raise ValueError(
-                f"unknown project {project!r}. Known: {', '.join(self._by_name) or '(none)'}"
-            )
+            raise ValueError(f"unknown project {project!r}. Known: {', '.join(self._by_name) or '(none)'}")
         rel = (rel_path or ".").strip()
         if rel.startswith("/") or rel.startswith("~"):
             raise ValueError("path must be relative to the project root")
@@ -246,6 +244,7 @@ def build_fs_tools(config) -> list:
     tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file]
 
     if allow_run:
+
         @tool
         async def run_command(project: str, command: str, timeout: float = 60.0) -> str:
             """Run a shell command inside a managed project's directory (fenced cwd).
@@ -270,12 +269,15 @@ def build_fs_tools(config) -> list:
             # operator's decision. Denied → don't run.
             if run_requires_approval:
                 from langgraph.types import interrupt
-                decision = interrupt({
-                    "kind": "approval",
-                    "title": "Approve shell command?",
-                    "detail": command,
-                    "project": project,
-                })
+
+                decision = interrupt(
+                    {
+                        "kind": "approval",
+                        "title": "Approve shell command?",
+                        "detail": command,
+                        "project": project,
+                    }
+                )
                 if not _approved(decision):
                     # Raise (not return) so the ToolNode stamps the ToolMessage
                     # status="error": the chat card then renders the declined action
@@ -287,7 +289,7 @@ def build_fs_tools(config) -> list:
             body = res.stdout or "(no output)"
             if res.stderr:
                 body += f"\n[stderr]\n{res.stderr}"
-            return body[: _MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
+            return body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
 
         tools.append(run_command)
 

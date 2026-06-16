@@ -7,6 +7,7 @@ those calls and stores the content for later extraction.
 
 from langchain.agents.middleware import AgentMiddleware
 
+
 class MessageCaptureMiddleware(AgentMiddleware):
     """Intercept message() tool calls and capture their content."""
 

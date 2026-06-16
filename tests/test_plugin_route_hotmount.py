@@ -43,8 +43,7 @@ def app(monkeypatch):
 
 
 def test_mounts_and_serves(app):
-    _mount_plugin_routers([{"plugin_id": "delegates", "router": _router("delegates"),
-                            "prefix": "/api/delegates"}])
+    _mount_plugin_routers([{"plugin_id": "delegates", "router": _router("delegates"), "prefix": "/api/delegates"}])
     c = TestClient(app)
     assert c.get("/api/delegates/ping").json() == {"from": "delegates"}
 
@@ -67,9 +66,15 @@ def test_remount_skipped_new_added(app):
 def test_view_route_resolves_after_enable(app):
     # The P0 fix: enabling a view-contributing plugin hot-mounts the router that serves
     # its view page — so /api/plugins/<id>/view 200s immediately, no restart, no 404.
-    _mount_plugin_routers([{"plugin_id": "project_board",
-                            "router": _view_router("project_board"),
-                            "prefix": "/api/plugins/project_board"}])
+    _mount_plugin_routers(
+        [
+            {
+                "plugin_id": "project_board",
+                "router": _view_router("project_board"),
+                "prefix": "/api/plugins/project_board",
+            }
+        ]
+    )
     c = TestClient(app)
     res = c.get("/api/plugins/project_board/view")
     assert res.status_code == 200
@@ -84,10 +89,12 @@ def test_noop_without_app(monkeypatch):
 
 
 def test_bad_router_does_not_break_the_batch(app):
-    _mount_plugin_routers([
-        {"plugin_id": "bad", "router": object(), "prefix": "/api/bad"},  # include_router raises
-        {"plugin_id": "good", "router": _router("good"), "prefix": "/api/good"},
-    ])
+    _mount_plugin_routers(
+        [
+            {"plugin_id": "bad", "router": object(), "prefix": "/api/bad"},  # include_router raises
+            {"plugin_id": "good", "router": _router("good"), "prefix": "/api/good"},
+        ]
+    )
     c = TestClient(app)
     assert c.get("/api/good/ping").json() == {"from": "good"}
     assert ("bad", "/api/bad") not in STATE.plugin_router_keys

@@ -108,11 +108,13 @@ _ORPHAN_THINK_OPEN_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
 _ORPHAN_THINK_CLOSE_RE = re.compile(r"</think>\s*", re.IGNORECASE)
 _CONFIDENCE_BLOCK_RE = re.compile(r"<confidence>[\s\S]*?</confidence>", re.IGNORECASE)
 _CONFIDENCE_EXPL_BLOCK_RE = re.compile(
-    r"<confidence_explanation>[\s\S]*?</confidence_explanation>", re.IGNORECASE,
+    r"<confidence_explanation>[\s\S]*?</confidence_explanation>",
+    re.IGNORECASE,
 )
 _CONFIDENCE_RE = re.compile(r"<confidence>\s*(-?[\d.]+)\s*</confidence>", re.IGNORECASE)
 _CONFIDENCE_EXPLANATION_RE = re.compile(
-    r"<confidence_explanation>([\s\S]*?)</confidence_explanation>", re.IGNORECASE,
+    r"<confidence_explanation>([\s\S]*?)</confidence_explanation>",
+    re.IGNORECASE,
 )
 
 
@@ -212,11 +214,11 @@ def stream_visible_output(raw: str) -> str:
 
 # Reasoning regions for live "thinking" display — the protocol scratch_pad and any
 # provider <think> block. Match open→content (with no nested reasoning tag) → close.
-_REASONING_BLOCK_RE = re.compile(
-    r"(?<!`)<(scratch_pad|think)>([\s\S]*?)</\1>", re.IGNORECASE)
+_REASONING_BLOCK_RE = re.compile(r"(?<!`)<(scratch_pad|think)>([\s\S]*?)</\1>", re.IGNORECASE)
 # A still-open trailing reasoning block (content runs to the end, no close yet).
 _REASONING_OPEN_TAIL_RE = re.compile(
-    r"(?<!`)<(scratch_pad|think)>((?:(?!</?(?:scratch_pad|think)>)[\s\S])*)$", re.IGNORECASE)
+    r"(?<!`)<(scratch_pad|think)>((?:(?!</?(?:scratch_pad|think)>)[\s\S])*)$", re.IGNORECASE
+)
 
 
 def stream_visible_reasoning(raw: str) -> str:
@@ -311,8 +313,7 @@ def extract_output(text: str) -> str:
 
     preview = text[:400].replace("\n", "\\n")
     log.warning(
-        "[extract_output] empty after stripping — len=%d scratch=%s "
-        "output=%s preview=%r",
+        "[extract_output] empty after stripping — len=%d scratch=%s output=%s preview=%r",
         len(text),
         "<scratch_pad>" in text.lower(),
         "<output>" in text.lower(),

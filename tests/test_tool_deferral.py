@@ -156,12 +156,7 @@ def test_middleware_noop_when_all_tools_are_base() -> None:
 
 def test_config_parses_deferred_tools(tmp_path) -> None:
     p = tmp_path / "langgraph-config.yaml"
-    p.write_text(
-        "tools:\n"
-        "  deferred:\n"
-        "    enabled: true\n"
-        "    keep: [web_search, current_time]\n"
-    )
+    p.write_text("tools:\n  deferred:\n    enabled: true\n    keep: [web_search, current_time]\n")
     cfg = LangGraphConfig.from_yaml(p)
     assert cfg.tools_deferred_enabled is True
     assert cfg.tools_deferred_keep == ["web_search", "current_time"]

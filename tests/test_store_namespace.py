@@ -47,9 +47,7 @@ def test_namespace_migration_on_preexisting_db(tmp_path):
         "domain TEXT NOT NULL DEFAULT 'general', heading TEXT, source TEXT, source_type TEXT, "
         "finding_type TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
     )
-    db.execute(
-        "INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('old row', 'general', 'x', 'x')"
-    )
+    db.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('old row', 'general', 'x', 'x')")
     db.commit()
     db.close()
 
@@ -75,8 +73,8 @@ def test_delete_by_namespace(tmp_path):
     remaining = {c.as_dict()["content"] for c in store.list_chunks()}
     assert "attach one" not in remaining and "attach two" not in remaining
     assert "other session" in remaining and "a global fact" in remaining
-    assert store.delete_by_namespace("attach:s1") == 0   # idempotent
-    assert store.delete_by_namespace("") == 0            # guard
+    assert store.delete_by_namespace("attach:s1") == 0  # idempotent
+    assert store.delete_by_namespace("") == 0  # guard
 
 
 def test_hybrid_delete_by_namespace_drops_vectors(tmp_path):

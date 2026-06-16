@@ -49,16 +49,16 @@ class PluginRegistry:
         self.skill_dirs: list[Path] = []
         self.workflow_dirs: list[Path] = []  # dirs of *.yaml workflow recipes (ADR 0027)
         self.a2a_skills: list[dict] = []  # A2A card skill specs (#570)
-        self.routers: list[dict] = []     # {"router", "prefix"}
-        self.surfaces: list[dict] = []    # {"name", "start", "stop"}
-        self.subagents: list = []         # SubagentConfig instances
-        self.middleware: list = []        # factories: (config) -> AgentMiddleware|None (ADR 0032)
-        self.mcp_servers: list = []       # factories: config -> entry dict | None
-        self.thread_id_resolver = None    # (request_metadata, session_id) -> str (#571)
-        self.goal_verifiers: dict = {}    # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
-        self.goal_hooks: list = []        # {on_achieved, on_failed} terminal reactions (ADR 0028)
+        self.routers: list[dict] = []  # {"router", "prefix"}
+        self.surfaces: list[dict] = []  # {"name", "start", "stop"}
+        self.subagents: list = []  # SubagentConfig instances
+        self.middleware: list = []  # factories: (config) -> AgentMiddleware|None (ADR 0032)
+        self.mcp_servers: list = []  # factories: config -> entry dict | None
+        self.thread_id_resolver = None  # (request_metadata, session_id) -> str (#571)
+        self.goal_verifiers: dict = {}  # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
+        self.goal_hooks: list = []  # {on_achieved, on_failed} terminal reactions (ADR 0028)
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
-        self.embedders: dict = {}         # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
+        self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -147,8 +147,9 @@ class PluginRegistry:
         validates (no shell, no eval). This is the only verifier type safe to set
         programmatically (D3)."""
         if not name or not callable(fn):
-            log.warning("[plugins] %s: register_goal_verifier needs a name + callable: %r / %r",
-                        self.plugin_id, name, fn)
+            log.warning(
+                "[plugins] %s: register_goal_verifier needs a name + callable: %r / %r", self.plugin_id, name, fn
+            )
             return
         key = name if ":" in name else f"{self.plugin_id}:{name}"
         self.goal_verifiers[key] = fn
@@ -159,14 +160,15 @@ class PluginRegistry:
         notification, record a finding, or set the next goal. A raising hook is
         logged + swallowed."""
         if not (callable(on_achieved) or callable(on_failed)):
-            log.warning("[plugins] %s: register_goal_hook needs on_achieved and/or on_failed",
-                        self.plugin_id)
+            log.warning("[plugins] %s: register_goal_hook needs on_achieved and/or on_failed", self.plugin_id)
             return
-        self.goal_hooks.append({
-            "plugin_id": self.plugin_id,
-            "on_achieved": on_achieved if callable(on_achieved) else None,
-            "on_failed": on_failed if callable(on_failed) else None,
-        })
+        self.goal_hooks.append(
+            {
+                "plugin_id": self.plugin_id,
+                "on_achieved": on_achieved if callable(on_achieved) else None,
+                "on_failed": on_failed if callable(on_failed) else None,
+            }
+        )
 
     def register_knowledge_store(self, name: str, factory) -> None:
         """Contribute a knowledge backend (ADR 0031) — ``factory(config) ->
@@ -176,8 +178,9 @@ class PluginRegistry:
         keeps the built-in SQLite store (degrade-safe). Name it simply (e.g.
         ``pgvector``); a collision keeps the first."""
         if not name or not callable(factory):
-            log.warning("[plugins] %s: register_knowledge_store needs a name + factory: %r / %r",
-                        self.plugin_id, name, factory)
+            log.warning(
+                "[plugins] %s: register_knowledge_store needs a name + factory: %r / %r", self.plugin_id, name, factory
+            )
             return
         self.knowledge_stores[name] = factory
 
@@ -188,8 +191,9 @@ class PluginRegistry:
         gateway round-trip (e.g. fastembed / sentence-transformers). On a None/error
         return the agent falls back to the gateway embedder (degrade-safe)."""
         if not name or not callable(factory):
-            log.warning("[plugins] %s: register_embedder needs a name + factory: %r / %r",
-                        self.plugin_id, name, factory)
+            log.warning(
+                "[plugins] %s: register_embedder needs a name + factory: %r / %r", self.plugin_id, name, factory
+            )
             return
         self.embedders[name] = factory
 
@@ -202,8 +206,7 @@ class PluginRegistry:
         ``id``/``name``/``description`` (+ optional ``tags``/``examples``/
         ``output_schema``/``result_mime``)."""
         if not isinstance(spec, dict) or not spec.get("id") or not spec.get("name"):
-            log.warning("[plugins] %s: register_a2a_skill needs a dict with id+name: %r",
-                        self.plugin_id, spec)
+            log.warning("[plugins] %s: register_a2a_skill needs a dict with id+name: %r", self.plugin_id, spec)
             return
         self.a2a_skills.append(spec)
 
@@ -215,8 +218,7 @@ class PluginRegistry:
         across enabled plugins (a warning fires if more than one is contributed).
         Unset ⇒ the template default (``a2a:<session_id>``)."""
         if not callable(fn):
-            log.warning("[plugins] %s: register_thread_id_resolver needs a callable: %r",
-                        self.plugin_id, fn)
+            log.warning("[plugins] %s: register_thread_id_resolver needs a callable: %r", self.plugin_id, fn)
             return
         self.thread_id_resolver = fn
 
@@ -225,13 +227,23 @@ class PluginRegistry:
 
         Defaults to the namespaced prefix ``/plugins/<id>`` so a plugin can't
         silently shadow a core route. Pass ``prefix=""`` (or your own) to mount
-        elsewhere — an escape hatch, logged. Mounted once at process init; routes
-        don't hot-reload (a ``plugins.enabled`` change needs a restart).
+        elsewhere — an escape hatch, logged. Plugin routes SHOULD live under
+        ``/plugins/<id>/``; a non-conforming prefix logs a WARNING (#870).
+        The default-deny auth middleware guards all non-public paths regardless
+        of prefix.
         """
         if router is None or not hasattr(router, "routes"):
             log.warning("[plugins] %s: register_router got a non-router: %r", self.plugin_id, router)
             return
         eff = f"/plugins/{self.plugin_id}" if prefix is None else str(prefix)
+        if eff and not eff.startswith(f"/plugins/{self.plugin_id}"):
+            log.warning(
+                "[plugins] %s: register_router prefix %r does not start with "
+                "/plugins/%s/ — plugin routes SHOULD live under /plugins/<id>/",
+                self.plugin_id,
+                eff,
+                self.plugin_id,
+            )
         self.routers.append({"router": router, "prefix": eff})
 
     def register_surface(self, start, stop=None, name: str | None = None, reload=None) -> None:
@@ -248,9 +260,7 @@ class PluginRegistry:
         if not callable(start):
             log.warning("[plugins] %s: register_surface needs a callable start", self.plugin_id)
             return
-        self.surfaces.append(
-            {"name": name or self.plugin_id, "start": start, "stop": stop, "reload": reload}
-        )
+        self.surfaces.append({"name": name or self.plugin_id, "start": start, "stop": stop, "reload": reload})
 
     def register_mcp_server(self, factory) -> None:
         """Contribute a **managed MCP server** the agent connects to (ADR 0019).
@@ -275,8 +285,7 @@ class PluginRegistry:
         ``task`` / ``task_batch`` — no edit to ``graph/subagents/config.py``.
         """
         if config is None or not getattr(config, "name", None):
-            log.warning("[plugins] %s: register_subagent got an invalid config: %r",
-                        self.plugin_id, config)
+            log.warning("[plugins] %s: register_subagent got an invalid config: %r", self.plugin_id, config)
             return
         self.subagents.append(config)
 
@@ -294,7 +303,6 @@ class PluginRegistry:
         ``graph/agent.py`` / ``executor.py``.
         """
         if not callable(factory):
-            log.warning("[plugins] %s: register_middleware needs a callable factory, got %r",
-                        self.plugin_id, factory)
+            log.warning("[plugins] %s: register_middleware needs a callable factory, got %r", self.plugin_id, factory)
             return
         self.middleware.append(factory)

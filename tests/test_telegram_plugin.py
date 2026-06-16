@@ -28,8 +28,11 @@ def test_configured():
 
 
 class _Resp:
-    def __init__(self, data): self._data = data
-    def json(self): return self._data
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
 
 
 def _fake_client_class(updates):
@@ -41,16 +44,19 @@ def _fake_client_class(updates):
             self._update_calls = 0
             instances.append(self)
 
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
 
         async def get(self, url, params=None):
             if "getMe" in url:
                 return _Resp({"ok": True, "result": {"username": "mybot"}})
-            self._update_calls += 1                       # getUpdates
+            self._update_calls += 1  # getUpdates
             if self._update_calls == 1:
                 return _Resp({"ok": True, "result": updates})
-            raise asyncio.CancelledError()                # 2nd poll → surface cancelled
+            raise asyncio.CancelledError()  # 2nd poll → surface cancelled
 
         async def post(self, url, json=None):
             self.posts.append(json)

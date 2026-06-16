@@ -58,9 +58,7 @@ def test_extract_output_is_case_insensitive():
 def test_extract_output_strips_think_inside_output():
     """LiteLLM #22392: MiniMax leaks `<think>...</think>` blocks inside
     `<output>`. _strip_reasoning runs over the output region too."""
-    text = (
-        "<output>head <think>inner reasoning</think> tail</output>"
-    )
+    text = "<output>head <think>inner reasoning</think> tail</output>"
     assert extract_output(text) == "head  tail"
 
 

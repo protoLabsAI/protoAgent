@@ -18,7 +18,6 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
-
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -68,6 +67,7 @@ def _in_goal_turn() -> bool:
 # Session persistence
 # ---------------------------------------------------------------------------
 
+
 def _persist_session(state: dict, trace_id: str) -> None:
     """Write a session summary JSON file atomically.
 
@@ -93,6 +93,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
     session_id: str = state.get("session_id", "") or ""
     if not session_id:
         from observability import tracing
+
         session_id = tracing.current_session_id() or ""
     messages_raw: list = state.get("messages", []) or []
 
@@ -119,20 +120,20 @@ def _persist_session(state: dict, trace_id: str) -> None:
     for msg in messages_raw:
         if isinstance(msg, ToolMessage):
             tool_call_id = getattr(msg, "tool_call_id", "") or ""
-            tool_results[tool_call_id] = (
-                msg.content if isinstance(msg.content, str) else str(msg.content)
-            )
+            tool_results[tool_call_id] = msg.content if isinstance(msg.content, str) else str(msg.content)
 
     for msg in messages_raw:
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls:
                 tc_id = tc.get("id", "")
-                all_tool_calls.append({
-                    "name": tc.get("name", ""),
-                    "args": tc.get("args", {}),
-                    "result": tool_results.get(tc_id, ""),
-                    "duration_ms": 0,  # timing not available in state
-                })
+                all_tool_calls.append(
+                    {
+                        "name": tc.get("name", ""),
+                        "args": tc.get("args", {}),
+                        "result": tool_results.get(tc_id, ""),
+                        "duration_ms": 0,  # timing not available in state
+                    }
+                )
 
     total_count = len(all_tool_calls)
 
@@ -200,6 +201,7 @@ def _persist_session(state: dict, trace_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Prior-sessions loader — single source of truth (ADR 0021)
 # ---------------------------------------------------------------------------
+
 
 def load_prior_sessions(
     memory_path: str = MEMORY_PATH,
@@ -277,6 +279,7 @@ def load_prior_sessions(
 # Middleware class
 # ---------------------------------------------------------------------------
 
+
 class MemoryMiddleware(AgentMiddleware):
     """Extract and store QA findings after agent responses.
 
@@ -317,10 +320,7 @@ class MemoryMiddleware(AgentMiddleware):
         import time
 
         now = time.monotonic()
-        if (
-            self._prior_sessions_cache is None
-            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
-        ):
+        if self._prior_sessions_cache is None or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
             self._prior_sessions_cache = self._load_prior_sessions()
             self._prior_sessions_loaded_at = now
         if not self._prior_sessions_cache:
@@ -332,6 +332,7 @@ class MemoryMiddleware(AgentMiddleware):
         # dedicated system-context append hook on state, so we piggyback on
         # the first human message by modifying its content.
         from langchain_core.messages import SystemMessage
+
         first = messages[0]
         if isinstance(first, SystemMessage):
             # Already has a system message — append prior_sessions to it
@@ -368,12 +369,9 @@ class MemoryMiddleware(AgentMiddleware):
         # content and no pending tool calls.
         if messages:
             last_msg = messages[-1]
-            if (
-                isinstance(last_msg, AIMessage)
-                and last_msg.content
-                and not getattr(last_msg, "tool_calls", None)
-            ):
+            if isinstance(last_msg, AIMessage) and last_msg.content and not getattr(last_msg, "tool_calls", None):
                 from observability import tracing
+
                 trace_id = tracing.current_trace_id()
                 _persist_session(state, trace_id)
         return None
@@ -386,6 +384,7 @@ class MemoryMiddleware(AgentMiddleware):
     def on_session_end(self, state, runtime) -> dict | None:
         """Persist session summary to disk when session reaches terminal state."""
         from observability import tracing
+
         trace_id = tracing.current_trace_id()
         _persist_session(state, trace_id)
         return None

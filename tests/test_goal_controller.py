@@ -14,6 +14,7 @@ def _ctrl(tmp_path, **overrides):
 
 # --- control parsing --------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_parse_non_goal_returns_none(tmp_path):
     assert await _ctrl(tmp_path).parse_control("hello there", "s") is None
@@ -61,6 +62,7 @@ async def test_parse_clear_aliases(tmp_path):
 
 
 # --- evaluate ---------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_evaluate_no_active_goal(tmp_path):

@@ -69,8 +69,13 @@ class WorkstaceanScheduler:
     # ── public API ──────────────────────────────────────────────────────────
 
     def add_job(
-        self, prompt: str, schedule: str, *, job_id: str | None = None,
-        timezone: str | None = None, context_id: str | None = None,
+        self,
+        prompt: str,
+        schedule: str,
+        *,
+        job_id: str | None = None,
+        timezone: str | None = None,
+        context_id: str | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
@@ -151,7 +156,9 @@ class WorkstaceanScheduler:
         # Workstacean owns scheduling state — nothing to start here.
         log.info(
             "[scheduler] workstacean backend ready: agent=%s base=%s topic=%s.*",
-            self.agent_name, self._base_url, self._topic_prefix,
+            self.agent_name,
+            self._base_url,
+            self._topic_prefix,
         )
 
     async def stop(self) -> None:
@@ -171,9 +178,7 @@ class WorkstaceanScheduler:
         except httpx.HTTPError as exc:
             raise RuntimeError(f"workstacean publish failed: {exc}") from exc
         if r.status_code >= 400:
-            raise RuntimeError(
-                f"workstacean publish HTTP {r.status_code}: {r.text[:200]}"
-            )
+            raise RuntimeError(f"workstacean publish HTTP {r.status_code}: {r.text[:200]}")
 
     def _namespaced_id(self, job_id: str | None) -> str:
         suffix = job_id or uuid.uuid4().hex[:12]
@@ -185,6 +190,7 @@ def _validate_schedule(schedule: str) -> None:
     """Validate cron expression OR ISO datetime. Raises ValueError."""
     if is_cron(schedule):
         from croniter import croniter
+
         try:
             croniter(schedule)
         except (TypeError, ValueError) as exc:

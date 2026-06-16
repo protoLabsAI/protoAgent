@@ -93,8 +93,7 @@ def test_deterministic():
 def test_prefers_paragraph_boundaries():
     a = "First paragraph. " * 10
     b = "Second paragraph. " * 10
-    chunks = chunk_text((a + "\n\n" + b).strip(), max_chars=len(a) + 20,
-                        overlap_chars=0, min_chars=0)
+    chunks = chunk_text((a + "\n\n" + b).strip(), max_chars=len(a) + 20, overlap_chars=0, min_chars=0)
     # Each paragraph fits its own chunk → the split lands on the blank line.
     assert len(chunks) == 2
     assert chunks[0].startswith("First")
@@ -120,7 +119,7 @@ def test_add_document_splits_and_is_searchable(tmp_path):
         chunk_min_chars=50,
     )
     ids = store.add_document(_long_doc(), domain="conversation", heading="Doc")
-    assert len(ids) > 1                       # genuinely chunked
+    assert len(ids) > 1  # genuinely chunked
     assert store.stats().get("total") == len(ids)
     # A query for a passage that lived deep in the doc finds its own chunk.
     hits = store.search("Topic 17 quick brown fox", k=3)
@@ -148,19 +147,20 @@ def test_hybrid_add_document_embeds_each_chunk(tmp_path):
         return [1.0 if w in t else 0.0 for w in vocab]
 
     db = str(tmp_path / "kb.db")
-    store = HybridKnowledgeStore(db, embed_fn=bow, chunk_max_chars=120,
-                                 chunk_overlap_chars=0, chunk_min_chars=0)
-    doc = "\n\n".join([
-        "alpha section. " + "padding word " * 12,
-        "bravo section. " + "padding word " * 12,
-        "charlie section. " + "padding word " * 12,
-    ])
+    store = HybridKnowledgeStore(db, embed_fn=bow, chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0)
+    doc = "\n\n".join(
+        [
+            "alpha section. " + "padding word " * 12,
+            "bravo section. " + "padding word " * 12,
+            "charlie section. " + "padding word " * 12,
+        ]
+    )
     ids = store.add_document(doc, domain="conversation", heading="Doc")
     assert len(ids) >= 3
     conn = sqlite3.connect(db)
     n_vecs = conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0]
     conn.close()
-    assert n_vecs == len(ids)            # one embedding per chunk, not one for the doc
+    assert n_vecs == len(ids)  # one embedding per chunk, not one for the doc
 
 
 def _bow_factory():
@@ -174,11 +174,13 @@ def _bow_factory():
 
 
 def _multi_chunk_doc() -> str:
-    return "\n\n".join([
-        "alpha section. " + "padding word " * 12,
-        "bravo section. " + "padding word " * 12,
-        "charlie section. " + "padding word " * 12,
-    ])
+    return "\n\n".join(
+        [
+            "alpha section. " + "padding word " * 12,
+            "bravo section. " + "padding word " * 12,
+            "charlie section. " + "padding word " * 12,
+        ]
+    )
 
 
 def test_add_document_batches_embeddings_into_one_call(tmp_path):
@@ -200,11 +202,12 @@ def test_add_document_batches_embeddings_into_one_call(tmp_path):
         return [bow(t) for t in texts]
 
     db = str(tmp_path / "kb.db")
-    store = HybridKnowledgeStore(db, embed_fn=single, embed_batch_fn=batch,
-                                 chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0)
+    store = HybridKnowledgeStore(
+        db, embed_fn=single, embed_batch_fn=batch, chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0
+    )
     ids = store.add_document(_multi_chunk_doc(), domain="conversation", heading="Doc")
     assert len(ids) >= 3
-    assert calls["batch"] == 1 and calls["single"] == 0   # one batched call, no per-chunk
+    assert calls["batch"] == 1 and calls["single"] == 0  # one batched call, no per-chunk
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == len(ids)
     conn.close()
@@ -226,11 +229,10 @@ def test_add_document_single_chunk_skips_batch(tmp_path):
         calls["batch"] += 1
         return [bow(t) for t in texts]
 
-    store = HybridKnowledgeStore(str(tmp_path / "kb.db"), embed_fn=single,
-                                 embed_batch_fn=batch, chunk_max_chars=5000)
+    store = HybridKnowledgeStore(str(tmp_path / "kb.db"), embed_fn=single, embed_batch_fn=batch, chunk_max_chars=5000)
     ids = store.add_document("a short single-chunk note", domain="general")
     assert len(ids) == 1
-    assert calls["batch"] == 0 and calls["single"] == 1   # single chunk → per-chunk embed
+    assert calls["batch"] == 0 and calls["single"] == 1  # single chunk → per-chunk embed
 
 
 def test_add_document_batch_failure_keeps_fts_rows(tmp_path):
@@ -243,17 +245,21 @@ def test_add_document_batch_failure_keeps_fts_rows(tmp_path):
     bow = _bow_factory()
     db = str(tmp_path / "kb.db")
     store = HybridKnowledgeStore(
-        db, embed_fn=bow,
+        db,
+        embed_fn=bow,
         embed_batch_fn=lambda ts: (_ for _ in ()).throw(RuntimeError("gateway down")),
-        breaker_threshold=1, chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        breaker_threshold=1,
+        chunk_max_chars=120,
+        chunk_overlap_chars=0,
+        chunk_min_chars=0,
     )
     ids = store.add_document(_multi_chunk_doc(), domain="conversation", heading="Doc")
-    assert len(ids) >= 3                       # rows written despite the embed failure
+    assert len(ids) >= 3  # rows written despite the embed failure
     conn = sqlite3.connect(db)
     assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 0  # no vectors
     conn.close()
-    assert store._breaker_open()               # breaker tripped
-    assert store.search("bravo")               # still searchable via FTS5
+    assert store._breaker_open()  # breaker tripped
+    assert store.search("bravo")  # still searchable via FTS5
 
 
 # ── contextual enrichment ────────────────────────────────────────────────────
@@ -268,13 +274,15 @@ def test_enrichment_prepends_context_to_each_chunk(tmp_path):
 
     store = KnowledgeStore(
         db_path=str(tmp_path / "agent.db"),
-        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        chunk_max_chars=120,
+        chunk_overlap_chars=0,
+        chunk_min_chars=0,
         context_fn=ctx,
     )
     doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
     ids = store.add_document(doc, domain="conversation", heading="Doc")
     assert len(ids) >= 3
-    assert len(calls) == len(ids)                 # one enrichment call per chunk
+    assert len(calls) == len(ids)  # one enrichment call per chunk
     # Every call saw the FULL document, and every stored chunk carries its context.
     assert all(c[0] == doc for c in calls)
     hits = store.search("CTX", k=10)
@@ -288,6 +296,7 @@ def test_enrichment_prepends_context_to_each_chunk(tmp_path):
 def test_enrichment_parallel_partial_failure_degrades_only_that_chunk(tmp_path):
     """A per-chunk failure in the parallel batch degrades just that chunk to raw;
     the rest still get context (the probe chunk succeeded, so enrichment is on)."""
+
     def ctx(doc, chunk):
         if "bravo" in chunk:
             raise RuntimeError("one flaky chunk")
@@ -295,7 +304,9 @@ def test_enrichment_parallel_partial_failure_degrades_only_that_chunk(tmp_path):
 
     store = KnowledgeStore(
         db_path=str(tmp_path / "agent.db"),
-        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        chunk_max_chars=120,
+        chunk_overlap_chars=0,
+        chunk_min_chars=0,
         context_fn=ctx,
     )
     doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
@@ -304,7 +315,7 @@ def test_enrichment_parallel_partial_failure_degrades_only_that_chunk(tmp_path):
     by = {h["id"]: h["content"] for h in hits}
     bravo = next(c for c in by.values() if "bravo" in c)
     others = [c for c in by.values() if "alpha" in c or "charlie" in c]
-    assert not bravo.startswith("CTX[")           # the flaky chunk is raw
+    assert not bravo.startswith("CTX[")  # the flaky chunk is raw
     assert others and all(c.startswith("CTX[") for c in others)  # the rest enriched
 
 
@@ -317,14 +328,16 @@ def test_single_chunk_doc_is_not_enriched(tmp_path):
     )
     ids = store.add_document("a short single-chunk note", domain="general")
     assert len(ids) == 1
-    assert calls == []                            # the chunk IS the whole doc — no call
+    assert calls == []  # the chunk IS the whole doc — no call
 
 
 def test_enrich_false_disables_enrichment(tmp_path):
     calls = []
     store = KnowledgeStore(
         db_path=str(tmp_path / "agent.db"),
-        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        chunk_max_chars=120,
+        chunk_overlap_chars=0,
+        chunk_min_chars=0,
         context_fn=lambda d, c: calls.append(1) or "CTX",
     )
     doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40])
@@ -342,11 +355,13 @@ def test_enrichment_failure_degrades_to_raw_chunks(tmp_path):
 
     store = KnowledgeStore(
         db_path=str(tmp_path / "agent.db"),
-        chunk_max_chars=120, chunk_overlap_chars=0, chunk_min_chars=0,
+        chunk_max_chars=120,
+        chunk_overlap_chars=0,
+        chunk_min_chars=0,
         context_fn=boom,
     )
     doc = "\n\n".join(["alpha " + "w " * 40, "bravo " + "w " * 40, "charlie " + "w " * 40])
-    ids = store.add_document(doc)                 # never raises
+    ids = store.add_document(doc)  # never raises
     assert len(ids) >= 3
     # First failure disables enrichment for the rest of the doc — not N failing calls.
     assert n["calls"] == 1
@@ -365,8 +380,7 @@ def test_add_document_helper_falls_back_on_chunkless_backend():
             return len(self.calls)
 
     backend = OnlyAddChunk()
-    ids = add_document(backend, "x" * 5000, domain="conversation",
-                       heading="H", max_chars=200)
+    ids = add_document(backend, "x" * 5000, domain="conversation", heading="H", max_chars=200)
     # No add_document on the backend → one un-chunked add_chunk, chunk-only
     # kwargs stripped (add_chunk never sees max_chars).
     assert ids == [1]

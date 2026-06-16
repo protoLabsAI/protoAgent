@@ -79,7 +79,7 @@ class BackgroundStore:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        db.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         db.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         db.row_factory = sqlite3.Row
         return db
@@ -110,8 +110,7 @@ class BackgroundStore:
             if "a2a_task_id" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN a2a_task_id TEXT")
             db.execute(
-                "CREATE INDEX IF NOT EXISTS ix_bg_session_pending "
-                "ON background_jobs(origin_session, status, notified)"
+                "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_bg_status ON background_jobs(status)")
             db.commit()
@@ -156,8 +155,7 @@ class BackgroundStore:
         db = self._connect()
         try:
             db.execute(
-                "UPDATE background_jobs SET a2a_task_id = ? "
-                "WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
+                "UPDATE background_jobs SET a2a_task_id = ? WHERE id = ? AND (a2a_task_id IS NULL OR a2a_task_id = '')",
                 (a2a_task_id, job_id),
             )
             db.commit()
@@ -238,9 +236,7 @@ class BackgroundStore:
     def get(self, job_id: str) -> BackgroundJob | None:
         db = self._connect()
         try:
-            row = db.execute(
-                "SELECT * FROM background_jobs WHERE id = ?", (job_id,)
-            ).fetchone()
+            row = db.execute("SELECT * FROM background_jobs WHERE id = ?", (job_id,)).fetchone()
             return _row_to_job(row) if row else None
         finally:
             db.close()

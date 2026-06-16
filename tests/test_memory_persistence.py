@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _reload_memory(env_overrides: dict | None = None):
     """Reload graph.middleware.memory with given env overrides active.
 
@@ -37,6 +38,7 @@ def _reload_memory(env_overrides: dict | None = None):
         if "graph.middleware.memory" in sys.modules:
             del sys.modules["graph.middleware.memory"]
         import graph.middleware.memory as mod
+
         return mod
 
 
@@ -61,6 +63,7 @@ def _make_state(
 # ---------------------------------------------------------------------------
 # 1. Successful persistence with correct JSON structure
 # ---------------------------------------------------------------------------
+
 
 def test_persist_session_creates_json_file(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
@@ -125,8 +128,8 @@ def test_persist_session_strips_reasoning_from_assistant(tmp_path):
     data = json.loads((tmp_path / "strip-test.json").read_text())
     blob = json.dumps(data)
     assert "scratch_pad" not in blob
-    assert "add 2 and 2" not in blob          # internal reasoning gone
-    assert "It's 4." in blob                   # user-facing answer kept
+    assert "add 2 and 2" not in blob  # internal reasoning gone
+    assert "It's 4." in blob  # user-facing answer kept
     assert "scratch_pad" not in (data["final_output"] or "")
 
 
@@ -150,13 +153,13 @@ def test_persist_session_final_output_is_last_ai_message(tmp_path):
 # 2. Atomic write — no partial file visible
 # ---------------------------------------------------------------------------
 
+
 def test_atomic_write_no_partial_file_on_error(tmp_path):
     """If json.dump fails mid-write, no corrupted file should exist at dest."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     state = _make_state("atomic-test")
     dest = tmp_path / "atomic-test.json"
-
 
     def bad_dump(*args, **kwargs):
         raise OSError("simulated write error")
@@ -188,11 +191,14 @@ def test_atomic_write_succeeds_with_valid_rename(tmp_path):
 # 3. Opt-out via PROTOAGENT_DISABLE_MEMORY
 # ---------------------------------------------------------------------------
 
+
 def test_disabled_by_env_var(tmp_path):
-    mod = _reload_memory({
-        "MEMORY_PATH": str(tmp_path),
-        "PROTOAGENT_DISABLE_MEMORY": "1",
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(tmp_path),
+            "PROTOAGENT_DISABLE_MEMORY": "1",
+        }
+    )
 
     state = _make_state("disabled-session")
     mod._persist_session(state, "t6")
@@ -203,10 +209,12 @@ def test_disabled_by_env_var(tmp_path):
 
 @pytest.mark.parametrize("value", ["1", "true", "True"])
 def test_disabled_by_env_var_variants(tmp_path, value):
-    mod = _reload_memory({
-        "MEMORY_PATH": str(tmp_path),
-        "PROTOAGENT_DISABLE_MEMORY": value,
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(tmp_path),
+            "PROTOAGENT_DISABLE_MEMORY": value,
+        }
+    )
 
     state = _make_state("disabled-variant")
     mod._persist_session(state, "t7")
@@ -218,12 +226,15 @@ def test_disabled_by_env_var_variants(tmp_path, value):
 # 4. Custom MEMORY_PATH override
 # ---------------------------------------------------------------------------
 
+
 def test_custom_memory_path(tmp_path):
     custom = tmp_path / "custom" / "path"
-    mod = _reload_memory({
-        "MEMORY_PATH": str(custom),
-        "PROTOAGENT_DISABLE_MEMORY": "",
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(custom),
+            "PROTOAGENT_DISABLE_MEMORY": "",
+        }
+    )
 
     state = _make_state("custom-path-session")
     mod._persist_session(state, "t8")
@@ -238,14 +249,17 @@ def test_custom_memory_path(tmp_path):
 # 5. Automatic directory creation
 # ---------------------------------------------------------------------------
 
+
 def test_directory_auto_created(tmp_path):
     nested = tmp_path / "a" / "b" / "c"
     assert not nested.exists(), "pre-condition: directory should not exist yet"
 
-    mod = _reload_memory({
-        "MEMORY_PATH": str(nested),
-        "PROTOAGENT_DISABLE_MEMORY": "",
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(nested),
+            "PROTOAGENT_DISABLE_MEMORY": "",
+        }
+    )
 
     state = _make_state("mkdir-session")
     mod._persist_session(state, "t9")
@@ -258,12 +272,15 @@ def test_directory_auto_created(tmp_path):
 # 6. Graceful permission error handling
 # ---------------------------------------------------------------------------
 
+
 def test_permission_error_does_not_raise(tmp_path):
     """If makedirs raises PermissionError, persist_session must not raise."""
-    mod = _reload_memory({
-        "MEMORY_PATH": str(tmp_path / "no-perms"),
-        "PROTOAGENT_DISABLE_MEMORY": "",
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(tmp_path / "no-perms"),
+            "PROTOAGENT_DISABLE_MEMORY": "",
+        }
+    )
 
     state = _make_state("perm-session")
 
@@ -274,10 +291,12 @@ def test_permission_error_does_not_raise(tmp_path):
 
 def test_write_error_does_not_raise(tmp_path):
     """If the write itself fails (disk full etc.), persist_session must not raise."""
-    mod = _reload_memory({
-        "MEMORY_PATH": str(tmp_path),
-        "PROTOAGENT_DISABLE_MEMORY": "",
-    })
+    mod = _reload_memory(
+        {
+            "MEMORY_PATH": str(tmp_path),
+            "PROTOAGENT_DISABLE_MEMORY": "",
+        }
+    )
 
     state = _make_state("write-err-session")
 
@@ -289,6 +308,7 @@ def test_write_error_does_not_raise(tmp_path):
 # ---------------------------------------------------------------------------
 # 7. Tool call count and top-5 by duration sorting
 # ---------------------------------------------------------------------------
+
 
 def _ai_msg_with_tool_calls(tool_calls: list[dict]) -> AIMessage:
     """Build an AIMessage that carries tool_calls metadata."""
@@ -365,6 +385,7 @@ def test_tool_calls_no_total_count_when_5_or_fewer(tmp_path):
 # 8. Empty session
 # ---------------------------------------------------------------------------
 
+
 def test_empty_session_creates_file_with_empty_arrays(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
@@ -419,6 +440,7 @@ def test_persist_session_unknown_only_when_no_session_id_anywhere(tmp_path):
 # 9. on_session_end middleware hook
 # ---------------------------------------------------------------------------
 
+
 def test_on_session_end_calls_persist_session(tmp_path):
     """MemoryMiddleware.on_session_end must call _persist_session."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
@@ -429,8 +451,10 @@ def test_on_session_end_calls_persist_session(tmp_path):
     state = _make_state("hook-session")
     runtime = MagicMock()
 
-    with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("observability.tracing.current_trace_id", return_value="trace-hook"):
+    with (
+        patch.object(mod, "_persist_session") as mock_persist,
+        patch("observability.tracing.current_trace_id", return_value="trace-hook"),
+    ):
         result = mw.on_session_end(state, runtime)
 
     mock_persist.assert_called_once_with(state, "trace-hook")
@@ -440,6 +464,7 @@ def test_on_session_end_calls_persist_session(tmp_path):
 # ---------------------------------------------------------------------------
 # 10. after_agent persistence on terminal turn
 # ---------------------------------------------------------------------------
+
 
 def test_after_agent_persists_on_terminal_turn(tmp_path):
     """after_agent must call _persist_session when last message is a terminal AIMessage."""
@@ -455,8 +480,10 @@ def test_after_agent_persists_on_terminal_turn(tmp_path):
     state = _make_state("after-agent-terminal", messages=messages)
     runtime = MagicMock()
 
-    with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("observability.tracing.current_trace_id", return_value="trace-after"):
+    with (
+        patch.object(mod, "_persist_session") as mock_persist,
+        patch("observability.tracing.current_trace_id", return_value="trace-after"),
+    ):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_called_once_with(state, "trace-after")
@@ -477,8 +504,7 @@ def test_after_agent_does_not_dump_findings_to_store(tmp_path):
     ]
     state = _make_state("after-agent-no-dump", messages=messages)
 
-    with patch.object(mod, "_persist_session"), \
-         patch("observability.tracing.current_trace_id", return_value="t"):
+    with patch.object(mod, "_persist_session"), patch("observability.tracing.current_trace_id", return_value="t"):
         mw.after_agent(state, MagicMock())
 
     store.add_finding.assert_not_called()
@@ -501,8 +527,10 @@ def test_after_agent_does_not_persist_when_tool_calls_pending(tmp_path):
     state = _make_state("after-agent-pending", messages=messages)
     runtime = MagicMock()
 
-    with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("observability.tracing.current_trace_id", return_value="trace-pending"):
+    with (
+        patch.object(mod, "_persist_session") as mock_persist,
+        patch("observability.tracing.current_trace_id", return_value="trace-pending"),
+    ):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_not_called()
@@ -523,8 +551,10 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
     state = _make_state("after-agent-human-last", messages=messages)
     runtime = MagicMock()
 
-    with patch.object(mod, "_persist_session") as mock_persist, \
-         patch("observability.tracing.current_trace_id", return_value="trace-human"):
+    with (
+        patch.object(mod, "_persist_session") as mock_persist,
+        patch("observability.tracing.current_trace_id", return_value="trace-human"),
+    ):
         mw.after_agent(state, runtime)
 
     mock_persist.assert_not_called()
@@ -533,6 +563,7 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
 # ---------------------------------------------------------------------------
 # Default path resolution (no MEMORY_PATH override)
 # ---------------------------------------------------------------------------
+
 
 def test_default_memory_path_uses_data_home(monkeypatch):
     """Without MEMORY_PATH, the default resolves under data_home() — the

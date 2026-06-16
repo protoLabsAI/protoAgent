@@ -20,23 +20,23 @@ def test_recall_at_k():
     assert R.recall_at_k([1, 2, 3], [9], 10) == 0.0
     assert R.recall_at_k([1, 2, 3, 4], [2, 4], 10) == 1.0
     assert R.recall_at_k([1, 2, 3, 4], [2, 4], 2) == 0.5  # only id 2 is in the top-2
-    assert R.recall_at_k([1, 2, 3], [], 10) == 0.0        # no relevant → 0, not a crash
+    assert R.recall_at_k([1, 2, 3], [], 10) == 0.0  # no relevant → 0, not a crash
 
 
 def test_hit_rate_at_k():
     assert R.hit_rate_at_k([1, 2, 3], [3], 3) == 1.0
-    assert R.hit_rate_at_k([1, 2, 3], [3], 2) == 0.0      # id 3 falls outside top-2
+    assert R.hit_rate_at_k([1, 2, 3], [3], 2) == 0.0  # id 3 falls outside top-2
     assert R.hit_rate_at_k([1, 2, 3], [9], 3) == 0.0
 
 
 def test_mrr():
-    assert R.mrr([5, 2, 9], [2]) == 0.5                   # first relevant at rank 2
+    assert R.mrr([5, 2, 9], [2]) == 0.5  # first relevant at rank 2
     assert R.mrr([2, 5, 9], [2]) == 1.0
     assert R.mrr([1, 2, 3], [9]) == 0.0
 
 
 def test_ndcg_at_k():
-    assert R.ndcg_at_k([7, 1, 2], [7], 10) == 1.0         # relevant first → ideal
+    assert R.ndcg_at_k([7, 1, 2], [7], 10) == 1.0  # relevant first → ideal
     # single relevant at rank 3: dcg = 1/log2(4), ideal = 1/log2(2) = 1
     assert math.isclose(R.ndcg_at_k([1, 2, 7], [7], 10), 1.0 / math.log2(4), rel_tol=1e-9)
     assert R.ndcg_at_k([1, 2, 3], [9], 10) == 0.0

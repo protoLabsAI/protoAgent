@@ -64,12 +64,14 @@ async def _background_wake(job) -> bool:
         return False
     from operator_api.console_handlers import _operator_inbox_add
 
-    res = await _operator_inbox_add({
-        "text": _background_wake_text(job),
-        "priority": "now",
-        "source": "background",
-        "dedup_key": f"background-wake:{job.id}",
-    })
+    res = await _operator_inbox_add(
+        {
+            "text": _background_wake_text(job),
+            "priority": "now",
+            "source": "background",
+            "dedup_key": f"background-wake:{job.id}",
+        }
+    )
     return bool(res.get("fired"))
 
 
@@ -79,11 +81,13 @@ def _spawn_background_wake(job) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
+
     async def _go() -> None:
         try:
             await _background_wake(job)
         except Exception:  # noqa: BLE001 — best-effort; never breaks the terminal hook
             log.exception("[background] wake fire failed for %s", getattr(job, "id", "?"))
+
     t = loop.create_task(_go())
     _BG_WAKE_TASKS.add(t)
     t.add_done_callback(_BG_WAKE_TASKS.discard)
@@ -229,7 +233,8 @@ def assert_routable_card_url() -> None:
             "a2a.require_routable_url is set — a deployed agent must advertise its "
             "externally-reachable address. Set A2A_PUBLIC_URL to the host other "
             "agents reach (e.g. http://roxy:7870).",
-            url, host or "<empty>",
+            url,
+            host or "<empty>",
         )
         raise SystemExit(1)
     log.info("[a2a] card URL %s is routable (require_routable_url check passed)", url)
@@ -238,8 +243,7 @@ def assert_routable_card_url() -> None:
 # Template default card description — used when a fork sets no ``a2a.description``
 # in config (#570). Forks override via config, not by editing this file.
 _DEFAULT_CARD_DESCRIPTION = (
-    "protoAgent template — A2A 1.0 LangGraph agent. "
-    "Replace this description with your agent's actual purpose."
+    "protoAgent template — A2A 1.0 LangGraph agent. Replace this description with your agent's actual purpose."
 )
 
 
@@ -296,6 +300,7 @@ def _record_a2a_telemetry(outcome) -> None:
     # /metrics alert on a failing/backed-up agent. Best-effort.
     try:
         from observability import metrics
+
         metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
     except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
         pass
@@ -304,16 +309,19 @@ def _record_a2a_telemetry(outcome) -> None:
     # spend without polling the telemetry store. Independent of the SQL store.
     try:
         _u = outcome.usage or {}
-        _event_bus.publish("turn.usage", {
-            "task_id": getattr(outcome, "task_id", "") or "",
-            "context_id": getattr(outcome, "context_id", "") or "",
-            "state": getattr(outcome, "state", "") or "",
-            "model": outcome.models[0] if getattr(outcome, "models", None) else "",
-            "input_tokens": int(_u.get("input_tokens", 0) or 0),
-            "output_tokens": int(_u.get("output_tokens", 0) or 0),
-            "cost_usd": round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6),
-            "duration_ms": int(getattr(outcome, "duration_ms", 0) or 0),
-        })
+        _event_bus.publish(
+            "turn.usage",
+            {
+                "task_id": getattr(outcome, "task_id", "") or "",
+                "context_id": getattr(outcome, "context_id", "") or "",
+                "state": getattr(outcome, "state", "") or "",
+                "model": outcome.models[0] if getattr(outcome, "models", None) else "",
+                "input_tokens": int(_u.get("input_tokens", 0) or 0),
+                "output_tokens": int(_u.get("output_tokens", 0) or 0),
+                "cost_usd": round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6),
+                "duration_ms": int(getattr(outcome, "duration_ms", 0) or 0),
+            },
+        )
     except Exception:  # noqa: BLE001 — best-effort
         pass
 
@@ -322,33 +330,38 @@ def _record_a2a_telemetry(outcome) -> None:
         return
     try:
         u = outcome.usage or {}
-        primary_model = outcome.models[0] if outcome.models else (
-            (STATE.graph_config.model_name if STATE.graph_config else "") or ""
+        primary_model = (
+            outcome.models[0]
+            if outcome.models
+            else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
         )
         input_tokens = int(u.get("input_tokens", 0) or 0)
         output_tokens = int(u.get("output_tokens", 0) or 0)
         from datetime import datetime, timedelta, timezone
+
         ended = datetime.now(timezone.utc)
         created = ended - timedelta(milliseconds=int(outcome.duration_ms or 0))
-        store.record({
-            "task_id": outcome.task_id,
-            "session_id": outcome.context_id,
-            "state": outcome.state,
-            "success": 1 if outcome.state == "completed" else 0,
-            "model": primary_model,
-            "models": ",".join(outcome.models),
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-            "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
-            "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
-            "cost_usd": float(outcome.cost_usd or 0.0),
-            "duration_ms": int(outcome.duration_ms or 0),
-            "llm_calls": int(outcome.llm_calls),
-            "tool_calls": int(outcome.tool_calls),
-            "created_at": created.isoformat(),
-            "ended_at": ended.isoformat(),
-        })
+        store.record(
+            {
+                "task_id": outcome.task_id,
+                "session_id": outcome.context_id,
+                "state": outcome.state,
+                "success": 1 if outcome.state == "completed" else 0,
+                "model": primary_model,
+                "models": ",".join(outcome.models),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+                "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
+                "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
+                "cost_usd": float(outcome.cost_usd or 0.0),
+                "duration_ms": int(outcome.duration_ms or 0),
+                "llm_calls": int(outcome.llm_calls),
+                "tool_calls": int(outcome.tool_calls),
+                "created_at": created.isoformat(),
+                "ended_at": ended.isoformat(),
+            }
+        )
     except Exception:  # noqa: BLE001 — telemetry is best-effort
         log.exception("[telemetry] failed to record turn %s", outcome.task_id)
 
@@ -499,7 +512,11 @@ def _a2a_terminal(outcome) -> None:
     _event_bus.publish(
         "activity.message",
         {
-            "role": "assistant", "text": text, "context_id": ACTIVITY_CONTEXT,
-            "origin": origin, "trigger": trigger, "priority": priority,
+            "role": "assistant",
+            "text": text,
+            "context_id": ACTIVITY_CONTEXT,
+            "origin": origin,
+            "trigger": trigger,
+            "priority": priority,
         },
     )

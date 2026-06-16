@@ -166,7 +166,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
     # server comes and goes with config without the operator touching mcp.servers.
     servers = list(getattr(config, "mcp_servers", []) or [])
     plugin_entries = []
-    for factory in (plugin_servers or []):
+    for factory in plugin_servers or []:
         try:
             entry = factory(config)
         except Exception:  # noqa: BLE001 — a bad factory must not break MCP
@@ -176,10 +176,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
             plugin_entries.append(entry)
     for entry in plugin_entries:
         name = str(entry.get("name") or "")
-        servers = [
-            s for s in servers
-            if not (isinstance(s, dict) and str(s.get("name") or "") == name)
-        ]
+        servers = [s for s in servers if not (isinstance(s, dict) and str(s.get("name") or "") == name)]
         servers.append(entry)
 
     if not (getattr(config, "mcp_enabled", False) or plugin_entries):
@@ -227,7 +224,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
         prefix = f"{name}__"
         kept = []
         for tool in discovered:
-            bare = tool.name[len(prefix):] if tool.name.startswith(prefix) else tool.name
+            bare = tool.name[len(prefix) :] if tool.name.startswith(prefix) else tool.name
             names = {tool.name, bare}
             included = bool(names & include)
             if include and not included:
@@ -254,11 +251,13 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
 
         clients.append(client)
         tools.extend(kept)
-        meta.append({
-            "name": name,
-            "transport": conn["transport"],
-            "tool_count": len(kept),
-        })
+        meta.append(
+            {
+                "name": name,
+                "transport": conn["transport"],
+                "tool_count": len(kept),
+            }
+        )
         log.info("[mcp] server %s (%s): %d tool(s)", name, conn["transport"], len(kept))
 
     return clients, tools, meta

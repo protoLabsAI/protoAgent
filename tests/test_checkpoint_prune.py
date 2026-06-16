@@ -36,8 +36,8 @@ def _seed(db, threads=("A", "B"), turns=3):
         app = _graph(build_sqlite_checkpointer(db))
         for t in threads:
             for i in range(turns):
-                await app.ainvoke({"messages": [HumanMessage(content=f"{t}{i}")]},
-                                  {"configurable": {"thread_id": t}})
+                await app.ainvoke({"messages": [HumanMessage(content=f"{t}{i}")]}, {"configurable": {"thread_id": t}})
+
     asyncio.run(main())
 
 
@@ -99,5 +99,5 @@ def test_age_ttl_drops_old_threads_only(tmp_path):
 
     res = prune_checkpoints(db, keep_per_thread=50, max_age_seconds=86400)  # 1-day TTL
     assert res["threads_deleted"] == 1
-    assert _count(db, "checkpoints", "stale") == 0       # old thread gone
-    assert _count(db, "checkpoints", "recent") > 0       # recent thread kept
+    assert _count(db, "checkpoints", "stale") == 0  # old thread gone
+    assert _count(db, "checkpoints", "recent") > 0  # recent thread kept

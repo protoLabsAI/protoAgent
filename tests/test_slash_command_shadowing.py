@@ -17,8 +17,7 @@ import runtime.state as rs
 def test_web_research_skill_slash_does_not_collide_with_research_workflow():
     text = Path("config/skills/web-research/SKILL.md").read_text()
     slash = next(
-        (ln.split(":", 1)[1].strip() for ln in text.splitlines()
-         if ln.strip().startswith("slash:")),
+        (ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.strip().startswith("slash:")),
         None,
     )
     assert slash and slash != "research", f"web-research slash={slash!r} collides with /research"
@@ -50,6 +49,6 @@ def test_shadowed_user_facing_skill_is_skipped_and_warned(monkeypatch, caplog):
         cmds = ch._operator_chat_commands()["commands"]
 
     names = [c["name"] for c in cmds]
-    assert names.count("research") == 1          # only the workflow; skill skipped
-    assert "gather" in names                      # non-colliding skill stays reachable
+    assert names.count("research") == 1  # only the workflow; skill skipped
+    assert "gather" in names  # non-colliding skill stays reachable
     assert any("unreachable" in r.getMessage() for r in caplog.records)

@@ -149,10 +149,15 @@ def _run_one_model(
             suffix = f"-r{run_i + 1}" if repeat > 1 else ""
             report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(model)}{suffix}.json"
             cmd = [
-                sys.executable, "-m", "evals.runner",
-                "--base-url", base_url,
-                "--model-label", model,
-                "--out", str(report_path),
+                sys.executable,
+                "-m",
+                "evals.runner",
+                "--base-url",
+                base_url,
+                "--model-label",
+                model,
+                "--out",
+                str(report_path),
             ]
             if category:
                 cmd += ["--category", category]
@@ -198,7 +203,9 @@ def _render_matrix(reports: dict[str, dict]) -> str:
         for c in cats:
             p, t = cper.get(c, (0, 0))
             cells.append(f"{p}/{t} ({_pct(p, t)})" if t else "—")
-        overall = f"**{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})**"
+        overall = (
+            f"**{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})**"
+        )
         lines.append(f"| `{model}` | " + " | ".join(cells) + f" | {overall} |")
     lines.append("")
 
@@ -268,14 +275,8 @@ def _render_repeat_matrix(model_runs: dict[str, list[dict]], repeat: int) -> str
 
     lines.append("|" + "---|" * (len(ordered) + 1))
     total = len(cases)
-    lines.append(
-        "| **Best-of-N passed** | "
-        + " | ".join(f"**{best_of_n(m)}/{total}**" for m in ordered) + " |"
-    )
-    lines.append(
-        "| Avg latency | "
-        + " | ".join(f"{_avg_latency(model_runs[m])}ms" for m in ordered) + " |"
-    )
+    lines.append("| **Best-of-N passed** | " + " | ".join(f"**{best_of_n(m)}/{total}**" for m in ordered) + " |")
+    lines.append("| Avg latency | " + " | ".join(f"{_avg_latency(model_runs[m])}ms" for m in ordered) + " |")
     return "\n".join(lines)
 
 
@@ -287,7 +288,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port-base", type=int, default=7990, help="first port (each model uses port-base+i)")
     p.add_argument("--keep", action="store_true", help="keep each model's instance data + logs")
     p.add_argument(
-        "--repeat", type=int, default=1,
+        "--repeat",
+        type=int,
+        default=1,
         help="run the suite N times per model for a best-of-N (majority) per-case table",
     )
     args = p.parse_args(argv)
@@ -325,13 +328,18 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + matrix)
 
     combined = _RESULTS_DIR / f"sweep-{ts}.json"
-    combined.write_text(json.dumps({
-        "ts": ts,
-        "models": models,
-        "repeat": repeat,
-        # repeat>1: all N runs per model; repeat==1: the single run (list of one).
-        "runs": model_runs,
-    }, indent=2))
+    combined.write_text(
+        json.dumps(
+            {
+                "ts": ts,
+                "models": models,
+                "repeat": repeat,
+                # repeat>1: all N runs per model; repeat==1: the single run (list of one).
+                "runs": model_runs,
+            },
+            indent=2,
+        )
+    )
     (_RESULTS_DIR / f"sweep-{ts}.md").write_text(matrix + "\n")
     print(f"\nSweep: {combined}")
     return 0

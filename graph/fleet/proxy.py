@@ -26,8 +26,18 @@ from graph.fleet import supervisor
 log = logging.getLogger("protoagent.server")
 
 # Headers we must not copy verbatim across the proxy boundary.
-_HOP = {"host", "content-length", "connection", "keep-alive", "transfer-encoding", "te",
-        "trailer", "upgrade", "proxy-authorization", "proxy-authenticate"}
+_HOP = {
+    "host",
+    "content-length",
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-authorization",
+    "proxy-authenticate",
+}
 
 
 # Shared client (#8) — one pooled AsyncClient instead of a fresh one (TCP setup + FD churn) per
@@ -60,6 +70,7 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
     target: tuple[str, dict] | None = None
     if slug == "host":
         from runtime.state import STATE
+
         port = getattr(STATE, "active_port", None)
         target = (f"http://127.0.0.1:{port}", {}) if port else None
     else:
@@ -84,8 +95,8 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
 
     client = _get_client()
     upstream_req = client.build_request(
-        request.method, url, headers=headers, content=body,
-        params=dict(request.query_params))
+        request.method, url, headers=headers, content=body, params=dict(request.query_params)
+    )
     try:
         upstream = await client.send(upstream_req, stream=True)
     except (httpx.ConnectError, httpx.ConnectTimeout):
@@ -164,7 +175,7 @@ async def forward_ws(slug: str, ws, path: str) -> None:
         await ws.close(code=1011, reason=f"agent {slug!r} is not running")
         return
     base, extra = target
-    ws_base = "ws" + base[len("http"):]  # http(s):// → ws(s)://
+    ws_base = "ws" + base[len("http") :]  # http(s):// → ws(s)://
     query = ws.url.query
     upstream_url = f"{ws_base}/{path}" + (f"?{query}" if query else "")
 
@@ -177,8 +188,12 @@ async def forward_ws(slug: str, ws, path: str) -> None:
 
     try:
         upstream = await websockets.connect(
-            upstream_url, additional_headers=headers or None, subprotocols=subprotocols,
-            open_timeout=5, ping_interval=None, max_size=None,
+            upstream_url,
+            additional_headers=headers or None,
+            subprotocols=subprotocols,
+            open_timeout=5,
+            ping_interval=None,
+            max_size=None,
         )
     except Exception as exc:  # noqa: BLE001 — connect refused / handshake failed / not a WS route
         log.info("[fleet] ws proxy to %s (%s) failed: %s", slug, path, exc)

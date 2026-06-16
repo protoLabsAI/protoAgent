@@ -15,8 +15,8 @@ import asyncio
 import logging
 
 from fastapi import Request, WebSocket  # module-level so the stringized `request: Request` /
-                             # `ws: WebSocket` annotations on the proxy routes resolve
-                             # (function-local imports don't, under `from __future__ import annotations`).
+# `ws: WebSocket` annotations on the proxy routes resolve
+# (function-local imports don't, under `from __future__ import annotations`).
 
 log = logging.getLogger("protoagent.server")
 
@@ -41,9 +41,11 @@ def register_fleet_routes(app) -> None:
         slug window like a local peer, with this hub reverse-proxying its console + A2A. An
         optional bearer ``token`` is stored for the proxy to attach (never returned)."""
         try:
-            rec = supervisor.add_remote(str((req or {}).get("name", "")),
-                                        str((req or {}).get("url", "")),
-                                        token=str((req or {}).get("token", "") or ""))
+            rec = supervisor.add_remote(
+                str((req or {}).get("name", "")),
+                str((req or {}).get("url", "")),
+                token=str((req or {}).get("token", "") or ""),
+            )
             return {"ok": True, "agent": rec}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
@@ -64,6 +66,7 @@ def register_fleet_routes(app) -> None:
         from urllib.parse import urlparse
 
         from graph.fleet import discovery
+
         fleet = supervisor.status()
         known = {("127.0.0.1", a["port"]) for a in fleet if a.get("port")}
         for a in fleet:  # registered remote members aren't 'discoveries' either
@@ -104,8 +107,7 @@ def register_fleet_routes(app) -> None:
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
-    @app.api_route("/agents/{slug}/{path:path}",
-                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    @app.api_route("/agents/{slug}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def _agent_proxy(slug: str, path: str, request: Request):
         """Reverse-proxy the console to a specific agent BY SLUG (ADR 0042 slug routing).
 
@@ -143,16 +145,20 @@ def register_fleet_routes(app) -> None:
         inherit_model = None
         if bool(body.get("inherit_config", True)):
             from graph.config_io import _live_config_dir
+
             cfg_dir = _live_config_dir()
             if (cfg_dir / "langgraph-config.yaml").exists():
                 inherit_model = str(cfg_dir)
         try:
             # create() may overlay the host model + install a bundle (subprocess) — off the loop.
             ws = await asyncio.to_thread(
-                manager.create, name, bundle=bundle, port=port, shared_skills=shared,
-                inherit_model=inherit_model)
-            agent = (await asyncio.to_thread(supervisor.start, name)) if start else {
-                "name": name, "id": ws["id"], "port": ws["port"], "running": False}
+                manager.create, name, bundle=bundle, port=port, shared_skills=shared, inherit_model=inherit_model
+            )
+            agent = (
+                (await asyncio.to_thread(supervisor.start, name))
+                if start
+                else {"name": name, "id": ws["id"], "port": ws["port"], "running": False}
+            )
             return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}
         except (manager.WorkspaceError, supervisor.FleetError) as exc:
             raise HTTPException(400, str(exc))
@@ -214,27 +220,37 @@ def _archetypes() -> list[dict]:
     """Built-in Basic + installed-bundle archetypes (cached in plugins.lock)."""
     out = [
         {
-            "id": "basic", "label": "Basic", "icon": "Sparkles", "bundle": None,
+            "id": "basic",
+            "label": "Basic",
+            "icon": "Sparkles",
+            "bundle": None,
             "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
         },
         {
             # Built-in PM archetype — installed FRESH from the git URL on each create (no pin),
             # so a new PM agent always gets the latest pm-stack.
-            "id": "pm-stack", "label": "Project Manager", "icon": "LayoutGrid",
+            "id": "pm-stack",
+            "label": "Project Manager",
+            "icon": "LayoutGrid",
             "bundle": "https://github.com/protoLabsAI/pm-stack",
             "blurb": "Project-management tools + board — clones the latest pm-stack on create.",
         },
     ]
     try:
         from graph.plugins.installer import _read_lock
-        for b in (_read_lock().get("bundles") or []):
+
+        for b in _read_lock().get("bundles") or []:
             arch = b.get("archetype") or {}
             if arch.get("label"):
-                out.append({
-                    "id": b.get("id"), "label": arch.get("label"),
-                    "icon": arch.get("icon", "Package"), "blurb": arch.get("blurb", ""),
-                    "bundle": b.get("source_url"),
-                })
+                out.append(
+                    {
+                        "id": b.get("id"),
+                        "label": arch.get("label"),
+                        "icon": arch.get("icon", "Package"),
+                        "blurb": arch.get("blurb", ""),
+                        "bundle": b.get("source_url"),
+                    }
+                )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort
         log.warning("[fleet] archetype discovery failed", exc_info=True)
     return out

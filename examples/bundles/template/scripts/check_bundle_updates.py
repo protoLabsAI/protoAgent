@@ -19,9 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-_MEMBER = re.compile(
-    r"^\s*-\s*\{\s*id:\s*(?P<id>[\w-]+)\s*,\s*url:\s*(?P<url>\S+?)\s*,\s*ref:\s*(?P<ref>\S+?)\s*\}"
-)
+_MEMBER = re.compile(r"^\s*-\s*\{\s*id:\s*(?P<id>[\w-]+)\s*,\s*url:\s*(?P<url>\S+?)\s*,\s*ref:\s*(?P<ref>\S+?)\s*\}")
 _SEMVER_TAG = re.compile(r"^v?\d+\.\d+\.\d+$")
 
 
@@ -33,7 +31,10 @@ def latest_tag(url: str) -> str | None:
     """Newest semver tag at ``url`` (peeled lines preferred-equivalent: tag NAMES only)."""
     out = subprocess.run(
         ["git", "ls-remote", "--tags", url],
-        check=True, capture_output=True, text=True, timeout=30,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
     ).stdout
     tags = set()
     for line in out.splitlines():

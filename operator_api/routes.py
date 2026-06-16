@@ -156,8 +156,7 @@ class _BeadsStoreAdapter:
         fields = {
             k: v
             for k, v in update.items()
-            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee")
-            and v is not None
+            if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee") and v is not None
         }
         return self._s.update(issue_id, **fields)
 
@@ -305,9 +304,7 @@ def register_operator_routes(
     @app.patch("/api/beads/issues/{issue_id}")
     async def _beads_update(issue_id: str, req: BeadsUpdateRequest):
         try:
-            issue = await asyncio.to_thread(
-                beads.update, req.project_path, issue_id, _model_payload(req)
-            )
+            issue = await asyncio.to_thread(beads.update, req.project_path, issue_id, _model_payload(req))
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -476,9 +473,7 @@ def register_operator_routes(
                 since = int(raw) if raw is not None else None
             except (TypeError, ValueError):
                 since = None
-            return StreamingResponse(
-                _sse_event_stream(events_subscribe, since=since), media_type="text/event-stream"
-            )
+            return StreamingResponse(_sse_event_stream(events_subscribe, since=since), media_type="text/event-stream")
 
     if events_publish is not None:
 

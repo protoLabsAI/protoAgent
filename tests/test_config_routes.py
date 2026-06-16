@@ -31,6 +31,7 @@ def test_get_config_delegates(monkeypatch):
         _fake_module("graph.config_io", config_to_dict=lambda c: {"model": "x"}, read_soul=lambda: "SOUL"),
     )
     import runtime.state as rs
+
     monkeypatch.setattr(rs.STATE, "graph_config", object(), raising=False)
     body = _client().get("/api/config").json()
     assert body == {"config": {"model": "x"}, "soul": "SOUL"}
@@ -185,6 +186,7 @@ def _wire_test_model(monkeypatch, *, ok: bool):
         _fake_module("graph.config_io", validate_model_connection=lambda b, k, m: (ok, "" if ok else "401")),
     )
     import runtime.state as rs
+
     cfg = types.SimpleNamespace(api_base="http://g/v1", api_key="live-key", model_name="m")
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     store = _BreakerStore()

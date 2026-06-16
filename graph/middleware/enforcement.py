@@ -68,8 +68,7 @@ class EnforcementMiddleware(AgentMiddleware):
         return None
 
     def _blocked(self, request, reason: str) -> ToolMessage:
-        logger.info("[enforcement] blocked %s: %s",
-                    request.tool_call.get("name", "?"), reason)
+        logger.info("[enforcement] blocked %s: %s", request.tool_call.get("name", "?"), reason)
         return ToolMessage(
             content=f"Blocked by policy: {reason}",
             tool_call_id=request.tool_call.get("id", ""),

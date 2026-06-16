@@ -76,6 +76,7 @@ def _strip_stored_reasoning(content: str) -> str:
 @dataclass
 class Chunk:
     """One row from the chunks table — what callers see."""
+
     id: int
     content: str
     domain: str
@@ -120,7 +121,8 @@ def _resolve_path(db_path: str | Path | None) -> Path:
         fallback.parent.mkdir(parents=True, exist_ok=True)
         log.info(
             "[knowledge] %s not writable; using %s instead",
-            p, fallback,
+            p,
+            fallback,
         )
         return fallback
 
@@ -140,8 +142,7 @@ _LIKE_ESCAPE = "\\"
 def _escape_like(text: str) -> str:
     """Escape ``%``, ``_``, and the escape char for safe LIKE matching."""
     return (
-        text
-        .replace(_LIKE_ESCAPE, _LIKE_ESCAPE + _LIKE_ESCAPE)
+        text.replace(_LIKE_ESCAPE, _LIKE_ESCAPE + _LIKE_ESCAPE)
         .replace("%", _LIKE_ESCAPE + "%")
         .replace("_", _LIKE_ESCAPE + "_")
     )
@@ -161,9 +162,7 @@ def _fts_quote(token: str) -> str:
 
 def _has_fts5(db: sqlite3.Connection) -> bool:
     try:
-        db.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)"
-        )
+        db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)")
         db.execute("DROP TABLE _fts5_probe")
         return True
     except sqlite3.OperationalError:
@@ -289,15 +288,11 @@ class KnowledgeStore:
                 # populated before FTS was added would have an empty
                 # virtual table without this rebuild.
                 try:
-                    db.execute(
-                        "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')"
-                    )
+                    db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
                 except sqlite3.DatabaseError as exc:
                     log.debug("[knowledge] FTS rebuild skipped: %s", exc)
             else:
-                log.info(
-                    "[knowledge] FTS5 unavailable — search will use LIKE fallback"
-                )
+                log.info("[knowledge] FTS5 unavailable — search will use LIKE fallback")
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -414,8 +409,11 @@ class KnowledgeStore:
         body. Returns the created row ids (a failed piece is skipped, never
         aborts the rest)."""
         texts = self._chunk_and_enrich(
-            content, max_chars=max_chars, overlap_chars=overlap_chars,
-            min_chars=min_chars, enrich=enrich,
+            content,
+            max_chars=max_chars,
+            overlap_chars=overlap_chars,
+            min_chars=min_chars,
+            enrich=enrich,
         )
         ids: list[int] = []
         for text in texts:
@@ -456,11 +454,7 @@ class KnowledgeStore:
         # Enrich only a genuinely multi-chunk doc: a single chunk IS the whole
         # document, so there's no within-document context to add (and no extra
         # LLM call for the common small-body case).
-        enriching = (
-            self._context_fn is not None
-            and (enrich if enrich is not None else True)
-            and len(pieces) >= 2
-        )
+        enriching = self._context_fn is not None and (enrich if enrich is not None else True) and len(pieces) >= 2
         if not enriching:
             return list(pieces)
         contexts = self._enrich_contexts(content, pieces)
@@ -520,8 +514,11 @@ class KnowledgeStore:
         if db is None:
             return []
         try:
-            rows = self._search_fts(db, query, k, domain) if self._fts_available \
+            rows = (
+                self._search_fts(db, query, k, domain)
+                if self._fts_available
                 else self._search_like(db, query, k, domain)
+            )
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] search failed: %s", exc)
             rows = []
@@ -531,11 +528,13 @@ class KnowledgeStore:
         results: list[dict[str, Any]] = []
         for r in rows:
             preview = (r["heading"] + ": " if r["heading"] else "") + r["content"]
-            results.append({
-                "table": "chunks",
-                "preview": preview[:self._preview_chars],
-                **dict(r),
-            })
+            results.append(
+                {
+                    "table": "chunks",
+                    "preview": preview[: self._preview_chars],
+                    **dict(r),
+                }
+            )
         return results
 
     def _search_fts(
@@ -586,18 +585,13 @@ class KnowledgeStore:
         # ``%`` or ``_`` doesn't silently match every row; ESCAPE is
         # bound on each clause.
         like_clauses = " + ".join(
-            "CASE WHEN content LIKE ? ESCAPE ? OR heading LIKE ? ESCAPE ? "
-            "THEN 1 ELSE 0 END"
-            for _ in tokens
+            "CASE WHEN content LIKE ? ESCAPE ? OR heading LIKE ? ESCAPE ? THEN 1 ELSE 0 END" for _ in tokens
         )
         params: list[Any] = []
         for t in tokens:
             needle = f"%{_escape_like(t)}%"
             params.extend([needle, _LIKE_ESCAPE, needle, _LIKE_ESCAPE])
-        sql = (
-            f"SELECT *, ({like_clauses}) AS score FROM chunks "
-            "WHERE score > 0"
-        )
+        sql = f"SELECT *, ({like_clauses}) AS score FROM chunks WHERE score > 0"
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
@@ -629,9 +623,7 @@ class KnowledgeStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(limit)
         try:
-            rows = db.execute(
-                f"SELECT * FROM chunks{where} ORDER BY id DESC LIMIT ?", params
-            ).fetchall()
+            rows = db.execute(f"SELECT * FROM chunks{where} ORDER BY id DESC LIMIT ?", params).fetchall()
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] list_chunks failed: %s", exc)
             rows = []
@@ -680,9 +672,7 @@ class KnowledgeStore:
         if db is None:
             return {"total": 0}
         try:
-            rows = db.execute(
-                "SELECT domain, COUNT(*) AS n FROM chunks GROUP BY domain ORDER BY n DESC"
-            ).fetchall()
+            rows = db.execute("SELECT domain, COUNT(*) AS n FROM chunks GROUP BY domain ORDER BY n DESC").fetchall()
             total = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] stats failed: %s", exc)
@@ -714,10 +704,7 @@ class KnowledgeStore:
             return None
         try:
             needle = f"%{_escape_like(text)}%"
-            sql = (
-                "SELECT * FROM chunks "
-                "WHERE (content LIKE ? ESCAPE ? OR heading LIKE ? ESCAPE ?)"
-            )
+            sql = "SELECT * FROM chunks WHERE (content LIKE ? ESCAPE ? OR heading LIKE ? ESCAPE ?)"
             params: list[Any] = [needle, _LIKE_ESCAPE, needle, _LIKE_ESCAPE]
             if domain:
                 sql += " AND domain = ?"

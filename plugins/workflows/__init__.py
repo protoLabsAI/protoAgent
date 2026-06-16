@@ -67,7 +67,9 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None)
         return out
 
     return await execute_workflow(
-        recipe, resolved, run_step=_run_step,
+        recipe,
+        resolved,
+        run_step=_run_step,
         max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
     )
 

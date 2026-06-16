@@ -27,8 +27,9 @@ def register(registry):
 '''
 
 
-def _make_plugin(root: Path, pid: str, *, enabled=False, tool="do_thing",
-                 requires_env=None, body=None, manifest_extra="") -> Path:
+def _make_plugin(
+    root: Path, pid: str, *, enabled=False, tool="do_thing", requires_env=None, body=None, manifest_extra=""
+) -> Path:
     d = root / pid
     d.mkdir(parents=True, exist_ok=True)
     env_line = f"requires_env: {requires_env}\n" if requires_env else ""
@@ -102,7 +103,8 @@ def test_multi_module_plugin_with_relative_import(tmp_path, monkeypatch) -> None
     d = root / "multi-mod"
     d.mkdir(parents=True)
     (d / "protoagent.plugin.yaml").write_text(
-        "id: multi-mod\nname: Multi mod\nversion: 0.1.0\nenabled: true\n", encoding="utf-8")
+        "id: multi-mod\nname: Multi mod\nversion: 0.1.0\nenabled: true\n", encoding="utf-8"
+    )
     (d / "tools.py").write_text(
         "from langchain_core.tools import tool\n"
         "@tool\n"
@@ -110,11 +112,13 @@ def test_multi_module_plugin_with_relative_import(tmp_path, monkeypatch) -> None
         "    '''sibling-module tool'''\n"
         "    return 'ok'\n"
         "def get_tools():\n"
-        "    return [mm_tool]\n", encoding="utf-8")
+        "    return [mm_tool]\n",
+        encoding="utf-8",
+    )
     (d / "__init__.py").write_text(
-        "from .tools import get_tools\n"
-        "def register(registry):\n"
-        "    registry.register_tools(get_tools())\n", encoding="utf-8")
+        "from .tools import get_tools\ndef register(registry):\n    registry.register_tools(get_tools())\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg())
     assert [t.name for t in res.tools] == ["mm_tool"]
@@ -180,7 +184,7 @@ def test_from_yaml_parses_plugins(tmp_path) -> None:
 
 # --- ADR 0018: routers / surfaces / subagents -------------------------------
 
-_EXT_PLUGIN = '''
+_EXT_PLUGIN = """
 class _FakeRouter:
     routes = []
 
@@ -198,7 +202,7 @@ def register(registry):
     registry.register_router(_FakeRouter(), prefix="/x")  # explicit prefix honored
     registry.register_surface(_start, stop=_stop, name="surf")
     registry.register_subagent(_Sub())
-'''
+"""
 
 
 def test_plugin_contributes_router_surface_subagent(tmp_path, monkeypatch) -> None:
@@ -250,7 +254,7 @@ def test_plugin_config_only_for_enabled(tmp_path) -> None:
 
     root = tmp_path / "plugins"
     _make_plugin(root, "cfgplug", enabled=False, manifest_extra=_CFG_MANIFEST)
-    assert discover_plugin_config([root], set()) == []          # disabled → none
+    assert discover_plugin_config([root], set()) == []  # disabled → none
     assert len(discover_plugin_config([root], {"cfgplug"})) == 1  # operator-enabled
 
 
@@ -258,8 +262,7 @@ def test_plugin_section_collision_with_builtin_ignored(tmp_path) -> None:
     from graph.plugins.pconfig import discover_plugin_config
 
     root = tmp_path / "plugins"
-    _make_plugin(root, "evil", enabled=True,
-                 manifest_extra="config_section: model\nconfig: {x: 1}\n")
+    _make_plugin(root, "evil", enabled=True, manifest_extra="config_section: model\nconfig: {x: 1}\n")
     # 'model' is a reserved built-in section — the plugin can't claim it.
     assert discover_plugin_config([root], {"evil"}) == []
 
@@ -282,7 +285,7 @@ def test_registry_exposes_plugin_host() -> None:
     from graph.plugins.registry import PluginRegistry
 
     r = PluginRegistry("p", Path("/tmp"))
-    assert r.host is HOST                      # the process singleton the server fills
+    assert r.host is HOST  # the process singleton the server fills
     assert hasattr(r.host, "invoke") and hasattr(r.host, "publish") and hasattr(r.host, "subscribe")
 
 
@@ -292,25 +295,31 @@ def test_registry_exposes_plugin_host() -> None:
 def test_manifest_parses_views() -> None:
     import tempfile
     from pathlib import Path as _P
+
     root = _P(tempfile.mkdtemp())
     _make_plugin(
-        root, "viewy", enabled=True,
+        root,
+        "viewy",
+        enabled=True,
         manifest_extra=(
             "views:\n"
             "  - {id: board, label: Board, icon: LayoutDashboard, path: /plugins/viewy/board}\n"
-            "  - {id: nopath, label: Bad}\n"   # missing path → dropped
+            "  - {id: nopath, label: Bad}\n"  # missing path → dropped
         ),
     )
     m = load_manifest(root / "viewy")
     assert m is not None
-    assert [v["id"] for v in m.views] == ["board"]   # the path-less one is dropped
+    assert [v["id"] for v in m.views] == ["board"]  # the path-less one is dropped
     assert m.views[0]["icon"] == "LayoutDashboard"
 
 
 def test_loader_meta_exposes_views_for_enabled_plugin(monkeypatch, tmp_path) -> None:
     root = tmp_path / "plugins"
     _make_plugin(
-        root, "viewy", enabled=True, tool="vt",
+        root,
+        "viewy",
+        enabled=True,
+        tool="vt",
         manifest_extra="views:\n  - {id: board, label: Board, path: /plugins/viewy/board}\n",
     )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
@@ -318,7 +327,6 @@ def test_loader_meta_exposes_views_for_enabled_plugin(monkeypatch, tmp_path) -> 
     meta = res.meta[0]
     assert meta["id"] == "viewy" and meta["enabled"] is True
     assert [v["id"] for v in meta["views"]] == ["board"]
-
 
 
 # ── full-bundle auto-discovery (ADR 0027) ─────────────────────────────────────
@@ -357,7 +365,7 @@ def test_plugin_goal_verifier_is_collected(monkeypatch, tmp_path) -> None:
     _make_plugin(root, "gverify", enabled=True, body=body)
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     res = load_plugins(_cfg(plugins_enabled=["gverify"]))
-    assert "gverify:credits" in res.goal_verifiers   # auto-namespaced (ADR 0028)
+    assert "gverify:credits" in res.goal_verifiers  # auto-namespaced (ADR 0028)
 
 
 def test_plugin_goal_hook_is_collected(monkeypatch, tmp_path) -> None:
@@ -404,8 +412,7 @@ def test_min_version_newer_than_host_refuses_load(tmp_path, monkeypatch) -> None
     """A plugin declaring it needs a newer host is refused, with both versions
     in the surfaced error (the manifest's documented "warn/refuse" promise)."""
     root = tmp_path / "plugins"
-    _make_plugin(root, "toonew", enabled=True, tool="toonew_tool",
-                 manifest_extra="min_protoagent_version: 99.0.0\n")
+    _make_plugin(root, "toonew", enabled=True, tool="toonew_tool", manifest_extra="min_protoagent_version: 99.0.0\n")
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
     res = load_plugins(_cfg())
@@ -417,10 +424,8 @@ def test_min_version_newer_than_host_refuses_load(tmp_path, monkeypatch) -> None
 
 def test_min_version_equal_or_older_loads(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
-    _make_plugin(root, "okequal", enabled=True, tool="okequal_tool",
-                 manifest_extra="min_protoagent_version: 0.32.0\n")
-    _make_plugin(root, "okolder", enabled=True, tool="okolder_tool",
-                 manifest_extra="min_protoagent_version: 0.1.0\n")
+    _make_plugin(root, "okequal", enabled=True, tool="okequal_tool", manifest_extra="min_protoagent_version: 0.32.0\n")
+    _make_plugin(root, "okolder", enabled=True, tool="okolder_tool", manifest_extra="min_protoagent_version: 0.1.0\n")
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
     res = load_plugins(_cfg())
@@ -430,8 +435,9 @@ def test_min_version_equal_or_older_loads(tmp_path, monkeypatch) -> None:
 def test_min_version_garbage_warns_and_loads(tmp_path, monkeypatch, caplog) -> None:
     """A typo'd version string must not brick the plugin — warn and load."""
     root = tmp_path / "plugins"
-    _make_plugin(root, "typoed", enabled=True, tool="typoed_tool",
-                 manifest_extra="min_protoagent_version: not-a-version\n")
+    _make_plugin(
+        root, "typoed", enabled=True, tool="typoed_tool", manifest_extra="min_protoagent_version: not-a-version\n"
+    )
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
     monkeypatch.setattr(plugin_loader, "_host_version", lambda: "0.32.0")
     with caplog.at_level("WARNING", logger="protoagent.plugins"):

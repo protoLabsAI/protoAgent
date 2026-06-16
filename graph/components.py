@@ -38,7 +38,7 @@ def extract_component(text: str) -> dict | None:
     if i < 0:
         return None
     try:
-        payload = json.loads(text[i + len(_SENTINEL):])
+        payload = json.loads(text[i + len(_SENTINEL) :])
     except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict) or payload.get("component") not in COMPONENT_TYPES:

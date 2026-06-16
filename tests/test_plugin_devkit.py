@@ -18,9 +18,7 @@ def _cfg(**kw):
 
 
 def _load_devkit_module(tmp_path):
-    spec = importlib.util.spec_from_file_location(
-        "pdk_test", str(REPO / "plugins" / "plugin-devkit" / "__init__.py")
-    )
+    spec = importlib.util.spec_from_file_location("pdk_test", str(REPO / "plugins" / "plugin-devkit" / "__init__.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -46,8 +44,14 @@ def test_scaffold_produces_a_loadable_plugin(monkeypatch, tmp_path):
     out_root.mkdir()
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     msg = scaffold.invoke(
-        {"name": "My Cool Plugin", "summary": "demo", "with_view": True,
-         "with_skill": True, "with_workflow": True, "enable": False}
+        {
+            "name": "My Cool Plugin",
+            "summary": "demo",
+            "with_view": True,
+            "with_skill": True,
+            "with_workflow": True,
+            "enable": False,
+        }
     )
     assert "scaffolded" in msg
     pdir = out_root / "my-cool-plugin"
@@ -65,7 +69,8 @@ def test_scaffold_produces_a_loadable_plugin(monkeypatch, tmp_path):
 
 def test_scaffold_refuses_overwrite(tmp_path):
     mod = _load_devkit_module(tmp_path)
-    out_root = tmp_path / "out"; out_root.mkdir()
+    out_root = tmp_path / "out"
+    out_root.mkdir()
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     scaffold.invoke({"name": "dup", "enable": False})
     assert "already exists" in scaffold.invoke({"name": "dup", "enable": False})
@@ -73,7 +78,8 @@ def test_scaffold_refuses_overwrite(tmp_path):
 
 def test_scaffold_communication_plugin(monkeypatch, tmp_path):
     mod = _load_devkit_module(tmp_path)
-    out_root = tmp_path / "out"; out_root.mkdir()
+    out_root = tmp_path / "out"
+    out_root.mkdir()
     scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
     msg = scaffold.invoke({"name": "My Chat", "summary": "demo", "with_comms": True})
     assert "communication plugin" in msg
@@ -95,7 +101,8 @@ def test_scaffold_enable_hot_reloads_when_live(monkeypatch, tmp_path):
     scaffolded plugin loads without a restart — it adds the new id to
     plugins.enabled (preserving the rest) and reloads via _apply_settings_changes."""
     mod = _load_devkit_module(tmp_path)
-    out_root = tmp_path / "out"; out_root.mkdir()
+    out_root = tmp_path / "out"
+    out_root.mkdir()
 
     import server.agent_init as agent_init
     from runtime.state import STATE
@@ -151,8 +158,10 @@ def test_live_enable_reports_a_plugin_that_failed_to_load(monkeypatch):
     monkeypatch.setattr(STATE, "graph_config", _Cfg(), raising=False)
     monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **k: (True, []))
     monkeypatch.setattr(
-        STATE, "plugin_meta",
-        [{"id": "broken", "loaded": False, "error": "boom: bad import"}], raising=False,
+        STATE,
+        "plugin_meta",
+        [{"id": "broken", "loaded": False, "error": "boom: bad import"}],
+        raising=False,
     )
     out = mod.enable_plugin.invoke({"plugin_id": "broken"})
     assert "FAILED to load" in out and "boom" in out

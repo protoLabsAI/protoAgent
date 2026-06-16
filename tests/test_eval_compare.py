@@ -4,21 +4,24 @@ from evals.compare import compare_reports
 
 
 def _report(results):
-    return {"total": len(results), "passed": sum(1 for r in results if r["passed"]),
-            "results": results}
+    return {"total": len(results), "passed": sum(1 for r in results if r["passed"]), "results": results}
 
 
 def test_overall_and_flips():
-    old = _report([
-        {"id": "a", "category": "tool", "name": "A", "passed": True, "detail": ""},
-        {"id": "b", "category": "tool", "name": "B", "passed": False, "detail": ""},
-        {"id": "c", "category": "a2a", "name": "C", "passed": True, "detail": ""},
-    ])
-    new = _report([
-        {"id": "a", "category": "tool", "name": "A", "passed": True, "detail": ""},
-        {"id": "b", "category": "tool", "name": "B", "passed": True, "detail": ""},   # fixed
-        {"id": "c", "category": "a2a", "name": "C", "passed": False, "detail": ""},   # regressed
-    ])
+    old = _report(
+        [
+            {"id": "a", "category": "tool", "name": "A", "passed": True, "detail": ""},
+            {"id": "b", "category": "tool", "name": "B", "passed": False, "detail": ""},
+            {"id": "c", "category": "a2a", "name": "C", "passed": True, "detail": ""},
+        ]
+    )
+    new = _report(
+        [
+            {"id": "a", "category": "tool", "name": "A", "passed": True, "detail": ""},
+            {"id": "b", "category": "tool", "name": "B", "passed": True, "detail": ""},  # fixed
+            {"id": "c", "category": "a2a", "name": "C", "passed": False, "detail": ""},  # regressed
+        ]
+    )
     md = compare_reports(old, new)
     assert "2/3" in md and "1/3" not in md.split("\n")[2]  # overall line: 2/3 → 2/3
     assert "Newly passing" in md and "`b`" in md

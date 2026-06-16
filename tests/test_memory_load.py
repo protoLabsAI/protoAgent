@@ -18,10 +18,10 @@ import os
 from unittest.mock import MagicMock
 
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_middleware(knowledge_store=None):
     """Instantiate KnowledgeMiddleware with a mock store."""
@@ -58,6 +58,7 @@ def _sample_session(session_id: str = "s1", timestamp: str = "2024-01-01T00:00:0
 # 1. Missing directory — returns empty string, does not raise
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_missing_directory():
     mw = _make_middleware()
     result = mw.load_memory(memory_path="/tmp/nonexistent_protoagent_memory_xyz_999/")
@@ -68,6 +69,7 @@ def test_load_memory_missing_directory():
 # 2. Empty directory — returns <prior_sessions/>
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_empty_directory(tmp_path):
     mw = _make_middleware()
     result = mw.load_memory(memory_path=str(tmp_path))
@@ -77,6 +79,7 @@ def test_load_memory_empty_directory(tmp_path):
 # ---------------------------------------------------------------------------
 # 3. Single valid session — appears in output
 # ---------------------------------------------------------------------------
+
 
 def test_load_memory_single_session(tmp_path):
     _write_session(str(tmp_path), "sess-1", _sample_session("sess-1"))
@@ -93,6 +96,7 @@ def test_load_memory_single_session(tmp_path):
 # 4. Multiple sessions — all appear when within budget
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_multiple_sessions(tmp_path):
     for i in range(3):
         _write_session(str(tmp_path), f"sess-{i}", _sample_session(f"sess-{i}"))
@@ -106,6 +110,7 @@ def test_load_memory_multiple_sessions(tmp_path):
 # ---------------------------------------------------------------------------
 # 5. Token budget enforcement — oldest sessions truncated first
 # ---------------------------------------------------------------------------
+
 
 def test_load_memory_token_budget_drops_oldest(tmp_path):
     # Write 5 sessions with enough per-session content to trigger budget enforcement.
@@ -154,6 +159,7 @@ def test_load_memory_respects_max_sessions(tmp_path):
 # 6. Malformed session file — skipped, other sessions still loaded
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_skips_malformed_file(tmp_path):
     # Write one good session
     _write_session(str(tmp_path), "good", _sample_session("good"))
@@ -176,6 +182,7 @@ def test_load_memory_skips_malformed_file(tmp_path):
 # 7. Result is cached after first load_memory call
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_cache_via_before_model(tmp_path):
     _write_session(str(tmp_path), "cached-sess", _sample_session("cached-sess"))
 
@@ -197,9 +204,7 @@ def test_load_memory_cache_via_before_model(tmp_path):
     mw.before_model(state, runtime=None)
 
     # load_memory should only have been called once (cache hit on second call)
-    assert call_count["n"] == 1, (
-        f"load_memory called {call_count['n']} times — expected 1 (cached)"
-    )
+    assert call_count["n"] == 1, f"load_memory called {call_count['n']} times — expected 1 (cached)"
 
 
 def test_prior_sessions_cache_refreshes_after_ttl(tmp_path):
@@ -222,6 +227,7 @@ def test_prior_sessions_cache_refreshes_after_ttl(tmp_path):
     assert call_count["n"] == 1
     # Simulate the TTL elapsing.
     from graph.middleware.knowledge import _PRIOR_SESSIONS_TTL_S
+
     mw._prior_sessions_loaded_at -= _PRIOR_SESSIONS_TTL_S + 1
     mw.before_model(state, runtime=None)
     assert call_count["n"] == 2, "cache did not refresh after TTL elapsed"
@@ -231,6 +237,7 @@ def test_prior_sessions_cache_refreshes_after_ttl(tmp_path):
 # 8. before_model injects prior_sessions into returned context
 # ---------------------------------------------------------------------------
 
+
 def test_before_model_injects_prior_sessions(tmp_path):
     _write_session(str(tmp_path), "inject-sess", _sample_session("inject-sess"))
 
@@ -238,10 +245,12 @@ def test_before_model_injects_prior_sessions(tmp_path):
     # Override load_memory to use tmp_path; mark fresh so the TTL cache does
     # not immediately reload from the default (empty) path.
     import time
+
     mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
     mw._prior_sessions_loaded_at = time.monotonic()
 
     from langchain_core.messages import HumanMessage
+
     state = {"messages": [HumanMessage(content="What did we discuss?")]}
 
     result = mw.before_model(state, runtime=None)
@@ -258,6 +267,7 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
 
     mw = _make_middleware()
     import time
+
     mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
     mw._prior_sessions_loaded_at = time.monotonic()
 
@@ -279,6 +289,7 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
 # 9. Disabled memory (no sessions) yields empty block or empty string
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_no_sessions_yields_empty_tag(tmp_path):
     mw = _make_middleware()
     result = mw.load_memory(memory_path=str(tmp_path))
@@ -290,6 +301,7 @@ def test_load_memory_no_sessions_yields_empty_tag(tmp_path):
 # 10. load_memory() works as a standalone call without a knowledge store
 # ---------------------------------------------------------------------------
 
+
 def test_load_memory_standalone_no_knowledge_store(tmp_path):
     """load_memory() does not touch self._store — it should work independently."""
     _write_session(str(tmp_path), "standalone", _sample_session("standalone"))
@@ -299,6 +311,7 @@ def test_load_memory_standalone_no_knowledge_store(tmp_path):
     broken_store.search.side_effect = RuntimeError("store should not be called")
 
     from graph.middleware.knowledge import KnowledgeMiddleware
+
     mw = KnowledgeMiddleware(broken_store, top_k=5)
     result = mw.load_memory(memory_path=str(tmp_path))
 
@@ -313,6 +326,7 @@ def test_load_memory_standalone_no_knowledge_store(tmp_path):
 # (HybridKnowledgeStore + create_embed_fn) — running it inline in
 # abefore_model stalled the event loop before every LLM call. The async
 # hook must dispatch the sync before_model via asyncio.to_thread.
+
 
 async def test_abefore_model_runs_search_off_event_loop():
     import threading

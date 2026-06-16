@@ -53,7 +53,7 @@ class BeadsStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")   # concurrent reads during writes
+        self._conn.execute("PRAGMA journal_mode=WAL")  # concurrent reads during writes
         self._conn.execute("PRAGMA busy_timeout=5000")  # wait (don't error) on lock contention
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
@@ -120,9 +120,15 @@ class BeadsStore:
                 "INSERT INTO issues (id, title, description, status, priority, issue_type, "
                 "assignee, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
-                    issue_id, title, description or "", "open",
+                    issue_id,
+                    title,
+                    description or "",
+                    "open",
                     int(priority) if priority is not None else 2,
-                    self._norm_type(issue_type), assignee or "", now, now,
+                    self._norm_type(issue_type),
+                    assignee or "",
+                    now,
+                    now,
                 ),
             )
             self._conn.commit()
@@ -132,9 +138,7 @@ class BeadsStore:
         if include_closed:
             rows = self._conn.execute("SELECT * FROM issues ORDER BY created_at").fetchall()
         else:
-            rows = self._conn.execute(
-                "SELECT * FROM issues WHERE status != 'closed' ORDER BY created_at"
-            ).fetchall()
+            rows = self._conn.execute("SELECT * FROM issues WHERE status != 'closed' ORDER BY created_at").fetchall()
         return [dict(r) for r in rows]
 
     def get(self, issue_id: str) -> dict[str, Any] | None:

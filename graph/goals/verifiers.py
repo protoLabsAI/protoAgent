@@ -35,9 +35,29 @@ _EVIDENCE_CAP = 2000
 _SAFE_BUILTINS = {
     name: __builtins__[name] if isinstance(__builtins__, dict) else getattr(__builtins__, name)
     for name in (
-        "len", "any", "all", "sum", "min", "max", "sorted", "abs", "round",
-        "bool", "int", "float", "str", "list", "dict", "set", "tuple",
-        "isinstance", "enumerate", "zip", "range", "map", "filter",
+        "len",
+        "any",
+        "all",
+        "sum",
+        "min",
+        "max",
+        "sorted",
+        "abs",
+        "round",
+        "bool",
+        "int",
+        "float",
+        "str",
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "isinstance",
+        "enumerate",
+        "zip",
+        "range",
+        "map",
+        "filter",
     )
 }
 
@@ -45,10 +65,10 @@ _SAFE_BUILTINS = {
 @dataclass
 class VerifyContext:
     config: object = None
-    condition: str = ""          # the goal condition (used by the llm verifier)
-    last_text: str = ""          # last assistant message of the turn
-    tool_summary: str = ""       # short summary of recent tool calls
-    cwd: str | None = None       # working dir for command/test verifiers
+    condition: str = ""  # the goal condition (used by the llm verifier)
+    last_text: str = ""  # last assistant message of the turn
+    tool_summary: str = ""  # short summary of recent tool calls
+    cwd: str | None = None  # working dir for command/test verifiers
 
 
 def _tail(text: str, cap: int = _EVIDENCE_CAP) -> str:
@@ -101,10 +121,18 @@ async def _verify_ci(spec: dict, ctx: VerifyContext) -> VerifyResult:
             return VerifyResult(True, f"PR #{pr} checks all green", evidence)
         return VerifyResult(False, f"PR #{pr} checks not all green (gh exit {rc})", evidence)
     if branch:
-        rc, out, err = await run_gh([
-            "run", "list", "--branch", str(branch), "--limit", "1",
-            "--json", "conclusion,status,name",
-        ])
+        rc, out, err = await run_gh(
+            [
+                "run",
+                "list",
+                "--branch",
+                str(branch),
+                "--limit",
+                "1",
+                "--json",
+                "conclusion,status,name",
+            ]
+        )
         evidence = _tail("\n".join(p for p in (out, err) if p))
         if rc != 0:
             return VerifyResult(False, f"gh run list failed (exit {rc})", evidence)
@@ -178,11 +206,7 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
 
         # Goal verification is classification, not the main reasoning task:
         # eval_model override → routing.aux_model → main model.
-        model_name = (
-            getattr(ctx.config, "goal_eval_model", "")
-            or getattr(ctx.config, "aux_model", "")
-            or None
-        )
+        model_name = getattr(ctx.config, "goal_eval_model", "") or getattr(ctx.config, "aux_model", "") or None
         llm = create_llm(ctx.config, model_name=model_name)
         prompt = (
             f"GOAL: {spec.get('condition') or ctx.condition}\n\n"
@@ -198,7 +222,7 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
         start, end = content.find("{"), content.rfind("}")
         if start == -1 or end == -1:
             return VerifyResult(False, "evaluator returned no JSON", _tail(content))
-        parsed = json.loads(content[start:end + 1])
+        parsed = json.loads(content[start : end + 1])
         return VerifyResult(bool(parsed.get("met")), str(parsed.get("reason") or ""), "")
     except Exception as exc:  # fail safe: never let evaluator errors mark met
         log.warning("[goal] llm verifier error: %s", exc)

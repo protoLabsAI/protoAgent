@@ -61,8 +61,8 @@ class CacheWarmer:
             return False
         if not (c.prompt_cache_force or _ANTHROPIC_RE.search(c.model_name)):
             log.info(
-                "[cache-warmer] disabled: model '%s' isn't Anthropic-family "
-                "(set prompt_cache.force to override)", c.model_name,
+                "[cache-warmer] disabled: model '%s' isn't Anthropic-family (set prompt_cache.force to override)",
+                c.model_name,
             )
             return False
         return True
@@ -95,9 +95,11 @@ class CacheWarmer:
         # so we warm the cache key real requests will hit. include_subagents
         # matches the default graph build (task/task_batch in the toolset).
         stable = build_system_prompt(include_subagents=True)
-        system = SystemMessage(content=[
-            {"type": "text", "text": stable, "cache_control": self._cache_control()},
-        ])
+        system = SystemMessage(
+            content=[
+                {"type": "text", "text": stable, "cache_control": self._cache_control()},
+            ]
+        )
         # 1-token generation: enough to register a cache hit/write, no more.
         ping = HumanMessage(content="ping")
 
@@ -121,7 +123,8 @@ class CacheWarmer:
         self._task = asyncio.create_task(self._loop(warm_once))
         log.info(
             "[cache-warmer] started (every %ss, ttl=%s)",
-            self._config.cache_warming_interval_seconds, self._config.prompt_cache_ttl,
+            self._config.cache_warming_interval_seconds,
+            self._config.prompt_cache_ttl,
         )
 
     async def _loop(self, warm_once) -> None:

@@ -22,12 +22,31 @@ log = logging.getLogger("protoagent.plugins")
 # Built-in top-level config sections a plugin may NOT claim (collision → ignored,
 # built-in wins). Keep roughly in step with the YAML the template ships.
 _RESERVED_SECTIONS = {
-    "model", "subagents", "middleware", "knowledge", "memory", "skills",
-    "workflows", "compaction", "checkpoint", "routing", "goal", "execute_code",
+    "model",
+    "subagents",
+    "middleware",
+    "knowledge",
+    "memory",
+    "skills",
+    "workflows",
+    "compaction",
+    "checkpoint",
+    "routing",
+    "goal",
+    "execute_code",
     # NB: `discord` and `google` are NOT reserved — they're first-party plugins
     # (ADR 0018/0019) that legitimately claim those sections.
-    "operator", "tools", "mcp", "plugins", "identity",
-    "auth", "runtime", "telemetry", "instance", "prompt_cache", "enforcement",
+    "operator",
+    "tools",
+    "mcp",
+    "plugins",
+    "identity",
+    "auth",
+    "runtime",
+    "telemetry",
+    "instance",
+    "prompt_cache",
+    "enforcement",
     "ingest",
 }
 
@@ -65,18 +84,24 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[Plugin
                 continue
             section = (m.config_section or m.id).strip()
             if section in _RESERVED_SECTIONS:
-                log.warning("[plugins] %s: config_section %r collides with a built-in — ignored",
-                            m.id, section)
+                log.warning("[plugins] %s: config_section %r collides with a built-in — ignored", m.id, section)
                 continue
             if section in claimed:
-                log.warning("[plugins] config_section %r claimed by %s and %s — keeping first",
-                            section, claimed[section], m.id)
+                log.warning(
+                    "[plugins] config_section %r claimed by %s and %s — keeping first", section, claimed[section], m.id
+                )
                 continue
             claimed[section] = m.id
-            out.append(PluginConfigSchema(
-                m.id, section, dict(m.config or {}), list(m.secrets or []), list(m.settings or []),
-                test=bool(getattr(m, "test", False)),
-            ))
+            out.append(
+                PluginConfigSchema(
+                    m.id,
+                    section,
+                    dict(m.config or {}),
+                    list(m.secrets or []),
+                    list(m.settings or []),
+                    test=bool(getattr(m, "test", False)),
+                )
+            )
         return out
     except Exception:  # noqa: BLE001 — discovery is best-effort
         log.exception("[plugins] config-schema discovery failed")
@@ -101,7 +126,9 @@ def live_plugin_config_schemas() -> list[PluginConfigSchema]:
         plugins = data.get("plugins") or {}
         roots = plugin_roots_from(_live_config_dir(), str(plugins.get("dir") or ""))
         return discover_plugin_config(
-            roots, set(plugins.get("enabled") or []), set(plugins.get("disabled") or []),
+            roots,
+            set(plugins.get("enabled") or []),
+            set(plugins.get("disabled") or []),
         )
     except Exception:  # noqa: BLE001
         log.exception("[plugins] live config-schema discovery failed")

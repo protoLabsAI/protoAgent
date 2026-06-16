@@ -26,15 +26,27 @@ def test_configured_needs_both_tokens():
 
 
 class _Resp:
-    def __init__(self, data): self._data = data
-    def json(self): return self._data
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
 
 
 class _FakeClient:
-    def __init__(self, data): self._data = data; self.calls = []
-    def __call__(self, *a, **k): return self
-    async def __aenter__(self): return self
-    async def __aexit__(self, *a): return False
+    def __init__(self, data):
+        self._data = data
+        self.calls = []
+
+    def __call__(self, *a, **k):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
     async def post(self, url, headers=None, json=None):
         self.calls.append(url)
         return _Resp(self._data)

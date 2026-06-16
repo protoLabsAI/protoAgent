@@ -8,6 +8,7 @@ plist to the ``python -m server`` module launch so a future rename
 can't silently regress the launcher again, and exercise the
 install-time existence check against the package layout.
 """
+
 from __future__ import annotations
 
 import plistlib
@@ -34,9 +35,7 @@ def test_plist_launches_the_server_module_not_server_py():
     args = data["ProgramArguments"]
 
     assert args[0] == "/repo/.venv/bin/python"
-    assert args[1:3] == ["-m", "server"], (
-        "plist must launch `python -m server` (ADR 0023)"
-    )
+    assert args[1:3] == ["-m", "server"], "plist must launch `python -m server` (ADR 0023)"
     assert not any(a.endswith("server.py") for a in args), (
         "stale single-file launch — server.py was deleted by ADR 0023"
     )

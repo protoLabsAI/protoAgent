@@ -23,25 +23,43 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("new", help="scaffold a new plugin skeleton on disk (ready to fill in + enable)")
-    pn.add_argument("name", help="human name (the id is slugified from it, e.g. \"My Plugin\" → my-plugin)")
+    pn.add_argument("name", help='human name (the id is slugified from it, e.g. "My Plugin" → my-plugin)')
     pn.add_argument("--summary", default="A protoAgent plugin.", help="one-line description for the manifest")
     pn.add_argument("--view", action="store_true", help="include a console view (sandboxed iframe + router)")
     pn.add_argument("--skill", action="store_true", help="include a SKILL.md skill stub")
     pn.add_argument("--workflow", action="store_true", help="include a workflow YAML stub")
-    pn.add_argument("--comms", action="store_true", help="a communication plugin (ChatAdapter, ADR 0029) instead of a tool plugin")
-    pn.add_argument("--tests", action="store_true", help="include a host-free test suite + CI + requirements-dev (for a standalone-repo plugin)")
+    pn.add_argument(
+        "--comms", action="store_true", help="a communication plugin (ChatAdapter, ADR 0029) instead of a tool plugin"
+    )
+    pn.add_argument(
+        "--tests",
+        action="store_true",
+        help="include a host-free test suite + CI + requirements-dev (for a standalone-repo plugin)",
+    )
     pn.add_argument("--dir", default=None, help="target dir (default: the live plugins dir the loader discovers)")
 
     pnb = sub.add_parser("new-bundle", help="scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040)")
     pnb.add_argument("name", help="human name for the bundle (slugified to its id)")
     pnb.add_argument("--summary", default="A protoAgent plugin bundle.", help="one-line description")
-    pnb.add_argument("--member", action="append", metavar="id=url[@ref]", default=[],
-                     help="a git plugin member; repeatable (e.g. --member board=https://github.com/you/board@v0.1.0)")
-    pnb.add_argument("--builtin", action="append", metavar="id", default=[],
-                     help="a built-in member that ships with protoAgent; repeatable (e.g. --builtin delegates)")
+    pnb.add_argument(
+        "--member",
+        action="append",
+        metavar="id=url[@ref]",
+        default=[],
+        help="a git plugin member; repeatable (e.g. --member board=https://github.com/you/board@v0.1.0)",
+    )
+    pnb.add_argument(
+        "--builtin",
+        action="append",
+        metavar="id",
+        default=[],
+        help="a built-in member that ships with protoAgent; repeatable (e.g. --builtin delegates)",
+    )
     pnb.add_argument("--dir", default=None, help="target dir (default: the live plugins dir)")
 
-    pi = sub.add_parser("install", help="install a plugin — or a bundle of plugins — from a git URL (does NOT enable it)")
+    pi = sub.add_parser(
+        "install", help="install a plugin — or a bundle of plugins — from a git URL (does NOT enable it)"
+    )
     pi.add_argument("url", help="git URL (https://, ssh://, git@, or a local path) of a plugin or a bundle repo")
     pi.add_argument("--ref", default=None, help="tag, branch, or commit SHA to pin (default: default branch HEAD)")
     pi.add_argument("--force", action="store_true", help="replace an already-installed plugin of the same id")
@@ -62,8 +80,13 @@ def run_plugin_cli(argv: list[str]) -> int:
         if args.cmd == "new":
             try:
                 res = scaffold.scaffold_plugin(
-                    args.name, summary=args.summary, with_view=args.view, with_skill=args.skill,
-                    with_workflow=args.workflow, with_comms=args.comms, with_tests=args.tests,
+                    args.name,
+                    summary=args.summary,
+                    with_view=args.view,
+                    with_skill=args.skill,
+                    with_workflow=args.workflow,
+                    with_comms=args.comms,
+                    with_tests=args.tests,
                     target_dir=args.dir,
                 )
             except FileExistsError as e:
@@ -75,7 +98,9 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print("  next: implement the ChatAdapter (see plugins/telegram), then enable it from Settings.")
             else:
                 print("  next: fill in __init__.py, then enable it — toggle it on in the console, or in a running")
-                print(f"        agent (with plugin-devkit enabled) ask it to enable_plugin('{res.id}') — live, no restart.")
+                print(
+                    f"        agent (with plugin-devkit enabled) ask it to enable_plugin('{res.id}') — live, no restart."
+                )
             return 0
         if args.cmd == "new-bundle":
             members: list[dict] = []
@@ -90,7 +115,10 @@ def run_plugin_cli(argv: list[str]) -> int:
                 members.append({"id": bid, "builtin": True})
             try:
                 res = scaffold.scaffold_bundle(
-                    args.name, summary=args.summary, members=members or None, target_dir=args.dir,
+                    args.name,
+                    summary=args.summary,
+                    members=members or None,
+                    target_dir=args.dir,
                 )
             except FileExistsError as e:
                 print(f"✗ {scaffold.slug(args.name)!r} already exists at {e}", file=sys.stderr)
@@ -102,8 +130,7 @@ def run_plugin_cli(argv: list[str]) -> int:
             print("  commit/push it, then `plugin install <repo-url>` to install + enable the stack (ADR 0040).")
             return 0
         if args.cmd == "install":
-            s = installer.install(args.url, args.ref, force=args.force,
-                                  allow=installer.configured_allowlist())
+            s = installer.install(args.url, args.ref, force=args.force, allow=installer.configured_allowlist())
             if "bundle" in s:  # a bundle: a set of plugins installed together
                 print(f"✓ installed bundle {s['bundle']}" + (f" — {s['name']}" if s["name"] else ""))
                 if s["description"]:
@@ -114,10 +141,14 @@ def run_plugin_cli(argv: list[str]) -> int:
                     print(f"  · built-in (already ships with protoAgent): {', '.join(s['skipped_builtin'])}")
                 deps = sorted({d for p in s["installed"] for d in p.get("requires_pip", [])})
                 if deps:
-                    print(f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}")
+                    print(
+                        f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}"
+                    )
                 if s["enabled"]:
-                    print(f"  NOT enabled. To turn on the stack, set plugins.enabled to include: "
-                          f"[{', '.join(s['enabled'])}], then restart.")
+                    print(
+                        f"  NOT enabled. To turn on the stack, set plugins.enabled to include: "
+                        f"[{', '.join(s['enabled'])}], then restart."
+                    )
                 if s["config"]:
                     print(f"  recommended config: {s['config']}")
                 return 0
@@ -152,7 +183,9 @@ def run_plugin_cli(argv: list[str]) -> int:
             rep = installer.uninstall(args.id, purge=args.purge)
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
             if rep["deps_left"]:
-                print(f"  declared deps left installed (shared venv — remove manually if unused): {', '.join(rep['deps_left'])}")
+                print(
+                    f"  declared deps left installed (shared venv — remove manually if unused): {', '.join(rep['deps_left'])}"
+                )
             if not args.purge:
                 print("  config + secrets kept (reinstall restores them). Use --purge to remove them too.")
             return 0
@@ -163,8 +196,11 @@ def run_plugin_cli(argv: list[str]) -> int:
             return 0
         if args.cmd == "install-deps":
             deps = installer.install_deps(args.id)
-            print(f"✓ installed {len(deps)} dep(s) for {args.id}: {', '.join(deps)}" if deps
-                  else f"{args.id} declares no deps")
+            print(
+                f"✓ installed {len(deps)} dep(s) for {args.id}: {', '.join(deps)}"
+                if deps
+                else f"{args.id} declares no deps"
+            )
             return 0
     except installer.InstallError as exc:
         print(f"✗ {exc}", file=sys.stderr)

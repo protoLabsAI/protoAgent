@@ -67,8 +67,12 @@ def test_set_goal_reads_session_from_injected_state(monkeypatch, tmp_path):
     monkeypatch.setattr(tracing, "current_session_id", lambda: "")  # contextvar empty
     _register_verifiers(monkeypatch, "spacetraders:credits")
     out = _build_set_goal_tool().invoke(
-        {"condition": "reach 1M", "check": "spacetraders:credits",
-         "check_args": {"min": 1_000_000}, "state": {"session_id": "s-injected"}}
+        {
+            "condition": "reach 1M",
+            "check": "spacetraders:credits",
+            "check_args": {"min": 1_000_000},
+            "state": {"session_id": "s-injected"},
+        }
     )
     assert "Goal set" in out
     assert ctrl.active_goal("s-injected") is not None

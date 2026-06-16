@@ -35,6 +35,7 @@ class _Recorder:
 def recorder(monkeypatch):
     rec = _Recorder()
     import httpx
+
     monkeypatch.setattr(httpx, "post", rec)
     return rec
 
@@ -137,6 +138,7 @@ class TestCancelJob:
 def test_custom_topic_prefix(monkeypatch):
     rec = _Recorder()
     import httpx
+
     monkeypatch.setattr(httpx, "post", rec)
     adapter = WorkstaceanScheduler(
         agent_name="gina-personal",

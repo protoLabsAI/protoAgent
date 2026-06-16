@@ -31,19 +31,17 @@ CHANGELOG = Path(__file__).parent.parent / "CHANGELOG.md"
 # detailed dev notes). It is NOT auto-derived from CHANGELOG.md (that produced verbose,
 # jargon-y entries). Instead: `scaffold` drafts a *concise* entry per new release (bullet
 # titles only) for a human to polish, and `missing_versions` guards against staleness.
-MARKETING_JSON = (
-    Path(__file__).parent.parent / "sites" / "marketing" / "data" / "changelog.json"
-)
+MARKETING_JSON = Path(__file__).parent.parent / "sites" / "marketing" / "data" / "changelog.json"
 
 _UNRELEASED_HEADING = "## [Unreleased]"
 
 
 def _strip_md(s: str) -> str:
     """Markdown → plain text (the marketing page renders plain text); drop ADR refs."""
-    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)            # **bold** → bold
-    s = re.sub(r"`([^`]+)`", r"\1", s)                # `code` → code
-    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)    # [text](url) → text
-    s = re.sub(r"\s*\(ADR[^)]*\)", "", s)             # drop "(ADR 0026)"
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)  # **bold** → bold
+    s = re.sub(r"`([^`]+)`", r"\1", s)  # `code` → code
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)  # [text](url) → text
+    s = re.sub(r"\s*\(ADR[^)]*\)", "", s)  # drop "(ADR 0026)"
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -54,7 +52,7 @@ def _section(text: str, version: str) -> tuple[str | None, str]:
         return None, ""
     start = m.end()
     nxt = re.search(r"^## \[", text[start:], re.MULTILINE)
-    return m.group(1), (text[start: start + nxt.start()] if nxt else text[start:])
+    return m.group(1), (text[start : start + nxt.start()] if nxt else text[start:])
 
 
 def _titles(body: str) -> list[str]:
@@ -92,7 +90,8 @@ def missing_versions() -> list[str]:
         return []
     floor = min(_vtuple(v) for v in have)
     return [
-        f"v{v}" for v in dated_versions(CHANGELOG.read_text(encoding="utf-8"))
+        f"v{v}"
+        for v in dated_versions(CHANGELOG.read_text(encoding="utf-8"))
         if _vtuple(v) >= floor and f"v{v}" not in have
     ]
 
@@ -163,13 +162,17 @@ def main() -> None:
         print(f"changelog: rolled Unreleased → [{args.version}] - {args.date}")
     elif args.cmd == "scaffold":
         added = scaffold(args.version)
-        print(f"changelog: {'scaffolded draft' if added else 'already present'} v{args.version}"
-              f" in {MARKETING_JSON.name} (polish the wording by hand)")
+        print(
+            f"changelog: {'scaffolded draft' if added else 'already present'} v{args.version}"
+            f" in {MARKETING_JSON.name} (polish the wording by hand)"
+        )
     elif args.cmd == "check":
         missing = missing_versions()
         if missing:
-            raise SystemExit(f"changelog.json is missing entries for: {', '.join(missing)} "
-                             f"(run `scripts/changelog.py scaffold <version>` then polish)")
+            raise SystemExit(
+                f"changelog.json is missing entries for: {', '.join(missing)} "
+                f"(run `scripts/changelog.py scaffold <version>` then polish)"
+            )
         print("changelog: marketing changelog.json covers every released version")
 
 

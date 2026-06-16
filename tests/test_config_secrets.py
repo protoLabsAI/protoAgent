@@ -81,12 +81,8 @@ def test_save_secrets_noop_on_empty(monkeypatch, tmp_path: Path) -> None:
 def test_from_yaml_overlays_secrets_file(tmp_path: Path) -> None:
     from graph.config import LangGraphConfig
 
-    (tmp_path / "langgraph-config.yaml").write_text(
-        "model:\n  name: m\n  api_key: \"\"\nauth:\n  token: \"\"\n"
-    )
-    (tmp_path / "secrets.yaml").write_text(
-        "model:\n  api_key: sk-from-overlay\nauth:\n  token: bearer-overlay\n"
-    )
+    (tmp_path / "langgraph-config.yaml").write_text('model:\n  name: m\n  api_key: ""\nauth:\n  token: ""\n')
+    (tmp_path / "secrets.yaml").write_text("model:\n  api_key: sk-from-overlay\nauth:\n  token: bearer-overlay\n")
 
     cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
     assert cfg.api_key == "sk-from-overlay"
@@ -110,7 +106,7 @@ def test_from_yaml_without_secrets_leaves_blank_for_env_fallback(tmp_path: Path)
     # set_a2a_token fall back to OPENAI_API_KEY / A2A_AUTH_TOKEN.
     from graph.config import LangGraphConfig
 
-    (tmp_path / "langgraph-config.yaml").write_text("model:\n  name: m\n  api_key: \"\"\n")
+    (tmp_path / "langgraph-config.yaml").write_text('model:\n  name: m\n  api_key: ""\n')
     cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
     assert cfg.api_key == ""
 
@@ -156,9 +152,7 @@ def test_secret_paths_falls_back_to_cache_on_discovery_failure(monkeypatch, capl
 
     # 1) a good discovery populates the cache (the plugin secret is recognized).
     monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
-    monkeypatch.setattr(
-        "graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()]
-    )
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()])
     assert pair in config_io.secret_paths()
 
     # 2) discovery now FAILS — the plugin secret must still be recognized (cached),
@@ -166,9 +160,7 @@ def test_secret_paths_falls_back_to_cache_on_discovery_failure(monkeypatch, capl
     def _boom():
         raise RuntimeError("manifest parse blew up")
 
-    monkeypatch.setattr(
-        "graph.plugins.pconfig.installed_plugin_config_schemas", _boom
-    )
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", _boom)
     with caplog.at_level(logging.WARNING, logger="protoagent.config_io"):
         paths = config_io.secret_paths()
     assert pair in paths  # fail-safe: NOT dropped to the base set
@@ -185,9 +177,7 @@ def test_a_plugin_secret_is_stripped_from_the_doc_even_if_rediscovery_fails(monk
         secrets = ["api_key"]
 
     monkeypatch.setattr(config_io, "_PLUGIN_SECRET_PATHS_CACHE", ())
-    monkeypatch.setattr(
-        "graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()]
-    )
+    monkeypatch.setattr("graph.plugins.pconfig.installed_plugin_config_schemas", lambda: [_Schema()])
     config_io.secret_paths()  # prime the cache
 
     monkeypatch.setattr(

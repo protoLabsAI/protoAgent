@@ -37,9 +37,7 @@ def discord_configured() -> bool:
     return bool((_token() or "").strip())
 
 
-async def _request(
-    method: str, path: str, json_body: dict[str, Any] | None = None
-) -> tuple[int, Any]:
+async def _request(method: str, path: str, json_body: dict[str, Any] | None = None) -> tuple[int, Any]:
     token = _token()
     if not token:
         return 0, "Error: DISCORD_BOT_TOKEN env var is not set."
@@ -109,9 +107,7 @@ async def discord_send(channel_id: str, content: str) -> str:
 
     posted: list[str] = []
     for chunk in chunks:
-        status, body = await _request(
-            "POST", f"/channels/{channel_id}/messages", json_body={"content": chunk}
-        )
+        status, body = await _request("POST", f"/channels/{channel_id}/messages", json_body={"content": chunk})
         if status not in (200, 201):
             return f"Error: HTTP {status}: {body}"
         if isinstance(body, dict) and body.get("id"):
@@ -161,9 +157,7 @@ async def discord_react(channel_id: str, message_id: str, emoji: str) -> str:
     from urllib.parse import quote
 
     encoded = quote(emoji)
-    status, body = await _request(
-        "PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
-    )
+    status, body = await _request("PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me")
     if status not in (200, 201, 204):
         return f"Error: HTTP {status}: {body}"
     return f"OK: reacted with {emoji}."

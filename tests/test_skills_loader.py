@@ -30,7 +30,8 @@ def _write_skill(root: Path, slug: str, frontmatter: str, body: str = "do the th
 
 def test_parse_valid_skill(tmp_path: Path) -> None:
     p = _write_skill(
-        tmp_path, "web-research",
+        tmp_path,
+        "web-research",
         "name: web-research\ndescription: Use when researching on the web.\ntools: [web_search, fetch_url]",
         "# Web Research\nPlan, search, read, cite.",
     )
@@ -72,7 +73,8 @@ def test_parse_truncates_oversized_description(tmp_path: Path) -> None:
 
 def test_metadata_tools_fallback(tmp_path: Path) -> None:
     p = _write_skill(
-        tmp_path, "meta",
+        tmp_path,
+        "meta",
         "name: meta\ndescription: d\nmetadata:\n  tools: [a, b]",
     )
     art = parse_skill_md(p)
@@ -92,7 +94,8 @@ def test_live_overrides_bundle_by_name(tmp_path: Path) -> None:
 def test_seed_and_retrieve_round_trip(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     _write_skill(
-        root, "web-research",
+        root,
+        "web-research",
         "name: web-research\ndescription: Research a topic on the web and cite sources.",
         "Plan, search, read, synthesize, cite.",
     )
@@ -124,7 +127,8 @@ def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
 
     root = tmp_path / "skills"
     _write_skill(
-        root, "web-research",
+        root,
+        "web-research",
         "name: web-research\ndescription: Research a topic on the web and cite sources.",
         "Plan, search, read, synthesize, cite.",
     )
@@ -146,9 +150,9 @@ def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
 def test_parse_user_facing_and_slash(tmp_path: Path) -> None:
     """`user_facing: true` + `slash:` are parsed onto the artifact (ADR 0052)."""
     p = _write_skill(
-        tmp_path, "web-research",
-        "name: web-research\ndescription: Research on the web.\n"
-        "user_facing: true\nslash: research",
+        tmp_path,
+        "web-research",
+        "name: web-research\ndescription: Research on the web.\nuser_facing: true\nslash: research",
         "Plan, search, cite.",
     )
     art = parse_skill_md(p)
@@ -165,7 +169,8 @@ def test_user_facing_defaults_off_and_slug_fallback(tmp_path: Path) -> None:
     assert art is not None and art.user_facing is False
 
     uf = _write_skill(
-        tmp_path, "Big Task",
+        tmp_path,
+        "Big Task",
         "name: Big Task\ndescription: A user-facing skill.\nuser_facing: yes",
         "do it",
     )

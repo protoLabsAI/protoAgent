@@ -92,12 +92,14 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
     import json
     from langgraph.types import interrupt
 
-    response = interrupt({
-        "kind": "form",
-        "title": title,
-        "description": description,
-        "steps": steps,
-    })
+    response = interrupt(
+        {
+            "kind": "form",
+            "title": title,
+            "description": description,
+            "steps": steps,
+        }
+    )
     # The resume value is the submitted form object; return it as JSON so the
     # model reads structured fields. (A plain string resume is passed through.)
     return response if isinstance(response, str) else json.dumps(response)
@@ -152,10 +154,7 @@ async def current_time(timezone: str = "UTC") -> str:
         return f"Error: unknown timezone {timezone!r}. Use an IANA name like 'UTC' or 'America/New_York'."
 
     now = datetime.now(tz)
-    return (
-        f"{now.isoformat()} ({timezone})\n"
-        f"Human: {now.strftime('%A, %B %d %Y, %H:%M:%S %Z')}"
-    )
+    return f"{now.isoformat()} ({timezone})\nHuman: {now.strftime('%A, %B %d %Y, %H:%M:%S %Z')}"
 
 
 # ── calculator ───────────────────────────────────────────────────────────────
@@ -246,10 +245,7 @@ async def web_search(query: str, max_results: int = 5) -> str:
     try:
         from ddgs import DDGS
     except ImportError:
-        return (
-            "Error: the 'ddgs' package is not installed. Add `ddgs>=9.0` to "
-            "requirements.txt and rebuild the image."
-        )
+        return "Error: the 'ddgs' package is not installed. Add `ddgs>=9.0` to requirements.txt and rebuild the image."
 
     try:
         with DDGS() as ddgs:
@@ -275,7 +271,7 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 
 _MAX_FETCH_BYTES = 2_000_000  # 2MB — enough for most articles, caps blast radius
-_MAX_OUTPUT_CHARS = 8000      # LLM context budget; callers can ask for a shorter limit
+_MAX_OUTPUT_CHARS = 8000  # LLM context budget; callers can ask for a shorter limit
 
 
 @tool
@@ -299,6 +295,7 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     # Egress allowlist (ADR 0008) — deny-by-default when configured; permissive
     # (no-op) otherwise. fetch_url is the model-chosen-host exfil/SSRF vector.
     from security import egress
+
     blocked = egress.check_url(url)
     if blocked:
         return blocked
@@ -313,7 +310,9 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
         # re-checked against egress — otherwise a public URL that 30x-redirects
         # to http://169.254.169.254/ would bypass the SSRF guard above.
         async with httpx.AsyncClient(
-            follow_redirects=False, timeout=15, headers={
+            follow_redirects=False,
+            timeout=15,
+            headers={
                 "User-Agent": "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)",
             },
         ) as client:
@@ -359,6 +358,7 @@ def _extract_text_from_html(content: bytes) -> str:
         from bs4 import BeautifulSoup
     except ImportError:
         import re
+
         raw = content.decode("utf-8", errors="replace")
         # Remove script/style blocks first so their contents don't leak through
         raw = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", raw, flags=re.DOTALL | re.IGNORECASE)
@@ -399,16 +399,22 @@ def set_disabled_tools(names) -> None:
     global _disabled_tools
     _disabled_tools = {str(n).strip() for n in (names or []) if str(n).strip()}
 
+
 # Stable list of scheduler tool names. Exposed as a module-level
 # constant so ``graph/config_io.py::list_available_tools`` can show
 # the wizard the right surface even when the runtime hasn't yet
 # constructed a scheduler instance (e.g. fresh boot before setup is
 # complete). Keep in sync with ``_build_scheduler_tools``.
 SCHEDULER_TOOL_NAMES: tuple[str, ...] = (
-    "schedule_task", "list_schedules", "cancel_schedule",
+    "schedule_task",
+    "list_schedules",
+    "cancel_schedule",
 )
 MEMORY_TOOL_NAMES: tuple[str, ...] = (
-    "memory_ingest", "memory_recall", "memory_list", "memory_stats",
+    "memory_ingest",
+    "memory_recall",
+    "memory_list",
+    "memory_stats",
 )
 INBOX_TOOL_NAMES: tuple[str, ...] = ("check_inbox",)
 
@@ -476,9 +482,7 @@ def _build_memory_tools(knowledge_store) -> list:
         # add_chunk embeds over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        chunk_id = await asyncio.to_thread(
-            knowledge_store.add_chunk, content, domain=domain, heading=heading
-        )
+        chunk_id = await asyncio.to_thread(knowledge_store.add_chunk, content, domain=domain, heading=heading)
         if chunk_id is None:
             return "Error: failed to store chunk (knowledge store unavailable)."
         return f"Stored chunk {chunk_id} in {domain!r}."
@@ -683,8 +687,7 @@ def _build_scheduler_tools(scheduler) -> list:
         return f"Canceled {job_id}." if ok else f"Error: cancel failed or no such job {job_id}."
 
     @tool
-    async def wait(seconds: int, then: str,
-                   state: Annotated[Any, InjectedState] = None) -> str:
+    async def wait(seconds: int, then: str, state: Annotated[Any, InjectedState] = None) -> str:
         """Pause and resume LATER instead of polling. Use this whenever you are
         waiting for something to finish — a ship to arrive, a build/deploy, a
         cooldown, a countdown a status tool reported ("arriving in 37s"). Do NOT
@@ -728,10 +731,7 @@ def _build_scheduler_tools(scheduler) -> list:
             job = await asyncio.to_thread(scheduler.add_job, then, when, context_id=ctx)
         except Exception as exc:  # noqa: BLE001
             return f"Error: couldn't schedule the wake-up: {exc}"
-        return (
-            f"Yielding for {secs}s — turn ending now. You'll be re-invoked at "
-            f"{job.next_fire or when} to: {then}"
-        )
+        return f"Yielding for {secs}s — turn ending now. You'll be re-invoked at {job.next_fire or when} to: {then}"
 
     return [schedule_task, list_schedules, cancel_schedule, wait]
 
@@ -761,15 +761,16 @@ def _build_beads_tools(beads_store) -> list:
         items = beads_store.list(include_closed=include_closed)
         if not items:
             return "No issues on the board."
-        return "\n".join(
-            f"[{i['status']}] {i['id']} (p{i['priority']}, {i['issue_type']}) {i['title']}"
-            for i in items
-        )
+        return "\n".join(f"[{i['status']}] {i['id']} (p{i['priority']}, {i['issue_type']}) {i['title']}" for i in items)
 
     @tool
     def beads_update(
-        issue_id: str, status: str = "", title: str = "",
-        description: str = "", priority: int = -1, issue_type: str = "",
+        issue_id: str,
+        status: str = "",
+        title: str = "",
+        description: str = "",
+        priority: int = -1,
+        issue_type: str = "",
     ) -> str:
         """Update an issue. ``status`` is open|in_progress|blocked|deferred|closed.
         Leave a field empty (``priority`` -1) to keep it unchanged."""
@@ -827,9 +828,13 @@ def _build_set_goal_tool():
     tool hardcodes ``type="plugin"`` and routes through ``set_goal_safe``."""
 
     @tool
-    def set_goal(condition: str, check: str, check_args: dict | None = None,
-                 max_iterations: int | None = None,
-                 state: Annotated[Any, InjectedState] = None) -> str:
+    def set_goal(
+        condition: str,
+        check: str,
+        check_args: dict | None = None,
+        max_iterations: int | None = None,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Set a standing goal for THIS session, ground-truthed by a plugin verifier.
 
         You'll be re-invoked toward `condition` until the plugin verifier named by
@@ -839,6 +844,7 @@ def _build_set_goal_tool():
         Returns the goal status, or an error if goal mode is off / `check` is unknown.
         """
         from runtime.state import STATE
+
         if STATE.goal_controller is None:
             return "Goal mode is not enabled."
         session_id = _session_id_from(state)  # injected graph state, not the contextvar
@@ -848,13 +854,17 @@ def _build_set_goal_tool():
         # never pass — it just spins to the iteration cap, flagged 'unachievable'
         # (the live failure mode). List the registered ones so the agent can choose.
         from graph.goals.verifiers import plugin_verifier_names
+
         known = plugin_verifier_names()
         if check not in known:
             avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
             return f"Error: unknown plugin verifier {check!r}. Available verifiers: {avail}."
         verifier = {"type": "plugin", "check": check, "args": check_args or {}}
         _ok, msg = STATE.goal_controller.set_goal_safe(
-            session_id, condition, verifier, max_iterations,
+            session_id,
+            condition,
+            verifier,
+            max_iterations,
         )
         return msg
 
@@ -901,10 +911,13 @@ def _build_curation_tools():
                 )
                 by_model = s.get("by_model") or []
                 if by_model:
-                    out.append("By model: " + "; ".join(
-                        f"{m.get('model') or '?'} ×{m.get('turns', 0)} (${m.get('cost_usd', 0.0):.4f})"
-                        for m in by_model[:8]
-                    ))
+                    out.append(
+                        "By model: "
+                        + "; ".join(
+                            f"{m.get('model') or '?'} ×{m.get('turns', 0)} (${m.get('cost_usd', 0.0):.4f})"
+                            for m in by_model[:8]
+                        )
+                    )
             except Exception as exc:  # noqa: BLE001
                 out.append(f"(telemetry rollup unavailable: {exc})")
 
@@ -920,8 +933,9 @@ def _build_curation_tools():
                     tag = "/".join(p for p in (r.get("origin"), r.get("trigger")) if p)
                     out.append(f"- [{r.get('created_at', '')[:19]}] ({tag or 'operator'}) {text}")
         if not out:
-            return ("No activity or telemetry is available yet — nothing to consolidate or "
-                    "distill. Report this and stop.")
+            return (
+                "No activity or telemetry is available yet — nothing to consolidate or distill. Report this and stop."
+            )
         return "\n".join(out)
 
     @tool
@@ -950,8 +964,13 @@ def _build_curation_tools():
         return "\n".join(lines)
 
     @tool
-    def save_skill(name: str, description: str, body: str, tools: list[str] | None = None,
-                   state: Annotated[Any, InjectedState] = None) -> str:
+    def save_skill(
+        name: str,
+        description: str,
+        body: str,
+        tools: list[str] | None = None,
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Create a NEW reusable skill (a procedure/playbook the agent will be
         offered for matching tasks). ADDITIVE-ONLY — refuses if a skill with that
         name already exists (it never overwrites; to revise an existing skill,
@@ -975,9 +994,11 @@ def _build_curation_tools():
             return "Error: a one-line description is required (it's how the skill is matched)."
         existing = {(s.get("name") or "").strip().lower() for s in idx.all_skills()}
         if name.lower() in existing:
-            return (f"A skill named {name!r} already exists — refusing to overwrite "
-                    "(additive-only). Pick a distinct name, or propose extending the "
-                    "existing one for review instead of auto-creating.")
+            return (
+                f"A skill named {name!r} already exists — refusing to overwrite "
+                "(additive-only). Pick a distinct name, or propose extending the "
+                "existing one for review instead of auto-creating."
+            )
         from graph.extensions.skills import SkillV1Artifact
 
         try:
@@ -991,14 +1012,15 @@ def _build_curation_tools():
         except (ValueError, TypeError) as exc:
             return f"Error building skill: {exc}"
         idx.add_skill(art, source="distilled")
-        return (f"Created skill {name!r} (source=distilled, confidence 1.0). It'll be "
-                "retrieval-injected for matching tasks and curator-managed.")
+        return (
+            f"Created skill {name!r} (source=distilled, confidence 1.0). It'll be "
+            "retrieval-injected for matching tasks and curator-managed."
+        )
 
     return [recent_activity, list_skills, save_skill]
 
 
-def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
-                  beads_store=None, goal_enabled=False):
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None, goal_enabled=False):
     """Return every LangChain tool the lead agent + subagents can use.
 
     Optional dependencies:
@@ -1016,8 +1038,7 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None,
     # LangGraph interrupt that only the lead turn's runner resumes. Subagents
     # (run outside that runner) must not get it, so it's gated by allowlist:
     # present in the full set for the lead agent, absent from subagent allowlists.
-    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input,
-             show_component]
+    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, show_component]
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):
@@ -1058,11 +1079,21 @@ SEARCH_TOOLS_NAME = "search_tools"
 # Tools always exposed to the model when deferral is on. The keyless core +
 # delegation/workflow tools + the search meta-tool itself — enough to operate
 # and to *discover* the rest. Everything else is deferred until searched.
-DEFERRED_BASE_TOOL_NAMES = frozenset({
-    "current_time", "calculator", "web_search", "fetch_url", "ask_human", "request_user_input",
-    "task", "task_batch", "run_workflow", "save_workflow",
-    SEARCH_TOOLS_NAME,
-})
+DEFERRED_BASE_TOOL_NAMES = frozenset(
+    {
+        "current_time",
+        "calculator",
+        "web_search",
+        "fetch_url",
+        "ask_human",
+        "request_user_input",
+        "task",
+        "task_batch",
+        "run_workflow",
+        "save_workflow",
+        SEARCH_TOOLS_NAME,
+    }
+)
 
 
 def resolve_deferred_keep(configured_keep) -> set[str]:
@@ -1090,11 +1121,7 @@ def build_search_tools_tool(all_tools, keep_names):
     binds the matched tools on subsequent turns (progressive disclosure).
     """
     keep = set(keep_names)
-    catalog = [
-        (t.name, _tool_summary(t))
-        for t in all_tools
-        if getattr(t, "name", None) and t.name not in keep
-    ]
+    catalog = [(t.name, _tool_summary(t)) for t in all_tools if getattr(t, "name", None) and t.name not in keep]
 
     def _render(pairs, header) -> str:
         lines = [header]
