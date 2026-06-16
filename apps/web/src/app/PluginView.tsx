@@ -205,12 +205,17 @@ export function PluginView({ view }: { view: PluginViewType }) {
                 a 404 fires onLoad (not onError), so an unprobed iframe would render the
                 server's raw 404 body as a blank "view". */}
             {reachable ? (
+              // sandbox: allow-popups (+ -to-escape-sandbox) so links / window.open inside
+              // a plugin open as normal un-sandboxed pages instead of being blocked.
+              // allow: clipboard via Permissions-Policy (no sandbox token exists for it) so
+              // copy/paste works in plugin UIs.
               <iframe
                 ref={frameRef}
                 className="plugin-view-frame"
                 src={apiUrl(src)}
                 title={view.label}
-                sandbox="allow-scripts allow-forms allow-same-origin"
+                sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                allow="clipboard-read; clipboard-write"
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
                 style={{ visibility: loaded ? "visible" : "hidden" }}
