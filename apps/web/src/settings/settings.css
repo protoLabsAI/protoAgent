@@ -178,6 +178,14 @@
   gap: 8px;
   margin: 5px 0 0;
 }
+/* "Saving overrides the Global default for this agent" — shown when a still-inherited
+   box-shared field is edited in the Workspace view (PR4). */
+.setting-override-note {
+  margin: 4px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--warning);
+}
 .setting-control { min-width: 0; }
 .setting-input {
   width: 100%;

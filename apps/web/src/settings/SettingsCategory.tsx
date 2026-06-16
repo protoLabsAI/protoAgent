@@ -12,7 +12,7 @@ import type { ReactNode } from "react";
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
-import { api } from "../lib/api";
+import { agentHref, api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -28,13 +28,12 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
   );
 }
 
-// Host / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
-// categories, editable, saving to the host layer. Surfaced as its own Settings tab.
-// TODO(ADR 0047 §7): gate to the host console (slug=host); for now it renders for any
-// focused agent, clearly labeled "box-shared", so the slice isn't blocked on gating.
+// Global / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
+// categories, editable, saving to the host layer. Gated to the host console at the
+// call site (SettingsSurface): a workspace console renders <HostConfigLocked/> instead.
 export function HostDefaultsPanel({
   categories = ["Agent", "System"],
-  title = "Host defaults",
+  title = "Configuration",
 }: {
   categories?: string[];
   title?: string;
@@ -44,7 +43,7 @@ export function HostDefaultsPanel({
   // section). Previously this mapped one full SettingsCategory PER category, which
   // stacked duplicate panels each with its own scroll/Save/explainer.
   return (
-    <StagePanel label="host defaults" className="settings-panel">
+    <StagePanel label="configuration" className="settings-panel">
       <SettingsCategory
         category={categories[0]}
         categories={categories}
@@ -53,6 +52,27 @@ export function HostDefaultsPanel({
         hostLayer
       />
     </StagePanel>
+  );
+}
+
+// Workspace-console view of Global ▸ Configuration (ADR 0047 §7.7): the box-shared
+// defaults are editable only on the host console, so a workspace console gets a
+// read-only pointer. Per-agent overrides still happen under Workspace ▸ Settings.
+export function HostConfigLocked() {
+  return (
+    <section className="panel stage-panel settings-panel">
+      <PanelHeader title="Configuration" kicker="box-shared Global defaults" />
+      <div className="stage-body">
+        <Alert status="info" className="settings-banner">
+          These are the box-shared <strong>Global</strong> defaults — edited on the
+          <strong> host console</strong>. This workspace inherits them; to change a value
+          just for this agent, override it under <strong>Workspace ▸ Settings</strong>.
+        </Alert>
+        <Button variant="primary" type="button" onClick={() => { window.location.href = agentHref("host"); }}>
+          Open host console
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -242,12 +262,9 @@ export function SettingsCategory({
       <div className="stage-body">
         {hostLayer ? (
           <Alert status="info" className="settings-banner">
-            <strong>Host / box-shared defaults</strong> (ADR 0047) — edits here write to the
+            <strong>Global · box-shared defaults</strong> (ADR 0047) — edits here write to the
             box's <code>host-config.yaml</code> and become the inherited default for every agent
             on this box that hasn't set its own value. Per-agent overrides win.
-            {/* TODO(ADR 0047 §7): gate this view to the host console (slug=host). For now it
-                renders for any focused agent — clearly labeled as box-shared — so the slice
-                isn't blocked on host-console gating. */}
           </Alert>
         ) : null}
         {acpAgent ? (
@@ -352,7 +369,7 @@ export function SettingsCategory({
 //   source=="agent" && scope=="host"  → overridden here (offer reset-to-inherited)
 //   source=="agent" && scope=="agent" → a plain agent setting (no badge)
 function inheritance(field: SettingsField): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
-  if (field.source === "host") return { label: "inherited from Host", status: "neutral", overridden: false };
+  if (field.source === "host") return { label: "inherited from Global", status: "neutral", overridden: false };
   if (field.source === "default") return { label: "inherited from default", status: "neutral", overridden: false };
   if (field.source === "agent" && field.scope === "host") return { label: "overridden here", status: "warning", overridden: true };
   return null; // source=="agent" && scope=="agent" — just an agent setting.
@@ -398,6 +415,11 @@ function SettingRow({
               </Button>
             ) : null}
           </p>
+        ) : null}
+        {/* Editing a still-inherited box-shared field in the Workspace view writes a
+            per-agent leaf override (not the box default) — make that effect explicit. */}
+        {showInheritance && dirty && field.scope === "host" && field.source !== "agent" ? (
+          <p className="setting-override-note">Saving overrides the Global default for this agent only.</p>
         ) : null}
       </div>
       <div className="setting-control">

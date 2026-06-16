@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
+import { Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Palette, Plug, Puzzle, Settings2, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -9,40 +9,38 @@ import { McpPanel } from "../app/McpPanel";
 import { MiddlewarePanel } from "../app/MiddlewarePanel";
 import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
+import { isHostConsole } from "../lib/api";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { useUI, type SettingsScope } from "../state/uiStore";
-import { TelemetrySurface } from "../telemetry/TelemetrySurface";
-import { CommonsPanel } from "./CommonsPanel";
 import { DelegatesSection } from "./DelegatesSection";
-import { FleetSurface } from "./FleetSurface";
 import { OverviewPanel } from "./OverviewPanel";
-import { HostDefaultsPanel, SettingsCategoryPanel } from "./SettingsCategory";
+import { HostConfigLocked, HostDefaultsPanel, SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
-// Settings IA (ADR 0048) — scope is the primary axis. TWO homes, each with its own
-// section sub-nav, replacing the old flat category tabs:
+// Settings IA (ADR 0048 + PR4) — scope is the primary axis. TWO homes, each with its
+// own section sub-nav:
 //
-//   🖥 Global       — box-shared, reachable from any workspace (set once, every agent
-//                     inherits; per-agent overrides win, ADR 0047).
+//   🖥 Global       — the box-shared cascade ONLY (ADR 0047): Overview + Configuration
+//                     (the host-scoped fields). Editable on the host console; a
+//                     workspace console sees them read-only. Set once, every agent
+//                     inherits; per-agent overrides win.
 //   🧩 Workspace    — the focused agent: everything that defines it.
 //
-// S-A builds the Host/App home in full and a transitional Workspace home (today's
-// agent-scoped central settings). S-B folds the agent makeup (Identity/Tools/MCP/
-// Subagents/Skills/Middleware + Model/Behavior) into Workspace; S-C removes the
-// standalone Agent rail surface + the old category tabs.
+// Box-level *tools* that aren't cascade settings — Fleet, Telemetry, Commons — moved
+// OUT of Global to the dedicated Box rail surface (src/app/BoxSurface.tsx, PR4).
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
 type Home = { id: SettingsScope; label: string; icon: LucideIcon; sections: Section[] };
 
+// Global = the box-shared cascade ONLY (ADR 0047): Overview + the host-scoped fields.
+// Fleet / Telemetry / Commons were box-level *tools*, not cascade settings — moved out
+// to the Box rail surface (PR4). Host config is gated to the host console; a workspace
+// console sees a read-only pointer instead (ADR 0047 §7.7).
 const HOST_SECTIONS: Section[] = [
   { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
   // The host-scoped FIELDS (model gateway · routing · caching · org + the commons
   // location) in ONE panel, saving to the box's host-config.yaml (ADR 0047).
-  { id: "config", label: "Host config", icon: HardDrive, render: () => <HostDefaultsPanel title="Host configuration" /> },
-  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-  // The box-shared skill commons (ADR 0041): browse it, promote from a workspace.
-  { id: "commons", label: "Commons", icon: Library, render: () => <CommonsPanel /> },
+  { id: "config", label: "Configuration", icon: HardDrive, render: () => (isHostConsole() ? <HostDefaultsPanel title="Configuration" /> : <HostConfigLocked />) },
 ];
 
 // The Workspace home (ADR 0048 §3.2) — the focused agent, everything that defines it:
