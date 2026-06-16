@@ -5,6 +5,7 @@ import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 
 import { StatusPill } from "../app/StatusPill";
+import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -89,9 +90,7 @@ export function DelegatesSection() {
         <p className="setting-desc">
           Enable the <code>delegates</code> plugin (<code>plugins: {"{ enabled: [delegates] }"}</code>) to
           manage the agents and endpoints this agent can talk to.{" "}
-          <a className="settings-help-link" href={DELEGATES_GUIDE_URL} target="_blank" rel="noreferrer">
-            Guide
-          </a>
+          <HelpLink href={DELEGATES_GUIDE_URL}>Guide</HelpLink>
         </p>
       </section>
     );
