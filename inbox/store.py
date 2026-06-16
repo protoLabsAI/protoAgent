@@ -149,6 +149,24 @@ class InboxStore:
     def pending_count(self, *, priority_floor: str = "next") -> int:
         return len(self.list(priority_floor=priority_floor, limit=1000))
 
+    def prune(self, keep_days: int = 90, *, now: datetime | None = None) -> int:
+        """Delete delivered items older than ``keep_days``. Pending items
+        (undelivered) are never pruned. Returns rows removed. 0 = keep forever."""
+        if keep_days == 0:
+            return 0
+        now = now or datetime.now(UTC)
+        cutoff = (now - timedelta(days=keep_days)).isoformat()
+        db = self._connect()
+        try:
+            cur = db.execute(
+                "DELETE FROM inbox WHERE delivered_at IS NOT NULL AND created_at < ?",
+                (cutoff,),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
 
 class StormGuard:
     """Anti-storm rate limiter for the now→fire path.

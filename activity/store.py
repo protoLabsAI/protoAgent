@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -88,6 +88,26 @@ class ActivityLog:
         except sqlite3.DatabaseError:
             log.exception("[activity] add failed")
             return None
+        finally:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def prune(self, keep_days: int = 90, *, now: datetime | None = None) -> int:
+        """Delete entries older than ``keep_days``. 0 = keep forever. Returns rows removed."""
+        if keep_days == 0:
+            return 0
+        now = now or datetime.now(UTC)
+        cutoff = (now - timedelta(days=keep_days)).isoformat()
+        try:
+            db = self._connect()
+            cur = db.execute("DELETE FROM activity WHERE created_at < ?", (cutoff,))
+            db.commit()
+            return cur.rowcount
+        except sqlite3.DatabaseError:
+            log.exception("[activity] prune failed")
+            return 0
         finally:
             try:
                 db.close()

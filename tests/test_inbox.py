@@ -81,6 +81,51 @@ def test_add_rejects_empty_and_bad_priority(tmp_path):
         s.add("hi", priority="urgent")
 
 
+# ── InboxStore.prune ─────────────────────────────────────────────────────────
+
+
+def test_prune_inbox_removes_old_delivered_only(tmp_path):
+    """Only delivered items older than keep_days are removed; pending items
+    (undelivered) survive regardless of age."""
+    s = _store(tmp_path)
+    old = datetime(2024, 1, 1, tzinfo=UTC)
+    now = datetime(2024, 3, 1, tzinfo=UTC)
+    # Old delivered item — should be pruned.
+    item_old = s.add("old delivered", priority="next", now=old)
+    s.mark_delivered([item_old["id"]], now=old)
+    # Old pending item — should survive (never prune pending).
+    s.add("old pending", priority="next", now=old)
+    removed = s.prune(keep_days=30, now=now)
+    assert removed == 1
+    remaining = s.list(priority_floor="later", include_delivered=True)
+    assert len(remaining) == 1
+    assert remaining[0]["text"] == "old pending"
+
+
+def test_prune_inbox_keeps_recent_delivered(tmp_path):
+    """A recently delivered item within keep_days survives pruning."""
+    s = _store(tmp_path)
+    now = datetime(2024, 3, 1, tzinfo=UTC)
+    recent = now - timedelta(days=10)
+    item = s.add("recent delivered", priority="next", now=recent)
+    s.mark_delivered([item["id"]], now=recent)
+    removed = s.prune(keep_days=30, now=now)
+    assert removed == 0
+    remaining = s.list(priority_floor="later", include_delivered=True)
+    assert len(remaining) == 1
+
+
+def test_prune_inbox_keep_all_zero(tmp_path):
+    """keep_days=0 means keep forever — no rows are removed."""
+    s = _store(tmp_path)
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    item = s.add("ancient", priority="next", now=old)
+    s.mark_delivered([item["id"]], now=old)
+    removed = s.prune(keep_days=0, now=datetime(2026, 1, 1, tzinfo=UTC))
+    assert removed == 0
+    assert len(s.list(priority_floor="later", include_delivered=True)) == 1
+
+
 # ── StormGuard ───────────────────────────────────────────────────────────────
 
 

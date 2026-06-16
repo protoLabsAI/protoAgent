@@ -678,6 +678,27 @@ async def _checkpoint_prune_loop() -> None:
                     log.info("[telemetry-prune] removed %d turn(s) older than %dd", removed, keep_days)
             except Exception:
                 log.exception("[telemetry-prune] sweep failed")
+        # Inbox retention — delete delivered items older than the configured window
+        # so the inbox DB can't grow unbounded. Pending (undelivered) items are never
+        # pruned. 0 = keep all.
+        inbox_keep = getattr(cfg, "inbox_retention_days", 0) if cfg else 0
+        if STATE.inbox_store is not None and inbox_keep > 0:
+            try:
+                removed = await asyncio.to_thread(STATE.inbox_store.prune, inbox_keep)
+                if removed:
+                    log.info("[inbox-prune] removed %d delivered item(s) older than %dd", removed, inbox_keep)
+            except Exception:
+                log.exception("[inbox-prune] sweep failed")
+        # Activity retention — delete feed entries older than the configured window
+        # so the activity DB can't grow unbounded. 0 = keep all.
+        activity_keep = getattr(cfg, "activity_retention_days", 0) if cfg else 0
+        if STATE.activity_log is not None and activity_keep > 0:
+            try:
+                removed = await asyncio.to_thread(STATE.activity_log.prune, activity_keep)
+                if removed:
+                    log.info("[activity-prune] removed %d entry(ies) older than %dd", removed, activity_keep)
+            except Exception:
+                log.exception("[activity-prune] sweep failed")
         # A2A task TTL sweep (24h) — used to run only at boot, so an always-on
         # agent accumulated task rows forever between restarts. The store is
         # async (aiosqlite engine on this same loop), so it's awaited directly
