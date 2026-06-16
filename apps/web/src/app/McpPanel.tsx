@@ -1,14 +1,15 @@
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { QueryErrorResetBoundary, useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense, useState } from "react";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
+import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 
 // Agent → MCP: external Model Context Protocol servers whose tools are wired into
 // the agent (namespaced <server>__<tool>). Add/remove here hot-reloads — the new
@@ -40,12 +41,12 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
     mutationFn: () =>
       api.addMcpServer(transport === "stdio" ? { name, transport, command, args } : { name, transport, url }),
     onSuccess: (res) => onSuccess(`Connected ${res.name} — its tools are live.`),
-    onError: (err: unknown) => onDone(`Couldn't add server: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err: unknown) => onDone(`Couldn't add server: ${errMsg(err)}`),
   });
   const importJson = useMutation({
     mutationFn: () => api.importMcpServers(json),
     onSuccess: (res) => onSuccess(`Imported ${res.added.length} server${res.added.length === 1 ? "" : "s"}: ${res.added.join(", ")}.`),
-    onError: (err: unknown) => onDone(`Import failed: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err: unknown) => onDone(`Import failed: ${errMsg(err)}`),
   });
 
   const formValid = name.trim() && (transport === "stdio" ? command.trim() : url.trim());
@@ -132,7 +133,7 @@ function McpBody() {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
       setHint(`Removed ${n}.`);
     },
-    onError: (err: unknown, n) => setHint(`Couldn't remove ${n}: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err: unknown, n) => setHint(`Couldn't remove ${n}: ${errMsg(err)}`),
   });
   const removingName = remove.isPending ? remove.variables : undefined;
 
@@ -177,16 +178,8 @@ function McpBody() {
 
 export function McpPanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="MCP" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading MCP…" />}>
-              <McpBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="MCP">
+      <McpBody />
+    </StagePanel>
   );
 }

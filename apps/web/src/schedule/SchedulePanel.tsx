@@ -3,17 +3,17 @@ import "./schedule.css";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
-  QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
 import {
   buildOnce,
@@ -212,7 +212,7 @@ function ScheduleBody() {
       />
 
       <div className="stage-body">
-        {add.isError ? <p className="settings-status">Couldn't schedule: {add.error instanceof Error ? add.error.message : String(add.error)}</p> : null}
+        {add.isError ? <p className="settings-status">Couldn't schedule: {errMsg(add.error)}</p> : null}
         <div className="subagent-list">
           {jobs.length ? (
             jobs.map((job) => (
@@ -250,16 +250,8 @@ function ScheduleBody() {
 
 export function SchedulePanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="schedule" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading schedule…" />}>
-              <ScheduleBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="schedule">
+      <ScheduleBody />
+    </StagePanel>
   );
 }

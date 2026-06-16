@@ -1,9 +1,8 @@
-import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense } from "react";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
+import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 
 // Agent → Middleware: the graph middleware wired into each turn (knowledge,
@@ -33,16 +32,8 @@ function MiddlewareBody() {
 
 export function MiddlewarePanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="middleware" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading middleware…" />}>
-              <MiddlewareBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="middleware">
+      <MiddlewareBody />
+    </StagePanel>
   );
 }

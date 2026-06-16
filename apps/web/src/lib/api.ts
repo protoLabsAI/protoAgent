@@ -37,6 +37,7 @@ import type {
 } from "./types";
 
 import { notifyAuthRequired } from "./auth";
+import { errMsg } from "./format";
 
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
@@ -996,7 +997,7 @@ export const api = {
         if (reply) handlers.onText?.(reply, false);
         else handlers.onFailed?.("the turn returned no content");
       } catch (err) {
-        handlers.onFailed?.(err instanceof Error ? err.message : String(err));
+        handlers.onFailed?.(errMsg(err));
       } finally {
         handlers.onDone?.();
       }

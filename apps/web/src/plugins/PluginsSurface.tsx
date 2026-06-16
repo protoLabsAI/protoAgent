@@ -1,14 +1,15 @@
 import "../settings/plugins.css";
 
 import { Button } from "@protolabsai/ui/primitives";
-import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
-import { Suspense, useState } from "react";
+import { useState } from "react";
 import { ExternalLink, Github, Loader2, RefreshCw, Store } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
+import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
 import { PluginsSection } from "../settings/PluginsSection";
 import { PluginFreshness } from "./PluginFreshness";
@@ -110,7 +111,7 @@ function LocalTab() {
           : `${p.name} ${res.enabled ? "enabled" : "disabled"}.`,
       );
     },
-    onError: (err: unknown, p) => setHint(`Couldn't toggle ${p.name}: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err: unknown, p) => setHint(`Couldn't toggle ${p.name}: ${errMsg(err)}`),
   });
   const onToggle = (p: Plugin) => { setHint(null); toggle.mutate(p); };
   const pendingId = toggle.isPending ? toggle.variables?.id : undefined;
@@ -130,7 +131,7 @@ function LocalTab() {
           : `${p.name} updated${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.`,
       );
     },
-    onError: (err: unknown, p) => setHint(`Couldn't update ${p.name}: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err: unknown, p) => setHint(`Couldn't update ${p.name}: ${errMsg(err)}`),
   });
   const onUpdate = (p: Plugin) => { setHint(null); update.mutate(p); };
   const updatingId = update.isPending ? update.variables?.id : undefined;
@@ -221,16 +222,8 @@ const TABS: Record<PluginsTab, () => JSX.Element> = {
 export function PluginsSurface({ tab = "local" }: { tab?: PluginsTab }) {
   const Body = TABS[tab] ?? LocalTab;
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="plugins" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading plugins…" />}>
-              <Body />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="plugins">
+      <Body />
+    </StagePanel>
   );
 }

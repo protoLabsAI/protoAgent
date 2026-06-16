@@ -1,9 +1,8 @@
-import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense } from "react";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { subagentsQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
+import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 
 // Runtime → Subagents: the delegate roster the lead agent can fan work out to,
@@ -38,16 +37,8 @@ function SubagentsBody() {
 
 export function SubagentsPanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="subagents" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading subagents…" />}>
-              <SubagentsBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="subagents">
+      <SubagentsBody />
+    </StagePanel>
   );
 }

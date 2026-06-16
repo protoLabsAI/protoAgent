@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
+import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { onServerEvent } from "../lib/events";
 import type { ActivityEntry } from "../lib/types";
@@ -28,16 +29,6 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
   a2a: { icon: Users, label: "sister-agent" },
   operator: { icon: MessageSquare, label: "you" },
 };
-
-function ago(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
 
 function Badge({ entry }: { entry: ActivityEntry }) {
   const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
@@ -68,7 +59,7 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       const r = await api.activity();
       setEntries(r.entries || []);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -113,7 +104,7 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       // Reply into the Activity thread; the answer returns as a feed entry.
       await api.streamChat(text, ACTIVITY, {});
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setSending(false);
     }

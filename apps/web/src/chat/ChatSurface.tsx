@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
@@ -248,7 +249,7 @@ function ChatSessionSlot({
           ),
         );
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errMsg(e);
         setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
         onError(`Couldn't read ${file.name}: ${msg}`);
       }
@@ -265,7 +266,7 @@ function ChatSessionSlot({
         a.map((x) => (x.id === id ? { ...x, status: "ready", context: r.context, mode: r.mode } : x)),
       );
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errMsg(e);
       setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
       onError(`Couldn't attach ${file.name}: ${msg}`);
     }
@@ -710,7 +711,7 @@ function ChatSessionSlot({
       if (controller.signal.aborted) {
         setStatusMessage("stopped");
       } else {
-        const message = exc instanceof Error ? exc.message : String(exc);
+        const message = errMsg(exc);
         onError(message);
         setStatusMessage(message);
         chatStore.setSessionStatus(session.id, "error");

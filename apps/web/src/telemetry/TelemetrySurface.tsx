@@ -2,7 +2,7 @@ import "../settings/telemetry.css";
 
 import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
 import { Button, Empty } from "@protolabsai/ui/primitives";
-import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 import {
   Activity,
@@ -17,39 +17,18 @@ import {
   RefreshCw,
   Wrench,
 } from "lucide-react";
-import { Suspense } from "react";
 
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
+import { ms, pct, tokens, usd } from "../lib/format";
 import { telemetryQuery } from "../lib/queries";
 
 // Telemetry dashboard (ADR 0006 Slice 3) — reads /api/telemetry/* (the local
 // per-turn rollup store) on the TanStack Query data layer (ADR 0013). Summary
 // cards + a recent-turns table; loading via <Suspense>, errors via
 // <ErrorBoundary>. Functional: real numbers, theme-consistent, no charts yet.
-
-function usd(n: number): string {
-  if (!n) return "$0";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
-}
-
-function tokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function ms(n: number): string {
-  if (!n) return "—";
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`;
-}
-
-function pct(n: number): string {
-  return `${Math.round((n || 0) * 100)}%`;
-}
 
 async function downloadTelemetryCsv() {
   const blob = await api.exportTelemetry();
@@ -196,17 +175,9 @@ function TelemetryBody() {
 
 export function TelemetrySurface() {
   return (
-    <section className="panel stage-panel" data-testid="telemetry-surface">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="telemetry" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading telemetry…" />}>
-              <TelemetryBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="telemetry" testId="telemetry-surface">
+      <TelemetryBody />
+    </StagePanel>
   );
 }
 

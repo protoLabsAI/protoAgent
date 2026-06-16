@@ -3,15 +3,16 @@ import "./settings.css";
 import { Alert } from "@protolabsai/ui/data";
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { QueryErrorResetBoundary, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
-import { Suspense, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
 import { fieldVisible } from "./visibility";
@@ -20,17 +21,9 @@ import { fieldVisible } from "./visibility";
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
 export function SettingsCategoryPanel(props: { category: string; title?: string; emptyHint?: string; footer?: ReactNode }) {
   return (
-    <section className="panel stage-panel settings-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="settings" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading settings…" />}>
-              <SettingsCategory {...props} />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="settings" className="settings-panel">
+      <SettingsCategory {...props} />
+    </StagePanel>
   );
 }
 
@@ -50,23 +43,15 @@ export function HostDefaultsPanel({
   // section). Previously this mapped one full SettingsCategory PER category, which
   // stacked duplicate panels each with its own scroll/Save/explainer.
   return (
-    <section className="panel stage-panel settings-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="host defaults" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading host defaults…" />}>
-              <SettingsCategory
-                category={categories[0]}
-                categories={categories}
-                title={title}
-                emptyHint="No box-shared defaults on this box yet."
-                hostLayer
-              />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="host defaults" className="settings-panel">
+      <SettingsCategory
+        category={categories[0]}
+        categories={categories}
+        title={title}
+        emptyHint="No box-shared defaults on this box yet."
+        hostLayer
+      />
+    </StagePanel>
   );
 }
 
@@ -157,7 +142,7 @@ export function SettingsCategory({
       setDirty({});
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
-    onError: (e) => setStatus(`save failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`save failed: ${errMsg(e)}`),
   });
 
   // ADR 0047 reset-to-inherited — pop one (or more) overridden keys from the agent
@@ -173,7 +158,7 @@ export function SettingsCategory({
       setDirty((d) => { const next = { ...d }; for (const k of keys) delete next[k]; return next; });
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
-    onError: (e) => setStatus(`reset failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`reset failed: ${errMsg(e)}`),
   });
 
   const asStr = (v: unknown) => (typeof v === "string" ? v : "");
@@ -181,7 +166,7 @@ export function SettingsCategory({
     mutationFn: () => api.testModel(asStr(dirty["model.api_base"]), asStr(dirty["model.api_key"]), asStr(dirty["model.name"])),
     onMutate: () => setStatus("testing connection…"),
     onSuccess: (r) => setStatus(r.ok ? "connection OK — the model responded." : `connection failed — ${r.error || "no response"}`),
-    onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`connection test failed: ${errMsg(e)}`),
   });
 
   // Generic per-group "Test connection" (ADR 0029).
@@ -199,7 +184,7 @@ export function SettingsCategory({
     mutationFn: (vars: { endpoint: string; fields: Record<string, unknown> }) => api.testConfig(vars.endpoint, vars.fields),
     onMutate: () => setStatus("testing connection…"),
     onSuccess: (r) => setStatus(r.ok ? `connection OK${r.identity ? ` — ${r.identity}` : ""}` : `connection failed — ${r.error || "no response"}`),
-    onError: (e) => setStatus(`connection test failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`connection test failed: ${errMsg(e)}`),
     onSettled: () => setTestingSection(null),
   });
 
@@ -207,7 +192,7 @@ export function SettingsCategory({
     mutationFn: () => api.testDiscord(asStr(dirty["discord.bot_token"])),
     onMutate: () => setStatus("testing Discord…"),
     onSuccess: (r) => setStatus(r.ok ? `Discord OK — connected as ${r.bot_user || "your bot"}.` : `Discord connection failed — ${r.error || "check the token"}`),
-    onError: (e) => setStatus(`Discord test failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`Discord test failed: ${errMsg(e)}`),
   });
 
   const googleStatus = useQuery({ queryKey: ["google-status"], queryFn: () => api.googleStatus(), enabled: hasGoogle });
@@ -219,7 +204,7 @@ export function SettingsCategory({
       void googleStatus.refetch();
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
     },
-    onError: (e) => setStatus(`Google connect failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`Google connect failed: ${errMsg(e)}`),
   });
   const dirtyGoogleClient = "google.client_id" in dirty || "google.client_secret" in dirty;
 

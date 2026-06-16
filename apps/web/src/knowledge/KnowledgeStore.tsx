@@ -6,6 +6,7 @@ import { Brain, Database, FileUp, Pencil, Plus, RefreshCw, Trash2 } from "lucide
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
@@ -18,17 +19,6 @@ import type { KnowledgeChunk } from "../lib/types";
 // The operator can also CURATE the store here: add a fact, fix a stale chunk,
 // delete a wrong one. Edit replaces the chunk server-side (new id — the new
 // revision is added before the old row is dropped, and a hybrid store re-embeds).
-
-function ago(iso: string | null): string {
-  if (!iso) return "—";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
 
 type Draft = { heading: string; domain: string; content: string };
 const EMPTY_DRAFT: Draft = { heading: "", domain: "general", content: "" };
@@ -120,7 +110,7 @@ function IngestForm({
       setUrl("");
       await onDone();
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setBusy(false);
     }
@@ -228,7 +218,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       setStats(r.stats || {});
       onError("");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -253,7 +243,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       setDraft(EMPTY_DRAFT);
       await run(query);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setSaving(false);
     }
@@ -264,7 +254,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       await api.deleteKnowledgeChunk(id);
       await run(query);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     }
   }
 
