@@ -16,6 +16,7 @@ its engine injects ``run_subagent`` as the per-step runner).
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -98,6 +99,36 @@ async def complete(prompt: str, *, system: str | None = None, model_name: str | 
     resp = await llm.ainvoke(messages)
     content = getattr(resp, "content", resp)
     return content if isinstance(content, str) else str(content)
+
+
+# ── knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge") ──
+# The consumption SDK exposed run_subagent/complete but not the knowledge store, so a
+# plugin couldn't ground its work in (or contribute to) what the agent knows. These
+# two thin accessors close that: the coding loop reads distilled lessons to inject into
+# a coder's prompt; the loop-retro writes recurring failures back as searchable chunks.
+# Both degrade to a no-op ([] / None) when no store is configured, and run the
+# (HTTP-embedding) store call off the event loop.
+
+
+async def knowledge_search(query: str, *, k: int = 5, domain: str | None = None) -> list[dict]:
+    """Search the agent's knowledge graph (hybrid FTS5 + embeddings); return the top-``k``
+    matching chunks (each a dict with ``preview``/``content``, ``domain``, ``score`` …),
+    or ``[]`` when no store is configured. ``domain`` scopes to one bucket
+    (e.g. ``"loop-lessons"``)."""
+    store = getattr(STATE, "knowledge_store", None)
+    if store is None:
+        return []
+    return await asyncio.to_thread(store.search, query, k=k, domain=domain)
+
+
+async def knowledge_add(content: str, *, domain: str = "general", heading: str | None = None) -> int | None:
+    """Add one chunk to the agent's knowledge graph; return its id, or ``None`` when no
+    store is configured / it was a no-op. ``domain`` is the bucket, ``heading`` an
+    optional title — e.g. ``knowledge_add(lesson, domain="loop-lessons", heading=cls)``."""
+    store = getattr(STATE, "knowledge_store", None)
+    if store is None:
+        return None
+    return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading)
 
 
 # ── goal-driven recurring loop (the OODA pattern) ──────────────────────────────────────
