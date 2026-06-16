@@ -9,7 +9,7 @@ import time
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from graph.checkpoint_prune import prune_checkpoints, uuidv6_unix_seconds
+from graph.checkpoint_prune import delete_thread, prune_checkpoints, uuidv6_unix_seconds
 from graph.checkpointer import build_sqlite_checkpointer
 
 
@@ -126,3 +126,72 @@ def test_background_keep_none_falls_back_to_keep_per_thread(tmp_path):
 
     prune_checkpoints(db, keep_per_thread=2, background_keep=None)
     assert _count(db, "checkpoints", "a2a:background:task") == 2  # same as keep_per_thread
+def test_delete_thread_exact_only_without_cascade(tmp_path):
+    """delete_thread(cascade=False) removes only the named thread, not sub-threads."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=2)
+    # Insert synthetic goal-iter sub-thread rows for the same session
+    conn = sqlite3.connect(db)
+    for sub in ("a2a:X:goal-iter-1", "a2a:X:goal-iter-2"):
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1
+
+    n = delete_thread(db, "a2a:X", cascade=False)
+    assert n > 0
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1  # untouched
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1  # untouched
+    assert _count(db, "writes", "a2a:X") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "writes", "a2a:X:goal-iter-2") == 1
+
+
+def test_delete_thread_cascade_removes_subthreads(tmp_path):
+    """delete_thread(cascade=True) removes the thread AND its :goal-iter-N sub-threads."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=2)
+    # Insert synthetic goal-iter sub-thread + unrelated thread rows
+    conn = sqlite3.connect(db)
+    for sub in ("a2a:X:goal-iter-1", "a2a:X:goal-iter-2", "a2a:Y"):
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1
+    assert _count(db, "checkpoints", "a2a:Y") == 1
+
+    n = delete_thread(db, "a2a:X", cascade=True)
+    assert n > 0
+    # Parent + sub-threads gone
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 0
+    assert _count(db, "writes", "a2a:X") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-1") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-2") == 0
+    # Unrelated thread untouched
+    assert _count(db, "checkpoints", "a2a:Y") == 1
+    assert _count(db, "writes", "a2a:Y") == 1

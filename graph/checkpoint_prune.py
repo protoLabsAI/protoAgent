@@ -60,14 +60,31 @@ def find_aged_threads(db_path: str, max_age_seconds: float, *, now: float | None
         conn.close()
 
 
-def delete_thread(db_path: str, thread_id: str) -> int:
-    """Delete all checkpoints + writes for a thread. Returns checkpoints removed."""
+def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
+    """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
+
+    When ``cascade`` is True, also deletes any sub-threads whose id starts with
+    ``thread_id`` followed by ``:goal-iter-`` (goal-mode iteration checkpoints)."""
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
     try:
-        n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
-        conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
-        conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
+        if cascade:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            ).fetchone()[0]
+            conn.execute(
+                "DELETE FROM checkpoints WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            )
+            conn.execute(
+                "DELETE FROM writes WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            )
+        else:
+            n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
+            conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
+            conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
         conn.commit()
         return n
     finally:
