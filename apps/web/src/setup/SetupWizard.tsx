@@ -117,6 +117,21 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
   };
 }
 
+// A probe/test against a possibly-wrong or slow gateway must never hang the wizard —
+// race it against a timeout so `busy` always clears and the step never locks (which
+// would disable Next, trapping the user on the runtime step).
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the API base and key`)),
+        ms,
+      ),
+    ),
+  ]);
+}
+
 export function SetupWizard({
   open,
   projectPath,
@@ -195,7 +210,7 @@ export function SetupWizard({
     setError("");
     if (!silent) setModels([]);
     try {
-      const response = await api.models(state.apiBase, state.apiKey);
+      const response = await withTimeout(api.models(state.apiBase, state.apiKey), 15000, "Probe");
       if (response.error) {
         if (!silent) setError(response.error); // auto-probe stays quiet — the user may still be typing creds
         return;
@@ -234,7 +249,11 @@ export function SetupWizard({
     setError("");
     setTested(null);
     try {
-      const r = await api.testModel(state.apiBase.trim(), state.apiKey.trim(), state.modelName.trim());
+      const r = await withTimeout(
+        api.testModel(state.apiBase.trim(), state.apiKey.trim(), state.modelName.trim()),
+        25000,
+        "Test connection",
+      );
       setTested({ ok: r.ok, error: r.error || "" });
     } catch (exc) {
       setTested({ ok: false, error: errMsg(exc) });

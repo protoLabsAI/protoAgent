@@ -389,6 +389,27 @@ def test_list_gateway_models_empty_base_returns_error():
     assert "api_base" in err
 
 
+def test_list_gateway_models_malformed_url_returns_error_not_raise(monkeypatch):
+    """A malformed api_base makes httpx raise InvalidURL — which is NOT an
+    httpx.HTTPError subclass, so it would propagate as a 500 and lock the setup
+    wizard's runtime step. The probe must catch it and return a clean, fixable error.
+    Regression for the new-user setup-wizard hang."""
+    import httpx
+
+    from graph import config_io
+
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.get.side_effect = httpx.InvalidURL("Invalid port: '4000\\'")
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    # 8.8.8.8 passes the egress guard, so we reach the (mocked) get → InvalidURL path.
+    models, err = config_io.list_gateway_models("http://8.8.8.8:4000/v1", "key")
+    assert models == []
+    assert "invalid api_base" in err and "InvalidURL" in err
+
+
 def test_list_gateway_models_http_error(monkeypatch):
     from graph import config_io
 

@@ -292,12 +292,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (!response.ok) {
+    // Read the body ONCE — calling response.json() then response.text() on the same
+    // response throws "body stream already read" (a second error that masks the real
+    // one). Read text, then best-effort parse a JSON {detail}.
+    const raw = await response.text().catch(() => "");
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail || detail;
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
     } catch {
-      detail = await response.text();
+      detail = raw || detail;
     }
     // Wrong/expired/missing bearer on a token-gated deployment — surface the
     // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.
