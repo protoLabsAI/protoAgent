@@ -52,6 +52,17 @@ describe("migrateUiState", () => {
     expect(out.railOrder.left).not.toContain("schedule");
   });
 
+  // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a
+  // persisted layout that predates it.
+  it("adds the bottom dock to a pre-v6 railOrder", () => {
+    // `box` already present so this isolates the v6 step (the migration is cumulative).
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "box", "settings"], right: ["beads"] },
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] } };
+    expect(out.railOrder.bottom).toEqual([]);
+    expect(out.railOrder.left).toEqual(["chat", "box", "settings"]);
+  });
+
   it("does not mutate the input object", () => {
     const input = { railOf: { chat: "left" }, leftActive: "chat" };
     migrateUiState(input);
@@ -73,8 +84,8 @@ describe("migrateUiState", () => {
 // set would prune every persisted entry and the reload would re-seed by manifest —
 // the layout-wipe bug this contract pins down.)
 describe("reconcilePluginViews", () => {
-  const seed = (left: string[], right: string[]) =>
-    useUI.setState({ railOrder: { left, right } });
+  const seed = (left: string[], right: string[], bottom: string[] = []) =>
+    useUI.setState({ railOrder: { left, right, bottom } });
 
   beforeEach(() => seed(["chat", "plugin:doom:panel"], ["beads", "plugin:board:board", "notes"]));
 
