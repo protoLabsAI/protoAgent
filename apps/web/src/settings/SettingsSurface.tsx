@@ -22,7 +22,7 @@ import { ThemeSurface } from "./ThemeSurface";
 // Settings IA (ADR 0048) — scope is the primary axis. TWO homes, each with its own
 // section sub-nav, replacing the old flat category tabs:
 //
-//   🖥 Host / App   — box-shared, reachable from any workspace (set once, every agent
+//   🖥 Global       — box-shared, reachable from any workspace (set once, every agent
 //                     inherits; per-agent overrides win, ADR 0047).
 //   🧩 Workspace    — the focused agent: everything that defines it.
 //
@@ -78,7 +78,7 @@ const WORKSPACE_SECTIONS: Section[] = [
 ];
 
 export const SETTINGS_HOMES: Home[] = [
-  { id: "host", label: "Host / App", icon: HardDrive, sections: HOST_SECTIONS },
+  { id: "host", label: "Global", icon: HardDrive, sections: HOST_SECTIONS },
   { id: "workspace", label: "Workspace", icon: Boxes, sections: WORKSPACE_SECTIONS },
 ];
 

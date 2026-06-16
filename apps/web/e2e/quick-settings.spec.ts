@@ -10,7 +10,7 @@ test("the topbar gear opens the Settings overlay (the two-home one-stop-shop)", 
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
   // The same two scope homes render inside the overlay (the segmented toggle).
-  await expect(dialog.getByRole("button", { name: "Host / App", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Global", exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
 });
 

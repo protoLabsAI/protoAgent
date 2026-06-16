@@ -730,7 +730,7 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
-              // Fleet now lives under Host / App ▸ Fleet (ADR 0048); ask the panel to
+              // Fleet now lives under Global ▸ Fleet (ADR 0048); ask the panel to
               // open the new-agent picker on mount.
               setSurface("settings");
               setSettingsScope("host");

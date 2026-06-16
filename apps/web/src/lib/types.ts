@@ -2,7 +2,7 @@ export type RuntimeStatus = {
   setup_complete: boolean;
   graph_loaded: boolean;
   /** App version (pyproject [project].version; the frozen desktop sidecar reports
-   *  its bundled version — #894). Surfaced in Settings ▸ Host / App ▸ Overview. */
+   *  its bundled version — #894). Surfaced in Settings ▸ Global ▸ Overview. */
   version?: string;
   project: {
     path: string;

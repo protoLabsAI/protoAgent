@@ -4,7 +4,7 @@ import { useUI } from "../state/uiStore";
 import { FleetManagerPanel } from "./FleetManagerPanel";
 import { NewAgentPanel } from "./NewAgentPanel";
 
-// Host / App ▸ Fleet (ADR 0042 / 0048). The fleet manager + the new-agent picker,
+// Global ▸ Fleet (ADR 0042 / 0048). The fleet manager + the new-agent picker,
 // toggled in place — "+ New agent" opens the picker, which returns to the list on
 // create/cancel. The FleetSwitcher's "+ New agent" deep-link sets a one-shot
 // `fleetStartNew` flag (ADR 0048) so landing here opens the picker straight away.

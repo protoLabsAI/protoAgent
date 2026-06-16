@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 // Settings IA (ADR 0048): scope is the primary axis — TWO homes, each with its own
-// section sub-nav. 🖥 Host / App (box-shared) and 🧩 Workspace (the focused agent).
+// section sub-nav. 🖥 Global (box-shared) and 🧩 Workspace (the focused agent).
 // Each section renders GET /api/settings/schema groups for its category and saves via
 // POST /api/settings (auto-reload). The Agent rail surface still hosts the agent
 // makeup until the S-C collapse.
@@ -34,14 +34,14 @@ async function expandAllGroups(page) {
   }
 }
 
-test("Settings is a two-home shell (Host / App · Workspace)", async ({ page }) => {
+test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
   await openSettings(page);
   // The two scope homes (ADR 0048) — the segmented toggle pinned atop the SideNav.
   expect(await page.locator(".pl-tabs--segmented").locator("button").allTextContents()).toEqual([
-    "Host / App",
+    "Global",
     "Workspace",
   ]);
-  // The Host / App home's sections (the default home) — DS SideNav rail.
+  // The Global home's sections (the default home) — DS SideNav rail.
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Overview",
     "Host config",
@@ -139,7 +139,7 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
 
 test("Host config edits the host-scoped subset and saves to the host layer", async ({ page }) => {
   await openSettings(page);
-  await tab(page, "Host config"); // Host / App is the default home
+  await tab(page, "Host config"); // Global is the default home
   await expect(page.locator(".settings-banner").first()).toContainText("box-shared");
   await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   // Only host-scoped fields appear — model.name (host) is here; the agent-scoped

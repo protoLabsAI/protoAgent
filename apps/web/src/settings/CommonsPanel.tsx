@@ -5,7 +5,7 @@ import { Library, RefreshCw } from "lucide-react";
 
 import { api } from "../lib/api";
 
-// Host / App ▸ Commons (ADR 0041 + 0048) — the box-shared skill library every agent
+// Global ▸ Commons (ADR 0041 + 0048) — the box-shared skill library every agent
 // on this machine reads (commons ∪ private, in layered mode). Read-only here: a
 // skill enters the commons by being PROMOTED from a workspace (Workspace ▸ Skills),
 // which is the curated, explicit "shared brain, private hands" lift. The commons
