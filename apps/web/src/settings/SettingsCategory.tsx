@@ -262,9 +262,10 @@ export function SettingsCategory({
       <div className="stage-body">
         {hostLayer ? (
           <Alert status="info" className="settings-banner">
-            <strong>Global · box-shared defaults</strong> (ADR 0047) — edits here write to the
-            box's <code>host-config.yaml</code> and become the inherited default for every agent
-            on this box that hasn't set its own value. Per-agent overrides win.
+            <strong>Global · box-shared defaults</strong> (ADR 0047) — edits here write to this
+            hub's <code>host-config.yaml</code> and become the inherited default for every agent the
+            hub manages that hasn't set its own value. Per-agent overrides win. (Usually one hub per
+            machine; a machine running several hubs keeps a host-config per hub.)
           </Alert>
         ) : null}
         {acpAgent ? (
