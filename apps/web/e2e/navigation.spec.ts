@@ -128,6 +128,23 @@ test("Chat is movable too — right-click → move to the right rail (ADR 0036)"
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
 });
 
+test("right-click → Move to bottom dock docks the surface at the bottom", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const rightRail = page.locator(".pl-rail--right");
+  const bottomRail = page.locator(".pl-rail--bottom");
+  // The bottom rail exists as an (empty) drop target, but nothing is docked there by default.
+  await expect(bottomRail.getByRole("button")).toHaveCount(0);
+
+  // Move Beads (right rail) → bottom dock.
+  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Move to bottom dock").click();
+
+  // Beads now lives in the (icon-only) bottom rail, off the right rail, and its panel opens.
+  await expect(bottomRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toHaveCount(0);
+  await expect(page.locator(".pl-appshell__bottom").getByRole("heading", { name: "Beads" })).toBeVisible();
+});
+
 test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto("/app/", { waitUntil: "load" });
