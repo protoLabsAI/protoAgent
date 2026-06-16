@@ -340,6 +340,11 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
     _deep_merge(
         d,
         {
+            # background_keep is an operational knob (not a settings-schema field),
+            # so emit it here for round-trip completeness like the breaker knobs.
+            "checkpoint": {
+                "background_keep": config.checkpoint_background_keep,
+            },
             "knowledge": {
                 "db_path": config.knowledge_db_path,
                 # Breaker knobs aren't settings-schema fields (operational, config-only),

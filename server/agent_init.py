@@ -683,6 +683,7 @@ async def _checkpoint_prune_loop() -> None:
                     path,
                     keep_per_thread=cfg.checkpoint_keep_per_thread,
                     max_age_seconds=(None if harvest else max_age),
+                    background_keep=cfg.checkpoint_background_keep,
                 )
                 if res["threads_deleted"] or res["checkpoints_deleted"]:
                     log.info(

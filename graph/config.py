@@ -456,7 +456,10 @@ class LangGraphConfig:
     # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
     # latest N checkpoints per session, and TTL whole sessions idle past
     # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
-    checkpoint_keep_per_thread: int = 5
+    checkpoint_keep_per_thread: int = 2
+    # Background subagent threads (a2a:background:*) get a tighter cap — we only
+    # resume-from-latest, never time-travel, so retaining more than 1 is waste.
+    checkpoint_background_keep: int = 1
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
     # When a session is retired (aged out or deleted), summarize it into the
@@ -814,6 +817,9 @@ class LangGraphConfig:
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get(
                 "keep_per_thread", cls.checkpoint_keep_per_thread
+            ),
+            checkpoint_background_keep=data.get("checkpoint", {}).get(
+                "background_keep", cls.checkpoint_background_keep
             ),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
