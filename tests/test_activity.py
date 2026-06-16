@@ -12,7 +12,10 @@ from operator_api.routes import register_operator_routes
 
 def test_notify_terminal_invokes_hook_and_is_exception_safe():
     outcome = TurnOutcome(
-        task_id="t1", context_id="system:activity", state="completed", text="hi",
+        task_id="t1",
+        context_id="system:activity",
+        state="completed",
+        text="hi",
     )
     seen = []
     prior = executor._ON_TERMINAL[0]
@@ -82,7 +85,7 @@ async def _unused(*_a, **_k):  # pragma: no cover - placeholder callable
 
 # ── ActivityLog.prune ────────────────────────────────────────────────────────
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from activity.store import ActivityLog
 
@@ -100,6 +103,7 @@ def test_prune_activity_removes_old(tmp_path):
     # Directly insert rows with controlled timestamps via raw SQL so we
     # can set created_at to an old date (ActivityLog.add always uses _now_iso).
     import sqlite3
+
     db = sqlite3.connect(str(tmp_path / "activity.db"))
     db.execute(
         "INSERT INTO activity (created_at, context_id, origin, text) VALUES (?, ?, ?, ?)",
@@ -124,6 +128,7 @@ def test_prune_activity_keep_all_zero(tmp_path):
     al = _activity_log(tmp_path)
 
     import sqlite3
+
     db = sqlite3.connect(str(tmp_path / "activity.db"))
     db.execute(
         "INSERT INTO activity (created_at, context_id, origin, text) VALUES (?, ?, ?, ?)",
