@@ -693,6 +693,11 @@ def list_gateway_models(
             resp = client.get(url, headers=headers)
     except httpx.HTTPError as e:
         return [], f"connection failed: {e}"
+    except Exception as e:  # noqa: BLE001 — a malformed api_base (httpx.InvalidURL, e.g.
+        # "Invalid port", a bad scheme/host) is NOT an httpx.HTTPError, so it would
+        # otherwise propagate as a 500 and lock the setup wizard. A probe must always
+        # return a fixable error, never raise.
+        return [], f"invalid api_base ({type(e).__name__}): {e}"
 
     if resp.status_code >= 400:
         # Don't echo the raw upstream body (#871) — just the status.
