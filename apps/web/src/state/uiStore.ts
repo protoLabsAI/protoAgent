@@ -40,7 +40,9 @@ const _layoutStorage = createJSONStorage(() => ({
 // now store-only (its Memory settings live in Settings ▸ Workspace ▸ Memory).
 export type Surface =
   | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "box" | "settings" | (string & {});
-export type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
+// `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
+// (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
+export type RightPanel = "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
 export type PluginsTab = "local" | "market" | "download";
 export type ActivityTab = "thread" | "inbox";
 // The Box surface (PR4 / ADR 0048 §5) — box-level operations that aren't per-agent
