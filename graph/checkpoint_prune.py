@@ -77,14 +77,17 @@ def delete_thread(db_path: str, thread_id: str) -> int:
 def prune_checkpoints(
     db_path: str,
     *,
-    keep_per_thread: int = 5,
+    keep_per_thread: int = 2,
     max_age_seconds: float | None = None,
     now: float | None = None,
+    background_keep: int | None = None,
 ) -> dict[str, int]:
     """Trim the checkpoint DB. Returns counts of what was removed.
 
     ``max_age_seconds=None`` disables the age TTL (only the per-thread cap runs).
     ``now`` is injectable for tests.
+    ``background_keep`` overrides the per-thread cap for ``a2a:background:*`` threads
+    (resume-from-latest only — no time-travel, so retaining extras is waste).
     """
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
@@ -109,8 +112,12 @@ def prune_checkpoints(
                     threads_deleted += 1
 
         # 2. Per-thread cap — keep the latest N checkpoints per namespace.
-        keep = max(1, keep_per_thread)
+        #    Background threads get a tighter cap (resume-from-latest only).
         for thread_id in threads:
+            if background_keep is not None and thread_id.startswith("a2a:background:"):
+                keep = max(1, background_keep)
+            else:
+                keep = max(1, keep_per_thread)
             for (ns,) in conn.execute(
                 "SELECT DISTINCT checkpoint_ns FROM checkpoints WHERE thread_id=?", (thread_id,)
             ).fetchall():

@@ -101,3 +101,28 @@ def test_age_ttl_drops_old_threads_only(tmp_path):
     assert res["threads_deleted"] == 1
     assert _count(db, "checkpoints", "stale") == 0  # old thread gone
     assert _count(db, "checkpoints", "recent") > 0  # recent thread kept
+
+
+def test_background_keep_tighter_cap_for_background_threads(tmp_path):
+    """a2a:background:* threads use background_keep instead of keep_per_thread."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("chat:user", "a2a:background:research"), turns=3)
+    before_chat = _count(db, "checkpoints", "chat:user")
+    before_bg = _count(db, "checkpoints", "a2a:background:research")
+    assert before_chat > 2 and before_bg > 1
+
+    res = prune_checkpoints(db, keep_per_thread=2, background_keep=1)
+    assert _count(db, "checkpoints", "chat:user") == 2  # normal cap
+    assert _count(db, "checkpoints", "a2a:background:research") == 1  # tighter cap
+    assert res["checkpoints_deleted"] > 0
+
+
+def test_background_keep_none_falls_back_to_keep_per_thread(tmp_path):
+    """When background_keep is None, background threads use keep_per_thread."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:background:task",), turns=3)
+    before = _count(db, "checkpoints", "a2a:background:task")
+    assert before > 2
+
+    prune_checkpoints(db, keep_per_thread=2, background_keep=None)
+    assert _count(db, "checkpoints", "a2a:background:task") == 2  # same as keep_per_thread
