@@ -1878,19 +1878,10 @@ textarea {
   color: var(--fg-muted);
 }
 
-/* Topbar fleet switcher (ADR 0042) — the agent name as a dropdown */
-/* The DS Header name slot (.pl-header__name) sets `overflow: hidden` for text ellipsis — but
-   it now hosts the FleetSwitcher, whose dropdown menu is positioned BELOW the trigger and so
-   gets clipped invisible. Let the slot (and the lockup above it) overflow when the switcher
-   lives there, so the menu actually shows. */
-.pl-header__lockup:has(.fleet-switcher),
-.pl-header__name:has(.fleet-switcher) {
-  overflow: visible;
-}
-.fleet-switcher {
-  position: relative;
-  display: inline-flex;
-}
+/* Topbar fleet switcher (ADR 0042) — the agent name as a DS Menu trigger (#1078).
+   The dropdown itself is the DS Menu (.pl-menu, portaled to <body>), so the old
+   overflow-visible hack + the hand-rolled .fleet-switcher-menu/item/sep rules are
+   gone; only the trigger button + the per-row name layout remain. */
 .fleet-switcher-trigger {
   display: inline-flex;
   align-items: center;
@@ -1908,49 +1899,15 @@ textarea {
 .fleet-switcher-trigger:hover {
   background: var(--bg-hover);
 }
-.fleet-switcher-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
-  min-width: 200px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
-  box-shadow: var(--pl-shadow-popover);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.fleet-switcher-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 9px;
-  background: none;
-  border: none;
-  border-radius: 5px;
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.fleet-switcher-item:hover {
-  background: var(--bg-hover);
-}
-.fleet-switcher-item.active {
-  color: var(--accent);
-}
 .fleet-switcher-name {
-  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
-.fleet-switcher-sep {
-  height: 1px;
-  margin: 4px 2px;
-  background: var(--border);
+.fleet-switcher-check {
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 
 /* .fleet-host-tag retired (#832) — the "this instance" / "remote" tags in the
