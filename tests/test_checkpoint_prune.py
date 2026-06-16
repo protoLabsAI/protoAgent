@@ -127,6 +127,8 @@ def test_background_keep_none_falls_back_to_keep_per_thread(tmp_path):
 
     prune_checkpoints(db, keep_per_thread=2, background_keep=None)
     assert _count(db, "checkpoints", "a2a:background:task") == 2  # same as keep_per_thread
+
+
 def test_delete_thread_exact_only_without_cascade(tmp_path):
     """delete_thread(cascade=False) removes only the named thread, not sub-threads."""
     db = str(tmp_path / "c.db")
@@ -196,33 +198,34 @@ def test_delete_thread_cascade_removes_subthreads(tmp_path):
     # Unrelated thread untouched
     assert _count(db, "checkpoints", "a2a:Y") == 1
     assert _count(db, "writes", "a2a:Y") == 1
+
+
 # ── reclaim() tests ─────────────────────────────────────────────────────────
 
 
 def test_reclaim_truncates_wal_and_frees_pages(tmp_path):
     """After deleting rows, reclaim truncates the WAL and reduces page_count."""
     db = str(tmp_path / "c.db")
-    # Build a DB with auto_vacuum=INCREMENTAL (set before tables) and WAL.
+    # Build a DB with auto_vacuum=INCREMENTAL (set before any table) and WAL.
     conn = sqlite3.connect(db)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-    # Create a table large enough that deletes free whole pages.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, data BLOB)")
     conn.executemany("INSERT INTO t (data) VALUES (?)", [(b"x" * 4096,) for _ in range(30)])
     conn.commit()
-    # Delete most rows to create free pages on the freelist.
+    # Delete most rows so auto_vacuum tracks the freed pages on the freelist.
     conn.execute("DELETE FROM t WHERE id > 5")
     conn.commit()
-    # Keep the connection open so the WAL file persists (auto-checkpoint on
-    # close would otherwise remove it).
-    wal_path = db + "-wal"
-    assert Path(wal_path).exists(), "WAL file must exist before reclaim"
+    # Close first: a TRUNCATE checkpoint can only complete (busy == 0) when no
+    # other connection holds the WAL back — which mirrors the restart-time reclaim.
+    conn.close()
 
     res = reclaim(db)
     assert res["wal_truncated"] == 1
     assert res["pages_reclaimed"] > 0
-    assert not Path(wal_path).exists(), "WAL file must be gone after reclaim"
-    conn.close()
+    # TRUNCATE shrinks the -wal to zero bytes; it does NOT delete the file.
+    wal = Path(db + "-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
 
 
 def test_reclaim_noop_on_fresh_db(tmp_path):

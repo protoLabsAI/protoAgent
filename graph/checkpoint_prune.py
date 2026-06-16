@@ -23,7 +23,6 @@ forever.
 from __future__ import annotations
 
 import logging
-import os
 import sqlite3
 import uuid
 
@@ -196,11 +195,12 @@ def reclaim(db_path: str) -> dict[str, int]:
         _log.exception("[checkpoint-prune] reclaim failed on connect")
         return result
     try:
-        # 1. Truncate the WAL so the -wal file shrinks / disappears.
-        wal_path = db_path + "-wal"
-        had_wal = os.path.exists(wal_path)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        result["wal_truncated"] = 1 if (had_wal and not os.path.exists(wal_path)) else 0
+        # 1. Checkpoint + truncate the WAL. TRUNCATE shrinks the -wal file to
+        #    zero bytes (it does NOT delete the file). The result row is
+        #    (busy, log_frames, checkpointed_frames); busy == 0 means the
+        #    checkpoint completed — i.e. no other open connection held it back.
+        row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        result["wal_truncated"] = 1 if (row is not None and row[0] == 0) else 0
 
         # 2. Determine auto_vacuum mode.  INCREMENTAL (2) → use the cheap
         #    incremental_vacuum PRAGMA; NONE (0) → fall back to full VACUUM.

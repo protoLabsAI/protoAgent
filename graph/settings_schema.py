@@ -384,6 +384,14 @@ FIELDS: list[Field] = [
         "Summarize a session into the searchable knowledge base before pruning/deleting it.",
     ),
     Field(
+        "checkpoint.vacuum",
+        "checkpoint_vacuum",
+        "History: reclaim disk after prune",
+        "bool",
+        "Knowledge",
+        "After a prune frees rows, VACUUM + truncate the WAL so the DB file shrinks instead of holding the freed space.",
+    ),
+    Field(
         "knowledge.facts",
         "knowledge_facts",
         "Extract semantic facts",
