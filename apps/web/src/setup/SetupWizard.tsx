@@ -1,4 +1,4 @@
-import { Checkbox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
+import { Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import {
 
@@ -23,9 +23,14 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
 
-type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "finish";
+type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "finish";
 
-const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "workspace", "finish"];
+// Workspace (project dir / allowed dirs / knowledge db / top-K / beads-init) was its
+// own step but it's all sensible defaults a new user shouldn't have to think about —
+// blank project dir = the protoAgent dir, blank knowledge db = the default location,
+// top-K 5, no beads init (do that from the Beads view when there's a board to make).
+// So it's dropped from the wizard; the defaults flow straight through finishSetup.
+const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "finish"];
 
 // CLI coding agents that can be the runtime over ACP (ADR 0033) — agent_runtime: acp:<id>.
 const ACP_AGENTS: { id: string; label: string; hint: string }[] = [
@@ -565,69 +570,6 @@ export function SetupWizard({
             </StepBody>
           ) : null}
 
-          {step === "workspace" ? (
-            <StepBody icon={<Database size={20} />} title="Workspace" kicker="Project & memory">
-              {/* Group 1 — Project: where the agent works (the relatable concept). */}
-              <span className="field-hint">
-                <strong>Project</strong> — the directory this agent works in.
-              </span>
-              <label className="field">
-                <span>Project directory</span>
-                <Input
-                  value={projectPath}
-                  onChange={(event) => onProjectPathChange(event.target.value)}
-                  placeholder="Absolute path — defaults to the protoAgent directory"
-                />
-                <span className="field-hint">
-                  Where this agent's beads &amp; notes live, and its default project. Must already
-                  exist. Leave blank to use the protoAgent directory.
-                  {projectPath.trim() && !projectPath.trim().startsWith("/") && !projectPath.trim().startsWith("~") ? (
-                    <span className="field-warn"> Use an absolute path (starting with / or ~).</span>
-                  ) : null}
-                </span>
-              </label>
-              <label className="field">
-                <span>Additional allowed directories</span>
-                <Textarea
-                  rows={2}
-                  value={state.allowedDirs}
-                  onChange={(event) => update({ allowedDirs: event.target.value })}
-                  placeholder={"One absolute path per line — usually left blank."}
-                />
-                <span className="field-hint">
-                  Extra directories beads &amp; notes may read/write, beyond the project directory
-                  and protoAgent (which are always allowed). One per line. Most setups leave this blank.
-                </span>
-              </label>
-
-              {/* Group 2 — Memory: the RAG knowledge store. Advanced; safe defaults. */}
-              <span className="field-hint">
-                <strong>Memory</strong> — the long-term knowledge store (RAG). Defaults are fine.
-              </span>
-              <div className="setup-grid two">
-                <label className="field">
-                  <span>Knowledge database</span>
-                  <Input
-                    value={state.knowledgePath}
-                    onChange={(event) => update({ knowledgePath: event.target.value })}
-                    placeholder="Leave blank for the default"
-                  />
-                  <span className="field-hint">Blank = the default location (~/.protoagent/knowledge).</span>
-                </label>
-                <label className="field">
-                  <span>Recall results (top-K)</span>
-                  <Input type="number" min="1" value={state.knowledgeTopK} onChange={(event) => update({ knowledgeTopK: Number(event.target.value) })} />
-                  <span className="field-hint">How many memory snippets each recall returns.</span>
-                </label>
-              </div>
-              <Checkbox
-                className="checkbox-field setup-checkbox"
-                checked={state.initBeads}
-                onCheckedChange={(c) => update({ initBeads: c })}
-                label="Initialize beads (task tracker) in the project directory"
-              />
-            </StepBody>
-          ) : null}
 
           {step === "finish" ? (
             <StepBody icon={<Check size={20} />} title="Finish" kicker="Write config">
