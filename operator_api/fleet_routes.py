@@ -33,7 +33,7 @@ def register_fleet_routes(app) -> None:
         slug now (ADR 0042 slug routing) — no server-side 'active' pointer. Remote probes are
         TTL-cached + refreshed off the loop, so the 3s console poll stays cheap."""
         await asyncio.to_thread(supervisor.refresh_remote_probes)
-        return {"agents": supervisor.status()}
+        return {"agents": await asyncio.to_thread(supervisor.status)}
 
     @app.post("/api/fleet/remotes")
     async def _add_remote(req: dict):

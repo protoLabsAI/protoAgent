@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import pytest
 
 
@@ -126,3 +129,37 @@ def test_discover_endpoint(client, monkeypatch):
     monkeypatch.setattr(discovery, "discover", fake_discover)
     body = client.get("/api/fleet/discover").json()
     assert body["discovered"][0]["name"] == "remote"
+
+
+def test_fleet_list_offloads_status_to_thread(client, monkeypatch):
+    """supervisor.status() must run off the event loop via asyncio.to_thread (#875)."""
+    from graph.fleet import supervisor
+
+    recorded = []
+    orig_to_thread = asyncio.to_thread
+
+    async def wrapped_to_thread(func, /, *args, **kwargs):
+        recorded.append(func)
+        return await orig_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", wrapped_to_thread)
+    client.get("/api/fleet")
+    assert supervisor.status in recorded, "supervisor.status was not passed to asyncio.to_thread"
+
+
+def test_fleet_list_status_not_on_event_loop_thread(client, monkeypatch):
+    """supervisor.status must not run on the main thread — confirming to_thread off-loads it."""
+    from graph.fleet import supervisor
+
+    original_status = supervisor.status
+
+    def checked_status():
+        if threading.current_thread() is threading.main_thread():
+            raise RuntimeError("supervisor.status called on main thread — not offloaded")
+        return original_status()
+
+    monkeypatch.setattr(supervisor, "status", checked_status)
+    # If status() ran on the main thread, RuntimeError propagates.
+    # Offloaded via to_thread → runs on a thread-pool worker → no error.
+    r = client.get("/api/fleet")
+    assert r.status_code == 200
