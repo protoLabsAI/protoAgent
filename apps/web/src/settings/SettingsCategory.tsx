@@ -1,7 +1,7 @@
 import "./settings.css";
 
 import { Alert } from "@protolabsai/ui/data";
-import { Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
+import { Combobox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Link2, Loader2, RotateCcw, Save } from "lucide-react";
@@ -469,29 +469,27 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // ordered. Clearing a row removes it.
   if (field.type === "string_list" && field.options.length) {
     const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-    const listId = `${id}-models`;
     const update = (i: number, v: string) => {
       const next = items.slice();
       if (v) next[i] = v;
       else next.splice(i, 1);
       onChange(next);
     };
+    // A column of DS Comboboxes — one per value plus a trailing blank-to-add row;
+    // each carries its own suggestion list (the gateway models), and clearing a row
+    // removes it. Type any alias OR pick a suggestion.
     return (
       <div id={id} className="setting-list" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {[...items, ""].map((item, i) => (
-          <input
+          <Combobox
             key={i}
             className="setting-input"
-            type="text"
-            list={listId}
+            options={field.options}
             value={item}
             placeholder={i === items.length ? "add a model…" : ""}
-            onChange={(e) => update(i, e.target.value)}
+            onValueChange={(v) => update(i, v)}
           />
         ))}
-        <datalist id={listId}>
-          {field.options.map((opt) => <option key={opt} value={opt} />)}
-        </datalist>
       </div>
     );
   }
@@ -540,24 +538,15 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // values stay valid (these fields aren't membership-checked), so a datalist of
   // suggestions is the right control.
   if (field.options.length) {
-    const listId = `${id}-models`;
     return (
-      <>
-        <input
-          id={id}
-          className="setting-input"
-          type="text"
-          list={listId}
-          placeholder="type or pick a model"
-          value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        <datalist id={listId}>
-          {field.options.map((opt) => (
-            <option key={opt} value={opt} />
-          ))}
-        </datalist>
-      </>
+      <Combobox
+        id={id}
+        className="setting-input"
+        options={field.options}
+        placeholder="type or pick a model"
+        value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
+        onValueChange={onChange}
+      />
     );
   }
   return (
