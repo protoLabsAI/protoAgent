@@ -1,7 +1,7 @@
 import "./settings.css";
 
 import { Alert } from "@protolabsai/ui/data";
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
@@ -425,10 +425,12 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
 
   if (field.type === "bool") {
     return (
-      <label className="setting-toggle">
-        <input id={id} type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
-        <span>{value ? "on" : "off"}</span>
-      </label>
+      <Switch
+        id={id}
+        checked={Boolean(value)}
+        onCheckedChange={onChange}
+        label={value ? "on" : "off"}
+      />
     );
   }
   if (field.type === "number") {

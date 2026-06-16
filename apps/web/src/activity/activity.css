@@ -94,7 +94,7 @@
 .activity-origin-scheduler { color: var(--brand-indigo-bright); border-color: color-mix(in srgb, var(--brand-indigo-bright) 45%, var(--border)); }
 .activity-origin-inbox     { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
 .activity-origin-webhook   { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
-.activity-origin-a2a       { color: #f472b6; border-color: color-mix(in srgb, #f472b6 45%, var(--border)); }
+.activity-origin-a2a       { color: var(--brand-pink); border-color: color-mix(in srgb, var(--brand-pink) 45%, var(--border)); }
 .activity-origin-operator  { color: var(--accent, #7c8cff); border-color: color-mix(in srgb, var(--accent, #7c8cff) 45%, var(--border)); }
 .activity-trigger { font-family: var(--font-mono, ui-monospace, monospace); color: var(--fg-secondary); }
 .activity-time { margin-left: auto; color: var(--fg-tertiary, var(--fg-secondary)); }

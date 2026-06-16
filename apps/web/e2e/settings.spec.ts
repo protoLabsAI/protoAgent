@@ -106,7 +106,9 @@ test("a restart-flagged System field shows the restart banner", async ({ page })
   await tab(page, "System");
   await expect(page.locator(".settings-banner")).toHaveCount(0);
   await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
-  await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] input[type="checkbox"]').check();
+  // The bool setting renders as a DS Switch (its native checkbox is 0×0/opacity:0,
+  // so click the switch label to toggle it on rather than .check() the input).
+  await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] .pl-switch').click();
   await expect(page.locator(".settings-banner")).toContainText("restart");
 });
 

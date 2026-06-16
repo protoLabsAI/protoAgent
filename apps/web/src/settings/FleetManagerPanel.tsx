@@ -5,7 +5,7 @@ import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { EditableText } from "@protolabsai/ui/forms";
+import { EditableText, Switch } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
@@ -351,10 +351,12 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         onClose={() => setConfirmRemove(null)}
       >
         <p>Stops the agent and removes it from the fleet.</p>
-        <label className="fleet-purge">
-          <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-          Also purge its workspace data (irreversible)
-        </label>
+        <Switch
+          className="fleet-purge"
+          checked={purge}
+          onCheckedChange={setPurge}
+          label="Also purge its workspace data (irreversible)"
+        />
       </ConfirmDialog>
     </section>
   );

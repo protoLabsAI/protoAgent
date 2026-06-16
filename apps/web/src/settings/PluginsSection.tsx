@@ -134,13 +134,13 @@ export function PluginsSection() {
           aria-label="git ref"
           style={{ maxWidth: 200 }}
         />
-        <button
-          className="btn"
+        <Button
+          variant="primary"
           disabled={!url.trim() || install.isPending}
           onClick={() => { setStatus(""); install.mutate(); }}
         >
           {install.isPending ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Install
-        </button>
+        </Button>
       </div>
       {status ? <p className="plugin-install-status" role="status">{status}</p> : null}
 
@@ -292,9 +292,9 @@ function PluginRow({
           </p>
         ) : null}
       </div>
-      <button className="btn-icon danger" title="Uninstall" disabled={removing} onClick={onRemove} aria-label={`uninstall ${p.id}`}>
+      <Button icon variant="danger" title="Uninstall" disabled={removing} onClick={onRemove} aria-label={`uninstall ${p.id}`}>
         <Trash2 size={15} />
-      </button>
+      </Button>
     </li>
   );
 }
