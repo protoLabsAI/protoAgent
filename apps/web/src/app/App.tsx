@@ -842,14 +842,13 @@ export function App() {
         }}
         onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
         onRailReorder={(next) => {
-          // Chat is the streaming slot (#613), never the bottom dock — bounce it back to the
-          // left rail if a drag landed it there.
+          // Chat is the streaming slot (#613), never the bottom dock — if a drag landed it
+          // there, bounce it back to the SIDE rail it came from (its pre-drag side), not
+          // always the left.
           if (next.bottom.includes("chat")) {
-            next = {
-              ...next,
-              bottom: next.bottom.filter((x) => x !== "chat"),
-              left: next.left.includes("chat") ? next.left : ["chat", ...next.left],
-            };
+            const back = railOrder.right.includes("chat") ? "right" : "left";
+            next = { ...next, bottom: next.bottom.filter((x) => x !== "chat") };
+            if (!next[back].includes("chat")) next = { ...next, [back]: [...next[back], "chat"] };
           }
           setRailOrder(next);
         }}
