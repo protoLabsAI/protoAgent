@@ -1,7 +1,8 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 
-import { Component, type ReactNode } from "react";
+import { Component, Suspense, type ReactNode } from "react";
+import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { Spinner } from "@protolabsai/ui/data";
 
 // A small render-prop error boundary (ADR 0013). Pairs with TanStack Query's
@@ -76,5 +77,52 @@ export function PanelSkeleton({ label = "Loading…" }: { label?: string }) {
       <Spinner size={18} />
       <span>{label}</span>
     </div>
+  );
+}
+
+/**
+ * The canonical stage/side panel scaffold (ADR 0013): a `<section className="panel …">`
+ * wrapping `QueryErrorResetBoundary → ErrorBoundary → Suspense`, so a `useSuspenseQuery`
+ * inside `children` loads via <PanelSkeleton> and fails into a retryable <PanelError>.
+ * Replaces the byte-identical boilerplate ~13 panels hand-repeated.
+ *
+ *   <StagePanel label="tools">{<ToolsBody/>}</StagePanel>
+ *
+ * `variant="side"` swaps `stage-panel` → `side-panel` (the right-rail panels).
+ * `className` appends a panel-specific hook (e.g. "settings-panel"). `loadingLabel`
+ * overrides the default `Loading ${label}…`.
+ */
+export function StagePanel({
+  label,
+  loadingLabel,
+  variant = "stage",
+  className,
+  testId,
+  resetKeys,
+  children,
+}: {
+  label: string;
+  loadingLabel?: string;
+  variant?: "stage" | "side";
+  className?: string;
+  testId?: string;
+  resetKeys?: unknown[];
+  children: ReactNode;
+}) {
+  const cls = ["panel", variant === "side" ? "side-panel" : "stage-panel", className]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <section className={cls} data-testid={testId}>
+      <QueryErrorResetBoundary>
+        {({ reset }) => (
+          <ErrorBoundary onReset={reset} resetKeys={resetKeys} fallback={(a) => <PanelError {...a} label={label} />}>
+            <Suspense fallback={<PanelSkeleton label={loadingLabel ?? `Loading ${label}…`} />}>
+              {children}
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </QueryErrorResetBoundary>
+    </section>
   );
 }

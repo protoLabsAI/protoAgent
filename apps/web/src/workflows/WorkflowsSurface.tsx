@@ -3,16 +3,14 @@ import "./workflows.css";
 import { Input, Select } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
-
-  QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { Loader2, Play, Plus, RefreshCw, Trash2, Workflow } from "lucide-react";
-import { Suspense, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { queryKeys, subagentsQuery, workflowsQuery } from "../lib/queries";
@@ -220,16 +218,8 @@ function WorkflowsBody() {
 
 export function WorkflowsSurface() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="workflows" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading workflows…" />}>
-              <WorkflowsBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="workflows">
+      <WorkflowsBody />
+    </StagePanel>
   );
 }

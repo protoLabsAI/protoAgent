@@ -10,6 +10,7 @@ import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-reac
 import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { delegatesQuery, delegateTypesQuery, queryKeys } from "../lib/queries";
 import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView } from "../lib/types";
 
@@ -71,13 +72,13 @@ export function DelegatesSection() {
       setStatus(r.message || "deleted");
       void invalidate();
     },
-    onError: (e) => setStatus(`delete failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`delete failed: ${errMsg(e)}`),
   });
 
   const testRow = useMutation({
     mutationFn: (d: DelegateView) => api.testDelegate({ name: d.name, type: d.type }),
     onSuccess: (p, d) => setProbes((m) => ({ ...m, [d.name]: p })),
-    onError: (e, d) => setProbes((m) => ({ ...m, [d.name]: { ok: false, error: e instanceof Error ? e.message : String(e) } })),
+    onError: (e, d) => setProbes((m) => ({ ...m, [d.name]: { ok: false, error: errMsg(e) } })),
   });
 
   // The delegates plugin isn't enabled (routes 404) — show a hint, not an error.
@@ -210,13 +211,13 @@ function DelegateForm({
   const test = useMutation({
     mutationFn: () => api.testDelegate(buildEntry()),
     onSuccess: (p) => { setProbe(p); setErr(""); },
-    onError: (e) => setErr(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setErr(errMsg(e)),
   });
 
   const save = useMutation({
     mutationFn: () => (editing ? api.updateDelegate(name, buildEntry()) : api.createDelegate(buildEntry())),
     onSuccess: (r) => onSaved(r.message || (editing ? "updated" : "created")),
-    onError: (e) => setErr(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setErr(errMsg(e)),
   });
 
   return (

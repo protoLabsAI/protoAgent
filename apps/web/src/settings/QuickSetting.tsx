@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField } from "../lib/types";
 import { SettingInput } from "./SettingsCategory";
@@ -107,7 +108,7 @@ function QuickSettingDialog({
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
       onClose();
     },
-    onError: (e) => setStatus(`save failed: ${e instanceof Error ? e.message : String(e)}`),
+    onError: (e) => setStatus(`save failed: ${errMsg(e)}`),
   });
 
   const dirtyKeys = Object.keys(dirty);

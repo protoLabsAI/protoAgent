@@ -5,6 +5,7 @@ import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 // Author a workflow recipe from the console (Sprint C): name + inputs + steps
@@ -77,7 +78,7 @@ export function WorkflowBuilder({
       const r = await api.saveWorkflow(recipe);
       onSaved(r.name || name.trim());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errMsg(e));
     } finally {
       setSaving(false);
     }

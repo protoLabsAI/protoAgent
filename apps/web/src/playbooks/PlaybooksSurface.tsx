@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
+import { ago, errMsg } from "../lib/format";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { Playbook } from "../lib/types";
 
@@ -15,17 +16,6 @@ import type { Playbook } from "../lib/types";
 // operator-facing name for skill-v1 artifacts: disk = pinned SKILL.md,
 // emitted = agent-learned (curated/decaying). Functional-first: list + search +
 // delete-with-confirm. Confidence tuning / curator audit are follow-ups.
-
-function ago(iso: string | null): string {
-  if (!iso) return "never";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 90) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
 
 export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: string) => void }) {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
@@ -43,7 +33,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
       setPlaybooks(r.playbooks || []);
       onError("");
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -81,7 +71,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
       onError("");
       await load(); // the skill now also reads from the commons tier
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     } finally {
       setPromoting(null);
     }
@@ -99,7 +89,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
       }
       setPlaybooks((ps) => ps.filter((p) => p.id !== id));
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      onError(errMsg(e));
     }
   }
 

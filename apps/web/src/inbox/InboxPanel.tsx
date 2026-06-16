@@ -2,16 +2,14 @@ import "./inbox.css";
 
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
-
-  QueryErrorResetBoundary,
   useMutation,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { Check, RefreshCw } from "lucide-react";
-import { Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { ErrorBoundary, PanelError, PanelSkeleton } from "../app/ErrorBoundary";
+import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
@@ -106,19 +104,11 @@ export function InboxPanel() {
   // the live-event refetch cycle (the inner body remounts on re-suspend).
   const [dismissed, setDismissed] = useState<Set<number>>(() => new Set());
   return (
-    <section className="panel side-panel inbox-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="inbox" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading inbox…" />}>
-              <InboxBody
-                dismissed={dismissed}
-                onDismiss={(id) => setDismissed((s) => new Set(s).add(id))}
-              />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="inbox" variant="side" className="inbox-panel">
+      <InboxBody
+        dismissed={dismissed}
+        onDismiss={(id) => setDismissed((s) => new Set(s).add(id))}
+      />
+    </StagePanel>
   );
 }

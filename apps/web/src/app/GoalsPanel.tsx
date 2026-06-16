@@ -12,6 +12,7 @@ import { Trash2 } from "lucide-react";
 import { Suspense } from "react";
 
 import { api } from "../lib/api";
+import { ago } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
@@ -29,14 +30,6 @@ function goalTone(status: string) {
   if (status === "active") return "warning" as const;
   if (status === "unachievable") return "error" as const;
   return "muted" as const;
-}
-
-function ago(epochSeconds: number): string {
-  const s = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 const trunc = (t: string, n = 80) => (t.length > n ? `${t.slice(0, n)}…` : t);

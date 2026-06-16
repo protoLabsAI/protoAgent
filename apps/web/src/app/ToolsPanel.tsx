@@ -1,10 +1,10 @@
 import { Input } from "@protolabsai/ui/forms";
-import { QueryErrorResetBoundary, useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense, useState } from "react";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { toolsQuery } from "../lib/queries";
-import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
+import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call,
@@ -75,16 +75,8 @@ function ToolsBody() {
 
 export function ToolsPanel() {
   return (
-    <section className="panel stage-panel">
-      <QueryErrorResetBoundary>
-        {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="tools" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading tools…" />}>
-              <ToolsBody />
-            </Suspense>
-          </ErrorBoundary>
-        )}
-      </QueryErrorResetBoundary>
-    </section>
+    <StagePanel label="tools">
+      <ToolsBody />
+    </StagePanel>
   );
 }

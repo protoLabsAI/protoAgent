@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../lib/api";
+import { errMsg } from "../lib/format";
 import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
 
 type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "workspace" | "finish";
@@ -151,7 +152,7 @@ export function SetupWizard({
         setSetupStatus(status);
         setState(hydrateState(config, status));
       } catch (exc) {
-        if (alive) setError(exc instanceof Error ? exc.message : String(exc));
+        if (alive) setError(errMsg(exc));
       } finally {
         if (alive) setBusy(false);
       }
@@ -205,7 +206,7 @@ export function SetupWizard({
         update({ modelName: response.models[0] });
       }
     } catch (exc) {
-      if (!silent) setError(exc instanceof Error ? exc.message : String(exc));
+      if (!silent) setError(errMsg(exc));
     } finally {
       if (!silent) setBusy(false);
     }
@@ -235,7 +236,7 @@ export function SetupWizard({
       const r = await api.testModel(state.apiBase.trim(), state.apiKey.trim(), state.modelName.trim());
       setTested({ ok: r.ok, error: r.error || "" });
     } catch (exc) {
-      setTested({ ok: false, error: exc instanceof Error ? exc.message : String(exc) });
+      setTested({ ok: false, error: errMsg(exc) });
     } finally {
       setBusy(false);
     }
@@ -249,7 +250,7 @@ export function SetupWizard({
       const response = await api.soulPreset(state.preset);
       update({ soul: response.content });
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      setError(errMsg(exc));
     } finally {
       setBusy(false);
     }
@@ -333,7 +334,7 @@ export function SetupWizard({
       setMessage(response.message);
       onFinished();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      setError(errMsg(exc));
     } finally {
       setBusy(false);
     }
