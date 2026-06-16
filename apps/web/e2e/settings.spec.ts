@@ -41,13 +41,11 @@ test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
     "Global",
     "Workspace",
   ]);
-  // The Global home's sections (the default home) — DS SideNav rail.
+  // The Global home is the box-shared cascade ONLY now (PR4) — Fleet/Telemetry/Commons
+  // moved out to the Box rail surface.
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Overview",
-    "Host config",
-    "Fleet",
-    "Telemetry",
-    "Commons",
+    "Configuration",
   ]);
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
   // The Workspace home → the focused agent's makeup + settings (ADR 0048 fold).
@@ -69,6 +67,19 @@ test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
   // Field groups are collapsible accordions (DS 0.29); titles render in the trigger.
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
+});
+
+test("Box surface hosts Fleet · Telemetry · Commons (moved out of Settings, PR4)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
+  const tabs = page.locator(".pl-tabs").getByRole("tab");
+  await expect(tabs).toHaveCount(3);
+  expect(await tabs.allTextContents()).toEqual(["Fleet", "Telemetry", "Commons"]);
+  // Fleet is the default Box tab.
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  // …and the moved Telemetry dashboard renders under its tab.
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Telemetry", exact: true }).click();
+  await expect(page.getByTestId("telemetry-surface")).toBeVisible();
 });
 
 test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({ page }) => {
@@ -123,7 +134,7 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   // model.name inherits from the host layer.
   await expect(
     page.locator('.setting-row[data-key="model.name"] .setting-inheritance'),
-  ).toContainText("inherited from Host");
+  ).toContainText("inherited from Global");
   // routing.aux_model inherits the App default.
   await expect(
     page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance'),
@@ -139,9 +150,9 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   ).toHaveCount(0);
 });
 
-test("Host config edits the host-scoped subset and saves to the host layer", async ({ page }) => {
+test("Configuration edits the host-scoped subset and saves to the host layer", async ({ page }) => {
   await openSettings(page);
-  await tab(page, "Host config"); // Global is the default home
+  await tab(page, "Configuration"); // Global is the default home; host console → editable
   await expect(page.locator(".settings-banner").first()).toContainText("box-shared");
   await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   // Only host-scoped fields appear — model.name (host) is here; the agent-scoped

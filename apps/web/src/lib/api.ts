@@ -143,6 +143,13 @@ export function currentSlug(): string {
   }
 }
 
+/** True when this window is the host console (the un-suffixed root or the reserved
+ *  `host` slug) — the only console allowed to edit the box-shared Global defaults
+ *  (ADR 0047 §7.7). A workspace console sees those fields read-only. */
+export function isHostConsole(): boolean {
+  return currentSlug() === "host";
+}
+
 /** URL of the console focused on `slug` (for navigation / opening a new window). */
 export function agentHref(slug: string): string {
   const base = import.meta.env.BASE_URL || "/"; // "/app/"

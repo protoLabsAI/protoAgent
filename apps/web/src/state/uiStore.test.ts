@@ -24,6 +24,24 @@ describe("migrateUiState", () => {
     expect(out).toEqual({ rightWidth: 320 });
   });
 
+  // v3→v4 (PR4): the new "box" rail surface is injected into a pre-v4 railOrder
+  // (before "settings") so an existing drag-and-drop layout gains it rather than
+  // hiding it.
+  it("injects the Box surface into a pre-v4 railOrder, before settings", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "plugins", "settings"], right: ["beads"] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.left).toEqual(["chat", "plugins", "box", "settings"]);
+    expect(out.railOrder.right).toEqual(["beads"]);
+  });
+
+  it("does not duplicate Box if a layout already has it", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "box", "settings"], right: [] },
+    }) as { railOrder: { left: string[] } };
+    expect(out.railOrder.left).toEqual(["chat", "box", "settings"]);
+  });
+
   it("does not mutate the input object", () => {
     const input = { railOf: { chat: "left" }, leftActive: "chat" };
     migrateUiState(input);
