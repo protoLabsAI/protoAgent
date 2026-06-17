@@ -123,10 +123,21 @@ def test_create_invalid_returns_400(client):
     )  # no model
 
 
-def test_test_endpoint_acp_probe(client):
+def test_test_endpoint_acp_probe(client, monkeypatch):
     import sys
 
-    # acp probe is local (binary-on-PATH + workdir exists) — point at the python exe.
+    from plugins.coding_agent.acp_client import AcpClient
+
+    # The acp probe now does a real ACP `initialize` handshake (#1116), so mock it —
+    # the python exe is on PATH + /tmp exists, but it doesn't speak ACP for real.
+    async def _ok(self):
+        self._protocol_version = 1
+
+    async def _noop(self):
+        pass
+
+    monkeypatch.setattr(AcpClient, "_ensure_started", _ok)
+    monkeypatch.setattr(AcpClient, "close", _noop)
     r = client.post(
         "/api/delegates/test", json={"name": "t", "type": "acp", "command": sys.executable, "workdir": "/tmp"}
     )
@@ -146,11 +157,21 @@ def test_list_includes_health_snapshot(client, monkeypatch):
     assert body["health"]["ok"] is True and body["health"]["latency_ms"] == 12
 
 
-def test_test_endpoint_probes_saved_delegate_by_name(client):
+def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch):
     # The per-row Test button sends only {name, type}; the endpoint must probe the
     # STORED config (command/workdir), not fail on the missing fields.
     import sys
 
+    from plugins.coding_agent.acp_client import AcpClient
+
+    async def _ok(self):
+        self._protocol_version = 1
+
+    async def _noop(self):
+        pass
+
+    monkeypatch.setattr(AcpClient, "_ensure_started", _ok)
+    monkeypatch.setattr(AcpClient, "close", _noop)
     client.post("/api/delegates", json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
     r = client.post("/api/delegates/test", json={"name": "proto", "type": "acp"})
     assert r.status_code == 200 and r.json()["ok"] is True
