@@ -1144,6 +1144,31 @@ export const api = {
     });
   },
 
+  /** Desktop in-app updater (Tauri). `checkUpdate` returns the available build's
+   * version + notes (the changelog from latest.json) or null (up to date / not
+   * desktop / offline). `installUpdate` downloads + installs + relaunches, streaming
+   * download progress. Both go through the Rust `updater_*` commands via the Tauri
+   * global (withGlobalTauri); they no-op outside the desktop shell. */
+  async checkUpdate(): Promise<{ version: string; current: string; notes: string } | null> {
+    const core = tauriCore();
+    if (!core) return null;
+    try {
+      return (await core.invoke<{ version: string; current: string; notes: string } | null>("updater_check")) ?? null;
+    } catch {
+      return null; // not in Tauri / no manifest / offline — stay quiet
+    }
+  },
+  async installUpdate(
+    onProgress: (e: { chunkLength: number; contentLength: number | null }) => void,
+  ): Promise<void> {
+    const core = tauriCore();
+    if (!core) throw new Error("Tauri core API unavailable");
+    const channel = new core.Channel<{ chunkLength: number; contentLength: number | null }>();
+    channel.onmessage = onProgress;
+    // Resolves only if install fails — on success the Rust command relaunches the app.
+    await core.invoke("updater_install", { onProgress: channel });
+  },
+
   // Mid-turn steering: queue a user message into a RUNNING turn (folded in at the
   // next model call by SteeringMiddleware) without stopping the stream. The client
   // `id` lets the turn-end reconcile tell consumed from arrived-too-late.

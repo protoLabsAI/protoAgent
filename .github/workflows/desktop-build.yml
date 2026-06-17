@@ -381,11 +381,18 @@ jobs:
             echo "::notice::No signed updater bundles on the release — skipping latest.json (in-app updates disabled for ${TAG})."
             exit 0
           fi
+          # Use the real GitHub Release body as the updater notes, so the in-app
+          # UpdateNotice shows the actual changelog (not a generic placeholder). By the
+          # time this fan-in runs (after the long desktop matrix), release.yml has long
+          # since created + populated the release. Fall back to the placeholder if the
+          # body is somehow empty.
+          NOTES="$(gh release view "$TAG" --repo "${{ github.repository }}" --json body -q .body 2>/dev/null || true)"
+          [ -z "$NOTES" ] && NOTES="protoAgent ${TAG} — see the GitHub Release for details."
           npx --yes -p '@protolabsai/release-tools@latest' build-updater-manifest \
             --version "$VERSION" \
             --dist updater-dist \
             --base-url "https://github.com/${{ github.repository }}/releases/download/${TAG}" \
-            --notes "protoAgent ${TAG} — see the GitHub Release for details." \
+            --notes "$NOTES" \
             --out latest.json
           cat latest.json
           # --repo is required: this job never checks out the repo (it only

@@ -64,6 +64,7 @@ import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
+import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
@@ -678,6 +679,8 @@ export function App() {
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
       <FleetTurnWatch />
+      {/* In-app update notice (desktop/Tauri): ambient pill → changelog + Update & Restart. */}
+      <UpdateNotice />
       {/* Background subagents (ADR 0050): when a detached job finishes, push its result
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}

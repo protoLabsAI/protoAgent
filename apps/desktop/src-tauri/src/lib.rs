@@ -303,10 +303,70 @@ async fn chat_stream(
     Ok(())
 }
 
+#[derive(serde::Serialize, Clone)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    /// The release notes / changelog (latest.json `notes`) — shown in the in-app pill.
+    notes: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DownloadProgress {
+    chunk_length: u64,
+    content_length: Option<u64>,
+}
+
+/// Check the updater manifest for a newer build, returning its version + notes for the
+/// in-app UpdateNotice (the web pill renders the changelog) — the typed counterpart to
+/// the tray's native-dialog `check_for_updates`. None when up to date; Err on failure.
+#[tauri::command]
+async fn updater_check<R: Runtime>(app: AppHandle<R>) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let current = app.package_info().version.to_string();
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(u) => Ok(Some(UpdateInfo {
+            version: u.version.clone(),
+            current,
+            notes: u.body.clone().unwrap_or_default(),
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Download + install the available update (signature-verified by the plugin against the
+/// embedded pubkey), streaming progress to the webview over an IPC Channel, then relaunch.
+#[tauri::command]
+async fn updater_install<R: Runtime>(
+    app: AppHandle<R>,
+    on_progress: tauri::ipc::Channel<DownloadProgress>,
+) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no update available".to_string())?;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                let _ = on_progress.send(DownloadProgress {
+                    chunk_length: chunk as u64,
+                    content_length: total,
+                });
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![chat_stream])
+        .invoke_handler(tauri::generate_handler![chat_stream, updater_check, updater_install])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: checks the latest.json manifest on GitHub Releases,
@@ -388,11 +448,11 @@ pub fn run() {
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
             }
 
-            // Silent launch check (release builds only — `tauri dev` runs at the
-            // in-tree placeholder version and would always see an "update").
-            if !cfg!(debug_assertions) {
-                check_for_updates(app.handle().clone(), false);
-            }
+            // Ambient update checks are now owned by the web UpdateNotice (an in-app
+            // pill + changelog, polling `updater_check` ~10s after boot then every 6h) —
+            // so the old silent launch check is gone, to avoid double-prompting (a native
+            // dialog AND the pill). The tray "Check for updates" still does an interactive
+            // native check (see the tray handler) as a manual fallback.
             Ok(())
         })
         .on_window_event(|window, event| {

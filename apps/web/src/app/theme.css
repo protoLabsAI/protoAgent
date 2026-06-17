@@ -1885,3 +1885,122 @@ textarea {
   animation-duration: 0.35s;
   animation-timing-function: ease;
 }
+
+/* In-app update notice (desktop/Tauri) — ambient pill + changelog panel (UpdateNotice.tsx).
+   Top-right under the topbar; uses only DS --pl-* tokens + currentColor so it themes with
+   whatever palette is active. */
+.update-notice-pill {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-raised);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: var(--pl-shadow-popover);
+}
+.update-notice-pill:hover {
+  background: var(--pl-color-bg-inset);
+}
+.update-notice-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.7;
+}
+.update-notice-panel {
+  position: fixed;
+  top: 44px;
+  right: 12px;
+  z-index: 40;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: var(--pl-space-4, 16px);
+  border-radius: 10px;
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-raised);
+  box-shadow: var(--pl-shadow-popover);
+  font-size: 13px;
+}
+.update-notice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.update-notice-ver {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.update-notice-x {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 12px;
+  line-height: 1;
+}
+.update-notice-x:hover {
+  opacity: 1;
+}
+.update-notice-notes {
+  margin-top: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  opacity: 0.85;
+  line-height: 1.45;
+}
+.update-notice-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.update-notice-progress {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.update-notice-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--pl-color-bg-inset);
+  overflow: hidden;
+}
+.update-notice-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.8;
+  transition: width 0.2s ease;
+}
+.update-notice-pct {
+  text-align: center;
+  font-size: 11px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.update-notice-err {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #e5484d;
+}
+.update-notice-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
