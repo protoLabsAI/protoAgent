@@ -44,8 +44,9 @@ registry), [delegates](/guides/delegates) (the A2A dispatch primitive), and
 | `portfolio_rollup([boards])` | **Bounded** cross-board view — per-board lane counts + only the blocked / critical-path items, never the full feature list. Reason over many boards without raw reads |
 | `portfolio_diff([boards])` | What **changed** since the last check — features merged / newly-blocked / unblocked / new — then advances the baseline |
 | `portfolio_watch([interval_min, boards])` | Records a baseline, then hands you the `schedule_task` call to run `portfolio_diff` on a schedule |
-| `portfolio_link(from_board, from_feature, to_board, to_feature[, note, remove])` | Record (or remove) a cross-board dependency: A's feature waits for B's |
+| `portfolio_link(from_board, from_feature, to_board, to_feature[, note, title, spec, …, remove])` | Record (or remove) a cross-board dependency; with `title`+`spec` it's a *planned dispatch* (held work) |
 | `portfolio_plan()` | The cross-board dependency graph + what's ready to dispatch next |
+| `portfolio_autodispatch([dry_run])` | Create each planned link's held work once its blocker ships — idempotent, schedulable |
 
 ## Deltas without polling
 
@@ -90,9 +91,31 @@ addressed by `(board, feature_id)` since ids are board-local. A link is **satisf
 the moment its depended-on feature reaches `done` (the board's only merge signal); an
 unreachable blocker is **unknown** and fail-closed (never dispatched on a guess); a
 vanished one is **dangling** (prune with `portfolio_link(remove="lnk-…")`). Cycles are
-rejected when you add the link. Pair `portfolio_plan` with `portfolio_dispatch` to send
-the unblocked work — the PM (or you) stays in the loop; auto-dispatch is a later slice
-(see [ADR 0055 P3](../adr/0055-multi-team-orchestration-federated-boards.md#phasing)).
+rejected when you add the link.
+
+### Holding work until its dependency ships (auto-dispatch)
+
+A plain link is advisory — but a team's spawn loop would still start a "ready" dependent
+before its cross-repo blocker lands. To actually **gate** the work, give the link the
+dependent's spec (a *planned dispatch*): the work isn't created on its board until the
+blocker ships, then `portfolio_autodispatch` creates it.
+
+```
+portfolio_link(from_board="team-web", from_feature="render-v2",   # a planning label
+               to_board="team-api",  to_feature="bd-bbb",
+               title="Render users from /v2",
+               spec="Wire the web users page to /v2/users")
+# nothing is created on team-web yet — the work is held behind bd-bbb
+
+# team-api ships bd-bbb (→ done); then, manually or on a schedule:
+portfolio_autodispatch()        # dry_run=True to preview
+# → creates "Render users from /v2" on team-web NOW, marks the link dispatched
+```
+
+`portfolio_autodispatch` is **idempotent** (a `dispatched` flag stops it re-creating), so
+schedule it with `schedule_task` and the PM dispatches each held feature the moment its
+dependency lands — no polling, no jumping the gun. See
+[ADR 0055 P3](../adr/0055-multi-team-orchestration-federated-boards.md#phasing).
 
 ## Notes
 

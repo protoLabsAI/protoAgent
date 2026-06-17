@@ -157,9 +157,11 @@ registry:
   `ready_to_dispatch` (a `from` whose every blocker is satisfied and that hasn't started)
   + `blocked`. Cycles are rejected at link time (DFS). *Why PM-side:* beads' `blocks`
   edges are single-DB (no foreign ids), a team-agent doesn't know its dependents, and
-  sequencing is the PM's concern — same rationale as P2. *Deferred (later P3 slices):*
-  auto-dispatch of unblocked work (pair `portfolio_plan` → `portfolio_dispatch` with an
-  idempotency guard; ideally delta-triggered, not polled), bead-side annotation so an
-  edge travels with the work, full cycle-aware multi-hop topological sequencing, and a
-  console graph view. Improves on the Studio comp (project-level edges, manual
-  `resolve`) with feature-level edges + automatic merge detection.
+  sequencing is the PM's concern — same rationale as P2. **Auto-dispatch (plugin
+  v0.5.0):** a link can carry the dependent's spec (a *planned dispatch* — the work is
+  held, not created on its board); `portfolio_autodispatch` creates it once the blocker
+  ships, idempotently (a `dispatched` flag) so it's schedulable — the PM genuinely gates
+  cross-repo dispatch rather than relying on advisory status. *Deferred:* bead-side
+  annotation so an edge travels with the work, full cycle-aware multi-hop topological
+  sequencing, and a console graph view. Improves on the Studio comp (project-level edges,
+  manual `resolve`) with feature-level edges + automatic merge detection.
