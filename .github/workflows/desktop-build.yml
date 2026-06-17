@@ -395,3 +395,9 @@ jobs:
           # (the in-app updater manifest). The download step above already
           # passes --repo for the same reason.
           gh release upload "$TAG" latest.json --repo "${{ github.repository }}" --clobber
+          # Promote to 'Latest' ONLY now that latest.json (and every binary) is on the
+          # release — this closes the in-app-updater 404 window. release.yml creates the
+          # release with --latest=false, so it becomes 'Latest' exactly here, after the
+          # manifest exists. (The no-bundles path above exits 0 before this, so an
+          # unsigned build never gets promoted — 'Latest' stays on the last good .0.)
+          gh release edit "$TAG" --repo "${{ github.repository }}" --latest
