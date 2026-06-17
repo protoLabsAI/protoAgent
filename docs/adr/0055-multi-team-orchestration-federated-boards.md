@@ -143,4 +143,20 @@ registry:
     team side. *Deferred push upgrade (P2.5+):* a team-side bus→`/api/inbox` bridge once a
     team↔PM handshake exists — the inbox (`POST /api/inbox`, `priority:"now"` fires a turn)
     is the right inbound sink, but it's a larger lift for marginal latency gain.
-- **P3** — cross-repo dependency graph + program-level sequencing.
+- **P3** ✅ *(slice 1 shipped)* — cross-repo dependency graph + program-level
+  sequencing: `portfolio_link` + `portfolio_plan` (plugin v0.4.0). Cross-board edges
+  are **PM-side state** (`portfolio_links.json`, scoped) — `{from_board, from_feature,
+  to_board, to_feature}` meaning *from is blocked until to is done*. Features are keyed
+  by `(board, feature_id)` (ids are board-local). `portfolio_plan` fetches every board
+  and marks each edge **satisfied** (the depended-on feature merged→`done`, the board's
+  one Done signal), **blocking**, **unknown** (board unreachable — fail-closed, never
+  assumed satisfied), or **dangling** (feature/board gone), then returns
+  `ready_to_dispatch` (a `from` whose every blocker is satisfied and that hasn't started)
+  + `blocked`. Cycles are rejected at link time (DFS). *Why PM-side:* beads' `blocks`
+  edges are single-DB (no foreign ids), a team-agent doesn't know its dependents, and
+  sequencing is the PM's concern — same rationale as P2. *Deferred (later P3 slices):*
+  auto-dispatch of unblocked work (pair `portfolio_plan` → `portfolio_dispatch` with an
+  idempotency guard; ideally delta-triggered, not polled), bead-side annotation so an
+  edge travels with the work, full cycle-aware multi-hop topological sequencing, and a
+  console graph view. Improves on the Studio comp (project-level edges, manual
+  `resolve`) with feature-level edges + automatic merge detection.

@@ -42,6 +42,8 @@ registry), [delegates](/guides/delegates) (the A2A dispatch primitive), and
 | `portfolio_rollup([boards])` | **Bounded** cross-board view — per-board lane counts + only the blocked / critical-path items, never the full feature list. Reason over many boards without raw reads |
 | `portfolio_diff([boards])` | What **changed** since the last check — features merged / newly-blocked / unblocked / new — then advances the baseline |
 | `portfolio_watch([interval_min, boards])` | Records a baseline, then hands you the `schedule_task` call to run `portfolio_diff` on a schedule |
+| `portfolio_link(from_board, from_feature, to_board, to_feature[, note, remove])` | Record (or remove) a cross-board dependency: A's feature waits for B's |
+| `portfolio_plan()` | The cross-board dependency graph + what's ready to dispatch next |
 
 ## Deltas without polling
 
@@ -63,6 +65,32 @@ Each scheduled fire arrives as a turn carrying only the deltas — *the system p
 the PM*. (Why pull-diff and not push: A2A push notifications are task-scoped, the event
 bus is in-process, and a team-agent doesn't know its PM — so a PM-side snapshot+diff is
 the thin correct shape. See [ADR 0055 P2](../adr/0055-multi-team-orchestration-federated-boards.md#phasing).)
+
+## Cross-board dependencies
+
+When one team's feature can't start until another team's ships, record the edge and
+let the PM sequence:
+
+```
+portfolio_link(from_board="team-web", from_feature="bd-aaa",
+               to_board="team-api",  to_feature="bd-bbb",
+               note="web's probe wiring needs the /v2 endpoint")
+# team-web:bd-aaa is now blocked until team-api:bd-bbb is done (merged)
+
+portfolio_plan()
+# → every link tagged satisfied / blocking / unknown / dangling, plus:
+#   ready_to_dispatch — from-features whose every blocker has merged (dispatch these next)
+#   blocked           — the rest, with their open blockers
+```
+
+Edges are **PM-side** (`portfolio_links.json`, scoped to the PM) — features are
+addressed by `(board, feature_id)` since ids are board-local. A link is **satisfied**
+the moment its depended-on feature reaches `done` (the board's only merge signal); an
+unreachable blocker is **unknown** and fail-closed (never dispatched on a guess); a
+vanished one is **dangling** (prune with `portfolio_link(remove="lnk-…")`). Cycles are
+rejected when you add the link. Pair `portfolio_plan` with `portfolio_dispatch` to send
+the unblocked work — the PM (or you) stays in the loop; auto-dispatch is a later slice
+(see [ADR 0055 P3](../adr/0055-multi-team-orchestration-federated-boards.md#phasing)).
 
 ## Notes
 
