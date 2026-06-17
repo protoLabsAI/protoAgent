@@ -175,7 +175,14 @@ def test_register_exposes_the_tools():
             seen.append(t.name)
 
     portfolio.register(_Reg())
-    assert set(seen) == {"portfolio_boards", "portfolio_dispatch", "portfolio_board_read", "portfolio_rollup"}
+    assert set(seen) == {
+        "portfolio_boards",
+        "portfolio_dispatch",
+        "portfolio_board_read",
+        "portfolio_rollup",
+        "portfolio_diff",
+        "portfolio_watch",
+    }
 
 
 # ── portfolio_rollup (P2) ────────────────────────────────────────────────────
@@ -274,3 +281,91 @@ async def test_rollup_no_boards_message(monkeypatch):
 
     monkeypatch.setattr(supervisor, "list_remotes", lambda: [])
     assert "No team boards yet" in await _tool("portfolio_rollup").ainvoke({})
+
+
+# ── portfolio_diff / portfolio_watch (P2 slice 2 — deltas) ───────────────────
+
+
+def test_diff_boards_pure_projection():
+    from plugins import portfolio as pf
+
+    prev = {
+        "f1": {"state": "in_progress", "blocked": False, "title": "merge me"},
+        "f2": {"state": "in_progress", "blocked": True, "title": "stuck"},
+        "f3": {"state": "ready", "blocked": False, "title": "steady"},
+    }
+    curr = {
+        "f1": {"state": "done", "blocked": False, "title": "merge me"},  # → merged
+        "f2": {"state": "in_progress", "blocked": False, "title": "stuck"},  # → unblocked
+        "f3": {"state": "ready", "blocked": False, "title": "steady"},  # unchanged → no delta
+        "f4": {"state": "in_progress", "blocked": True, "title": "fresh+blocked"},  # → new (not double-counted as blocked)
+    }
+    d = pf._diff_boards(prev, curr)
+    assert d["merged"] == [{"id": "f1", "title": "merge me"}]
+    assert d["unblocked"] == [{"id": "f2", "title": "stuck"}]
+    assert d["new"] == [{"id": "f4", "title": "fresh+blocked", "state": "in_progress"}]
+    assert "newly_blocked" not in d  # f4 is reported as new, not also as blocked
+    assert pf._diff_boards(curr, curr) == {}  # no changes → empty
+
+
+def _patch_board(monkeypatch, tmp_path, board_features: dict):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_remotes",
+        lambda: [{"id": "r1", "name": n, "url": f"https://{n}.example", "token": "t"} for n in board_features],
+    )
+    state = {"features": board_features}
+
+    async def fake_fetch(rec, fstate=""):
+        return state["features"][rec["name"]]
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+    monkeypatch.setattr(pf, "_snapshot_path", lambda: tmp_path / "snap.json")
+    return state
+
+
+@pytest.mark.asyncio
+async def test_diff_first_run_baselines_then_reports_changes(monkeypatch, tmp_path):
+    state = _patch_board(
+        monkeypatch,
+        tmp_path,
+        {"team-web": [{"id": "w1", "title": "feat", "board_state": "in_progress"}]},
+    )
+
+    # first run: records baseline, reports nothing
+    out1 = await _tool("portfolio_diff").ainvoke({})
+    assert "Baseline recorded" in out1
+    assert (tmp_path / "snap.json").exists()
+
+    # nothing changed → no-change message
+    assert "No board changes" in await _tool("portfolio_diff").ainvoke({})
+
+    # the feature merges → next diff reports it
+    state["features"]["team-web"] = [{"id": "w1", "title": "feat", "board_state": "done"}]
+    out3 = json.loads(await _tool("portfolio_diff").ainvoke({}))
+    assert out3 == {"team-web": {"merged": [{"id": "w1", "title": "feat"}]}}
+
+    # and it's consumed — a re-run sees no further change
+    assert "No board changes" in await _tool("portfolio_diff").ainvoke({})
+
+
+@pytest.mark.asyncio
+async def test_watch_baselines_and_returns_schedule_guidance(monkeypatch, tmp_path):
+    _patch_board(monkeypatch, tmp_path, {"team-web": [{"id": "w1", "title": "f", "board_state": "ready"}]})
+    out = await _tool("portfolio_watch").ainvoke({"interval_min": 30})
+    assert "Baseline captured for 1 board" in out
+    assert 'when="*/30 * * * *"' in out and "schedule_task" in out
+    assert (tmp_path / "snap.json").exists()  # baseline seeded
+
+
+@pytest.mark.asyncio
+async def test_diff_no_boards_message(monkeypatch, tmp_path):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(supervisor, "list_remotes", lambda: [])
+    monkeypatch.setattr(pf, "_snapshot_path", lambda: tmp_path / "snap.json")
+    assert "No team boards yet" in await _tool("portfolio_diff").ainvoke({})

@@ -1,6 +1,6 @@
 id: portfolio
 name: Portfolio (multi-team orchestration)
-version: 0.2.0
+version: 0.3.0
 description: >-
   The PM / program orchestration layer (ADR 0055 P1). One agent orchestrates work
   across MANY team-agents, each running its own project board for its own repo
@@ -12,9 +12,11 @@ description: >-
   Tools: portfolio_boards (enumerate), portfolio_dispatch (send a feature to a
   team board over A2A), portfolio_board_read (structured read of one team board),
   portfolio_rollup (bounded cross-board view — per-board lane counts + only the
-  blocked/critical-path items, so a PM reasons over MANY boards without raw reads).
-  Ships DISABLED; enable with `plugins: { enabled: [portfolio] }`. Pairs with the
-  `delegates` plugin and remote fleet members (ADR 0042). See ADR 0055.
+  blocked/critical-path items, so a PM reasons over MANY boards without raw reads),
+  portfolio_diff (what changed since last check — merged/blocked/unblocked/new) +
+  portfolio_watch (baseline now, then schedule a recurring diff — deltas without
+  polling). Ships DISABLED; enable with `plugins: { enabled: [portfolio] }`. Pairs
+  with the `delegates` plugin and remote fleet members (ADR 0042). See ADR 0055.
 
 enabled: false
 min_protoagent_version: "0.42.0"

@@ -112,10 +112,35 @@ registry:
 
 ## Phasing
 
-- **P0** — deterministic per-instance board pinning in `project_board` (explicit
-  beads location; honor `operator.project_dir`/instance; `db_path` wires through;
-  singleton reload). *Also fixes the dev-env isolation gap.*
-- **P1** — PM portfolio capability: address team-agents as boards over A2A
-  (discover, dispatch a feature, read a board's state) on the ADR 0042 spine.
-- **P2** — rollup + event/A2A delta streaming (the bounded-context layer).
+- **P0** ✅ *(shipped)* — deterministic per-instance board pinning in `project_board`
+  (explicit beads location; `db_path` wires through; per-(db,repo) store; `br` runs in
+  the configured repo). *Also fixed the dev-env isolation gap.* projectBoard-plugin
+  v0.19.0 (#46) + pm-stack pin (#6) + the host fix protoAgent #1105 (scoped instances
+  now resolve installed-plugin config from the unscoped plugins dir).
+- **P1** ✅ *(shipped + live-verified)* — PM portfolio capability: the `portfolio`
+  plugin (#1107) — `portfolio_boards` / `portfolio_dispatch` (A2A) / `portfolio_board_read`.
+  Pure composition of fleet × delegates × project_board. Live-verified end-to-end
+  against a real team-agent over A2A (a dispatched feature was created on the team's
+  own isolated board and read back structured).
+- **P2** — rollup + delta streaming (the bounded-context layer).
+  - *Slice 1* ✅ *(shipped)* — `portfolio_rollup` (#1110): bounded cross-board view —
+    per-board lane counts + only the blocked/critical-path items, never raw boards.
+  - *Slice 2* ✅ *(shipped)* — board **deltas** via `portfolio_diff` + `portfolio_watch`:
+    a PM-side **pull-diff**. The PM snapshots each board (feature→state/blocked) under
+    its instance data root and reports only the transitions (merged / newly-blocked /
+    unblocked / new); `portfolio_watch` seeds a baseline and hands back a `schedule_task`
+    cron so the diff runs on a schedule and arrives as a turn — *the system polls for the
+    PM, not the PM's reasoning loop*.
+
+    **Why pull-diff, not push** (decided after a substrate scout): A2A push notifications
+    (`pushNotificationConfig`) are **task-scoped** — they express "my dispatched task
+    finished," not "this board changed," which is the wrong granularity. The event bus
+    (ADR 0039) is **in-process per instance** with no cross-instance bridge. And remote
+    registration is **one-directional** (PM→team via `remotes.json`) — a team-agent has
+    no back-reference to its PM, so a push would need new credential distribution + a
+    team-side emit hook in the standalone `project_board` repo. Pull-diff reuses the
+    slice-1 read path verbatim, auth already flows PM→team, and nothing changes on the
+    team side. *Deferred push upgrade (P2.5+):* a team-side bus→`/api/inbox` bridge once a
+    team↔PM handshake exists — the inbox (`POST /api/inbox`, `priority:"now"` fires a turn)
+    is the right inbound sink, but it's a larger lift for marginal latency gain.
 - **P3** — cross-repo dependency graph + program-level sequencing.

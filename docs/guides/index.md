@@ -60,6 +60,7 @@ Run the agent as a service, give it a console, isolate instances, fence it in, a
 | [Operator console (React/Tauri)](/guides/react-tauri-ui) | You want the multi-chat React console and to package it for desktop |
 | [Run multiple instances](/guides/multi-instance) | You want several scoped agents (data isolation) on one host |
 | [Run a fleet (workspaces, archetypes, supervisor)](/guides/fleet) | You want many named agents on one host — created from archetypes, run in the background, sharing a skills commons |
+| [Portfolio (one PM, many team boards)](/guides/portfolio) | You want one PM agent to dispatch work to, and track, several team-agents' project boards across repos — over A2A |
 | [Sandboxing & egress](/guides/sandboxing) | You want to fence the filesystem + outbound network |
 | [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
 

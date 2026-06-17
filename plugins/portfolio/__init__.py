@@ -10,11 +10,20 @@ subsystems — no new dispatch or registry machinery:
 
 The PM treats each remote fleet member as a *board* addressed by its name: list
 them (`portfolio_boards`), dispatch a feature to one over A2A (`portfolio_dispatch`),
-and read one back structured (`portfolio_board_read`). See ADR 0055.
+read one back structured (`portfolio_board_read`), see a bounded cross-board rollup
+(`portfolio_rollup`), and watch for changes without polling (`portfolio_watch` +
+`portfolio_diff`). See ADR 0055.
+
+P2 deltas are PULL-DIFF, not push: the PM snapshots each board (state per feature)
+and reports what changed since the last check. A2A push notifications are task-scoped
+(wrong granularity), the event bus is in-process, and a team-agent doesn't know its
+PM — so a PM-side snapshot+diff, run on a schedule, is the thin correct shape (ADR
+0055 P2; the optional inbox-push upgrade is deferred).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from langchain_core.tools import tool
@@ -91,6 +100,110 @@ def _rollup_one(name: str, features: list) -> dict:
         if f.get("foundation") and st != "done":
             critical.append({"id": f.get("id"), "title": f.get("title", ""), "state": st})
     return {"board": name, "total": len(features), "counts": counts, "blocked": blocked, "critical_path": critical}
+
+
+def _parse_boards(boards: str) -> set | None:
+    """Comma-separated board filter → a set of names, or None for all."""
+    return {b.strip() for b in boards.split(",") if b.strip()} if boards else None
+
+
+# ── P2 deltas: snapshot + diff (pull-diff, PM-side) ──────────────────────────────
+
+
+def _snapshot_path():
+    """Per-instance baseline for delta detection — scoped under the PM's data root so
+    co-located instances don't collide (ADR 0004), mirroring remotes.json."""
+    from infra.paths import data_home, scope_leaf
+
+    return scope_leaf(data_home() / "portfolio_snapshot.json")
+
+
+def _load_snapshot() -> dict:
+    p = _snapshot_path()
+    try:
+        return json.loads(p.read_text()) if p.exists() else {}
+    except Exception:  # noqa: BLE001 — a corrupt snapshot just re-baselines, never breaks the tool
+        return {}
+
+
+def _save_snapshot(snap: dict) -> None:
+    p = _snapshot_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(snap))
+
+
+def _index_features(features: list) -> dict:
+    """feature_id → the fields a diff cares about (state + blocked + title)."""
+    return {
+        f["id"]: {
+            "state": f.get("board_state"),
+            "blocked": bool(f.get("blocked") or f.get("dag_blocked")),
+            "title": f.get("title", ""),
+        }
+        for f in features
+        if f.get("id")
+    }
+
+
+def _diff_boards(prev: dict, curr: dict) -> dict:
+    """Compare two feature-index snapshots → only the meaningful transitions: a feature
+    reaching ``done`` (PR merged), newly blocked, unblocked, or newly appearing."""
+    merged, newly_blocked, unblocked, new = [], [], [], []
+    for fid, c in curr.items():
+        p = prev.get(fid)
+        if p is None:
+            new.append({"id": fid, "title": c["title"], "state": c["state"]})
+            continue
+        if c["state"] == "done" and p.get("state") != "done":
+            merged.append({"id": fid, "title": c["title"]})
+        if c["blocked"] and not p.get("blocked"):
+            newly_blocked.append({"id": fid, "title": c["title"]})
+        elif p.get("blocked") and not c["blocked"]:
+            unblocked.append({"id": fid, "title": c["title"]})
+    out = {}
+    if merged:
+        out["merged"] = merged
+    if newly_blocked:
+        out["newly_blocked"] = newly_blocked
+    if unblocked:
+        out["unblocked"] = unblocked
+    if new:
+        out["new"] = new
+    return out
+
+
+async def _compute_portfolio_diff(wanted: set | None) -> dict:
+    """Fan out across the (filtered) team boards, diff each against the saved baseline,
+    and rewrite the baseline. Returns ``{recs, first_run, changes}``. On the first run
+    (no baseline) it records the baseline and reports nothing — there's no 'before'."""
+    from graph.fleet import supervisor
+
+    recs = [
+        r
+        for r in supervisor.list_remotes()
+        if wanted is None or r.get("name") in wanted or r.get("id") in wanted
+    ]
+    snap = _load_snapshot()
+    first_run = not snap
+
+    async def _one(rec: dict):
+        name = rec.get("name")
+        try:
+            feats = await _fetch_board_features(rec)
+        except _BoardUnavailable as exc:
+            return name, {"error": str(exc)}, None
+        idx = _index_features(feats)
+        return name, _diff_boards(snap.get(name, {}), idx), idx
+
+    results = await asyncio.gather(*[_one(r) for r in recs]) if recs else []
+    changes = {}
+    for name, deltas, idx in results:
+        if idx is not None:  # only advance the baseline for boards we actually read
+            snap[name] = idx
+        if deltas and not first_run:  # first run = pure baseline, suppress the all-new noise
+            changes[name] = deltas
+    _save_snapshot(snap)
+    return {"recs": len(recs), "first_run": first_run, "changes": changes}
 
 
 def _dispatch_instruction(title: str, spec: str, acceptance_criteria: str, files_to_modify: str) -> str:
@@ -207,9 +320,63 @@ def _tools() -> list:
                 return {"board": rec.get("name"), "error": str(exc)}
             return _rollup_one(rec.get("name"), feats)
 
-        import asyncio
-
         rollups = await asyncio.gather(*[_one(r) for r in recs])
         return json.dumps(rollups, indent=2)
 
-    return [portfolio_boards, portfolio_dispatch, portfolio_board_read, portfolio_rollup]
+    @tool
+    async def portfolio_diff(boards: str = "") -> str:
+        """Report what CHANGED on the team boards since the last check — features that
+        merged (reached done), newly blocked, unblocked, or newly added — then update
+        the baseline. The bounded, push-free way to stay current: schedule this (see
+        portfolio_watch) and each run surfaces only the deltas. The FIRST run records a
+        baseline and reports nothing (there's no 'before'). Optional comma-separated
+        ``boards`` filter."""
+        res = await _compute_portfolio_diff(_parse_boards(boards))
+        if res["recs"] == 0:
+            return (
+                "No matching team boards. Call portfolio_boards to list them."
+                if boards
+                else "No team boards yet — register a team-agent as a fleet member first (see portfolio_boards)."
+            )
+        if res["first_run"]:
+            return (
+                f"Baseline recorded for {res['recs']} board(s). Future portfolio_diff calls "
+                "report only what changed since now."
+            )
+        if not res["changes"]:
+            return "No board changes since the last check."
+        return json.dumps(res["changes"], indent=2)
+
+    @tool
+    async def portfolio_watch(interval_min: int = 15, boards: str = "") -> str:
+        """Start watching the team boards for changes WITHOUT polling: record a baseline
+        now, then hand you the exact schedule_task call to run a recurring portfolio_diff.
+        Each scheduled fire arrives as a turn carrying only the changes since the prior
+        sweep — so the system polls for you, not your reasoning loop. Optional
+        ``interval_min`` (default 15) and comma-separated ``boards`` filter."""
+        res = await _compute_portfolio_diff(_parse_boards(boards))
+        if res["recs"] == 0:
+            return (
+                "No matching team boards to watch."
+                if boards
+                else "No team boards yet — register a team-agent as a fleet member first (see portfolio_boards)."
+            )
+        interval = max(1, int(interval_min))
+        cron = f"*/{interval} * * * *" if interval < 60 else "0 * * * *"
+        filt = f' boards="{boards}"' if boards else ""
+        return (
+            f"Baseline captured for {res['recs']} board(s). To receive deltas without polling, "
+            "schedule a recurring sweep with your schedule_task tool:\n\n"
+            f'  schedule_task(prompt="Run portfolio_diff{filt} and report any board changes; '
+            f'if there are none, do nothing.", when="{cron}")\n\n'
+            "Each fire arrives as a turn carrying only the changes since the prior sweep."
+        )
+
+    return [
+        portfolio_boards,
+        portfolio_dispatch,
+        portfolio_board_read,
+        portfolio_rollup,
+        portfolio_diff,
+        portfolio_watch,
+    ]
