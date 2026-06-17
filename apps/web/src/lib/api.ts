@@ -227,6 +227,22 @@ export function isDesktopWebview(): boolean {
   }
 }
 
+/** A typed view of the bits of the Tauri `core` API the desktop streaming path uses,
+ * read off the `window.__TAURI__` global (the shell sets `withGlobalTauri: true`), so
+ * the shared web bundle needs no `@tauri-apps/api` dependency. Null outside the shell. */
+type TauriChannel<T> = { onmessage: (msg: T) => void };
+type TauriCore = {
+  invoke: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+  Channel: new <T>() => TauriChannel<T>;
+};
+function tauriCore(): TauriCore | null {
+  try {
+    return (window as unknown as { __TAURI__?: { core?: TauriCore } }).__TAURI__?.core ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Operator bearer token, set in localStorage (`protoagent.authToken`). Sent on
  * every fetch-based API + A2A call so a token-configured deployment's console
  * authenticates against the server guard. Blank ⇒ no header — the default
@@ -978,12 +994,89 @@ export const api = {
     } = {},
     opts: { images?: { b64: string; mime: string; name: string }[]; model?: string } = {},
   ) {
-    // Desktop (WKWebView) can't read a streaming SSE body via fetch (see
-    // isDesktopWebview) — the turn would render as a blank assistant bubble. Take
-    // the non-streaming `/api/chat` path: one request, full reply, render once.
-    // No token-by-token streaming or tool-call cards here, but the turn always
-    // shows. Browsers fall through to the streaming `/a2a` path below.
+    // One A2A SendStreamingMessage body + one frame dispatcher, shared by the desktop
+    // (Tauri-relayed) and browser (fetch SSE) paths so both decode turns identically.
+    const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const buildBody = () => ({
+      jsonrpc: "2.0",
+      id: rpcId,
+      method: "SendStreamingMessage",
+      params: {
+        message: {
+          role: "ROLE_USER",
+          parts: [
+            { text: message },
+            ...(opts.images || []).map((img) => ({ raw: img.b64, mediaType: img.mime, filename: img.name })),
+          ],
+          messageId: rpcId,
+          contextId: sessionId,
+          ...(opts.model ? { metadata: { model: opts.model } } : {}),
+        },
+      },
+    });
+    const dispatchFrame = (frame: A2AFrame) => {
+      if (frame.error?.message) throw new Error(frame.error.message);
+      const result = frame.result;
+      if (!result) return;
+      const task = result.task ?? (result.kind === "task" ? result : undefined);
+      const statusUpdate = result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
+      const artifactUpdate = result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);
+      if (task?.id) {
+        handlers.onTaskId?.(task.id);
+        const terminalText = textFromTerminalTask(task);
+        if (terminalText) handlers.onText?.(terminalText, false);
+      }
+      if (statusUpdate) {
+        const state = statusUpdate.status?.state || "";
+        const parts = statusUpdate.status?.message?.parts;
+        const messageText = textFromParts(parts);
+        const reasoning = reasoningFromParts(parts);
+        if (reasoning) handlers.onReasoning?.(reasoning);
+        if (!reasoning) handlers.onStatus?.(messageText || state);
+        const toolEvent = toolEventFromParts(parts);
+        if (toolEvent) handlers.onToolCall?.(toolEvent);
+        const component = componentFromParts(parts);
+        if (component) handlers.onComponent?.(component);
+        if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
+          handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
+        }
+        if (state === "failed" || state === "TASK_STATE_FAILED") {
+          handlers.onFailed?.(messageText || "the turn failed");
+        }
+      }
+      if (artifactUpdate) {
+        const text = textFromParts(artifactUpdate.artifact?.parts);
+        if (text) handlers.onText?.(text, artifactUpdate.append !== false);
+      }
+    };
+
+    // Desktop: WKWebView can't read a streaming SSE body via fetch, so relay the /a2a
+    // SSE through the Tauri shell (Rust reqwest → IPC Channel) and parse frames with the
+    // SAME drainSseBuffer + dispatchFrame as the browser — real token-by-token + tool-card
+    // streaming. Falls back to the non-streaming `/api/chat` path if the native command
+    // is unavailable or fails, so it never regresses below the old render-once behavior.
     if (isDesktopWebview()) {
+      try {
+        const core = tauriCore();
+        if (!core) throw new Error("Tauri core API unavailable (withGlobalTauri off?)");
+        const channel = new core.Channel<string>();
+        let buf = "";
+        channel.onmessage = (chunk) => {
+          buf += chunk;
+          buf = drainSseBuffer(buf, dispatchFrame);
+        };
+        const tok = authToken();
+        await core.invoke("chat_stream", {
+          url: apiUrl("/a2a"),
+          body: buildBody(),
+          auth: tok ? `Bearer ${tok}` : null,
+          onEvent: channel,
+        });
+        handlers.onDone?.();
+        return;
+      } catch (err) {
+        console.warn("[desktop] native chat stream failed; falling back to /api/chat:", err);
+      }
       try {
         const res = await fetch(apiUrl("/api/chat"), {
           method: "POST",
@@ -1014,40 +1107,14 @@ export const api = {
       return;
     }
 
-    const rpcId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const response = await fetch(apiUrl("/a2a"), {
       method: "POST",
       headers: applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" })),
       signal: handlers.signal,
-      // A2A 1.0 (a2a-sdk): the streaming RPC is `SendStreamingMessage` (0.3's
-      // `message/stream` is gone → -32601 Method not found, the cause of a
-      // never-resolving spinner). Message uses ROLE_USER, member-discriminated
-      // parts (`{text}`, not `{kind,text}`), and carries messageId + contextId.
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: rpcId,
-        method: "SendStreamingMessage",
-        params: {
-          message: {
-            role: "ROLE_USER",
-            // Native vision: image parts ride as proto-JSON Parts (raw=base64
-            // bytes + mediaType) the executor turns into multimodal content.
-            parts: [
-              { text: message },
-              ...(opts.images || []).map((img) => ({
-                raw: img.b64,
-                mediaType: img.mime,
-                filename: img.name,
-              })),
-            ],
-            messageId: rpcId,
-            contextId: sessionId,
-            // Per-tab model override — the executor merges message metadata into
-            // request_metadata, which the chat layer reads as the turn's model.
-            ...(opts.model ? { metadata: { model: opts.model } } : {}),
-          },
-        },
-      }),
+      // A2A 1.0 streaming RPC `SendStreamingMessage`; body built by buildBody()
+      // (shared with the desktop path) — ROLE_USER, member-discriminated parts,
+      // messageId + contextId, optional image parts + per-tab model metadata.
+      body: JSON.stringify(buildBody()),
     });
 
     if (!response.ok) {
@@ -1055,52 +1122,7 @@ export const api = {
       throw new Error(`${response.status} ${response.statusText}`);
     }
 
-    await consumeSse(response, (frame) => {
-      if (frame.error?.message) throw new Error(frame.error.message);
-      const result = frame.result;
-      if (!result) return;
-
-      // A2A 1.0 nests the event (task / statusUpdate / artifactUpdate); fall
-      // back to the flat 0.3 `kind`-tagged shape.
-      const task = result.task ?? (result.kind === "task" ? result : undefined);
-      const statusUpdate =
-        result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
-      const artifactUpdate =
-        result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);
-
-      if (task?.id) {
-        handlers.onTaskId?.(task.id);
-        const terminalText = textFromTerminalTask(task);
-        if (terminalText) handlers.onText?.(terminalText, false);
-      }
-
-      if (statusUpdate) {
-        const state = statusUpdate.status?.state || "";
-        const parts = statusUpdate.status?.message?.parts;
-        const messageText = textFromParts(parts);
-        const reasoning = reasoningFromParts(parts);
-        if (reasoning) handlers.onReasoning?.(reasoning);
-        // A reasoning-only frame shouldn't blank the status line to bare "working".
-        if (!reasoning) handlers.onStatus?.(messageText || state);
-        const toolEvent = toolEventFromParts(parts);
-        if (toolEvent) handlers.onToolCall?.(toolEvent);
-        const component = componentFromParts(parts);
-        if (component) handlers.onComponent?.(component);
-        // HITL pause: the turn parked awaiting the operator (0.3 `input-required`
-        // / 1.0 `TASK_STATE_INPUT_REQUIRED`). Surface the form/question payload.
-        if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
-          handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
-        }
-        if (state === "failed" || state === "TASK_STATE_FAILED") {
-          handlers.onFailed?.(messageText || "the turn failed");
-        }
-      }
-
-      if (artifactUpdate) {
-        const text = textFromParts(artifactUpdate.artifact?.parts);
-        if (text) handlers.onText?.(text, artifactUpdate.append !== false);
-      }
-    });
+    await consumeSse(response, dispatchFrame);
     // The SSE stream closing is the canonical "turn complete" signal in A2A 1.0
     // (terminal-by-state, no `final` flag) — resolve the spinner here.
     handlers.onDone?.();
