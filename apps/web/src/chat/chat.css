@@ -79,6 +79,40 @@
   color: var(--fg-secondary);
 }
 
+/* Dedicated Stop control while a turn streams (the composer's send button stays
+   live for mid-turn steering, so Stop is its own affordance here). */
+.composer-stop {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.composer-stop:hover,
+.composer-stop:focus-visible {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+/* A queued mid-turn steering message — an optimistic user bubble shown until the
+   running turn folds it in (then it settles into the thread) or it's re-sent. */
+.steer-queued {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
 /* Composer model picker — rendered in the DS PromptInput `actions` slot (ADR 0051,
    the ComposerWithAttachments DS pattern). A quiet inline button that reads as text
    until hover/focus. Drives a DS Menu dropdown. */

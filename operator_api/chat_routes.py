@@ -75,6 +75,36 @@ def register_chat_routes(app, ui: str) -> None:
                 log.warning("[chat] attachment cleanup failed for %s: %s", session_id, exc)
         return {"deleted": True, "harvested": chunk_id is not None}
 
+    @app.post("/api/chat/sessions/{session_id}/steer")
+    async def _api_steer(session_id: str, body: dict | None = None):
+        """Queue a user message into a RUNNING turn (mid-turn steering).
+
+        The next model call folds it in via ``SteeringMiddleware``, so the user
+        can redirect or reset ongoing work without stopping the live stream. This
+        does NOT start a turn — it only enqueues; the in-flight turn picks it up at
+        its next model call (i.e. after the current tool finishes). The client may
+        pass its own ``id`` so it can reconcile at turn-end."""
+        from fastapi import HTTPException
+
+        from graph import steering
+
+        text = str((body or {}).get("text", "")).strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        msg_id = str((body or {}).get("id", "")).strip() or None
+        mid = steering.enqueue(session_id, text, msg_id=msg_id)
+        return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
+
+    @app.get("/api/chat/sessions/{session_id}/steer")
+    async def _api_steer_pending(session_id: str):
+        """Items still queued for ``session_id`` — i.e. steering messages that
+        arrived after the turn's last model call and weren't folded in. The
+        console reads this at turn-end: it settles the consumed ones into the
+        thread and re-sends these un-consumed ones as a fresh turn."""
+        from graph import steering
+
+        return {"pending": steering.pending_items(session_id)}
+
     # --- Goal mode API ------------------------------------------------------
     # Programmatic status/clear for a session's goal (setting is done via the
     # `/goal ...` control message through chat/A2A). Returns 404-style payloads

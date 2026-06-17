@@ -1122,6 +1122,23 @@ export const api = {
     });
   },
 
+  // Mid-turn steering: queue a user message into a RUNNING turn (folded in at the
+  // next model call by SteeringMiddleware) without stopping the stream. The client
+  // `id` lets the turn-end reconcile tell consumed from arrived-too-late.
+  steerChat(sessionId: string, id: string, text: string) {
+    return request<{ ok: boolean; id: string | null; pending: number }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
+      { method: "POST", body: { id, text } },
+    );
+  },
+  // Items still queued for the session — read at turn-end: anything here arrived
+  // after the turn's last model call and wasn't folded in (re-send as a new turn).
+  pendingSteer(sessionId: string) {
+    return request<{ pending: { id: string; text: string }[] }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
+    );
+  },
+
   // Reconcile a turn against the server's durable task (A2A GetTask). Used to
   // self-heal a chat message stuck in `streaming` after the stream was
   // interrupted (reload, network blip, a stale tab) — the server task is the

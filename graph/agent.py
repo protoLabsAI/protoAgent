@@ -40,6 +40,13 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
 
     middleware.append(WaitYieldMiddleware())
 
+    # Mid-turn user steering (spike) — fold queued user input into the running
+    # turn at the next model call, so a user can redirect ongoing work without
+    # stopping the stream. No-op when nothing was injected this turn.
+    from graph.middleware.steering import SteeringMiddleware
+
+    middleware.append(SteeringMiddleware())
+
     # Per-turn model override (per chat tab). Outermost wrap_model_call so the
     # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
     # the turn carries state["model"].

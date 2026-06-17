@@ -16,6 +16,7 @@ import {
   GitBranch,
   Loader2,
   RotateCcw,
+  Square,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -215,6 +216,15 @@ function ChatSessionSlot({
   const abortRef = useRef<AbortController | null>(null);
   // Transient "copied ✓" feedback on a message's copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Mid-turn steering: user messages queued WHILE a turn streams (optimistic),
+  // reconciled at turn-end. The ref mirrors the state so the post-stream reconcile
+  // (a stale render closure) reads the live queue.
+  const [steerQueue, setSteerQueueState] = useState<{ id: string; text: string }[]>([]);
+  const steerQueueRef = useRef<{ id: string; text: string }[]>([]);
+  const setSteerQueue = (next: { id: string; text: string }[]) => {
+    steerQueueRef.current = next;
+    setSteerQueueState(next);
+  };
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -449,6 +459,98 @@ function ChatSessionSlot({
     setAttachments([]);
     void runTurn(display, { sendAs: sent, images });
   }
+
+  // Steer a RUNNING turn: queue the typed message (folds in at the agent's next
+  // model call via SteeringMiddleware) without stopping the stream. Shows an
+  // optimistic "queued" bubble; turn-end reconcile settles or re-sends it.
+  async function queueSteer() {
+    const text = draft.trim();
+    if (!session || !text) return;
+    const id = messageId();
+    setDraft("");
+    setSteerQueue([...steerQueueRef.current, { id, text }]);
+    try {
+      await api.steerChat(session.id, id, text);
+    } catch (e) {
+      setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
+      onError(`Couldn't queue message: ${errMsg(e)}`);
+    }
+  }
+
+  // Settle steered messages the agent has folded in: drop them from the queue and
+  // place them into the thread just before the turn's current assistant message —
+  // they shaped it. Shared by the mid-turn poll and the turn-end reconcile.
+  function settleConsumed(consumed: { id: string; text: string }[]) {
+    if (!session || !consumed.length) return;
+    const consumedIds = new Set(consumed.map((c) => c.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !consumedIds.has(q.id)));
+    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!snap) return;
+    const settled: ChatMessage[] = consumed.map((c) => ({
+      id: c.id,
+      role: "user",
+      content: c.text,
+      createdAt: Date.now(),
+      status: "done",
+    }));
+    const msgs = [...snap.messages];
+    let at = msgs.length;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "assistant") {
+        at = i;
+        break;
+      }
+    }
+    msgs.splice(at, 0, ...settled);
+    chatStore.updateMessages(session.id, msgs);
+  }
+
+  // After a turn ends, reconcile any still-queued steers: those the agent folded
+  // in settle into the thread; those still queued arrived after the last model
+  // call (never seen) → re-send as a fresh turn so they aren't lost.
+  async function reconcileSteer() {
+    const queued = steerQueueRef.current;
+    if (!session || !queued.length) return;
+    let remaining: { id: string; text: string }[];
+    try {
+      remaining = (await api.pendingSteer(session.id)).pending;
+    } catch {
+      return; // can't tell consumed from not — leave the queue rather than guess
+    }
+    const remainingIds = new Set(remaining.map((r) => r.id));
+    const consumed = queued.filter((q) => !remainingIds.has(q.id));
+    const unconsumed = queued.filter((q) => remainingIds.has(q.id));
+    if (consumed.length) settleConsumed(consumed);
+    setSteerQueue([]);
+    if (unconsumed.length) {
+      void runTurn(unconsumed.map((u) => u.text).join("\n\n"));
+    }
+  }
+
+  // Mid-turn ack: while a turn streams with queued steers, poll the backend so a
+  // steer the agent has already folded in settles into the thread immediately —
+  // otherwise a long turn shows "queued" long after the agent received it.
+  useEffect(() => {
+    if (status !== "streaming" || steerQueue.length === 0 || !session) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const remaining = (await api.pendingSteer(session.id)).pending;
+        if (!alive) return;
+        const remainingIds = new Set(remaining.map((r) => r.id));
+        const consumed = steerQueueRef.current.filter((q) => !remainingIds.has(q.id));
+        if (consumed.length) settleConsumed(consumed);
+      } catch {
+        /* transient — retry next tick */
+      }
+    };
+    const handle = window.setInterval(tick, 1500);
+    return () => {
+      alive = false;
+      window.clearInterval(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, steerQueue.length, session?.id]);
 
   function copyMessage(message: ChatMessage) {
     void navigator.clipboard?.writeText(message.content || "");
@@ -706,6 +808,7 @@ function ChatSessionSlot({
       }, { images: opts.images, model: session.model });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
+      void reconcileSteer();
     } catch (exc) {
       if (controller.signal.aborted) {
         setStatusMessage("stopped");
@@ -743,6 +846,8 @@ function ChatSessionSlot({
     abortRef.current?.abort();
     chatStore.setSessionStatus(sessionId, "idle");
     setStatusMessage("stopped");
+    // Drop any optimistic queued-steer bubbles; the user chose to stop.
+    setSteerQueue([]);
   }
 
   if (!session) return null;
@@ -811,6 +916,14 @@ function ChatSessionSlot({
             </Message>
           ))
         )}
+        {steerQueue.map((q) => (
+          <Message key={q.id} role="user">
+            <span className="chat-user-text">{q.text}</span>
+            <span className="steer-queued">
+              <Loader2 className="spin" size={11} /> queued — folds into the agent&apos;s work at its next step
+            </span>
+          </Message>
+        ))}
       </Conversation>
 
       {hitl && (
@@ -843,10 +956,13 @@ function ChatSessionSlot({
           }
         }}
       >
-        {status === "streaming" && statusMessage ? (
+        {status === "streaming" ? (
           <div className="composer-status">
             <Loader2 className="spin" size={12} />
-            <span>{statusMessage}</span>
+            <span>{statusMessage || "working"}</span>
+            <button type="button" className="composer-stop" onClick={() => void stop()}>
+              <Square size={10} /> Stop
+            </button>
           </div>
         ) : null}
         <PromptInput
@@ -855,13 +971,19 @@ function ChatSessionSlot({
             setDraft(v);
             setSlashDismissed(false); // re-open the menu when the input changes
           }}
-          // The DS button is Send when idle, Stop (square) while streaming.
+          // Idle → send. While a turn streams, the field stays live so the user can
+          // type and Enter to STEER (queue into the running turn) without stopping
+          // it; Stop is the dedicated control above. So `loading` stays false.
           onSubmit={() => {
-            if (status === "streaming") void stop();
+            if (status === "streaming") void queueSteer();
             else void send();
           }}
-          loading={status === "streaming"}
-          placeholder="Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
+          loading={false}
+          placeholder={
+            status === "streaming"
+              ? "Steer the agent — your message folds into its work at the next step (Enter to queue)"
+              : "Message protoAgent  (/ for commands · Enter to send · ⌘/Ctrl+Enter for newline)"
+          }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {

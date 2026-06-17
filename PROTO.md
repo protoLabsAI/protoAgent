@@ -14,6 +14,13 @@ TypeScript is the console.
 - **Server:** `python -m server` (never `python server.py` — single-file launch
   was retired in ADR 0023 and CI fails on it). Console is served from
   `apps/web/dist`; `/healthz` is the readiness probe.
+- **Isolated dev instance (don't stomp prod data):** `scripts/dev.sh` runs a
+  sandboxed instance via `PROTOAGENT_INSTANCE=dev` (ADR 0004 scoping) on `:7871` —
+  its own `config/dev/` + `~/.protoagent/{dev,*/dev}` data, **seeded from your
+  default config** (boots with your gateway, no re-setup) but with fresh, separate
+  chat/beads/knowledge. The default instance (`config/` + `~/.protoagent`, `:7870`)
+  is untouched. `scripts/dev-reset.sh` wipes just the sandbox. Use this for feature
+  testing instead of the default instance.
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is
   the source of truth; `uv.lock` is tracked). `uv sync` to install.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is

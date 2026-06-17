@@ -319,9 +319,16 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
+      // Mid-turn steering: turn-end reconcile reads the still-queued items.
+      if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname)) return sendJson(res, { pending: [] });
       const payload = handleApiGet(pathname, fleetFor(req));
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
+    }
+    // Mid-turn steering enqueue — accept + echo (the console ignores the body).
+    if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {
+      const body = await readBody(req);
+      return sendJson(res, { ok: true, id: body.id ?? null, pending: 0 });
     }
     if (pathname === "/api/knowledge/attach" && req.method === "POST") {
       // Chat attachment upload (#1002) — multipart, so DON'T JSON-parse the body.
