@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-06-17
+
 ### Added
 - **ACP `forget_session` — start a coder fresh when its workdir was recreated.** A
   persisted ACP session (#970) lets a dispatch *reattach* a prior thread — right when
