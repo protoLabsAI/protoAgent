@@ -17,7 +17,7 @@ permissions:
 jobs:
   workspace-config:
     name: Verify workspace config
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
 
   lint:
     name: Lint (ruff + import contracts)
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
 
   tests:
     name: Python tests
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +109,7 @@ jobs:
 
   live-smoke:
     name: A2A live smoke (lean tier)
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +136,7 @@ jobs:
 
   web-e2e:
     name: Web E2E smoke
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
