@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Field, Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Grid } from "@protolabsai/ui/layout";
 import { Button, Callout } from "@protolabsai/ui/primitives";
+import { Alert, Spinner } from "@protolabsai/ui/data";
 import {
-  AlertTriangle,
   Bot,
   Check,
   ChevronLeft,
@@ -11,7 +11,6 @@ import {
   Cpu,
   HardDrive,
   KeyRound,
-  Loader2,
   Search,
   ShieldCheck,
   Sparkles,
@@ -450,18 +449,12 @@ export function SetupWizard({
           {step === "agent" ? (
             <StepBody icon={<Bot size={20} />} title="Agent" kicker="Name & persona">
               <div className="setup-grid two">
-                <label className="field">
-                  <span>Agent name</span>
-                  <Input value={state.agentName} onChange={(event) => update({ agentName: event.target.value })} />
-                </label>
-                <label className="field">
-                  <span>Operator</span>
-                  <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
-                </label>
+                <Field label="Agent name" value={state.agentName} onValueChange={(value) => update({ agentName: value })} />
+                <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
               </div>
-              <small style={{ opacity: 0.7, display: "block", marginTop: "0.4rem" }}>
+              <p className="setup-hint">
                 Pick an archetype to seed the persona below — the agent&apos;s base SOUL. You can edit it freely.
-              </small>
+              </p>
               <Grid className="archetype-grid" min="160px" gap="sm">
                 {archetypeList.map((a) => (
                   <button
@@ -477,10 +470,9 @@ export function SetupWizard({
                   </button>
                 ))}
               </Grid>
-              <label className="field">
-                <span>SOUL.md</span>
+              <WizardField label="SOUL.md">
                 <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
-              </label>
+              </WizardField>
             </StepBody>
           ) : null}
 
@@ -492,9 +484,8 @@ export function SetupWizard({
             >
               {/* How this agent thinks: native LangGraph loop on a gateway, or hand each
                   turn to a CLI coding agent over ACP (ADR 0033). */}
-              <label className="field">
-                <span>How this agent thinks</span>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+              <WizardField label="How this agent thinks">
+                <div className="setup-choices">
                   {([
                     ["native", "Native model", "Run turns on an OpenAI-compatible gateway."],
                     ["acp", "Coding agent (ACP)", "Hand each turn to a CLI coding agent — it's the brain, no gateway key needed."],
@@ -502,30 +493,18 @@ export function SetupWizard({
                     <button
                       key={kind}
                       type="button"
+                      className={`setup-choice${state.runtimeKind === kind ? " selected" : ""}`}
+                      aria-pressed={state.runtimeKind === kind}
                       onClick={() => update({ runtimeKind: kind })}
-                      style={{
-                        flex: 1,
-                        textAlign: "left",
-                        padding: "0.6rem 0.7rem",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        color: "inherit",
-                        border: `1px solid ${state.runtimeKind === kind ? "var(--brand-violet-light, #a78bfa)" : "var(--border, #333)"}`,
-                        background:
-                          state.runtimeKind === kind
-                            ? "color-mix(in srgb, var(--brand-violet-light, #a78bfa) 14%, transparent)"
-                            : "transparent",
-                      }}
                     >
-                      <strong style={{ display: "block", fontSize: 13 }}>{label}</strong>
-                      <small style={{ opacity: 0.7 }}>{blurb}</small>
+                      <strong>{label}</strong>
+                      <small>{blurb}</small>
                     </button>
                   ))}
                 </div>
-              </label>
+              </WizardField>
               {state.runtimeKind === "acp" ? (
-                <label className="field">
-                  <span>Coding agent</span>
+                <WizardField label="Coding agent">
                   <Select
                     value={state.acpAgent}
                     onChange={(event) => update({ acpAgent: event.target.value })}
@@ -534,11 +513,11 @@ export function SetupWizard({
                       <option key={a.id} value={a.id}>{a.label}</option>
                     ))}
                   </Select>
-                  <small style={{ opacity: 0.7 }}>
+                  <small className="field-hint">
                     {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
                     <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
                   </small>
-                </label>
+                </WizardField>
               ) : (
                 <>
                   {/* Native gateway config — only when the runtime is the native model.
@@ -547,12 +526,8 @@ export function SetupWizard({
                       shouldn't have to tune — they flow through finishSetup; tweak later in
                       Settings. */}
                   <div className="setup-grid two">
-                    <label className="field">
-                      <span>API base</span>
-                      <Input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
-                    </label>
-                    <label className="field">
-                      <span>API key</span>
+                    <Field label="API base" value={state.apiBase} onValueChange={(value) => update({ apiBase: value })} />
+                    <WizardField label="API key">
                       <Input
                         type="password"
                         value={state.apiKey}
@@ -560,20 +535,19 @@ export function SetupWizard({
                         autoComplete="off"
                         placeholder="Leave blank to preserve current key"
                       />
-                    </label>
+                    </WizardField>
                   </div>
                   <div className="setup-grid model-row">
-                    <label className="field">
-                      <span>Model</span>
+                    <WizardField label="Model">
                       <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
                       <datalist id="model-options">
                         {models.map((model) => (
                           <option key={model} value={model} />
                         ))}
                       </datalist>
-                    </label>
+                    </WizardField>
                     <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
-                      {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
+                      {busy ? <Spinner size={15} /> : <Search size={15} />}
                       Probe
                     </Button>
                     <TestConnectionButton
@@ -583,14 +557,11 @@ export function SetupWizard({
                     />
                   </div>
                   {tested ? (
-                    <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
-                      {tested.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
-                      <span>
-                        {tested.ok
-                          ? "Connection OK — the model responded."
-                          : `Connection failed — ${tested.error || "the model did not respond."}`}
-                      </span>
-                    </div>
+                    <Alert status={tested.ok ? "success" : "error"}>
+                      {tested.ok
+                        ? "Connection OK — the model responded."
+                        : `Connection failed — ${tested.error || "the model did not respond."}`}
+                    </Alert>
                   ) : null}
                 </>
               )}
@@ -626,7 +597,7 @@ export function SetupWizard({
             </Button>
             {step === "finish" ? (
               <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
-                {busy ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
+                {busy ? <Spinner size={15} /> : <Check size={15} />}
                 Finish
               </Button>
             ) : (
@@ -664,6 +635,18 @@ function StepBody({
       </div>
       {children}
     </div>
+  );
+}
+
+// Label + an arbitrary DS control. The DS `Field` renders its OWN input, so it can't wrap
+// a Select / password Input / datalist — this reuses the DS `pl-field` classes so these
+// composite fields match `<Field>` exactly. Interim for a DS FormField primitive (gap filed).
+function WizardField({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <label className="pl-field">
+      <span className="pl-field__label">{label}</span>
+      {children}
+    </label>
   );
 }
 
