@@ -42,8 +42,8 @@ test("New agent → archetype picker → create returns to the list", async ({ p
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
-  await expect(page.locator(".archetype-card")).toHaveCount(2); // from GET /api/archetypes
-  await page.locator(".archetype-card", { hasText: "Project Manager" }).click();
+  await expect(page.locator(".pl-radiocard")).toHaveCount(2); // DS RadioCard, from GET /api/archetypes
+  await page.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
   await page.getByLabel("Agent name").fill("newbot");
   await page.getByRole("button", { name: /Create/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "newbot" })).toBeVisible();
