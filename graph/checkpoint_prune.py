@@ -14,12 +14,19 @@ weight. This trims the DB two ways:
 
 All pure SQL on a short-lived connection (the saver runs WAL mode, so this
 coexists with live writes); failures are caught by the caller and never block.
+
+After row deletions, ``reclaim()`` truncates the WAL and vacuum-frees pages
+back to the OS so the on-disk file shrinks rather than holding freed space
+forever.
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
+
+_log = logging.getLogger("protoagent.checkpoint_prune")
 
 # 100ns intervals between the UUID (Gregorian, 1582-10-15) and Unix epochs.
 _GREGORIAN_OFFSET = 0x01B21DD213814000
@@ -60,14 +67,31 @@ def find_aged_threads(db_path: str, max_age_seconds: float, *, now: float | None
         conn.close()
 
 
-def delete_thread(db_path: str, thread_id: str) -> int:
-    """Delete all checkpoints + writes for a thread. Returns checkpoints removed."""
+def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
+    """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
+
+    When ``cascade`` is True, also deletes any sub-threads whose id starts with
+    ``thread_id`` followed by ``:goal-iter-`` (goal-mode iteration checkpoints)."""
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
     try:
-        n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
-        conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
-        conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
+        if cascade:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            ).fetchone()[0]
+            conn.execute(
+                "DELETE FROM checkpoints WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            )
+            conn.execute(
+                "DELETE FROM writes WHERE thread_id=? OR thread_id LIKE ? || ':goal-iter-%'",
+                (thread_id, thread_id),
+            )
+        else:
+            n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
+            conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
+            conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
         conn.commit()
         return n
     finally:
@@ -77,14 +101,17 @@ def delete_thread(db_path: str, thread_id: str) -> int:
 def prune_checkpoints(
     db_path: str,
     *,
-    keep_per_thread: int = 5,
+    keep_per_thread: int = 2,
     max_age_seconds: float | None = None,
     now: float | None = None,
+    background_keep: int | None = None,
 ) -> dict[str, int]:
     """Trim the checkpoint DB. Returns counts of what was removed.
 
     ``max_age_seconds=None`` disables the age TTL (only the per-thread cap runs).
     ``now`` is injectable for tests.
+    ``background_keep`` overrides the per-thread cap for ``a2a:background:*`` threads
+    (resume-from-latest only — no time-travel, so retaining extras is waste).
     """
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
@@ -109,8 +136,12 @@ def prune_checkpoints(
                     threads_deleted += 1
 
         # 2. Per-thread cap — keep the latest N checkpoints per namespace.
-        keep = max(1, keep_per_thread)
+        #    Background threads get a tighter cap (resume-from-latest only).
         for thread_id in threads:
+            if background_keep is not None and thread_id.startswith("a2a:background:"):
+                keep = max(1, background_keep)
+            else:
+                keep = max(1, keep_per_thread)
             for (ns,) in conn.execute(
                 "SELECT DISTINCT checkpoint_ns FROM checkpoints WHERE thread_id=?", (thread_id,)
             ).fetchall():
@@ -137,3 +168,55 @@ def prune_checkpoints(
     finally:
         conn.close()
     return {"threads_deleted": threads_deleted, "checkpoints_deleted": checkpoints_deleted}
+
+
+def reclaim(db_path: str) -> dict[str, int]:
+    """Truncate the WAL and free unused DB pages back to the OS.
+
+    Designed as a best-effort companion to ``prune_checkpoints``: after rows
+    are deleted the DB file still holds their disk space (and the WAL may
+    contain stale frames).  This call compacts both.
+
+    * ``PRAGMA wal_checkpoint(TRUNCATE)`` — checkpoints the WAL and truncates
+      it to zero, so the ``-wal`` file disappears.
+    * ``PRAGMA incremental_vacuum`` — when ``auto_vacuum=INCREMENTAL``, frees
+      pages from the freelist back to the OS (``page_count`` drops). On a
+      legacy DB with ``auto_vacuum=NONE``, a full ``VACUUM`` rewrites the
+      entire file — slower but still shrinks it.
+
+    Returns ``{"wal_truncated": int, "pages_reclaimed": int}``.
+    Best-effort: any error is caught and logged; the returned counts are zero
+    on failure.  Never raises.
+    """
+    result: dict[str, int] = {"wal_truncated": 0, "pages_reclaimed": 0}
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+    except Exception:
+        _log.exception("[checkpoint-prune] reclaim failed on connect")
+        return result
+    try:
+        # 1. Checkpoint + truncate the WAL. TRUNCATE shrinks the -wal file to
+        #    zero bytes (it does NOT delete the file). The result row is
+        #    (busy, log_frames, checkpointed_frames); busy == 0 means the
+        #    checkpoint completed — i.e. no other open connection held it back.
+        row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        result["wal_truncated"] = 1 if (row is not None and row[0] == 0) else 0
+
+        # 2. Determine auto_vacuum mode.  INCREMENTAL (2) → use the cheap
+        #    incremental_vacuum PRAGMA; NONE (0) → fall back to full VACUUM.
+        av_row = conn.execute("PRAGMA auto_vacuum").fetchone()
+        av_mode = av_row[0] if av_row else 0
+        page_count_before = conn.execute("PRAGMA page_count").fetchone()[0]
+
+        if av_mode == 2:  # INCREMENTAL
+            conn.execute("PRAGMA incremental_vacuum")
+        else:
+            conn.execute("VACUUM")
+
+        page_count_after = conn.execute("PRAGMA page_count").fetchone()[0]
+        result["pages_reclaimed"] = max(0, page_count_before - page_count_after)
+    except Exception:
+        _log.exception("[checkpoint-prune] reclaim failed")
+    finally:
+        conn.close()
+    return result

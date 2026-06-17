@@ -18,11 +18,15 @@ def test_schema_groups_and_values():
     # Grouped + ordered by category: the Agent category leads, runtime first.
     assert [g["section"] for g in groups][:3] == ["Agent runtime", "Model", "Routing"]
     fields = [f for g in groups for f in g["fields"]]
-    # Every core FIELD is present. (build_schema also appends plugin-declared
-    # settings — e.g. the discord plugin — so count only the core-keyed fields,
+    # Every core FIELD is present — EXCEPT ui_hidden ones, which stay in FIELDS for
+    # config round-trip but aren't rendered in the settings UI (e.g. identity.name,
+    # owned by the dedicated Identity panel — #1076). (build_schema also appends
+    # plugin-declared settings — e.g. discord — so count only the core-keyed fields,
     # which keeps this robust to whichever plugins are installed.)
     core_keys = {f.key for f in FIELDS}
-    assert len([f for f in fields if f["key"] in core_keys]) == len(FIELDS)
+    visible_core = [f for f in FIELDS if not f.ui_hidden]
+    assert len([f for f in fields if f["key"] in core_keys]) == len(visible_core)
+    assert "identity.name" not in {f["key"] for f in fields}  # ui_hidden → not in the UI
     for f in fields:
         assert {"key", "label", "type", "value", "default", "restart", "description"} <= set(f)
     # The model select is populated from the probed options.

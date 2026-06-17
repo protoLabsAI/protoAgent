@@ -92,8 +92,8 @@ export type PluginView = {
   path: string;
   tabs?: { id: string; label: string; path: string }[];
   // "rail" (default) = a left-rail surface; "right" = a right-sidebar panel
-  // alongside Notes/Beads/Goals/Schedule (ADR 0026).
-  placement?: "rail" | "right";
+  // alongside Notes/Beads/Goals/Schedule (ADR 0026); "bottom" = the bottom dock.
+  placement?: "rail" | "right" | "bottom";
   // Claim a core surface slot instead of adding a rail icon (ADR 0045). A view with
   // slot:"chat" REPLACES the built-in chat panel — it renders under the core "chat"
   // rail id, stays mounted for the app's lifetime (streaming continuity, #613), and
@@ -589,4 +589,5 @@ export type Archetype = {
   icon: string; // lucide-react icon name
   blurb: string;
   bundle: string | null; // null = Basic; else the bundle git URL
+  soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
 };

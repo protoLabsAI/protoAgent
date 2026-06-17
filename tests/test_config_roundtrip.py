@@ -47,9 +47,11 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "chat_template_kwargs": None,
     "checkpoint_db_path": "/sandbox/checkpoints.db",
     "checkpoint_harvest_enabled": True,
+    "checkpoint_background_keep": 1,
     "checkpoint_keep_per_thread": 5,
     "checkpoint_max_age_days": 30,
     "checkpoint_prune_interval_hours": 6,
+    "checkpoint_vacuum": True,
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
@@ -177,11 +179,13 @@ CONFIG_TO_DICT_GOLDEN = {
         "token": "",
     },
     "checkpoint": {
+        "background_keep": 1,
         "db_path": "/sandbox/checkpoints.db",
         "harvest_enabled": True,
         "keep_per_thread": 5,
         "max_age_days": 30,
         "prune_interval_hours": 6,
+        "vacuum": True,
     },
     "commons": {
         "path": "",
@@ -430,6 +434,7 @@ EMITTED_ATTRS = {
     "knowledge_embeddings",
     "knowledge_facts",
     # checkpoint.*
+    "checkpoint_background_keep",
     "checkpoint_db_path",
     "checkpoint_keep_per_thread",
     "checkpoint_max_age_days",

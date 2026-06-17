@@ -24,8 +24,9 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
-test("schedule is a right-rail panel that lists scheduled jobs", async ({ page }) => {
-  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+test("schedule is a tab of the Activity surface that lists scheduled jobs (#1075)", async ({ page }) => {
+  await page.locator(".pl-rail").getByRole("button", { name: "Activity", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Schedule", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });
@@ -125,6 +126,23 @@ test("Chat is movable too — right-click → move to the right rail (ADR 0036)"
   // Chat now lives on the right rail (no longer pinned left).
   await expect(rightRail.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
   await expect(leftRail.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0);
+});
+
+test("right-click → Move to bottom dock docks the surface at the bottom", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const rightRail = page.locator(".pl-rail--right");
+  const bottomRail = page.locator(".pl-rail--bottom");
+  // The bottom rail exists as an (empty) drop target, but nothing is docked there by default.
+  await expect(bottomRail.getByRole("button")).toHaveCount(0);
+
+  // Move Beads (right rail) → bottom dock.
+  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Move to bottom dock").click();
+
+  // Beads now lives in the (icon-only) bottom rail, off the right rail, and its panel opens.
+  await expect(bottomRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toHaveCount(0);
+  await expect(page.locator(".pl-appshell__bottom").getByRole("heading", { name: "Beads" })).toBeVisible();
 });
 
 test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({ page }) => {

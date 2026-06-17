@@ -24,6 +24,45 @@ describe("migrateUiState", () => {
     expect(out).toEqual({ rightWidth: 320 });
   });
 
+  // v3→v4 (PR4): the new "box" rail surface is injected into a pre-v4 railOrder
+  // (before "settings") so an existing drag-and-drop layout gains it rather than
+  // hiding it.
+  it("injects the Box surface into a pre-v4 railOrder, before settings", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "plugins", "settings"], right: ["beads"] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.left).toEqual(["chat", "plugins", "box", "settings"]);
+    expect(out.railOrder.right).toEqual(["beads"]);
+  });
+
+  it("does not duplicate Box if a layout already has it", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "box", "settings"], right: [] },
+    }) as { railOrder: { left: string[] } };
+    expect(out.railOrder.left).toEqual(["chat", "box", "settings"]);
+  });
+
+  // v4→v5 (#1075): "schedule" folded into the Activity surface (a tab), so it's pruned
+  // from a persisted railOrder rather than lingering as a dead rail id.
+  it("prunes the obsolete 'schedule' rail surface", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "settings"], right: ["beads", "goals", "schedule"] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.right).toEqual(["beads", "goals"]);
+    expect(out.railOrder.left).not.toContain("schedule");
+  });
+
+  // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a
+  // persisted layout that predates it.
+  it("adds the bottom dock to a pre-v6 railOrder", () => {
+    // `box` already present so this isolates the v6 step (the migration is cumulative).
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "box", "settings"], right: ["beads"] },
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] } };
+    expect(out.railOrder.bottom).toEqual([]);
+    expect(out.railOrder.left).toEqual(["chat", "box", "settings"]);
+  });
+
   it("does not mutate the input object", () => {
     const input = { railOf: { chat: "left" }, leftActive: "chat" };
     migrateUiState(input);
@@ -45,8 +84,8 @@ describe("migrateUiState", () => {
 // set would prune every persisted entry and the reload would re-seed by manifest —
 // the layout-wipe bug this contract pins down.)
 describe("reconcilePluginViews", () => {
-  const seed = (left: string[], right: string[]) =>
-    useUI.setState({ railOrder: { left, right } });
+  const seed = (left: string[], right: string[], bottom: string[] = []) =>
+    useUI.setState({ railOrder: { left, right, bottom } });
 
   beforeEach(() => seed(["chat", "plugin:doom:panel"], ["beads", "plugin:board:board", "notes"]));
 

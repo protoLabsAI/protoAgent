@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from graph.checkpoint_prune import prune_checkpoints, uuidv6_unix_seconds
+from graph.checkpoint_prune import delete_thread, prune_checkpoints, reclaim, uuidv6_unix_seconds
 from graph.checkpointer import build_sqlite_checkpointer
 
 
@@ -101,3 +102,167 @@ def test_age_ttl_drops_old_threads_only(tmp_path):
     assert res["threads_deleted"] == 1
     assert _count(db, "checkpoints", "stale") == 0  # old thread gone
     assert _count(db, "checkpoints", "recent") > 0  # recent thread kept
+
+
+def test_background_keep_tighter_cap_for_background_threads(tmp_path):
+    """a2a:background:* threads use background_keep instead of keep_per_thread."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("chat:user", "a2a:background:research"), turns=3)
+    before_chat = _count(db, "checkpoints", "chat:user")
+    before_bg = _count(db, "checkpoints", "a2a:background:research")
+    assert before_chat > 2 and before_bg > 1
+
+    res = prune_checkpoints(db, keep_per_thread=2, background_keep=1)
+    assert _count(db, "checkpoints", "chat:user") == 2  # normal cap
+    assert _count(db, "checkpoints", "a2a:background:research") == 1  # tighter cap
+    assert res["checkpoints_deleted"] > 0
+
+
+def test_background_keep_none_falls_back_to_keep_per_thread(tmp_path):
+    """When background_keep is None, background threads use keep_per_thread."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:background:task",), turns=3)
+    before = _count(db, "checkpoints", "a2a:background:task")
+    assert before > 2
+
+    prune_checkpoints(db, keep_per_thread=2, background_keep=None)
+    assert _count(db, "checkpoints", "a2a:background:task") == 2  # same as keep_per_thread
+
+
+def test_delete_thread_exact_only_without_cascade(tmp_path):
+    """delete_thread(cascade=False) removes only the named thread, not sub-threads."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=2)
+    # Insert synthetic goal-iter sub-thread rows for the same session
+    conn = sqlite3.connect(db)
+    for sub in ("a2a:X:goal-iter-1", "a2a:X:goal-iter-2"):
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1
+
+    n = delete_thread(db, "a2a:X", cascade=False)
+    assert n > 0
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1  # untouched
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1  # untouched
+    assert _count(db, "writes", "a2a:X") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "writes", "a2a:X:goal-iter-2") == 1
+
+
+def test_delete_thread_cascade_removes_subthreads(tmp_path):
+    """delete_thread(cascade=True) removes the thread AND its :goal-iter-N sub-threads."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=2)
+    # Insert synthetic goal-iter sub-thread + unrelated thread rows
+    conn = sqlite3.connect(db)
+    for sub in ("a2a:X:goal-iter-1", "a2a:X:goal-iter-2", "a2a:Y"):
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (sub, "", f"00000000-0000-6000-8000-00000000000{sub[-1]}", "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 1
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 1
+    assert _count(db, "checkpoints", "a2a:Y") == 1
+
+    n = delete_thread(db, "a2a:X", cascade=True)
+    assert n > 0
+    # Parent + sub-threads gone
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-1") == 0
+    assert _count(db, "checkpoints", "a2a:X:goal-iter-2") == 0
+    assert _count(db, "writes", "a2a:X") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-1") == 0
+    assert _count(db, "writes", "a2a:X:goal-iter-2") == 0
+    # Unrelated thread untouched
+    assert _count(db, "checkpoints", "a2a:Y") == 1
+    assert _count(db, "writes", "a2a:Y") == 1
+
+
+# ── reclaim() tests ─────────────────────────────────────────────────────────
+
+
+def test_reclaim_truncates_wal_and_frees_pages(tmp_path):
+    """After deleting rows, reclaim truncates the WAL and reduces page_count."""
+    db = str(tmp_path / "c.db")
+    # Build a DB with auto_vacuum=INCREMENTAL (set before any table) and WAL.
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, data BLOB)")
+    conn.executemany("INSERT INTO t (data) VALUES (?)", [(b"x" * 4096,) for _ in range(30)])
+    conn.commit()
+    # Delete most rows so auto_vacuum tracks the freed pages on the freelist.
+    conn.execute("DELETE FROM t WHERE id > 5")
+    conn.commit()
+    # Close first: a TRUNCATE checkpoint can only complete (busy == 0) when no
+    # other connection holds the WAL back — which mirrors the restart-time reclaim.
+    conn.close()
+
+    res = reclaim(db)
+    assert res["wal_truncated"] == 1
+    assert res["pages_reclaimed"] > 0
+    # TRUNCATE shrinks the -wal to zero bytes; it does NOT delete the file.
+    wal = Path(db + "-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
+
+
+def test_reclaim_noop_on_fresh_db(tmp_path):
+    """On a fresh DB with no deletions, reclaim changes nothing."""
+    db = str(tmp_path / "c.db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, data TEXT)")
+    conn.execute("INSERT INTO t (data) VALUES ('hello')")
+    conn.commit()
+    conn.close()
+
+    res = reclaim(db)
+    assert res["pages_reclaimed"] == 0
+    # wal_truncated may be 0 or 1 depending on whether WAL was checkpointed on
+    # close — either is fine for a no-op test; we only care that nothing broke.
+
+
+def test_reclaim_never_raises_on_bad_path():
+    """reclaim must catch any error and return zero counts — never raise."""
+    res = reclaim("/nonexistent_dir_xyz_12345/test.db")
+    assert res == {"wal_truncated": 0, "pages_reclaimed": 0}
+
+
+def test_reclaim_full_vacuum_fallback(tmp_path):
+    """On a legacy DB (auto_vacuum=NONE), reclaim falls back to full VACUUM."""
+    db = str(tmp_path / "c.db")
+    conn = sqlite3.connect(db)
+    # Deliberately do NOT set auto_vacuum — defaults to NONE.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, data BLOB)")
+    conn.executemany("INSERT INTO t (data) VALUES (?)", [(b"y" * 4096,) for _ in range(30)])
+    conn.commit()
+    conn.execute("DELETE FROM t WHERE id > 5")
+    conn.commit()
+    conn.close()
+
+    res = reclaim(db)
+    assert res["pages_reclaimed"] > 0, "full VACUUM should reduce page_count after deletions on auto_vacuum=NONE"

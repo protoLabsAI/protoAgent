@@ -1,6 +1,8 @@
 # ADR 0047 — Layered settings cascade (App→Host→Agent, per-field, `Field.scope`)
 
-- **Status:** Accepted (2026-06-10; decisions locked in the operator walkthrough — see §2.1)
+- **Status:** Accepted (2026-06-10; decisions locked in the operator walkthrough — see §2.1).
+  **Host-file scoping ratified _per-hub_ on 2026-06-16 (#1077)** — `host_config_path()` is
+  `scope_leaf`'d; the original §D2 unscoped-`data_home()` (per-physical-box) proposal is superseded.
 - **Date:** 2026-06-10
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** config, settings, fleet, host, architecture, cascade, schema-driven
@@ -150,7 +152,8 @@ the corresponding items in §7.
    one-hub-per-box ≡ per-box; multiple instances on one box stay isolated (no #706
    regression). True multi-tenant on one box uses **containers** (ADR 0004's
    recommended boundary), so each tenant gets its own `data_home` → its own host
-   policy. (Corrects D2's earlier unscoped-`data_home()` proposal.)
+   policy. (Corrects D2's earlier unscoped-`data_home()` proposal — **ratified #1077**;
+   §D2 + the Status line above are reconciled to per-hub.)
 
 4. **Host-change propagation = banner now, broadcast later.** A host-layer change
    re-merges for free on each co-located agent's next reload (`_reload_langgraph_agent`
@@ -216,20 +219,26 @@ materialized everywhere (`type(config)()`). The bundled
 cascade does NOT read it as a live layer. `app_doc = {}`, relying on the
 dataclass defaults that `from_dict` already falls back to.
 
-**Host / Machine** (NEW, one-per-box, NOT instance-scoped):
+**Host / Hub** (NEW — per-hub, `scope_leaf`'d; **ratified #1077**):
 
 ```python
-HOST_CONFIG_PATH = data_home() / "host-config.yaml"   # NOT scope_leaf'd
+HOST_CONFIG_PATH = host_config_path()   # = scope_leaf(data_home() / "host-config.yaml")
 ```
 
-`data_home()` (`paths.py:64-67`) resolves to `/sandbox/host-config.yaml` in a
-container, else `~/.protoagent/host-config.yaml`. Crucially it uses the
-**unscoped** `data_home()` and does NOT pass through `scope_leaf`, so it is
-genuinely one-per-physical-box, shared by every agent the box owns regardless of
-`PROTOAGENT_INSTANCE`. The file is **OPTIONAL**: absent ⇒ the Host layer is empty
-⇒ App defaults show through. A `PROTOAGENT_HOST_CONFIG` env override (points at a
-FILE, mirroring `PROTOAGENT_CONFIG_DIR`'s role for the leaf) handles the
+`host_config_path()` (`infra/paths.py`) `scope_leaf`-wraps `data_home()/host-config.yaml`,
+so the host file is **per-hub** — riding the same isolation as `fleet.json` / `remotes.json`
+(#813) — not one-per-physical-box. In the usual one-hub-per-box deployment that's equivalent
+to per-box; multiple hubs on one box stay isolated (no #706 regression), and true multi-tenant
+on one box uses containers (ADR 0004), each with its own `data_home`. The file is **OPTIONAL**:
+absent ⇒ the Host layer is empty ⇒ App defaults show through. A `PROTOAGENT_HOST_CONFIG` env
+override (points at a FILE, mirroring `PROTOAGENT_CONFIG_DIR`'s role for the leaf) handles the
 read-only frozen desktop sidecar.
+
+> **Ratified per-hub (#1077).** Supersedes this section's original proposal of an *unscoped*
+> `data_home()/host-config.yaml` (one-per-physical-box, NOT `scope_leaf`'d). Decision item 3
+> (§"Decisions") corrected it; the shipped `host_config_path()` and the Global ▸ Configuration
+> console copy both reflect the ratified per-hub scope. Other "unscoped `data_home()` host file"
+> phrasings remaining below are pre-ratification context.
 
 **Agent / Leaf** (UNCHANGED): the existing
 `CONFIG_YAML_PATH = scope_leaf(_LIVE_CONFIG_DIR/langgraph-config.yaml)`
@@ -308,8 +317,8 @@ and threads it through the seams that **already take a `path` arg**:
 (`graph/config_io.py:177,197,307`):
 
 - Agent → `CONFIG_YAML_PATH` (the scope_leaf'd per-instance leaf, current behavior).
-- Host → `HOST_CONFIG_PATH` (the unscoped `data_home()/host-config.yaml`, created
-  lazily on first "save to Host layer").
+- Host → `HOST_CONFIG_PATH` (the per-hub `scope_leaf`'d `host_config_path()`, #1077;
+  created lazily on first "save to Host layer").
 
 The save's **actual target layer is decided per request** (the panel's render
 context — Agent view vs. a Host/Machine view — supplies `layer`, defaulting to the

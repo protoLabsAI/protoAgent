@@ -4,6 +4,7 @@ import {
   BookMarked,
   Database,
   BookOpen,
+  Box,
   Boxes,
   CalendarClock,
   CircleAlert,
@@ -108,6 +109,7 @@ import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
+import { BoxSurface } from "./BoxSurface";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
@@ -226,8 +228,7 @@ export function App() {
   const chatStreaming = useAnyChatStreaming();
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
-  const setSettingsScope = useUI((s) => s.setSettingsScope);
-  const setSettingsSection = useUI((s) => s.setSettingsSection);
+  const setBoxTab = useUI((s) => s.setBoxTab);
   const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const activityTab = useUI((s) => s.activityTab);
   const setActivityTab = useUI((s) => s.setActivityTab);
@@ -239,6 +240,12 @@ export function App() {
   const setLeftCollapsed = useUI((s) => s.setLeftCollapsed);
   const rightWidth = useUI((s) => s.rightWidth);
   const setRightWidth = useUI((s) => s.setRightWidth);
+  const bottomPanel = useUI((s) => s.bottomPanel);
+  const setBottomPanel = useUI((s) => s.setBottomPanel);
+  const bottomHeight = useUI((s) => s.bottomHeight);
+  const setBottomHeight = useUI((s) => s.setBottomHeight);
+  const bottomCollapsed = useUI((s) => s.bottomCollapsed);
+  const setBottomCollapsed = useUI((s) => s.setBottomCollapsed);
   const railOrder = useUI((s) => s.railOrder);
   const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
   const isMobile = useIsMobile();
@@ -329,8 +336,9 @@ export function App() {
     [],
   );
 
-  const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right");
+  const pluginRail = allPluginViews.filter((v) => (v.placement ?? "rail") !== "right" && v.placement !== "bottom");
   const pluginRightPanels = allPluginViews.filter((v) => v.placement === "right");
+  const pluginBottom = allPluginViews.filter((v) => v.placement === "bottom");
   const activePluginView = pluginRail.find((v) => v.key === surface) ?? null;
 
   // Stale-surface fallback: if we're on a plugin view that no longer exists (its
@@ -490,10 +498,12 @@ export function App() {
     { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
     // "agent" folded into Settings ▸ Workspace (ADR 0048 S-C) — no longer a rail surface.
     { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
+    // Box (PR4) — box-level ops (Fleet · Telemetry · Commons), moved out of Settings ▸ Global.
+    { id: "box", label: "Box", icon: <Box size={18} /> },
     { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
     { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
-    { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
+    // "schedule" is now a tab inside the Activity surface (#1075), not a rail surface.
   ];
   // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core AND plugin views are
   // first-class railOrder members — reconciled below — so all are reorderable/movable, including
@@ -505,11 +515,11 @@ export function App() {
     allPluginViews.map((v) => [v.key, { id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }] as const),
   );
   const metaFor = (id: string): RailItem | undefined => coreMeta.get(id) ?? pluginMeta.get(id);
-  function railSurfaces(side: "left" | "right"): RailItem[] {
-    const placed = new Set([...railOrder.left, ...railOrder.right]);
+  function railSurfaces(side: "left" | "right" | "bottom"): RailItem[] {
+    const placed = new Set([...railOrder.left, ...railOrder.right, ...railOrder.bottom]);
     const ordered = (railOrder[side] ?? []).map(metaFor).filter((s): s is RailItem => Boolean(s));
     // Safety net: a plugin view that appeared before reconcile ran — append it for this side.
-    const extra = (side === "left" ? pluginRail : pluginRightPanels)
+    const extra = (side === "left" ? pluginRail : side === "right" ? pluginRightPanels : pluginBottom)
       .filter((v) => !placed.has(v.key))
       .map((v): RailItem => ({ id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }));
     // Fork-contributed surfaces (ADR 0038 D3 — the src/ext seam), appended for their rail side.
@@ -529,11 +539,14 @@ export function App() {
       case "activity":
         return (
           <>
+            {/* Schedule is a third Activity tab (#1075): cron is a TRIGGER, so timed
+                turns belong alongside the thread + inbox triggers, not in their own rail. */}
             <Tabs responsive active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
               { id: "thread", label: "Thread", icon: Activity },
               { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
+              { id: "schedule", label: "Schedule", icon: CalendarClock },
             ].map(toTab)} />
-            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
+            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : activityTab === "inbox" ? <InboxPanel /> : <SchedulePanel />}
           </>
         );
       // The Agent surface folded into Settings ▸ Workspace (ADR 0048 S-C). Its tabs
@@ -557,14 +570,16 @@ export function App() {
       case "settings":
         // SettingsSurface owns its own two-level nav (home + section, ADR 0048).
         return <SettingsSurface />;
+      // Box (PR4) — owns its own Fleet/Telemetry/Commons sub-tabs.
+      case "box":
+        return <BoxSurface />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       case "beads":
         return <BeadsPanel confirm={setConfirmState} />;
       case "goals":
         return <GoalsPanel />;
-      case "schedule":
-        return <SchedulePanel />;
+      // "schedule" folded into the Activity surface as a 3rd tab (#1075) — no rail surface.
       default: {
         // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
         // Skip a requiresPlugin surface when its plugin is off (e.g. a stale saved order).
@@ -589,6 +604,7 @@ export function App() {
     reconcilePluginViews([
       ...pluginRail.map((v) => ({ id: v.key, side: "left" as const })),
       ...pluginRightPanels.map((v) => ({ id: v.key, side: "right" as const })),
+      ...pluginBottom.map((v) => ({ id: v.key, side: "bottom" as const })),
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pluginViewSig, pluginViewsLoaded, reconcilePluginViews]);
@@ -599,6 +615,9 @@ export function App() {
   const rightMembers = railSurfaces("right").map((s) => s.id);
   const leftActive = leftMembers.includes(surface) ? surface : (leftMembers[0] ?? "chat");
   const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "beads");
+  // Bottom dock active surface (mirror left/right) — clamp to a member of the bottom dock.
+  const bottomMembers = railSurfaces("bottom").map((s) => s.id);
+  const bottomActive = bottomMembers.includes(bottomPanel) ? bottomPanel : (bottomMembers[0] ?? "");
   // Chat mounts unconditionally on whichever side it's on (streaming continuity, #613).
   const chatRail: "left" | "right" = railOrder.right.includes("chat") ? "right" : "left";
 
@@ -614,6 +633,7 @@ export function App() {
   // be excluded — otherwise that panel could never light a dot.
   const visibleKeys: string[] = [leftActive, mobileActive];
   if (!rightCollapsed) visibleKeys.push(rightActive);
+  if (!bottomCollapsed && bottomActive) visibleKeys.push(bottomActive);
   const activeKeysRef = useRef<Set<string>>(new Set());
   activeKeysRef.current = new Set(visibleKeys);
   useEffect(
@@ -636,7 +656,7 @@ export function App() {
       if (key && key.startsWith("plugin:")) setPluginDot(key, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leftActive, rightActive, mobileActive, rightCollapsed, setPluginDot]);
+  }, [leftActive, rightActive, bottomActive, mobileActive, rightCollapsed, bottomCollapsed, setPluginDot]);
 
   return (
     <>
@@ -730,11 +750,10 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
-              // Fleet now lives under Global ▸ Fleet (ADR 0048); ask the panel to
-              // open the new-agent picker on mount.
-              setSurface("settings");
-              setSettingsScope("host");
-              setSettingsSection("fleet");
+              // Fleet now lives under the Box surface (PR4); ask the panel to open
+              // the new-agent picker on mount.
+              setSurface("box");
+              setBoxTab("fleet");
               setFleetStartNew(true);
             }}
           />
@@ -803,31 +822,50 @@ export function App() {
           dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
         }))}
         rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
+        bottomItems={railSurfaces("bottom").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
         activeLeft={leftCollapsed ? "" : leftActive}
         activeRight={rightCollapsed ? "" : rightActive}
+        activeBottom={bottomCollapsed ? "" : bottomActive}
         onSelect={(side, id) => {
           // Click the already-open view's icon → toggle the panel closed; otherwise open the
           // panel on the clicked view (re-opening it if it was collapsed).
           if (side === "left") {
             if (!leftCollapsed && leftActive === id) setLeftCollapsed(true);
             else { setSurface(id); setLeftCollapsed(false); }
-          } else {
+          } else if (side === "right") {
             if (!rightCollapsed && rightActive === id) setRightCollapsed(true);
             else { setRightPanel(id); setRightCollapsed(false); }
+          } else {
+            if (!bottomCollapsed && bottomActive === id) setBottomCollapsed(true);
+            else { setBottomPanel(id); setBottomCollapsed(false); }
           }
         }}
         onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
-        onRailReorder={setRailOrder}
+        onRailReorder={(next) => {
+          // Chat is the streaming slot (#613), never the bottom dock — if a drag landed it
+          // there, bounce it back to the SIDE rail it came from (its pre-drag side), not
+          // always the left.
+          if (next.bottom.includes("chat")) {
+            const back = railOrder.right.includes("chat") ? "right" : "left";
+            next = { ...next, bottom: next.bottom.filter((x) => x !== "chat") };
+            if (!next[back].includes("chat")) next = { ...next, [back]: [...next[back], "chat"] };
+          }
+          setRailOrder(next);
+        }}
         rightWidth={rightWidth}
         onRightWidthChange={setRightWidth}
         rightCollapsed={rightCollapsed}
         onCollapse={setRightCollapsed}
         leftCollapsed={leftCollapsed}
         onLeftCollapse={setLeftCollapsed}
+        bottomHeight={bottomHeight}
+        onBottomHeightChange={setBottomHeight}
+        bottomCollapsed={bottomCollapsed}
+        onBottomCollapse={setBottomCollapsed}
         // Let the left column narrow to 200 before it snaps/collapses (the DS default is
         // 280, which left a 140–280 dead zone where a narrowed left snapped back up).
         minLeftWidth={200}
-        mobileItems={[...railSurfaces("left"), ...railSurfaces("right")].map((s) => ({
+        mobileItems={[...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")].map((s) => ({
           ...s,
           dot: pluginDots[s.id] || undefined,
         }))}
@@ -868,6 +906,7 @@ export function App() {
             {rightActive !== "chat" ? renderSurface(rightActive) : null}
           </>
         }
+        bottomContent={bottomActive ? renderSurface(bottomActive) : null}
         utilityBar={
           <UtilityBar
             start={

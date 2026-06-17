@@ -143,6 +143,13 @@ export function currentSlug(): string {
   }
 }
 
+/** True when this window is the host console (the un-suffixed root or the reserved
+ *  `host` slug) — the only console allowed to edit the box-shared Global defaults
+ *  (ADR 0047 §7.7). A workspace console sees those fields read-only. */
+export function isHostConsole(): boolean {
+  return currentSlug() === "host";
+}
+
 /** URL of the console focused on `slug` (for navigation / opening a new window). */
 export function agentHref(slug: string): string {
   const base = import.meta.env.BASE_URL || "/"; // "/app/"
@@ -285,12 +292,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   });
 
   if (!response.ok) {
+    // Read the body ONCE — calling response.json() then response.text() on the same
+    // response throws "body stream already read" (a second error that masks the real
+    // one). Read text, then best-effort parse a JSON {detail}.
+    const raw = await response.text().catch(() => "");
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      detail = payload.detail || detail;
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
     } catch {
-      detail = await response.text();
+      detail = raw || detail;
     }
     // Wrong/expired/missing bearer on a token-gated deployment — surface the
     // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.

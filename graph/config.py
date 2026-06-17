@@ -456,13 +456,20 @@ class LangGraphConfig:
     # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
     # latest N checkpoints per session, and TTL whole sessions idle past
     # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
-    checkpoint_keep_per_thread: int = 5
+    checkpoint_keep_per_thread: int = 2
+    # Background subagent threads (a2a:background:*) get a tighter cap — we only
+    # resume-from-latest, never time-travel, so retaining more than 1 is waste.
+    checkpoint_background_keep: int = 1
     checkpoint_max_age_days: int = 30
     checkpoint_prune_interval_hours: int = 6
     # When a session is retired (aged out or deleted), summarize it into the
     # knowledge base before dropping the raw checkpoints — so past conversations
     # stay searchable via memory_recall. Needs the knowledge store enabled.
     checkpoint_harvest_enabled: bool = True
+    # Vacuum reclaim — after the prune sweep deletes rows, compact the DB file
+    # (truncate WAL + free unused pages back to the OS). Best-effort; never
+    # blocks pruning on error. True by default so the DB shrinks after deletes.
+    checkpoint_vacuum: bool = True
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
     # the conversation (aux model) and consolidate them into the store as
     # finding_type="fact". Rides the harvest pass; needs harvest enabled.
@@ -815,6 +822,9 @@ class LangGraphConfig:
             checkpoint_keep_per_thread=data.get("checkpoint", {}).get(
                 "keep_per_thread", cls.checkpoint_keep_per_thread
             ),
+            checkpoint_background_keep=data.get("checkpoint", {}).get(
+                "background_keep", cls.checkpoint_background_keep
+            ),
             checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
             checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
                 "prune_interval_hours", cls.checkpoint_prune_interval_hours
@@ -822,6 +832,7 @@ class LangGraphConfig:
             checkpoint_harvest_enabled=data.get("checkpoint", {}).get(
                 "harvest_enabled", cls.checkpoint_harvest_enabled
             ),
+            checkpoint_vacuum=data.get("checkpoint", {}).get("vacuum", cls.checkpoint_vacuum),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),

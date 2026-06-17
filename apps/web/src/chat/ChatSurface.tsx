@@ -1,5 +1,6 @@
 import "./chat.css";
 import { Empty } from "@protolabsai/ui/primitives";
+import { Switch } from "@protolabsai/ui/forms";
 import {
   Conversation,
   Message,
@@ -183,14 +184,12 @@ export function ChatSurface({
             {/* Harvest is OPT-IN: deleting a chat must not silently copy it into
                 searchable memory — the operator may be deleting it precisely to
                 get rid of it. */}
-            <label className="chat-delete-harvest">
-              <input
-                type="checkbox"
-                checked={harvestOnDelete}
-                onChange={(e) => setHarvestOnDelete(e.target.checked)}
-              />
-              Harvest into the knowledge base first (keeps a searchable summary)
-            </label>
+            <Switch
+              className="chat-delete-harvest"
+              checked={harvestOnDelete}
+              onCheckedChange={setHarvestOnDelete}
+              label="Harvest into the knowledge base first (keeps a searchable summary)"
+            />
           </>
         ) : undefined}
       </ConfirmDialog>

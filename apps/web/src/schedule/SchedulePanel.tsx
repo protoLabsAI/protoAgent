@@ -2,16 +2,18 @@ import "./schedule.css";
 
 import { Input, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
+import { Dialog } from "@protolabsai/ui/overlays";
 import {
   useMutation,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { CalendarClock, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { CalendarClock, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { RefreshButton } from "../app/ui-kit";
+import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
@@ -66,37 +68,36 @@ function ScheduleModal({
 
   const preview = describeSchedule(schedule);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   const canSubmit = !!prompt.trim() && !!schedule && !busy;
 
   return (
-    <div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="New schedule"
-         onClick={onClose} data-testid="schedule-modal">
-      <div className="confirm-card schedule-card" onClick={(e) => e.stopPropagation()}>
-        <div className="confirm-head">
-          <CalendarClock size={16} />
-          <h2>New schedule</h2>
-          <Button icon variant="ghost" className="schedule-close" type="button" onClick={onClose} title="Close">
-            <X size={16} />
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={<><CalendarClock size={16} /> New schedule</>}
+      width="min(560px, 94vw)"
+      className="schedule-dialog"
+      footer={
+        <>
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
+                  onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
+            <Plus size={16} /> Schedule
           </Button>
-        </div>
-
-        <div className="schedule-modes" role="tablist">
-          <button type="button" role="tab" aria-selected={mode === "once"}
-                  className={mode === "once" ? "active" : ""} onClick={() => setMode("once")}>Once</button>
-          <button type="button" role="tab" aria-selected={mode === "repeat"}
-                  className={mode === "repeat" ? "active" : ""} onClick={() => setMode("repeat")}>Repeat</button>
-          <button type="button" role="tab" aria-selected={mode === "cron"}
-                  className={mode === "cron" ? "active" : ""} onClick={() => setMode("cron")}>Cron</button>
-        </div>
+        </>
+      }
+    >
+      <div className="schedule-form" data-testid="schedule-modal">
+        <Tabs
+          ariaLabel="Schedule mode"
+          active={mode}
+          onSelect={(m) => setMode(m as Mode)}
+          items={[
+            { id: "once", label: "Once" },
+            { id: "repeat", label: "Repeat" },
+            { id: "cron", label: "Cron" },
+          ]}
+        />
 
         {mode === "once" && (
           <label className="field">
@@ -164,15 +165,8 @@ function ScheduleModal({
           <Input value={jobId} onChange={(e) => setJobId(e.target.value)} placeholder="auto" />
         </label>
 
-        <div className="confirm-actions">
-          <Button type="button"  onClick={onClose}>Cancel</Button>
-          <Button type="button" variant="primary" disabled={!canSubmit} data-testid="schedule-submit"
-                  onClick={() => onAdd({ prompt: prompt.trim(), schedule, job_id: jobId.trim() || undefined, timezone: mode !== "once" && tz ? tz : undefined })}>
-            <Plus size={16} /> Schedule
-          </Button>
-        </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -200,9 +194,7 @@ function ScheduleBody() {
         kicker={`${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${backend}`}
         actions={
           <>
-            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-              <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </Button>
+            <RefreshButton onClick={() => void refetch()} busy={isFetching} />
             <Button variant="primary" type="button" onClick={() => setModalOpen(true)}
                     disabled={backend === "disabled"} data-testid="schedule-new">
               <Plus size={16} /> New schedule

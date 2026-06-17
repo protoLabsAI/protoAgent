@@ -39,10 +39,17 @@ const _layoutStorage = createJSONStorage(() => ({
 // The "agent" surface folded into Settings ▸ Workspace (ADR 0048 S-C); Knowledge is
 // now store-only (its Memory settings live in Settings ▸ Workspace ▸ Memory).
 export type Surface =
-  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "settings" | (string & {});
-export type RightPanel = "notes" | "beads" | "goals" | "schedule" | (string & {}); // + plugin:<id>:<viewId>
+  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "box" | "settings" | (string & {});
+// `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
+// (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
+export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<viewId>
 export type PluginsTab = "local" | "market" | "download";
-export type ActivityTab = "thread" | "inbox";
+// "schedule" joins thread/inbox here (#1075): cron is a trigger, so timed turns are a
+// tab of the Activity surface rather than a standalone rail surface.
+export type ActivityTab = "thread" | "inbox" | "schedule";
+// The Box surface (PR4 / ADR 0048 §5) — box-level operations that aren't per-agent
+// cascade settings, moved out of the Settings ▸ Global home into their own rail surface.
+export type BoxTab = "fleet" | "telemetry" | "commons";
 // Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
 // section sub-nav. `settingsScope` picks the home; `settingsSection` the active
 // section within it (a free string so each home owns its own section ids).
@@ -52,6 +59,7 @@ type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
   pluginsTab: PluginsTab;
+  boxTab: BoxTab;
   settingsScope: SettingsScope;
   settingsSection: string;
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
@@ -64,13 +72,20 @@ type UIState = {
   // Ordered surface lists per rail (ADR 0035 D2 + 0036) — a surface is on exactly one side, at a
   // position. Core surfaces seeded below; plugin views append by their manifest `placement`. Chat
   // is pinned left (mounts unconditionally for streaming continuity) — never moved across rails.
-  railOrder: { left: string[]; right: string[] };
-  moveSurface: (id: string, side: "left" | "right") => void; // splice out → append to side's bottom
+  // Three docks now (DS AppShell bottom dock): left/right rails + the bottom dock (a
+  // horizontal icon rail in the util bar + a full-width panel). A surface is on exactly
+  // one dock, at a position.
+  railOrder: { left: string[]; right: string[]; bottom: string[] };
+  moveSurface: (id: string, side: "left" | "right" | "bottom") => void; // splice out → append to the target dock
   reorderSurface: (id: string, dir: -1 | 1) => void; // swap with the neighbour within its rail
-  setRailOrder: (next: { left: string[]; right: string[] }) => void; // DS AppShell DnD — whole new order
+  setRailOrder: (next: { left: string[]; right: string[]; bottom: string[] }) => void; // DS AppShell DnD — whole new order
   // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
   // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
-  reconcilePluginViews: (views: { id: string; side: "left" | "right" }[]) => void;
+  reconcilePluginViews: (views: { id: string; side: "left" | "right" | "bottom" }[]) => void;
+  // Bottom dock — active surface + height + collapse (mirror the right panel, on the Y axis).
+  bottomPanel: string;
+  bottomHeight: number;
+  bottomCollapsed: boolean;
   // Mobile shell (ADR 0035 S4): one active surface + a configurable bottom quick-bar.
   mobileActive: string;
   setMobileActive: (id: string) => void;
@@ -79,6 +94,7 @@ type UIState = {
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setPluginsTab: (t: PluginsTab) => void;
+  setBoxTab: (t: BoxTab) => void;
   setSettingsScope: (s: SettingsScope) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
@@ -86,6 +102,9 @@ type UIState = {
   setRightCollapsed: (b: boolean) => void;
   setLeftCollapsed: (b: boolean) => void;
   setRightWidth: (w: number) => void;
+  setBottomPanel: (p: string) => void;
+  setBottomHeight: (h: number) => void;
+  setBottomCollapsed: (b: boolean) => void;
   // Notification dots (ADR 0039) — a plugin surface key (`plugin:<id>:<view>`) with unseen
   // bus activity shows a rail dot until opened. Persisted so the dot survives a refresh.
   pluginDots: Record<string, boolean>;
@@ -108,6 +127,32 @@ export function migrateUiState(persisted: unknown): unknown {
       knowledgeTab: _drop4,
       ...rest
     } = persisted as Record<string, unknown>;
+    // v4 (PR4): the "Box" rail surface (Fleet/Telemetry/Commons moved out of Settings ▸
+    // Global). Inject it into a persisted railOrder that predates it — just before
+    // "settings" — so an existing drag-and-drop layout gains the surface instead of
+    // silently hiding it. (A fresh store seeds it via the default railOrder above.)
+    const ro = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
+    if (ro && Array.isArray(ro.left) && !ro.left.includes("box") && !(ro.right ?? []).includes("box")) {
+      const left = ro.left.slice();
+      const at = left.indexOf("settings");
+      left.splice(at >= 0 ? at : left.length, 0, "box");
+      rest.railOrder = { ...ro, left };
+    }
+    // v5 (#1075): "schedule" folded into the Activity surface (a tab), so prune it from a
+    // persisted railOrder — otherwise it lingers as a dead rail id with no surface metadata.
+    const ro2 = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
+    if (ro2 && (Array.isArray(ro2.left) || Array.isArray(ro2.right))) {
+      rest.railOrder = {
+        left: (ro2.left ?? []).filter((x) => x !== "schedule"),
+        right: (ro2.right ?? []).filter((x) => x !== "schedule"),
+      };
+    }
+    // v6 (bottom dock): railOrder gains a `bottom` dock — add the empty array to a
+    // persisted layout that predates it so the shape is complete.
+    const ro3 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro3 && !Array.isArray(ro3.bottom)) {
+      rest.railOrder = { ...ro3, bottom: [] };
+    }
     return rest;
   }
   return persisted;
@@ -119,6 +164,7 @@ export const useUI = create<UIState>()(
       surface: "chat",
       rightPanel: "beads",
       pluginsTab: "local",
+      boxTab: "fleet",
       settingsScope: "host" as SettingsScope,
       settingsSection: "overview",
       fleetStartNew: false,
@@ -126,16 +172,23 @@ export const useUI = create<UIState>()(
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
+      bottomPanel: "",
+      bottomHeight: 240,
+      bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "activity", "studio", "knowledge", "plugins", "settings"],
-        right: ["beads", "goals", "schedule"],
+        left: ["chat", "activity", "studio", "knowledge", "plugins", "box", "settings"],
+        right: ["beads", "goals"],
+        bottom: [],
       },
       moveSurface: (id, side) =>
         set((s) => {
-          const left = s.railOrder.left.filter((x) => x !== id);
-          const right = s.railOrder.right.filter((x) => x !== id);
-          (side === "left" ? left : right).push(id); // append to the target's bottom
-          return { railOrder: { left, right } };
+          const arrs = {
+            left: s.railOrder.left.filter((x) => x !== id),
+            right: s.railOrder.right.filter((x) => x !== id),
+            bottom: s.railOrder.bottom.filter((x) => x !== id),
+          };
+          arrs[side].push(id); // append to the target dock's end
+          return { railOrder: arrs };
         }),
       reorderSurface: (id, dir) =>
         set((s) => {
@@ -147,7 +200,7 @@ export const useUI = create<UIState>()(
             [next[i], next[j]] = [next[j], next[i]];
             return next;
           };
-          return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right) } };
+          return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right), bottom: swap(s.railOrder.bottom) } };
         }),
       setRailOrder: (railOrder) => set({ railOrder }),
       mobileActive: "chat",
@@ -163,16 +216,16 @@ export const useUI = create<UIState>()(
         set((s) => {
           const ids = new Set(views.map((v) => v.id));
           const keep = (arr: string[]) => arr.filter((x) => !x.startsWith("plugin:") || ids.has(x));
-          const left = keep(s.railOrder.left);
-          const right = keep(s.railOrder.right);
+          const arrs = { left: keep(s.railOrder.left), right: keep(s.railOrder.right), bottom: keep(s.railOrder.bottom) };
           for (const v of views) {
-            if (!left.includes(v.id) && !right.includes(v.id)) (v.side === "left" ? left : right).push(v.id);
+            if (!arrs.left.includes(v.id) && !arrs.right.includes(v.id) && !arrs.bottom.includes(v.id)) arrs[v.side].push(v.id);
           }
-          return { railOrder: { left, right } };
+          return { railOrder: arrs };
         }),
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
+      setBoxTab: (boxTab) => set({ boxTab }),
       // Switching home resets to that home's first section (its own default lives in
       // SettingsSurface); callers that want a specific section call setSettingsSection too.
       setSettingsScope: (settingsScope) => set({ settingsScope }),
@@ -189,6 +242,9 @@ export const useUI = create<UIState>()(
       // column could never grow past 720, so the LEFT column never reached its collapse
       // threshold (left wouldn't close), and the column stopped tracking the pointer mid-drag.
       setRightWidth: (w) => set({ rightWidth: Math.max(0, Math.round(w)) }),
+      setBottomPanel: (bottomPanel) => set({ bottomPanel }),
+      setBottomHeight: (h) => set({ bottomHeight: Math.max(0, Math.round(h)) }),
+      setBottomCollapsed: (bottomCollapsed) => set({ bottomCollapsed }),
       pluginDots: {},
       setPluginDot: (key, on) =>
         set((s) => {
@@ -202,7 +258,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 3, // v2: railOf→railOrder. v3: settingsTab→settingsScope+settingsSection (ADR 0048)
+      version: 6, // …v4 +Box · v5 Schedule→Activity tab (#1075) · v6 +bottom dock
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
     },
   ),

@@ -1,10 +1,11 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Brain, Database, FileUp, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Brain, Database, FileUp, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
+import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -297,9 +298,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
                 </Button>
               </>
             ) : null}
-            <Button icon variant="ghost" type="button" onClick={() => void run(query)} disabled={loading} title="Refresh">
-              <RefreshCw size={16} className={loading ? "spin" : ""} />
-            </Button>
+            <RefreshButton onClick={() => void run(query)} busy={loading} />
           </>
         }
       />

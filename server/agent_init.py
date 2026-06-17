@@ -683,6 +683,7 @@ async def _checkpoint_prune_loop() -> None:
                     path,
                     keep_per_thread=cfg.checkpoint_keep_per_thread,
                     max_age_seconds=(None if harvest else max_age),
+                    background_keep=cfg.checkpoint_background_keep,
                 )
                 if res["threads_deleted"] or res["checkpoints_deleted"]:
                     log.info(
@@ -690,6 +691,20 @@ async def _checkpoint_prune_loop() -> None:
                         res["threads_deleted"],
                         res["checkpoints_deleted"],
                     )
+                    # Reclaim freed space back to the OS (compact WAL + pages).
+                    if getattr(cfg, "checkpoint_vacuum", True):
+                        try:
+                            from graph.checkpoint_prune import reclaim as _reclaim
+
+                            vac = await asyncio.to_thread(_reclaim, path)
+                            if vac["wal_truncated"] or vac["pages_reclaimed"]:
+                                log.info(
+                                    "[checkpoint-prune] reclaimed WAL=%d pages=%d",
+                                    vac["wal_truncated"],
+                                    vac["pages_reclaimed"],
+                                )
+                        except Exception:
+                            log.exception("[checkpoint-prune] reclaim failed")
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
         # Telemetry retention guardrail (ADR 0006) — drop turns older than the
@@ -768,7 +783,7 @@ async def _monitor_goals_loop() -> None:
         await asyncio.sleep(max(5, interval))
 
 
-async def _retire_thread(thread_id: str, *, harvest: bool | None = None) -> str | None:
+async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade: bool = True) -> str | None:
     """Harvest a thread to the knowledge base (best-effort) then delete its
     checkpoints. Shared by the prune sweep and explicit tab deletion. Returns
     the harvested knowledge chunk id, if any.
@@ -777,7 +792,11 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None) -> str 
     sweep's config-driven default); an explicit bool overrides it (the
     delete-chat dialog's opt-in checkbox: an unchecked box must not harvest
     just because the sweep is configured to, and a checked box is an explicit
-    operator request)."""
+    operator request).
+
+    ``cascade`` — when True (the default), also deletes any
+    ``:goal-iter-N`` sub-threads so goal-mode iteration checkpoints are not
+    orphaned."""
     import asyncio
 
     from graph.checkpoint_prune import delete_thread
@@ -794,7 +813,7 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None) -> str 
             config=STATE.graph_config,
         )
     if STATE.checkpoint_path:
-        await asyncio.to_thread(delete_thread, STATE.checkpoint_path, thread_id)
+        await asyncio.to_thread(delete_thread, STATE.checkpoint_path, thread_id, cascade=cascade)
     elif STATE.checkpointer is not None and hasattr(STATE.checkpointer, "delete_thread"):
         try:
             STATE.checkpointer.delete_thread(thread_id)

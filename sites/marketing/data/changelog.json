@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.42.0",
+    "date": "2026-06-17",
+    "changes": [
+      "ACP forget_session — start a coder fresh when its workdir was recreated.",
+      "dream & distill — scheduled self-curation subagents.",
+      "New-user setup wizard, rebuilt around archetypes.",
+      "ACP coding-agent client: a real coding turn died on its own output.",
+      "operator.project_dir actually drives the workspace root.",
+      "Setup probe could 500 or hang the runtime step.",
+      "Out-of-graph subagent runs now see the lead's full tool set."
+    ]
+  },
+  {
     "version": "v0.41.0",
     "date": "2026-06-15",
     "changes": [

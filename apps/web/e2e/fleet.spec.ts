@@ -20,8 +20,9 @@ test.beforeEach(async ({ page }, testInfo) => {
 
 async function openAgents(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+  // Fleet lives under the Box rail surface now (PR4), not Settings.
+  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
 }
 
 test("Agents tab lists the host (this instance) + peers, host active by default", async ({ page }) => {
@@ -41,8 +42,8 @@ test("New agent → archetype picker → create returns to the list", async ({ p
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
-  await expect(page.locator(".archetype-card")).toHaveCount(2); // from GET /api/archetypes
-  await page.locator(".archetype-card", { hasText: "Project Manager" }).click();
+  await expect(page.locator(".pl-radiocard")).toHaveCount(2); // DS RadioCard, from GET /api/archetypes
+  await page.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
   await page.getByLabel("Agent name").fill("newbot");
   await page.getByRole("button", { name: /Create/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "newbot" })).toBeVisible();
@@ -153,8 +154,8 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   await expect(page.getByTestId("fleet-switcher")).toContainText("remy");
 
   // Unregister from the fleet manager (the remote agent itself is untouched).
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
   await page.locator(".fleet-row", { hasText: "remy" })
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);

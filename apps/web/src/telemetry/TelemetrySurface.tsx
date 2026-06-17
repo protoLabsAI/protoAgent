@@ -14,11 +14,11 @@ import {
   Download,
   Hash,
   Layers,
-  RefreshCw,
   Wrench,
 } from "lucide-react";
 
 import { StagePanel } from "../app/ErrorBoundary";
+import { RefreshButton } from "../app/ui-kit";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
@@ -58,9 +58,7 @@ function TelemetryBody() {
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
             </Button>
-            <Button icon variant="ghost" type="button" onClick={() => void refetch()} disabled={isFetching} title="Refresh">
-              <RefreshCw size={16} className={isFetching ? "spin" : ""} />
-            </Button>
+            <RefreshButton onClick={() => void refetch()} busy={isFetching} />
           </>
         }
       />

@@ -1,17 +1,18 @@
 import "./settings.css";
 
 import { Alert } from "@protolabsai/ui/data";
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Combobox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { ExternalLink, Link2, Loader2, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { Link2, Loader2, RotateCcw, Save } from "lucide-react";
 
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { StagePanel } from "../app/ErrorBoundary";
-import { api } from "../lib/api";
+import { HelpLink, TestConnectionButton } from "../app/ui-kit";
+import { agentHref, api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -27,13 +28,12 @@ export function SettingsCategoryPanel(props: { category: string; title?: string;
   );
 }
 
-// Host / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
-// categories, editable, saving to the host layer. Surfaced as its own Settings tab.
-// TODO(ADR 0047 §7): gate to the host console (slug=host); for now it renders for any
-// focused agent, clearly labeled "box-shared", so the slice isn't blocked on gating.
+// Global / box-shared defaults view (ADR 0047) — the host-scoped fields across ALL
+// categories, editable, saving to the host layer. Gated to the host console at the
+// call site (SettingsSurface): a workspace console renders <HostConfigLocked/> instead.
 export function HostDefaultsPanel({
   categories = ["Agent", "System"],
-  title = "Host defaults",
+  title = "Configuration",
 }: {
   categories?: string[];
   title?: string;
@@ -43,7 +43,7 @@ export function HostDefaultsPanel({
   // section). Previously this mapped one full SettingsCategory PER category, which
   // stacked duplicate panels each with its own scroll/Save/explainer.
   return (
-    <StagePanel label="host defaults" className="settings-panel">
+    <StagePanel label="configuration" className="settings-panel">
       <SettingsCategory
         category={categories[0]}
         categories={categories}
@@ -52,6 +52,27 @@ export function HostDefaultsPanel({
         hostLayer
       />
     </StagePanel>
+  );
+}
+
+// Workspace-console view of Global ▸ Configuration (ADR 0047 §7.7): the box-shared
+// defaults are editable only on the host console, so a workspace console gets a
+// read-only pointer. Per-agent overrides still happen under Workspace ▸ Settings.
+export function HostConfigLocked() {
+  return (
+    <section className="panel stage-panel settings-panel">
+      <PanelHeader title="Configuration" kicker="box-shared Global defaults" />
+      <div className="stage-body">
+        <Alert status="info" className="settings-banner">
+          These are the box-shared <strong>Global</strong> defaults — edited on the
+          <strong> host console</strong>. This workspace inherits them; to change a value
+          just for this agent, override it under <strong>Workspace ▸ Settings</strong>.
+        </Alert>
+        <Button variant="primary" type="button" onClick={() => { window.location.href = agentHref("host"); }}>
+          Open host console
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -226,10 +247,7 @@ export function SettingsCategory({
         actions={
           <>
             {hasModel ? (
-              <Button type="button" onClick={() => testConn.mutate()} disabled={testConn.isPending || save.isPending}>
-                {testConn.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                Test connection
-              </Button>
+              <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
             ) : null}
             {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
             <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
@@ -244,12 +262,10 @@ export function SettingsCategory({
       <div className="stage-body">
         {hostLayer ? (
           <Alert status="info" className="settings-banner">
-            <strong>Host / box-shared defaults</strong> (ADR 0047) — edits here write to the
-            box's <code>host-config.yaml</code> and become the inherited default for every agent
-            on this box that hasn't set its own value. Per-agent overrides win.
-            {/* TODO(ADR 0047 §7): gate this view to the host console (slug=host). For now it
-                renders for any focused agent — clearly labeled as box-shared — so the slice
-                isn't blocked on host-console gating. */}
+            <strong>Global · box-shared defaults</strong> (ADR 0047) — edits here write to this
+            hub's <code>host-config.yaml</code> and become the inherited default for every agent the
+            hub manages that hasn't set its own value. Per-agent overrides win. (Usually one hub per
+            machine; a machine running several hubs keeps a host-config per hub.)
           </Alert>
         ) : null}
         {acpAgent ? (
@@ -303,13 +319,8 @@ export function SettingsCategory({
             ))}
             {hasDiscord && group.section === "Discord" ? (
               <div className="settings-group-actions">
-                <Button type="button" onClick={() => testDiscord.mutate()} disabled={testDiscord.isPending || save.isPending}>
-                  {testDiscord.isPending ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                  Test connection
-                </Button>
-                <a className="settings-help-link" href={DISCORD_GUIDE_URL} target="_blank" rel="noreferrer">
-                  How to create a bot <ExternalLink size={13} />
-                </a>
+                <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
+                <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
               </div>
             ) : null}
             {hasGoogle && group.section === "Google" ? (
@@ -331,22 +342,16 @@ export function SettingsCategory({
                       ? "Save the client ID + secret, then connect"
                       : "Not connected"}
                 </span>
-                <a className="settings-help-link" href={GOOGLE_GUIDE_URL} target="_blank" rel="noreferrer">
-                  Get an OAuth client <ExternalLink size={13} />
-                </a>
+                <HelpLink href={GOOGLE_GUIDE_URL}>Get an OAuth client</HelpLink>
               </div>
             ) : null}
             {group.test ? (
               <div className="settings-group-actions">
-                <Button
-
-                  type="button"
+                <TestConnectionButton
                   onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
-                  disabled={(testGroup.isPending && testingSection === group.section) || save.isPending}
-                >
-                  {testGroup.isPending && testingSection === group.section ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
-                  Test connection
-                </Button>
+                  pending={testGroup.isPending && testingSection === group.section}
+                  disabled={save.isPending}
+                />
               </div>
             ) : null}
           </AccordionItem>
@@ -365,7 +370,7 @@ export function SettingsCategory({
 //   source=="agent" && scope=="host"  → overridden here (offer reset-to-inherited)
 //   source=="agent" && scope=="agent" → a plain agent setting (no badge)
 function inheritance(field: SettingsField): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
-  if (field.source === "host") return { label: "inherited from Host", status: "neutral", overridden: false };
+  if (field.source === "host") return { label: "inherited from Global", status: "neutral", overridden: false };
   if (field.source === "default") return { label: "inherited from default", status: "neutral", overridden: false };
   if (field.source === "agent" && field.scope === "host") return { label: "overridden here", status: "warning", overridden: true };
   return null; // source=="agent" && scope=="agent" — just an agent setting.
@@ -412,6 +417,11 @@ function SettingRow({
             ) : null}
           </p>
         ) : null}
+        {/* Editing a still-inherited box-shared field in the Workspace view writes a
+            per-agent leaf override (not the box default) — make that effect explicit. */}
+        {showInheritance && dirty && field.scope === "host" && field.source !== "agent" ? (
+          <p className="setting-override-note">Saving overrides the Global default for this agent only.</p>
+        ) : null}
       </div>
       <div className="setting-control">
         <SettingInput field={field} value={value} onChange={onChange} />
@@ -425,10 +435,12 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
 
   if (field.type === "bool") {
     return (
-      <label className="setting-toggle">
-        <input id={id} type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
-        <span>{value ? "on" : "off"}</span>
-      </label>
+      <Switch
+        id={id}
+        checked={Boolean(value)}
+        onCheckedChange={onChange}
+        label={value ? "on" : "off"}
+      />
     );
   }
   if (field.type === "number") {
@@ -457,29 +469,27 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // ordered. Clearing a row removes it.
   if (field.type === "string_list" && field.options.length) {
     const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-    const listId = `${id}-models`;
     const update = (i: number, v: string) => {
       const next = items.slice();
       if (v) next[i] = v;
       else next.splice(i, 1);
       onChange(next);
     };
+    // A column of DS Comboboxes — one per value plus a trailing blank-to-add row;
+    // each carries its own suggestion list (the gateway models), and clearing a row
+    // removes it. Type any alias OR pick a suggestion.
     return (
       <div id={id} className="setting-list" style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
         {[...items, ""].map((item, i) => (
-          <input
+          <Combobox
             key={i}
             className="setting-input"
-            type="text"
-            list={listId}
+            options={field.options}
             value={item}
             placeholder={i === items.length ? "add a model…" : ""}
-            onChange={(e) => update(i, e.target.value)}
+            onValueChange={(v) => update(i, v)}
           />
         ))}
-        <datalist id={listId}>
-          {field.options.map((opt) => <option key={opt} value={opt} />)}
-        </datalist>
       </div>
     );
   }
@@ -528,24 +538,15 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   // values stay valid (these fields aren't membership-checked), so a datalist of
   // suggestions is the right control.
   if (field.options.length) {
-    const listId = `${id}-models`;
     return (
-      <>
-        <input
-          id={id}
-          className="setting-input"
-          type="text"
-          list={listId}
-          placeholder="type or pick a model"
-          value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
-          onChange={(e) => onChange(e.target.value)}
-        />
-        <datalist id={listId}>
-          {field.options.map((opt) => (
-            <option key={opt} value={opt} />
-          ))}
-        </datalist>
-      </>
+      <Combobox
+        id={id}
+        className="setting-input"
+        options={field.options}
+        placeholder="type or pick a model"
+        value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
+        onValueChange={onChange}
+      />
     );
   }
   return (

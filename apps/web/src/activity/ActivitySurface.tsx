@@ -2,11 +2,12 @@ import "./activity.css";
 
 import { Textarea } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
-import { Clock, Inbox, Loader2, MessageSquare, RefreshCw, Send, Users, Webhook, Zap } from "lucide-react";
+import { Clock, Inbox, Loader2, MessageSquare, Send, Users, Webhook, Zap } from "lucide-react";
 
 import { useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
+import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -117,11 +118,7 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       <PanelHeader
         title="Activity"
         kicker="what the agent did on its own — and why"
-        actions={
-          <Button icon variant="ghost" type="button" onClick={() => void load()} title="Refresh">
-            {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-          </Button>
-        }
+        actions={<RefreshButton onClick={() => void load()} busy={loading} />}
       />
 
       <div className="stage-body activity-body">

@@ -10,6 +10,8 @@
   --brand-violet-light: #a78bfa;
   --brand-indigo: #6366f1;
   --brand-indigo-bright: #818cf8;
+  /* sister-agent (a2a) accent — the only non-semantic origin tint in the activity feed */
+  --brand-pink: #f472b6;
 
   /* Light-mode ready: the legacy app vars are now ALIASES of the @protolabsai/design
      `--pl-*` tokens (imported in main.tsx), so the whole console — DS components AND

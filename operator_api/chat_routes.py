@@ -52,15 +52,19 @@ def register_chat_routes(app, ui: str) -> None:
 
     @app.delete("/api/chat/sessions/{session_id}")
     async def _api_delete_session(session_id: str, harvest: bool = False):
-        """Retire a chat session: purge its checkpoints, optionally harvesting
-        the conversation into the knowledge base first. Called when the
-        operator deletes a chat tab.
+        """Retire a chat session: purge its checkpoints for both the A2A and
+        chat prefix, optionally harvesting the conversation into the knowledge
+        base first. Called when the operator deletes a chat tab.
 
         Harvest is OPT-IN (``?harvest=true`` — the delete dialog's checkbox):
         deleting a chat must not silently copy it into searchable memory; the
         operator may be deleting it precisely to get rid of it. The TTL prune
-        sweep keeps its own config-driven default (``checkpoint_harvest_enabled``)."""
-        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest)
+        sweep keeps its own config-driven default (``checkpoint_harvest_enabled``).
+
+        Both ``a2a:{session_id}`` and ``chat:{session_id}`` threads are retired
+        with cascade so goal-mode ``:goal-iter-N`` sub-threads are not orphaned."""
+        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
+        await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
         # deleted chat leaves nothing indexed behind.
         store = STATE.knowledge_store
