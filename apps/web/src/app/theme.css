@@ -1439,31 +1439,50 @@ textarea {
 }
 
 /* "Test connection" result line in the model step. */
-.setup-test {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 18px 0;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  font-size: 0.85rem;
+/* Short explanatory line under a field/step (replaces ad-hoc inline `opacity` smalls). */
+.setup-hint {
+  margin: 8px 0 0;
+  color: var(--fg-muted);
+  font-size: 12px;
   line-height: 1.4;
 }
 
-.setup-test.ok {
-  border: 1px solid color-mix(in srgb, var(--success) 28%, transparent);
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  color: var(--success);
+/* Runtime-kind picker — selectable cards. Mirrors .archetype-card's token usage so it
+   tracks the theme accent (was inline styles on the off-theme --brand-violet-light).
+   DS gap: a RadioCard/SegmentedControl primitive (see protoContent issues). */
+.setup-choices {
+  display: flex;
+  gap: 8px;
 }
-
-.setup-test.err {
-  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-  color: var(--error);
+.setup-choice {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: inherit;
+  cursor: pointer;
 }
-
-.setup-test svg {
-  flex-shrink: 0;
+.setup-choice:hover {
+  border-color: var(--fg-muted);
+}
+.setup-choice.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+}
+.setup-choice strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.setup-choice small {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .setup-actions {
