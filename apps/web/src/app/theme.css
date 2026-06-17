@@ -1372,6 +1372,19 @@ textarea {
   white-space: nowrap;
 }
 
+/* Intro / closing prose on the welcome + finish steps — wraps (unlike the
+   ellipsis-clipped status-line labels). */
+.setup-intro {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.setup-intro-foot {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
 .toggle-row input {
   width: 18px;
   height: 18px;
