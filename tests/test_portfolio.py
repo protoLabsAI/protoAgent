@@ -167,7 +167,7 @@ def test_manifest_discovers_and_ships_disabled():
     assert m.version and m.enabled is False  # enable is the operator's trust decision
 
 
-def test_register_exposes_the_three_tools():
+def test_register_exposes_the_tools():
     seen = []
 
     class _Reg:
@@ -175,4 +175,102 @@ def test_register_exposes_the_three_tools():
             seen.append(t.name)
 
     portfolio.register(_Reg())
-    assert set(seen) == {"portfolio_boards", "portfolio_dispatch", "portfolio_board_read"}
+    assert set(seen) == {"portfolio_boards", "portfolio_dispatch", "portfolio_board_read", "portfolio_rollup"}
+
+
+# ── portfolio_rollup (P2) ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rollup_projects_bounded_counts_and_only_blocked_critical(monkeypatch):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_remotes",
+        lambda: [
+            {"id": "r1", "name": "team-web", "url": "https://web.example", "token": "t"},
+            {"id": "r2", "name": "team-api", "url": "https://api.example", "token": "t"},
+        ],
+    )
+
+    boards = {
+        "team-web": [
+            {"id": "w1", "title": "ready feat", "board_state": "ready"},
+            {"id": "w2", "title": "blocked feat", "board_state": "in_progress", "blocked": True},
+            {"id": "w3", "title": "foundation", "board_state": "in_progress", "foundation": True},
+            {"id": "w4", "title": "done foundation", "board_state": "done", "foundation": True},
+        ],
+        "team-api": [{"id": "a1", "title": "x", "board_state": "backlog"}],
+    }
+
+    async def fake_fetch(rec, state=""):
+        return boards[rec["name"]]
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+
+    out = {r["board"]: r for r in json.loads(await _tool("portfolio_rollup").ainvoke({}))}
+    web = out["team-web"]
+    assert web["total"] == 4
+    assert web["counts"] == {"ready": 1, "in_progress": 2, "done": 1}
+    assert web["blocked"] == [{"id": "w2", "title": "blocked feat"}]  # only the blocked one
+    assert web["critical_path"] == [{"id": "w3", "title": "foundation", "state": "in_progress"}]  # done foundation excluded
+    # the rollup is BOUNDED — it carries counts + blocked/critical only, never the full feature list
+    assert "spec" not in json.dumps(web) and "files_to_modify" not in json.dumps(web)
+    assert out["team-api"]["counts"] == {"backlog": 1}
+
+
+@pytest.mark.asyncio
+async def test_rollup_filters_by_boards_arg(monkeypatch):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_remotes",
+        lambda: [
+            {"id": "r1", "name": "team-web", "url": "https://web.example", "token": "t"},
+            {"id": "r2", "name": "team-api", "url": "https://api.example", "token": "t"},
+        ],
+    )
+
+    async def fake_fetch(rec, state=""):
+        return []
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+    out = json.loads(await _tool("portfolio_rollup").ainvoke({"boards": "team-api"}))
+    assert [r["board"] for r in out] == ["team-api"]
+
+
+@pytest.mark.asyncio
+async def test_rollup_tolerates_an_unreachable_board(monkeypatch):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_remotes",
+        lambda: [
+            {"id": "r1", "name": "up", "url": "https://up.example", "token": "t"},
+            {"id": "r2", "name": "down", "url": "https://down.example", "token": "t"},
+        ],
+    )
+
+    async def fake_fetch(rec, state=""):
+        if rec["name"] == "down":
+            raise pf._BoardUnavailable("no project board exposed (project_board not enabled there)")
+        return [{"id": "x", "board_state": "ready"}]
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+    out = {r["board"]: r for r in json.loads(await _tool("portfolio_rollup").ainvoke({}))}
+    assert out["up"]["counts"] == {"ready": 1}
+    assert "error" in out["down"] and "no project board" in out["down"]["error"]  # one bad board doesn't sink the rollup
+
+
+@pytest.mark.asyncio
+async def test_rollup_no_boards_message(monkeypatch):
+    from graph.fleet import supervisor
+
+    monkeypatch.setattr(supervisor, "list_remotes", lambda: [])
+    assert "No team boards yet" in await _tool("portfolio_rollup").ainvoke({})

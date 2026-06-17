@@ -43,6 +43,56 @@ def _remote_by_name(name: str) -> dict | None:
     return None
 
 
+class _BoardUnavailable(Exception):
+    """A team board couldn't be read (policy block, 404, HTTP error, network)."""
+
+
+async def _fetch_board_features(rec: dict, state: str = "") -> list:
+    """GET a remote team board's features (structured) — the shared read used by both
+    the raw read and the rollup. Raises ``_BoardUnavailable`` so callers format their
+    own message. The stored remote bearer authenticates both ``/a2a`` and the board
+    API; the remote was egress-vetted at add_remote, re-checked here for parity with
+    the A2A dispatch path."""
+    url = rec["url"].rstrip("/") + "/api/plugins/project_board/features"
+    from security import policy
+
+    blocked = policy.check_url(url)
+    if blocked:
+        raise _BoardUnavailable(blocked)
+
+    import httpx
+
+    headers = {"Authorization": f"Bearer {rec['token']}"} if rec.get("token") else {}
+    params = {"state": state} if state else None
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=headers, params=params)
+    except Exception as exc:  # noqa: BLE001
+        raise _BoardUnavailable(str(exc)) from exc
+    if r.status_code == 404:
+        raise _BoardUnavailable("no project board exposed (project_board not enabled there)")
+    if r.status_code >= 400:
+        raise _BoardUnavailable(f"HTTP {r.status_code} {r.text[:200]}")
+    return r.json().get("features", [])
+
+
+def _rollup_one(name: str, features: list) -> dict:
+    """Project a board's features into a BOUNDED rollup — lane counts + only the
+    blocked / foundation (critical-path) items, never the full feature list. This is
+    what keeps a PM's context small when reasoning over many boards."""
+    counts: dict[str, int] = {}
+    blocked: list[dict] = []
+    critical: list[dict] = []
+    for f in features:
+        st = f.get("board_state", "backlog")
+        counts[st] = counts.get(st, 0) + 1
+        if f.get("blocked") or f.get("dag_blocked"):
+            blocked.append({"id": f.get("id"), "title": f.get("title", "")})
+        if f.get("foundation") and st != "done":
+            critical.append({"id": f.get("id"), "title": f.get("title", ""), "state": st})
+    return {"board": name, "total": len(features), "counts": counts, "blocked": blocked, "critical_path": critical}
+
+
 def _dispatch_instruction(title: str, spec: str, acceptance_criteria: str, files_to_modify: str) -> str:
     lines = [
         "You manage a project board (the project_board plugin). Create a new feature on it "
@@ -122,29 +172,44 @@ def _tools() -> list:
         rec = _remote_by_name(board)
         if rec is None:
             return f"Error: no team board named {board!r}. Call portfolio_boards to list them."
-
-        url = rec["url"].rstrip("/") + "/api/plugins/project_board/features"
-        # The remote was egress-vetted at add_remote; re-check the read URL too (parity
-        # with the A2A dispatch path, which guards every call).
-        from security import policy
-
-        blocked = policy.check_url(url)
-        if blocked:
-            return f"Error reading {board!r} board: {blocked}"
-
-        import httpx
-
-        headers = {"Authorization": f"Bearer {rec['token']}"} if rec.get("token") else {}
-        params = {"state": state} if state else None
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(url, headers=headers, params=params)
-        except Exception as exc:  # noqa: BLE001
+            feats = await _fetch_board_features(rec, state)
+        except _BoardUnavailable as exc:
             return f"Error reading {board!r} board: {exc}"
-        if r.status_code == 404:
-            return f"{board!r} doesn't expose a project board (project_board not enabled there)."
-        if r.status_code >= 400:
-            return f"Error reading {board!r} board: HTTP {r.status_code} {r.text[:200]}"
-        return json.dumps(r.json().get("features", []), indent=2)
+        return json.dumps(feats, indent=2)
 
-    return [portfolio_boards, portfolio_dispatch, portfolio_board_read]
+    @tool
+    async def portfolio_rollup(boards: str = "") -> str:
+        """A BOUNDED portfolio view across team boards: per-board lane counts + only the
+        blocked / critical-path (foundation) items — NOT every feature — so you can
+        reason over MANY boards at once without pulling each one raw. Optional comma-
+        separated ``boards`` filters to specific team-agent names (default = all). An
+        unreachable board is reported with an ``error`` instead of failing the rollup."""
+        from graph.fleet import supervisor
+
+        wanted = {b.strip() for b in boards.split(",") if b.strip()} if boards else None
+        recs = [
+            r
+            for r in supervisor.list_remotes()
+            if wanted is None or r.get("name") in wanted or r.get("id") in wanted
+        ]
+        if not recs:
+            return (
+                "No matching team boards. Call portfolio_boards to list them."
+                if wanted
+                else "No team boards yet — register a team-agent as a fleet member first (see portfolio_boards)."
+            )
+
+        async def _one(rec: dict) -> dict:
+            try:
+                feats = await _fetch_board_features(rec)
+            except _BoardUnavailable as exc:
+                return {"board": rec.get("name"), "error": str(exc)}
+            return _rollup_one(rec.get("name"), feats)
+
+        import asyncio
+
+        rollups = await asyncio.gather(*[_one(r) for r in recs])
+        return json.dumps(rollups, indent=2)
+
+    return [portfolio_boards, portfolio_dispatch, portfolio_board_read, portfolio_rollup]
