@@ -20,7 +20,7 @@ the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-a
 
 ## Manage in the console (panel)
 
-With the plugin enabled, open **Settings → Plugins → Delegates**. The panel:
+Open **Settings → Plugins → Delegates** (the registry is on by default). The panel:
 
 - **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
   marker, a **live health dot** (a background prober probes each delegate
@@ -34,13 +34,13 @@ With the plugin enabled, open **Settings → Plugins → Delegates**. The panel:
 Saving writes the config + secret and hot-reloads, so the new roster is live on
 the next turn.
 
-## Enable it
+## Declare delegates
+
+The registry is **enabled by default** — it does nothing until you declare a
+delegate, so just add entries (no plugin to turn on):
 
 ```yaml
 # config/langgraph-config.yaml
-plugins:
-  enabled: [delegates]
-
 delegates:
   - name: helm                      # the name the LLM passes to delegate_to(target=…)
     type: a2a

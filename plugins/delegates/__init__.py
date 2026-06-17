@@ -7,8 +7,9 @@ gateway-only model) with one hot-swappable roster.
 
 PR1 (this slice): the registry + `delegate_to` + the three adapters, configured
 via the ``delegates`` config section and hot-reloaded by Save & Reload. The CRUD
-REST API (PR2) and the React panel (PR3) build on this. Ships disabled — enable
-with ``plugins: { enabled: [delegates] }`` and declare delegates in config.
+REST API (PR2) and the React panel (PR3) build on this. Enabled by default — it
+contributes ``delegate_to`` only once you declare a delegate in config (a no-op
+until then), so the gate is the delegate, not a plugin toggle.
 """
 
 from __future__ import annotations
@@ -98,10 +99,11 @@ def register(registry) -> None:
             delegates = nested
     reg = DelegateRegistry(delegates)
     if not reg.names():
-        log.warning(
-            "[delegates] enabled but no delegates configured — add entries under "
-            "`delegates` (see docs/guides/delegates.md), or use the Delegates panel. "
-            "No delegate_to tool registered yet."
+        # The default state for a fresh install (the plugin is always-on): no
+        # delegates declared ⇒ no `delegate_to` tool. Not an anomaly — debug, not warn.
+        log.debug(
+            "[delegates] no delegates declared — `delegate_to` not registered. Add "
+            "entries under `delegates` (docs/guides/delegates.md) or use the Delegates panel."
         )
         return
     registry.register_tool(_build_delegate_to(reg))

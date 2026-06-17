@@ -9,8 +9,9 @@ description: >-
   docs/guides/delegates.md.
 
   Declare delegates in a top-level `delegates:` list (a list, ORBIS-style — not a
-  plugin config section). Ships DISABLED; enable with
-  `plugins: { enabled: [delegates] }`.
+  plugin config section). Enabled by default — it contributes the `delegate_to`
+  tool ONLY once you declare at least one delegate, so it's a no-op until then.
+  (Turn it off explicitly with `plugins: { disabled: [delegates] }`.)
 
   Example (langgraph-config.yaml):
     delegates:
@@ -31,7 +32,10 @@ description: >-
         args: ["--acp"]
         workdir: ~/dev/my-repo
         permissions: allowlist
-enabled: false
+# Always-on (ADR 0025): the registry ships enabled, but stays a no-op until a
+# delegate is declared (register() adds `delegate_to` only when the roster is
+# non-empty). So the gate is "did you declare a delegate", not "did you enable a plugin".
+enabled: true
 
 # Declarative only (not yet enforced) — surfaced in the console for transparency.
 capabilities:

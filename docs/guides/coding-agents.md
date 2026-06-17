@@ -30,9 +30,6 @@ Settings — each grants local authority and deserves a deliberate edit):
 
 ```yaml
 # config/langgraph-config.yaml
-plugins:
-  enabled: [delegates]
-
 delegates:
   - name: proto                 # the name you pass to delegate_to(target=…)
     type: acp
@@ -47,8 +44,9 @@ delegates:
     # deny_kinds: [execute, delete]   # override: kinds to deny
 ```
 
-Enabling a plugin needs a **restart** (plugin routes/tools wire once at process
-init); editing the `delegates` list itself hot-reloads on Save & Reload.
+The delegates registry is **enabled by default** — there's no plugin to turn on.
+Declaring (or editing) the `delegates` list hot-reloads on **Save & Reload**: the
+first delegate you add registers `delegate_to` for the next turn, no restart.
 
 ### Other coding agents
 
