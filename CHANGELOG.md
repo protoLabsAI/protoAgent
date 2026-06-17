@@ -37,18 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (delete one memory chunk by id). `memory_list` now leads each row with its
   `#<id>` so a fact can be targeted for pruning. Inspired by MiMo-Code's
   dream/distill commands, adapted to protoAgent's stores + native scheduler.
-- **Setup wizard: clearer Workspace step (bd-241) + an authoritative project
-  directory (bd-2mf).** The step now groups its fields into **Project** (project
-  directory + additional allowed dirs) and **Memory** (knowledge DB + recall
-  top-K), each with plain-language hints, so the four previously-unlabeled
-  concerns read clearly. The **Knowledge DB** field is now optional — blank uses
-  the default location (no more confusing `/sandbox/...` Docker path shown to
-  local users). New `operator.project_dir` config field: the project directory you
-  pick is now persisted and **actually drives** the console's beads/notes root
-  (`server._resolve_operator_project_root` reads it, honored only when it exists),
-  instead of merely being folded into the allowlist. The model step now
-  **auto-populates the gateway model dropdown** on arrival when an API base is set,
-  so the picker is ready without a manual "Probe" (bd-hbf).
+- **New-user setup wizard, rebuilt around archetypes.** The first-run wizard is
+  streamlined to **four steps — Welcome → Agent → Brain → Summary**. Welcome opens
+  with a local-first / privacy intro; **Agent** combines identity (name + operator)
+  with a **persona picked from archetype cards** (Basic / Project Manager / Custom +
+  any installed bundle) that seed an editable SOUL; **Brain** is the model or
+  coding-agent (ACP) runtime (selecting ACP hides the gateway form); **Summary**
+  recaps what you configured. Picking a **bundle archetype installs its tools** —
+  choosing "Project Manager" clones + enables pm-stack (board + browser + delegates)
+  into the host on finish, so you get the persona *and* the tooling in one pass.
+  Each archetype carries a base SOUL on `GET /api/archetypes`
+  (`config/soul-presets/{base,project-manager}.md`; installed bundles declare theirs
+  inline). The **Workspace** and **Tools** steps are gone — their fields were all
+  sensible defaults a new user shouldn't have to reason about (blank project dir →
+  the protoAgent dir, blank knowledge DB → the default location, top-K 5, all
+  middleware on, 40 researcher turns), so they flow straight through on finish and
+  stay tunable in Settings. The model step also **auto-populates the gateway model
+  dropdown** on arrival when an API base is set, so the picker is ready without a
+  manual "Probe" (bd-hbf).
 
 ### Fixed
 - **ACP coding-agent client: a real coding turn died on its own output.** The
@@ -63,11 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opaque "agent exited"), and `content` extraction handles list-shaped blocks (not
   just a single dict), which also raised `AttributeError` and killed the turn.
   Found by dogfooding the project-board coding loop end-to-end.
-- **Setup wizard "Project path" was cosmetic.** It was only folded into
-  `operator.allowed_dirs` and never persisted, so the real beads/notes root
-  (`_resolve_operator_project_root`) ignored it — typing a path didn't relocate
-  the workspace. It now persists as `operator.project_dir` and the resolver honors
-  it (env > configured-and-exists > default). (bd-2mf)
+- **`operator.project_dir` actually drives the workspace root.** The configured
+  project directory was only folded into `operator.allowed_dirs` and never persisted,
+  so the real beads/notes root (`_resolve_operator_project_root`) ignored it. It now
+  persists as `operator.project_dir` and the resolver honors it
+  (env > configured-and-exists > default). (bd-2mf)
+- **Setup probe could 500 or hang the runtime step.** Listing gateway models caught
+  `httpx.HTTPError` but not `httpx.InvalidURL`, so a malformed API base 500'd and
+  locked the step (and the response body was read twice). Broadened the guard to a
+  clean error, read the body once, and added client-side timeouts on Probe / Test
+  connection so a slow gateway can't pin the step's busy state (which disables Next).
 - **Out-of-graph subagent runs now see the lead's full tool set.** A subagent run
   outside the lead's `task` tool (slash `/<subagent>`, a scheduled turn, the
   console fan-out) built its tools without `inbox_store`/`beads_store`, so an
