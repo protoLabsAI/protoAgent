@@ -138,6 +138,40 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     steering._QUEUES.clear()
 
 
+def test_delegation_list_and_cancel_roundtrip(monkeypatch):
+    # HTTP lifecycle of the Tier 2 delegation routes: GET lists in-flight `task`
+    # delegations; POST cancels one (the route hits graph.delegations directly).
+    from graph import delegations
+
+    class _Fake:
+        def __init__(self):
+            self.cancelled = False
+
+        def done(self):
+            return self.cancelled
+
+        def cancel(self):
+            self.cancelled = True
+
+    delegations._RUNNING.clear()
+    c = _client(monkeypatch)
+    assert c.get("/api/chat/sessions/s1/delegations").json() == {"running": []}
+
+    f = _Fake()
+    delegations.register("s1", "d1", f, label="research X")
+    assert c.get("/api/chat/sessions/s1/delegations").json() == {
+        "running": [{"id": "d1", "label": "research X"}]
+    }
+    # Cancel the live delegation → cancelled; still counted (the tool's finally
+    # unregisters once the task actually unwinds, not the route).
+    assert c.post("/api/chat/sessions/s1/delegations/d1/cancel").json() == {"cancelled": True, "running": 1}
+    assert f.cancelled is True
+    # Cancel again (already cancelling) and an unknown id → both too-late/false.
+    assert c.post("/api/chat/sessions/s1/delegations/d1/cancel").json() == {"cancelled": False, "running": 1}
+    assert c.post("/api/chat/sessions/s1/delegations/nope/cancel").json() == {"cancelled": False, "running": 1}
+    delegations._RUNNING.clear()
+
+
 def test_openai_models_and_completion(monkeypatch):
     c = _client(monkeypatch)
     models = c.get("/v1/models").json()

@@ -498,6 +498,19 @@ function ChatSessionSlot({
     }
   }
 
+  // Tier 2: abort a running subagent delegation (the Stop on a running `task` tool
+  // card). Cancels just that delegation server-side — the lead continues; the card
+  // settles to done with a "cancelled" result via the normal tool_end stream, so we
+  // don't mutate it here. Distinct from the composer Stop, which kills the whole turn.
+  async function cancelDelegation(delegationId: string) {
+    if (!session) return;
+    try {
+      await api.cancelDelegation(session.id, delegationId);
+    } catch (e) {
+      onError(`Couldn't cancel delegation: ${errMsg(e)}`);
+    }
+  }
+
   // Settle steered messages the agent has folded in: drop them from the queue and
   // place them into the thread just before the turn's current assistant message —
   // they shaped it. Shared by the mid-turn poll and the turn-end reconcile.
@@ -893,7 +906,7 @@ function ChatSessionSlot({
                 </Reasoning>
               ) : null}
               {message.toolCalls && message.toolCalls.length > 0 ? (
-                <ToolCalls calls={message.toolCalls} />
+                <ToolCalls calls={message.toolCalls} onCancelDelegation={cancelDelegation} />
               ) : null}
               {message.content
                 ? message.role === "user"

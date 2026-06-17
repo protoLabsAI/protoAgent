@@ -17,6 +17,31 @@
   white-space: normal;
 }
 
+/* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
+   (.pl-toolcard__actions) as a compact, error-toned text button — quiet until
+   hover so a long delegation reads as "running" first, "abortable" on intent. */
+.tool-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  width: auto;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+}
+.tool-cancel-btn:hover {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--error) 28%, transparent);
+}
+.tool-cancel-btn svg {
+  flex: none;
+}
+
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
 .pl-toolcard__body pre {
   margin: 0;

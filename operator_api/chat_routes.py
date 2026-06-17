@@ -118,6 +118,28 @@ def register_chat_routes(app, ui: str) -> None:
         removed = steering.dequeue(session_id, msg_id)
         return {"removed": removed, "pending": steering.pending(session_id)}
 
+    @app.get("/api/chat/sessions/{session_id}/delegations")
+    async def _api_delegations(session_id: str):
+        """In-flight foreground subagent delegations for ``session_id`` —
+        ``[{"id", "label"}]``. ``id`` is the running ``task`` tool-call id; the
+        console surfaces a Cancel affordance on each running ``task`` card and this
+        is the authoritative list that affordance acts on."""
+        from graph import delegations
+
+        return {"running": delegations.running_items(session_id)}
+
+    @app.post("/api/chat/sessions/{session_id}/delegations/{delegation_id}/cancel")
+    async def _api_delegation_cancel(session_id: str, delegation_id: str):
+        """Abort ONE running foreground delegation (the Stop on a running ``task``
+        card) — cancels just that subagent, NOT the whole turn: the lead continues
+        with a 'cancelled' result. Contrast the composer Stop, which A2A-CancelTasks
+        the entire turn. ``cancelled: false`` means the delegation already finished,
+        was already cancelling, or was never running (too late / nothing to do)."""
+        from graph import delegations
+
+        cancelled = delegations.cancel(session_id, delegation_id)
+        return {"cancelled": cancelled, "running": delegations.running(session_id)}
+
     # --- Goal mode API ------------------------------------------------------
     # Programmatic status/clear for a session's goal (setting is done via the
     # `/goal ...` control message through chat/A2A). Returns 404-style payloads

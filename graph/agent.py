@@ -464,7 +464,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
     import asyncio
     from typing import Literal
 
-    from langchain_core.tools import tool
+    from langchain_core.tools import InjectedToolCallId, tool
 
     tool_map = {t.name: t for t in all_tools}
     subagent_names = list(SUBAGENT_REGISTRY.keys())
@@ -487,6 +487,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
         emit_skill: bool = False,
         run_in_background: bool = False,
         state: Annotated[Any, InjectedState] = None,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
         """Delegate a single task to a specialized subagent.
 
@@ -567,17 +568,42 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 "finishes — continue with other work; do NOT re-spawn it."
             )
 
-        return await _run_subagent(
-            config=config,
-            tool_map=tool_map,
-            available_subagents=available_subagents,
-            description=description,
-            prompt=prompt,
-            subagent_type=subagent_type,
-            emit_skill=emit_skill,
-            truncate=None,
-            skills_index=skills_index,
+        # Foreground delegation: a blocking `await` that would freeze the turn until
+        # the subagent finishes. Wrap it in a cancellable task registered under THIS
+        # tool call's id (the one the console sees on the running `task` card) so the
+        # user can ABORT just this delegation (Tier 2). On a user cancel the lead
+        # CONTINUES with a "cancelled" result; a parent turn-level cancel (the Stop
+        # button → A2A CancelTask) still propagates and kills the whole turn.
+        from graph import delegations
+
+        session_id = _session_id_from(state)
+        deleg = asyncio.ensure_future(
+            _run_subagent(
+                config=config,
+                tool_map=tool_map,
+                available_subagents=available_subagents,
+                description=description,
+                prompt=prompt,
+                subagent_type=subagent_type,
+                emit_skill=emit_skill,
+                truncate=None,
+                skills_index=skills_index,
+            )
         )
+        delegations.register(session_id, tool_call_id, deleg, label=description)
+        try:
+            return await deleg
+        except asyncio.CancelledError:
+            # User-initiated delegation cancel → swallow and let the lead keep going;
+            # a turn-level cancel (flag unset) → re-raise so the whole turn unwinds.
+            if delegations.was_cancelled(session_id, tool_call_id):
+                return (
+                    f"[delegation cancelled by the user before it finished: "
+                    f"{subagent_type} — {description}. Continue without its result.]"
+                )
+            raise
+        finally:
+            delegations.unregister(session_id, tool_call_id)
 
     @tool
     async def task_batch(tasks: list[dict]) -> str:

@@ -1147,6 +1147,16 @@ export const api = {
       { method: "DELETE" },
     );
   },
+  // Abort ONE running foreground subagent delegation (the Stop on a running `task`
+  // tool card, Tier 2) — cancels just that subagent, NOT the whole turn: the lead
+  // continues with a 'cancelled' result. `delegationId` is the `task` tool-call id.
+  // `cancelled: false` means it already finished / wasn't running (too late).
+  cancelDelegation(sessionId: string, delegationId: string) {
+    return request<{ cancelled: boolean; running: number }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/delegations/${encodeURIComponent(delegationId)}/cancel`,
+      { method: "POST" },
+    );
+  },
 
   // Reconcile a turn against the server's durable task (A2A GetTask). Used to
   // self-heal a chat message stuck in `streaming` after the stream was
