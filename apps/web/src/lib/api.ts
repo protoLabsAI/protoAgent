@@ -1138,6 +1138,15 @@ export const api = {
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
     );
   },
+  // Cancel a still-queued steer (the ✕ on a pending bubble) before it folds into
+  // the turn. `removed: false` means it was already drained — the agent will act
+  // on it, so the caller settles it into the thread rather than dropping it.
+  cancelSteer(sessionId: string, id: string) {
+    return request<{ removed: boolean; pending: number }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+  },
 
   // Reconcile a turn against the server's durable task (A2A GetTask). Used to
   // self-heal a chat message stuck in `streaming` after the stream was

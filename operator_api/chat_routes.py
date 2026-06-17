@@ -105,6 +105,19 @@ def register_chat_routes(app, ui: str) -> None:
 
         return {"pending": steering.pending_items(session_id)}
 
+    @app.delete("/api/chat/sessions/{session_id}/steer/{msg_id}")
+    async def _api_steer_cancel(session_id: str, msg_id: str):
+        """Cancel a still-queued steer before it folds into the turn (the ✕ on a
+        pending bubble). ``removed: true`` means it was dropped from the queue and
+        the agent never sees it; ``removed: false`` means it had already been
+        drained into the running turn (too late — the agent will still act on it)
+        or was never queued. The console settles a not-removed steer into the
+        thread instead of pretending it never happened."""
+        from graph import steering
+
+        removed = steering.dequeue(session_id, msg_id)
+        return {"removed": removed, "pending": steering.pending(session_id)}
+
     # --- Goal mode API ------------------------------------------------------
     # Programmatic status/clear for a session's goal (setting is done via the
     # `/goal ...` control message through chat/A2A). Returns 404-style payloads

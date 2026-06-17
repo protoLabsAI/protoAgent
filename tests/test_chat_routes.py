@@ -120,6 +120,24 @@ def test_goal_disabled_when_no_controller(monkeypatch):
     assert c.delete("/api/goal/s1").json() == {"enabled": False, "cleared": False}
 
 
+def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
+    # Full HTTP lifecycle of the steer endpoints: POST queues, GET peeks, DELETE
+    # cancels a still-queued message, and a second DELETE reports too-late.
+    from graph import steering
+
+    steering._QUEUES.clear()
+    c = _client(monkeypatch)
+    posted = c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "do X instead"}).json()
+    assert posted == {"ok": True, "id": "m1", "pending": 1}
+    assert c.get("/api/chat/sessions/s1/steer").json() == {"pending": [{"id": "m1", "text": "do X instead"}]}
+
+    # ✕ before the turn folds it in → removed, queue empties.
+    assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": True, "pending": 0}
+    # ✕ again (or after it's drained) → too late, nothing removed.
+    assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": False, "pending": 0}
+    steering._QUEUES.clear()
+
+
 def test_openai_models_and_completion(monkeypatch):
     c = _client(monkeypatch)
     models = c.get("/v1/models").json()

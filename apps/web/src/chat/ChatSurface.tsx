@@ -476,6 +476,28 @@ function ChatSessionSlot({
     }
   }
 
+  // Cancel a queued steer via the ✕ on its pending bubble. Drop the bubble
+  // optimistically so the click feels instant, then DELETE it server-side. If the
+  // agent had already drained it (`removed: false`), it's too late to cancel — it
+  // shaped the reply, so settle it into the thread instead of lying it never ran.
+  async function cancelSteer(id: string) {
+    if (!session) return;
+    const item = steerQueueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    setSteerQueue(steerQueueRef.current.filter((q) => q.id !== id));
+    try {
+      const { removed } = await api.cancelSteer(session.id, id);
+      if (!removed) settleConsumed([item]);
+    } catch (e) {
+      // Couldn't reach the backend — restore the bubble rather than drop a steer
+      // that may still be queued (avoid concurrent-add clobber by re-checking).
+      if (!steerQueueRef.current.some((q) => q.id === id)) {
+        setSteerQueue([...steerQueueRef.current, item]);
+      }
+      onError(`Couldn't cancel message: ${errMsg(e)}`);
+    }
+  }
+
   // Settle steered messages the agent has folded in: drop them from the queue and
   // place them into the thread just before the turn's current assistant message —
   // they shaped it. Shared by the mid-turn poll and the turn-end reconcile.
@@ -916,10 +938,17 @@ function ChatSessionSlot({
           ))
         )}
         {steerQueue.map((q) => (
-          // DS queued state (0.42.0): dimmed pending bubble + spinner. No ✕ yet —
-          // the steer is already POSTed and there's no dequeue endpoint, so an
-          // optimistic cancel would mislead (the agent would still fold it in).
-          <Message key={q.id} role="user" queued queuedLabel="queued — folds into the agent's work at its next step">
+          // DS queued state (0.42.0): dimmed pending bubble + spinner + ✕. The ✕
+          // hits DELETE /steer/{id}: if still queued it's dropped before the agent
+          // sees it; if already folded in, cancelSteer settles it into the thread
+          // (no lie that it never ran).
+          <Message
+            key={q.id}
+            role="user"
+            queued
+            queuedLabel="queued — folds into the agent's work at its next step"
+            onCancel={() => void cancelSteer(q.id)}
+          >
             <span className="chat-user-text">{q.text}</span>
           </Message>
         ))}

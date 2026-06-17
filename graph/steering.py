@@ -44,6 +44,26 @@ def drain(session_id: str) -> list[dict]:
     return _QUEUES.pop(session_id, [])
 
 
+def dequeue(session_id: str, msg_id: str) -> bool:
+    """Remove a still-queued steering message by id BEFORE it's folded in (the
+    console's ✕-cancel on a pending bubble). Returns True if it was found and
+    dropped; False if absent — already drained into the running turn (too late;
+    the agent will still act on it) or never queued. The console settles a
+    not-removed steer into the thread rather than lie that it never happened."""
+    if not session_id or not msg_id:
+        return False
+    q = _QUEUES.get(session_id)
+    if not q:
+        return False
+    for i, item in enumerate(q):
+        if item.get("id") == msg_id:
+            del q[i]
+            if not q:
+                _QUEUES.pop(session_id, None)  # match drain(): no empty lists linger
+            return True
+    return False
+
+
 def pending_items(session_id: str) -> list[dict]:
     """Peek the still-queued items for ``session_id`` (not drained) — the
     turn-end reconcile reads this to find input that arrived too late."""

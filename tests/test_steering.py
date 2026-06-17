@@ -56,6 +56,37 @@ def test_queues_are_per_session():
     assert steering.drain("b") == [{"id": "2", "text": "for-b"}]
 
 
+# ── dequeue (the ✕ cancel) ──────────────────────────────────────────────────────
+
+
+def test_dequeue_removes_the_targeted_item_and_keeps_order():
+    steering.enqueue("s1", "first", msg_id="a")
+    steering.enqueue("s1", "second", msg_id="b")
+    steering.enqueue("s1", "third", msg_id="c")
+    assert steering.dequeue("s1", "b") is True  # cancel the middle one
+    assert steering.pending_items("s1") == [{"id": "a", "text": "first"}, {"id": "c", "text": "third"}]
+
+
+def test_dequeue_returns_false_when_already_drained_or_absent():
+    steering.enqueue("s1", "x", msg_id="a")
+    assert steering.dequeue("s1", "missing") is False  # never queued
+    steering.drain("s1")  # turn folded it in
+    assert steering.dequeue("s1", "a") is False  # too late — already drained
+    assert steering.dequeue("s1", "a") is False  # session has no queue at all
+
+
+def test_dequeue_ignores_blanks():
+    assert steering.dequeue("", "a") is False
+    assert steering.dequeue("s1", "") is False
+
+
+def test_dequeue_drops_the_empty_queue_like_drain():
+    steering.enqueue("s1", "only", msg_id="a")
+    assert steering.dequeue("s1", "a") is True
+    assert "s1" not in steering._QUEUES  # no empty list lingers (matches drain)
+    assert steering.pending("s1") == 0
+
+
 # ── the middleware (unit) ──────────────────────────────────────────────────────
 
 
