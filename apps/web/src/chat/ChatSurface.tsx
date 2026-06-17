@@ -16,7 +16,6 @@ import {
   GitBranch,
   Loader2,
   RotateCcw,
-  Square,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -917,11 +916,11 @@ function ChatSessionSlot({
           ))
         )}
         {steerQueue.map((q) => (
-          <Message key={q.id} role="user">
+          // DS queued state (0.42.0): dimmed pending bubble + spinner. No ✕ yet —
+          // the steer is already POSTed and there's no dequeue endpoint, so an
+          // optimistic cancel would mislead (the agent would still fold it in).
+          <Message key={q.id} role="user" queued queuedLabel="queued — folds into the agent's work at its next step">
             <span className="chat-user-text">{q.text}</span>
-            <span className="steer-queued">
-              <Loader2 className="spin" size={11} /> queued — folds into the agent&apos;s work at its next step
-            </span>
           </Message>
         ))}
       </Conversation>
@@ -957,12 +956,11 @@ function ChatSessionSlot({
         }}
       >
         {status === "streaming" ? (
+          // Live turn status. Stop now lives inside the composer (the DS busy mode's
+          // self-contained onStop), so this strip is just the "working…" readout.
           <div className="composer-status">
             <Loader2 className="spin" size={12} />
             <span>{statusMessage || "working"}</span>
-            <button type="button" className="composer-stop" onClick={() => void stop()}>
-              <Square size={10} /> Stop
-            </button>
           </div>
         ) : null}
         <PromptInput
@@ -971,14 +969,13 @@ function ChatSessionSlot({
             setDraft(v);
             setSlashDismissed(false); // re-open the menu when the input changes
           }}
-          // Idle → send. While a turn streams, the field stays live so the user can
-          // type and Enter to STEER (queue into the running turn) without stopping
-          // it; Stop is the dedicated control above. So `loading` stays false.
-          onSubmit={() => {
-            if (status === "streaming") void queueSteer();
-            else void send();
-          }}
-          loading={false}
+          // Idle → send. While a turn streams (`busy`), the field stays live: Enter
+          // queues a steer into the running turn (onQueue) without stopping it, and
+          // the kit renders a dedicated Stop (onStop) beside Send.
+          onSubmit={() => void send()}
+          busy={status === "streaming"}
+          onQueue={() => void queueSteer()}
+          onStop={() => void stop()}
           placeholder={
             status === "streaming"
               ? "Steer the agent — your message folds into its work at the next step (Enter to queue)"
