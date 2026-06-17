@@ -234,6 +234,17 @@ class LangGraphConfig:
     repetition_penalty: float | None = None
     chat_template_kwargs: dict | None = None
 
+    # Reasoning controls for OpenAI-compatible reasoning models (DeepSeek, the
+    # OpenAI o-series, etc. behind the gateway). Both opt-in — unset means "let the
+    # provider/model card decide", so an un-tuned config is a true no-op (#1113).
+    #   ``thinking`` — "" (inherit) | "enabled" | "disabled". When set, rides
+    #     ``extra_body`` as ``{"thinking": {"type": ...}}`` (DeepSeek's spelling).
+    #   ``reasoning_effort`` — None (inherit) | "low" | "medium" | "high" | "max".
+    #     A native ChatOpenAI param, sent top-level. DeepSeek maps low/medium→high
+    #     and xhigh→max server-side; we just pass the string through.
+    thinking: str = ""
+    reasoning_effort: str | None = None
+
     # Subagents — template ships one example, `researcher` (see
     # graph/subagents/config.py). Add fields here as you add entries to
     # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
@@ -782,6 +793,8 @@ class LangGraphConfig:
             presence_penalty=model.get("presence_penalty", cls.presence_penalty),
             repetition_penalty=model.get("repetition_penalty", cls.repetition_penalty),
             chat_template_kwargs=model.get("chat_template_kwargs", cls.chat_template_kwargs),
+            thinking=model.get("thinking", cls.thinking),
+            reasoning_effort=model.get("reasoning_effort", cls.reasoning_effort),
             knowledge_middleware=middleware.get("knowledge", cls.knowledge_middleware),
             audit_middleware=middleware.get("audit", cls.audit_middleware),
             memory_middleware=middleware.get("memory", cls.memory_middleware),

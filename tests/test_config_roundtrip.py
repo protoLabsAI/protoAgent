@@ -131,6 +131,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "prompt_cache_enabled": True,
     "prompt_cache_force": False,
     "prompt_cache_ttl": "5m",
+    "reasoning_effort": None,
     "repetition_penalty": None,
     "request_timeout": 120,
     "researcher": SubagentDef(
@@ -156,6 +157,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "inbox_retention_days": 90,
     "activity_retention_days": 90,
     "temperature": 0.2,
+    "thinking": "",
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
     "tools_disabled": [],
@@ -273,7 +275,9 @@ CONFIG_TO_DICT_GOLDEN = {
         "max_tokens": 32768,
         "name": "protolabs/reasoning",
         "provider": "openai",
+        "reasoning_effort": None,
         "temperature": 0.2,
+        "thinking": "",
         "vision": False,
     },
     "network": {
@@ -353,6 +357,8 @@ EMITTED_ATTRS = {
     "max_tokens",
     "model_vision",
     "max_iterations",
+    "thinking",
+    "reasoning_effort",
     # subagents.researcher
     "researcher",
     # middleware.*

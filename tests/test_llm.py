@@ -54,6 +54,45 @@ def test_negative_top_k_means_default_and_is_omitted():
     assert "extra_body" not in kwargs
 
 
+def test_reasoning_controls_omitted_by_default():
+    # #1113 — thinking/reasoning_effort are opt-in: unset → nothing emitted,
+    # so the provider/model-card default wins and existing configs are unchanged.
+    kwargs = _build_llm_kwargs(LangGraphConfig())
+    assert "reasoning_effort" not in kwargs
+    assert "extra_body" not in kwargs
+
+
+def test_reasoning_effort_is_top_level():
+    # #1113 — reasoning_effort is a native ChatOpenAI param, sent top-level
+    # (NOT extra_body).
+    kwargs = _build_llm_kwargs(LangGraphConfig(reasoning_effort="high"))
+    assert kwargs["reasoning_effort"] == "high"
+    assert "extra_body" not in kwargs
+
+
+def test_thinking_rides_extra_body():
+    # #1113 — DeepSeek's thinking toggle rides extra_body as {"thinking": {"type": ...}}.
+    for state in ("enabled", "disabled"):
+        kwargs = _build_llm_kwargs(LangGraphConfig(thinking=state))
+        assert kwargs["extra_body"]["thinking"] == {"type": state}
+
+
+def test_blank_thinking_is_omitted():
+    # "" is the inherit sentinel — no thinking key emitted.
+    kwargs = _build_llm_kwargs(LangGraphConfig(thinking=""))
+    assert "extra_body" not in kwargs
+
+
+def test_from_yaml_reads_reasoning_controls(tmp_path):
+    import yaml
+
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump({"model": {"thinking": "disabled", "reasoning_effort": "max"}}))
+    cfg = LangGraphConfig.from_yaml(p)
+    assert cfg.thinking == "disabled"
+    assert cfg.reasoning_effort == "max"
+
+
 def test_from_yaml_reads_sampling_block(tmp_path):
     import yaml
 
