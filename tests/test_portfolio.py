@@ -182,6 +182,8 @@ def test_register_exposes_the_tools():
         "portfolio_rollup",
         "portfolio_diff",
         "portfolio_watch",
+        "portfolio_link",
+        "portfolio_plan",
     }
 
 
@@ -369,3 +371,122 @@ async def test_diff_no_boards_message(monkeypatch, tmp_path):
     monkeypatch.setattr(supervisor, "list_remotes", lambda: [])
     monkeypatch.setattr(pf, "_snapshot_path", lambda: tmp_path / "snap.json")
     assert "No team boards yet" in await _tool("portfolio_diff").ainvoke({})
+
+
+# ── portfolio_link / portfolio_plan (P3 — cross-board dependency graph) ───────
+
+
+def test_has_cycle_unit():
+    from plugins import portfolio as pf
+
+    edges = [
+        {"from_board": "a", "from_feature": "1", "to_board": "b", "to_feature": "2"},
+        {"from_board": "b", "from_feature": "2", "to_board": "a", "to_feature": "1"},
+    ]
+    assert pf._has_cycle(edges) is True
+    assert pf._has_cycle(edges[:1]) is False  # a single edge is acyclic
+
+
+def _patch_links(monkeypatch, tmp_path, boards=("team-web", "team-api")):
+    from graph.fleet import supervisor
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(
+        supervisor,
+        "list_remotes",
+        lambda: [{"id": f"r-{n}", "name": n, "url": f"https://{n}.example", "token": "t"} for n in boards],
+    )
+    monkeypatch.setattr(pf, "_links_path", lambda: tmp_path / "links.json")
+
+
+def test_link_add_dedup_self_unknown(monkeypatch, tmp_path):
+    _patch_links(monkeypatch, tmp_path)
+    link = _tool("portfolio_link")
+    edge = {"from_board": "team-web", "from_feature": "w1", "to_board": "team-api", "to_feature": "a1"}
+
+    out = json.loads(link.invoke(edge))
+    assert out["from_board"] == "team-web" and out["to_feature"] == "a1" and out["id"].startswith("lnk-")
+    assert "Already linked" in link.invoke(edge)  # dedup on the 4-tuple
+    assert "can't depend on itself" in link.invoke(
+        {"from_board": "team-web", "from_feature": "w1", "to_board": "team-web", "to_feature": "w1"}
+    )
+    assert "no team board named 'ghost'" in link.invoke(
+        {"from_board": "team-web", "from_feature": "w1", "to_board": "ghost", "to_feature": "x"}
+    )
+
+
+def test_link_rejects_a_cycle(monkeypatch, tmp_path):
+    _patch_links(monkeypatch, tmp_path)
+    link = _tool("portfolio_link")
+    link.invoke({"from_board": "team-web", "from_feature": "w1", "to_board": "team-api", "to_feature": "a1"})
+    # the reverse edge would close a cycle (web:w1 → api:a1 → web:w1)
+    out = link.invoke({"from_board": "team-api", "from_feature": "a1", "to_board": "team-web", "to_feature": "w1"})
+    assert "cycle" in out
+
+
+def test_link_remove(monkeypatch, tmp_path):
+    _patch_links(monkeypatch, tmp_path)
+    link = _tool("portfolio_link")
+    eid = json.loads(
+        link.invoke({"from_board": "team-web", "from_feature": "w1", "to_board": "team-api", "to_feature": "a1"})
+    )["id"]
+    assert "Removed" in link.invoke({"remove": eid})  # remove short-circuits before validation
+    assert "No cross-board link" in link.invoke({"remove": "lnk-zzzzzzzz"})
+
+
+@pytest.mark.asyncio
+async def test_plan_satisfied_blocking_and_ready(monkeypatch, tmp_path):
+    from plugins import portfolio as pf
+
+    _patch_links(monkeypatch, tmp_path)
+    pf._save_links(
+        [
+            {"id": "l1", "from_board": "team-web", "from_feature": "w1", "to_board": "team-api", "to_feature": "a1", "note": ""},
+            {"id": "l2", "from_board": "team-web", "from_feature": "w2", "to_board": "team-api", "to_feature": "a2", "note": ""},
+        ]
+    )
+    boards = {
+        "team-web": [{"id": "w1", "board_state": "backlog"}, {"id": "w2", "board_state": "backlog"}],
+        "team-api": [{"id": "a1", "board_state": "done"}, {"id": "a2", "board_state": "in_progress"}],
+    }
+
+    async def fake_fetch(rec, state=""):
+        return boards[rec["name"]]
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+    plan = json.loads(await _tool("portfolio_plan").ainvoke({}))
+    assert {ln["id"]: ln["status"] for ln in plan["links"]} == {"l1": "satisfied", "l2": "blocking"}
+    assert plan["ready_to_dispatch"] == [{"board": "team-web", "feature": "w1", "state": "backlog"}]  # blocker done
+    assert plan["blocked"][0]["feature"] == "w2"
+    assert plan["blocked"][0]["blockers"][0]["feature"] == "a2"
+
+
+@pytest.mark.asyncio
+async def test_plan_unknown_and_dangling_fail_closed(monkeypatch, tmp_path):
+    from plugins import portfolio as pf
+
+    _patch_links(monkeypatch, tmp_path)
+    pf._save_links(
+        [
+            {"id": "l1", "from_board": "team-web", "from_feature": "w1", "to_board": "team-api", "to_feature": "a1", "note": ""},
+            {"id": "l2", "from_board": "team-web", "from_feature": "w2", "to_board": "team-web", "to_feature": "ghost", "note": ""},
+        ]
+    )
+
+    async def fake_fetch(rec, state=""):
+        if rec["name"] == "team-api":
+            raise pf._BoardUnavailable("down")
+        return [{"id": "w1", "board_state": "backlog"}, {"id": "w2", "board_state": "backlog"}]
+
+    monkeypatch.setattr(pf, "_fetch_board_features", fake_fetch)
+    plan = json.loads(await _tool("portfolio_plan").ainvoke({}))
+    assert {ln["id"]: ln["status"] for ln in plan["links"]} == {"l1": "unknown", "l2": "dangling"}
+    assert plan["ready_to_dispatch"] == []  # fail-closed: never dispatch on an unknown/dangling blocker
+
+
+@pytest.mark.asyncio
+async def test_plan_empty(monkeypatch, tmp_path):
+    from plugins import portfolio as pf
+
+    monkeypatch.setattr(pf, "_links_path", lambda: tmp_path / "links.json")
+    assert "No cross-board links yet" in await _tool("portfolio_plan").ainvoke({})

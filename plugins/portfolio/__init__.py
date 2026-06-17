@@ -11,8 +11,9 @@ subsystems — no new dispatch or registry machinery:
 The PM treats each remote fleet member as a *board* addressed by its name: list
 them (`portfolio_boards`), dispatch a feature to one over A2A (`portfolio_dispatch`),
 read one back structured (`portfolio_board_read`), see a bounded cross-board rollup
-(`portfolio_rollup`), and watch for changes without polling (`portfolio_watch` +
-`portfolio_diff`). See ADR 0055.
+(`portfolio_rollup`), watch for changes without polling (`portfolio_watch` +
+`portfolio_diff`), and sequence cross-board dependencies (`portfolio_link` +
+`portfolio_plan`). See ADR 0055.
 
 P2 deltas are PULL-DIFF, not push: the PM snapshots each board (state per feature)
 and reports what changed since the last check. A2A push notifications are task-scoped
@@ -206,6 +207,85 @@ async def _compute_portfolio_diff(wanted: set | None) -> dict:
     return {"recs": len(recs), "first_run": first_run, "changes": changes}
 
 
+# ── P3 cross-board dependency graph (PM-side links + sequencing) ──────────────────
+
+
+async def _fetch_all(recs: list) -> tuple[dict, dict]:
+    """Fetch every board's features concurrently → (features_by_board, unreachable{name:error})."""
+
+    async def _one(rec: dict):
+        name = rec.get("name")
+        try:
+            return name, await _fetch_board_features(rec), None
+        except _BoardUnavailable as exc:
+            return name, None, str(exc)
+
+    results = await asyncio.gather(*[_one(r) for r in recs]) if recs else []
+    by_board, unreachable = {}, {}
+    for name, feats, err in results:
+        if err is None:
+            by_board[name] = feats
+        else:
+            unreachable[name] = err
+    return by_board, unreachable
+
+
+def _links_path():
+    """Cross-board dependency edges, scoped under the PM's data root (ADR 0004) —
+    mirrors the P2 snapshot + fleet remotes.json. Edges are PM state: a team-agent
+    doesn't know its dependents, and the sequencing is the PM's concern."""
+    from infra.paths import data_home, scope_leaf
+
+    return scope_leaf(data_home() / "portfolio_links.json")
+
+
+def _load_links() -> list:
+    p = _links_path()
+    try:
+        return json.loads(p.read_text()) if p.exists() else []
+    except Exception:  # noqa: BLE001 — a corrupt links file shouldn't break the tools
+        return []
+
+
+def _save_links(links: list) -> None:
+    from infra.paths import atomic_write
+
+    p = _links_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, json.dumps(links, indent=2))
+
+
+def _edge_id(from_board: str, from_feature: str, to_board: str, to_feature: str) -> str:
+    """Stable id from the edge tuple → natural dedup (the same edge always gets the same id)."""
+    import hashlib
+
+    key = f"{from_board}:{from_feature}>{to_board}:{to_feature}"
+    return "lnk-" + hashlib.sha1(key.encode()).hexdigest()[:8]
+
+
+def _has_cycle(links: list) -> bool:
+    """DFS over (board, feature) nodes — True if the edge set contains a cycle (a feature
+    transitively depends on itself). Used to REJECT a cycle at link time; without this a
+    cycle would silently deadlock (nothing ever becomes ready)."""
+    from collections import defaultdict
+
+    adj: dict = defaultdict(list)
+    for ln in links:
+        adj[(ln["from_board"], ln["from_feature"])].append((ln["to_board"], ln["to_feature"]))
+    color: dict = {}  # absent/0 = unvisited, 1 = on the current path, 2 = done
+
+    def visit(node) -> bool:
+        color[node] = 1
+        for nxt in adj.get(node, []):
+            c = color.get(nxt, 0)
+            if c == 1 or (c == 0 and visit(nxt)):
+                return True
+        color[node] = 2
+        return False
+
+    return any(color.get(n, 0) == 0 and visit(n) for n in list(adj))
+
+
 def _dispatch_instruction(title: str, spec: str, acceptance_criteria: str, files_to_modify: str) -> str:
     lines = [
         "You manage a project board (the project_board plugin). Create a new feature on it "
@@ -372,6 +452,119 @@ def _tools() -> list:
             "Each fire arrives as a turn carrying only the changes since the prior sweep."
         )
 
+    @tool
+    def portfolio_link(
+        from_board: str = "",
+        from_feature: str = "",
+        to_board: str = "",
+        to_feature: str = "",
+        note: str = "",
+        remove: str = "",
+    ) -> str:
+        """Record (or remove) a CROSS-BOARD dependency: ``from_board``'s ``from_feature``
+        is blocked until ``to_board``'s ``to_feature`` is done (merged on that team's
+        board). Features are addressed by (board name, feature id) — ids are board-local,
+        so the board is always required. Run portfolio_plan to see the graph + what's
+        unblocked. To delete an edge, pass ``remove="lnk-..."`` (the id from
+        portfolio_plan)."""
+        links = _load_links()
+        if remove:
+            kept = [ln for ln in links if ln.get("id") != remove]
+            if len(kept) == len(links):
+                return f"No cross-board link {remove!r} to remove."
+            _save_links(kept)
+            return f"Removed link {remove}."
+        if not (from_board and from_feature and to_board and to_feature):
+            return "Error: from_board, from_feature, to_board and to_feature are all required."
+        if (from_board, from_feature) == (to_board, to_feature):
+            return "Error: a feature can't depend on itself."
+        for b in (from_board, to_board):
+            if _remote_by_name(b) is None:
+                return f"Error: no team board named {b!r}. Call portfolio_boards to list them."
+        eid = _edge_id(from_board, from_feature, to_board, to_feature)
+        if any(ln.get("id") == eid for ln in links):
+            return f"Already linked ({eid})."
+        edge = {
+            "id": eid,
+            "from_board": from_board,
+            "from_feature": from_feature,
+            "to_board": to_board,
+            "to_feature": to_feature,
+            "note": note,
+        }
+        if _has_cycle(links + [edge]):
+            return "Error: that link would create a cross-board dependency cycle — not recorded."
+        _save_links(links + [edge])
+        return json.dumps(
+            {k: edge[k] for k in ("id", "from_board", "from_feature", "to_board", "to_feature")}, indent=2
+        )
+
+    @tool
+    async def portfolio_plan() -> str:
+        """The cross-board dependency graph + what's ready to dispatch next. For each link
+        (see portfolio_link): ``satisfied`` (the depended-on feature is done), ``blocking``
+        (not yet), ``unknown`` (its board is unreachable — never assumed satisfied), or
+        ``dangling`` (the board/feature no longer exists — prune it). ``ready_to_dispatch``
+        = ``from`` features whose every blocker is satisfied and that haven't started yet;
+        ``blocked`` lists the rest with their open blockers."""
+        links = _load_links()
+        if not links:
+            return "No cross-board links yet. Use portfolio_link to record a dependency, then portfolio_plan to sequence."
+        from graph.fleet import supervisor
+
+        by_board, unreachable = await _fetch_all(supervisor.list_remotes())
+        state = {}
+        for name, feats in by_board.items():
+            for f in feats:
+                if f.get("id"):
+                    state[(name, f["id"])] = f.get("board_state")
+
+        def status_of(ln) -> str:
+            if ln["to_board"] in unreachable:
+                return "unknown"  # fail-closed: an unreadable blocker is NOT satisfied
+            key = (ln["to_board"], ln["to_feature"])
+            if key not in state:
+                return "dangling"
+            return "satisfied" if state[key] == "done" else "blocking"
+
+        enriched = [
+            {
+                "id": ln["id"],
+                "from_board": ln["from_board"],
+                "from_feature": ln["from_feature"],
+                "to_board": ln["to_board"],
+                "to_feature": ln["to_feature"],
+                "status": status_of(ln),
+                "to_state": state.get((ln["to_board"], ln["to_feature"])),
+            }
+            for ln in links
+        ]
+
+        from collections import defaultdict
+
+        by_from: dict = defaultdict(list)
+        for e in enriched:
+            by_from[(e["from_board"], e["from_feature"])].append(e)
+        ready, blocked = [], []
+        for (fb, ff), edges in by_from.items():
+            if all(e["status"] == "satisfied" for e in edges):
+                from_state = state.get((fb, ff))
+                if from_state in (None, "backlog", "ready"):  # not yet underway → dispatchable
+                    ready.append({"board": fb, "feature": ff, "state": from_state})
+            else:
+                blocked.append(
+                    {
+                        "board": fb,
+                        "feature": ff,
+                        "blockers": [
+                            {"board": e["to_board"], "feature": e["to_feature"], "status": e["status"], "to_state": e["to_state"]}
+                            for e in edges
+                            if e["status"] != "satisfied"
+                        ],
+                    }
+                )
+        return json.dumps({"links": enriched, "ready_to_dispatch": ready, "blocked": blocked}, indent=2)
+
     return [
         portfolio_boards,
         portfolio_dispatch,
@@ -379,4 +572,6 @@ def _tools() -> list:
         portfolio_rollup,
         portfolio_diff,
         portfolio_watch,
+        portfolio_link,
+        portfolio_plan,
     ]
