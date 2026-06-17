@@ -33,6 +33,13 @@ model:
   #   presence_penalty: 0.0
   #   repetition_penalty: 1.05
   #   chat_template_kwargs: { preserve_thinking: true }
+  # Reasoning controls for OpenAI-compatible reasoning models (DeepSeek, the
+  # OpenAI o-series). Both opt-in; omit to inherit the provider default.
+  # `thinking` rides extra_body (enabled|disabled); `reasoning_effort` is sent
+  # top-level (low|medium|high|max). NOTE: with thinking on, DeepSeek ignores
+  # temperature / top_p / penalties.
+  #   thinking: enabled
+  #   reasoning_effort: high
 
 subagents:
   researcher:

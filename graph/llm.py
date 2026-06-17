@@ -66,6 +66,10 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         kwargs["top_p"] = config.top_p
     if config.presence_penalty is not None:
         kwargs["presence_penalty"] = config.presence_penalty
+    # Reasoning effort (#1113) — a native ChatOpenAI param, so it goes top-level
+    # (not extra_body). Only sent when set, so the model card default wins otherwise.
+    if config.reasoning_effort:
+        kwargs["reasoning_effort"] = config.reasoning_effort
 
     extra_body: dict = {}
     if config.top_k is not None and config.top_k >= 0:
@@ -74,6 +78,10 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
         extra_body["repetition_penalty"] = config.repetition_penalty
     if config.chat_template_kwargs:
         extra_body["chat_template_kwargs"] = dict(config.chat_template_kwargs)
+    # Thinking mode (#1113) — DeepSeek's spelling rides extra_body like
+    # chat_template_kwargs; "" means inherit (omit it entirely).
+    if config.thinking in ("enabled", "disabled"):
+        extra_body["thinking"] = {"type": config.thinking}
     if extra_body:
         kwargs["extra_body"] = extra_body
 

@@ -88,6 +88,27 @@ FIELDS: list[Field] = [
     Field("model.temperature", "temperature", "Temperature", "number", "Model", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model", minimum=1),
     Field(
+        "model.thinking",
+        "thinking",
+        "Thinking mode",
+        "select",
+        "Model",
+        "Reasoning models on an OpenAI-compatible gateway (e.g. DeepSeek) can toggle their "
+        "thinking/reasoning step. Blank = inherit the provider default. Note: with thinking on, "
+        "DeepSeek ignores temperature / top-p / penalties.",
+        options=["", "enabled", "disabled"],
+    ),
+    Field(
+        "model.reasoning_effort",
+        "reasoning_effort",
+        "Reasoning effort",
+        "select",
+        "Model",
+        "How hard a reasoning model thinks. Blank = inherit the provider default. DeepSeek maps "
+        "low/medium to high and treats max as the ceiling; the OpenAI o-series uses these directly.",
+        options=["", "low", "medium", "high", "max"],
+    ),
+    Field(
         "model.vision",
         "model_vision",
         "Vision (native images)",
