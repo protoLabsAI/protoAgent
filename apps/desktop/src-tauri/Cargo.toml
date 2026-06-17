@@ -28,3 +28,8 @@ tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
+# Desktop chat streaming: WKWebView can't read a streaming fetch body, so the
+# `chat_stream` command runs the /a2a SSE POST here and relays chunks to the
+# webview. Local sidecar is http://127.0.0.1, so no TLS backend needed.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+futures-util = "0.3"

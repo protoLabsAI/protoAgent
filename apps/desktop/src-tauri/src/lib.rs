@@ -260,9 +260,53 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Stream a chat turn for the desktop shell. WKWebView won't deliver a streaming
+/// SSE `fetch` body chunk-by-chunk, so the webview hands us the A2A request body and
+/// we run the `/a2a` `SendStreamingMessage` POST here (reqwest streams fine), relaying
+/// each raw response chunk to the frontend over an IPC `Channel`. The webview parses
+/// the SSE + dispatches frames exactly like the browser path (`drainSseBuffer`), so
+/// desktop gets real token-by-token + tool-call streaming. On any error the caller
+/// falls back to the non-streaming `/api/chat` path — so this never regresses below
+/// today's behavior.
+#[tauri::command]
+async fn chat_stream(
+    url: String,
+    body: serde_json::Value,
+    auth: Option<String>,
+    on_event: tauri::ipc::Channel<String>,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("A2A-Version", "1.0")
+        .json(&body);
+    if let Some(token) = auth.filter(|t| !t.is_empty()) {
+        req = req.header("Authorization", token);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| e.to_string())?;
+        // Relay raw bytes; the webview accumulates + parses SSE (handles frames split
+        // across chunks). Stop if the frontend dropped the channel (window closed /
+        // turn cancelled via the server-side CancelTask, which ends the stream).
+        if on_event.send(String::from_utf8_lossy(&bytes).into_owned()).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![chat_stream])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: checks the latest.json manifest on GitHub Releases,
