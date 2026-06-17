@@ -300,8 +300,12 @@ export function SetupWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, archetypeList, state.soul, state.archetype]);
 
-  // Labels for the finish-step summary.
-  const personaLabel = archetypeList.find((a) => a.id === state.archetype)?.label ?? state.archetype;
+  // The picked archetype drives the finish summary AND (Plan C) the bundle install:
+  // an archetype with a bundle (e.g. Project Manager → pm-stack) installs its plugins
+  // into this host on finish, so the persona arrives WITH its tools.
+  const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
+  const personaLabel = pickedArchetype?.label ?? state.archetype;
+  const pickedBundle = pickedArchetype?.bundle ?? null;
   const acpAgentLabel = ACP_AGENTS.find((a) => a.id === state.acpAgent)?.label ?? state.acpAgent;
 
   async function finishSetup() {
@@ -379,7 +383,29 @@ export function SetupWizard({
       if (state.initBeads) {
         await api.initBeads();
       }
-      setMessage(response.message);
+      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Project
+      // Manager → pm-stack), install it into THIS host on finish — so the new user
+      // gets the persona AND its tools/board in one shot, not just the prose.
+      // installPlugin auto-enables + hot-reloads the bundle's plugins (no restart).
+      // A failure is non-fatal: setup is already written, so we finish anyway and
+      // point the user at Settings ▸ Plugins.
+      if (pickedBundle) {
+        setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
+        try {
+          const r = await api.installPlugin(pickedBundle);
+          setMessage(
+            r.enable_error
+              ? `Setup complete. The ${personaLabel} tools installed but couldn't auto-enable (${r.enable_error}) — turn them on in Settings ▸ Plugins.`
+              : `Setup complete — ${personaLabel} tools are ready.`,
+          );
+        } catch (exc) {
+          setMessage(
+            `Setup complete, but installing the ${personaLabel} tools failed (${errMsg(exc)}). You can add them later in Settings ▸ Plugins.`,
+          );
+        }
+      } else {
+        setMessage(response.message);
+      }
       onFinished();
     } catch (exc) {
       setError(errMsg(exc));
