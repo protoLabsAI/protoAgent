@@ -217,7 +217,15 @@ def register_fleet_routes(app) -> None:
 
 
 def _archetypes() -> list[dict]:
-    """Built-in Basic + installed-bundle archetypes (cached in plugins.lock)."""
+    """Built-in Basic + installed-bundle archetypes (cached in plugins.lock).
+
+    Each archetype carries an optional ``soul`` — a base SOUL.md the setup
+    wizard seeds when the operator picks it (ADR 0042). Built-ins read it from
+    a ``config/soul-presets`` file; bundle archetypes declare it inline in
+    their ``archetype:`` manifest block.
+    """
+    from graph.config_io import read_soul_preset
+
     out = [
         {
             "id": "basic",
@@ -225,6 +233,7 @@ def _archetypes() -> list[dict]:
             "icon": "Sparkles",
             "bundle": None,
             "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
+            "soul": read_soul_preset("base"),
         },
         {
             # Built-in PM archetype — installed FRESH from the git URL on each create (no pin),
@@ -234,6 +243,7 @@ def _archetypes() -> list[dict]:
             "icon": "LayoutGrid",
             "bundle": "https://github.com/protoLabsAI/pm-stack",
             "blurb": "Project-management tools + board — clones the latest pm-stack on create.",
+            "soul": read_soul_preset("project-manager"),
         },
     ]
     try:
@@ -249,8 +259,23 @@ def _archetypes() -> list[dict]:
                         "icon": arch.get("icon", "Package"),
                         "blurb": arch.get("blurb", ""),
                         "bundle": b.get("source_url"),
+                        "soul": arch.get("soul", ""),
                     }
                 )
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort
         log.warning("[fleet] archetype discovery failed", exc_info=True)
+    # "Custom" is the catch-all, kept LAST as more archetypes land above it — a
+    # blank-slate persona the operator writes themselves. Like Basic it carries no
+    # bundle, but it seeds the editor with the fill-in-the-blanks SOUL scaffold
+    # rather than a ready-to-use base prompt.
+    out.append(
+        {
+            "id": "custom",
+            "label": "Custom",
+            "icon": "PenLine",
+            "bundle": None,
+            "blurb": "Write your own — start from a SOUL template and fill it in.",
+            "soul": read_soul_preset("blank"),
+        }
+    )
     return out

@@ -1,16 +1,17 @@
-import { Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
+import { useQuery } from "@tanstack/react-query";
+import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Grid } from "@protolabsai/ui/layout";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import {
-
   AlertTriangle,
   Bot,
   Check,
   ChevronLeft,
   ChevronRight,
-  Database,
+  Cpu,
+  HardDrive,
   KeyRound,
   Loader2,
-  Network,
   Search,
   ShieldCheck,
   Sparkles,
@@ -21,16 +22,22 @@ import type { ReactNode } from "react";
 import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import type { AgentConfig, ConfigPayload, SetupStatus } from "../lib/types";
+import { lucideIcon } from "../lib/lucideIcon";
+import { archetypesQuery } from "../lib/queries";
+import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 
-type Step = "welcome" | "identity" | "model" | "persona" | "tools" | "finish";
+// Four steps: intro, then "who the agent is" (name + persona), then "how it thinks"
+// (the model/coding-agent runtime), then a summary. Identity + persona are one step.
+type Step = "welcome" | "agent" | "brain" | "finish";
 
-// Workspace (project dir / allowed dirs / knowledge db / top-K / beads-init) was its
-// own step but it's all sensible defaults a new user shouldn't have to think about —
-// blank project dir = the protoAgent dir, blank knowledge db = the default location,
-// top-K 5, no beads init (do that from the Beads view when there's a board to make).
-// So it's dropped from the wizard; the defaults flow straight through finishSetup.
-const steps: Step[] = ["welcome", "identity", "model", "persona", "tools", "finish"];
+// Two former steps were dropped — they're all sensible defaults a new user shouldn't
+// have to reason about; the values flow straight through finishSetup:
+//   • Workspace (project dir / allowed dirs / knowledge db / top-K / beads-init):
+//     blank project dir = the protoAgent dir, blank knowledge db = default location,
+//     top-K 5, no beads init (do that from the Beads view when there's a board).
+//   • Tools (middleware toggles + researcher turns): all middleware on, 40 turns —
+//     tune later in Settings.
+const steps: Step[] = ["welcome", "agent", "brain", "finish"];
 
 // CLI coding agents that can be the runtime over ACP (ADR 0033) — agent_runtime: acp:<id>.
 const ACP_AGENTS: { id: string; label: string; hint: string }[] = [
@@ -55,7 +62,9 @@ type WizardState = {
   maxTokens: number;
   maxIterations: number;
   soul: string;
-  preset: string;
+  // The archetype whose base SOUL seeded the editor (ADR 0042) — "basic" by
+  // default. Picking a card in the persona step seeds `soul` from it.
+  archetype: string;
   middleware: AgentConfig["middleware"];
   researcherTurns: number;
   knowledgePath: string;
@@ -77,7 +86,7 @@ function defaultState(): WizardState {
     maxTokens: 32768,
     maxIterations: 50,
     soul: "",
-    preset: "",
+    archetype: "basic",
     middleware: {
       knowledge: true,
       audit: true,
@@ -92,7 +101,7 @@ function defaultState(): WizardState {
   };
 }
 
-function hydrateState(payload: ConfigPayload, status: SetupStatus | null): WizardState {
+function hydrateState(payload: ConfigPayload): WizardState {
   const config = payload.config;
   const rt = String(config.agent_runtime || "native");
   return {
@@ -106,8 +115,12 @@ function hydrateState(payload: ConfigPayload, status: SetupStatus | null): Wizar
     temperature: Number(config.model.temperature ?? 0.2),
     maxTokens: Number(config.model.max_tokens ?? 32768),
     maxIterations: Number(config.model.max_iterations ?? 50),
-    soul: payload.soul || "",
-    preset: status?.presets[0] || "",
+    // Start blank in the wizard (first-run-only flow): /api/config returns the
+    // server's GENERIC default SOUL, not a user persona — the persona step seeds
+    // the editor from the selected archetype instead. Leaving it blank lets that
+    // seed run (a non-empty value here would suppress it).
+    soul: "",
+    archetype: "basic",
     middleware: {
       knowledge: Boolean(config.middleware.knowledge),
       audit: Boolean(config.middleware.audit),
@@ -150,8 +163,14 @@ export function SetupWizard({
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
-  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  // Starter archetypes (Basic + Project Manager + installed bundles) — the same
+  // source the fleet new-agent picker uses. Each carries a base SOUL the persona
+  // step seeds when picked (ADR 0042).
+  const archetypes = useQuery(archetypesQuery());
   const [models, setModels] = useState<string[]>([]);
+  // Flips true once the initial config load finishes. The persona seed waits on it
+  // so the async load() (which replaces the whole state) can't clobber the seed.
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -168,10 +187,10 @@ export function SetupWizard({
       setBusy(true);
       setError("");
       try {
-        const [status, config] = await Promise.all([api.setupStatus(), api.config()]);
+        const config = await api.config();
         if (!alive) return;
-        setSetupStatus(status);
-        setState(hydrateState(config, status));
+        setState(hydrateState(config));
+        setLoaded(true);
       } catch (exc) {
         if (alive) setError(errMsg(exc));
       } finally {
@@ -190,23 +209,15 @@ export function SetupWizard({
   }, [state.apiBase, state.apiKey, state.modelName]);
 
   const canGoNext = useMemo(() => {
-    // ACP runtime needs no gateway, so don't gate the step on the model fields.
-    if (step === "model")
+    // On the brain step, a native model needs a gateway + model name. ACP needs
+    // neither (the coding agent is the brain), so don't gate on the model fields.
+    if (step === "brain")
       return Boolean(state.runtimeKind === "acp" || (state.apiBase.trim() && state.modelName.trim()));
-    // The workspace step has no required fields — Knowledge DB is optional (blank
-    // = the default location) and the project dir defaults to the protoAgent dir.
     return true;
   }, [state.apiBase, state.modelName, state.runtimeKind, step]);
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
-  }
-
-  function setMiddleware(key: keyof WizardState["middleware"], value: boolean) {
-    setState((current) => ({
-      ...current,
-      middleware: { ...current.middleware, [key]: value },
-    }));
   }
 
   async function probeModels(opts?: { silent?: boolean }) {
@@ -240,7 +251,7 @@ export function SetupWizard({
   const autoProbedBase = useRef("");
   useEffect(() => {
     const base = state.apiBase.trim();
-    if (step !== "model" || state.runtimeKind !== "native" || !base) return;
+    if (step !== "brain" || state.runtimeKind !== "native" || !base) return;
     if (autoProbedBase.current === base || models.length > 0) return;
     autoProbedBase.current = base;
     void probeModels({ silent: true });
@@ -267,19 +278,31 @@ export function SetupWizard({
     }
   }
 
-  async function loadPreset() {
-    if (!state.preset) return;
-    setBusy(true);
-    setError("");
-    try {
-      const response = await api.soulPreset(state.preset);
-      update({ soul: response.content });
-    } catch (exc) {
-      setError(errMsg(exc));
-    } finally {
-      setBusy(false);
-    }
+  // Picking an archetype card seeds the editor with that archetype's base SOUL
+  // — the same archetypes the fleet new-agent picker offers. The textarea stays
+  // freely editable below; this is an explicit "load this persona" action.
+  function pickArchetype(a: Archetype) {
+    update({ archetype: a.id, soul: a.soul });
   }
+
+  // Pre-fill the editor once with the default archetype's base SOUL so the persona
+  // step isn't blank. Gated on `loaded` so it runs AFTER load() hydrates state —
+  // otherwise load()'s full-state replace would clobber the seed and the guard would
+  // block a retry, leaving it blank until the user toggles a card. Never clobbers an
+  // in-session edit (soul already non-empty).
+  const archetypeList = archetypes.data?.archetypes ?? [];
+  const seededSoul = useRef(false);
+  useEffect(() => {
+    if (!loaded || seededSoul.current || !archetypeList.length || state.soul.trim()) return;
+    const a = archetypeList.find((x) => x.id === state.archetype) ?? archetypeList[0];
+    seededSoul.current = true;
+    update({ archetype: a.id, soul: a.soul });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, archetypeList, state.soul, state.archetype]);
+
+  // Labels for the finish-step summary.
+  const personaLabel = archetypeList.find((a) => a.id === state.archetype)?.label ?? state.archetype;
+  const acpAgentLabel = ACP_AGENTS.find((a) => a.id === state.acpAgent)?.label ?? state.acpAgent;
 
   async function finishSetup() {
     setBusy(true);
@@ -381,18 +404,25 @@ export function SetupWizard({
 
         <section className="setup-card">
           {step === "welcome" ? (
-            <StepBody icon={<Bot size={20} />} title="protoAgent" kicker="Setup">
+            <StepBody icon={<Bot size={20} />} title="protoAgent" kicker="Welcome">
+              <p className="setup-intro">
+                A local-first AI agent that runs on your own machine. Your chats, files, and
+                the agent&apos;s memory stay here — nothing leaves except the requests you send
+                to the model gateway you choose.
+              </p>
               <div className="setup-summary">
-                <StatusLine icon={<KeyRound size={15} />} label="Model gateway" />
-                <StatusLine icon={<Sparkles size={15} />} label="SOUL profile" />
-                <StatusLine icon={<Database size={15} />} label="Workspace" />
-                <StatusLine icon={<Network size={15} />} label="Subagents" />
+                <StatusLine icon={<HardDrive size={15} />} label="Local-first — runs on this machine" />
+                <StatusLine icon={<ShieldCheck size={15} />} label="Private — you control its access" />
+                <StatusLine icon={<KeyRound size={15} />} label="Bring your own model gateway" />
               </div>
+              <p className="setup-intro setup-intro-foot">
+                Takes a minute — everything here can be changed later in Settings.
+              </p>
             </StepBody>
           ) : null}
 
-          {step === "identity" ? (
-            <StepBody icon={<Bot size={20} />} title="Identity" kicker="Agent">
+          {step === "agent" ? (
+            <StepBody icon={<Bot size={20} />} title="Agent" kicker="Name & persona">
               <div className="setup-grid two">
                 <label className="field">
                   <span>Agent name</span>
@@ -403,13 +433,35 @@ export function SetupWizard({
                   <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
                 </label>
               </div>
+              <small style={{ opacity: 0.7, display: "block", marginTop: "0.4rem" }}>
+                Pick an archetype to seed the persona below — the agent&apos;s base SOUL. You can edit it freely.
+              </small>
+              <Grid className="archetype-grid" min="160px" gap="sm">
+                {archetypeList.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={`archetype-card${a.id === state.archetype ? " selected" : ""}`}
+                    aria-pressed={a.id === state.archetype}
+                    onClick={() => pickArchetype(a)}
+                  >
+                    <span className="archetype-icon">{lucideIcon(a.icon, 22)}</span>
+                    <span className="archetype-label">{a.label}</span>
+                    <span className="archetype-blurb">{a.blurb}</span>
+                  </button>
+                ))}
+              </Grid>
+              <label className="field">
+                <span>SOUL.md</span>
+                <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
+              </label>
             </StepBody>
           ) : null}
 
-          {step === "model" ? (
+          {step === "brain" ? (
             <StepBody
-              icon={<KeyRound size={20} />}
-              title="Runtime"
+              icon={<Cpu size={20} />}
+              title="Brain"
               kicker={state.runtimeKind === "acp" ? "coding agent over ACP" : "OpenAI-compatible gateway"}
             >
               {/* How this agent thinks: native LangGraph loop on a gateway, or hand each
@@ -458,127 +510,83 @@ export function SetupWizard({
                   </Select>
                   <small style={{ opacity: 0.7 }}>
                     {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
-                    <code>acp:{state.acpAgent}</code>. The gateway below is <strong>optional</strong> (only for native delegates / fallback).
+                    <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
                   </small>
                 </label>
-              ) : null}
-              <div className="setup-grid two">
-                <label className="field">
-                  <span>API base</span>
-                  <Input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
-                </label>
-                <label className="field">
-                  <span>API key</span>
-                  <Input
-                    type="password"
-                    value={state.apiKey}
-                    onChange={(event) => update({ apiKey: event.target.value })}
-                    autoComplete="off"
-                    placeholder="Leave blank to preserve current key"
-                  />
-                </label>
-              </div>
-              <div className="setup-grid model-row">
-                <label className="field">
-                  <span>Model</span>
-                  <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
-                  <datalist id="model-options">
-                    {models.map((model) => (
-                      <option key={model} value={model} />
-                    ))}
-                  </datalist>
-                </label>
-                <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
-                  {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
-                  Probe
-                </Button>
-                <TestConnectionButton
-                  onClick={() => void testConnection()}
-                  pending={busy}
-                  disabled={!state.apiBase.trim() || !state.modelName.trim()}
-                />
-              </div>
-              {tested ? (
-                <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
-                  {tested.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
-                  <span>
-                    {tested.ok
-                      ? "Connection OK — the model responded."
-                      : `Connection failed — ${tested.error || "the model did not respond."}`}
-                  </span>
-                </div>
-              ) : null}
-              <div className="setup-grid three">
-                <label className="field">
-                  <span>Temperature</span>
-                  <Input type="number" min="0" max="2" step="0.1" value={state.temperature} onChange={(event) => update({ temperature: Number(event.target.value) })} />
-                </label>
-                <label className="field">
-                  <span>Max tokens</span>
-                  <Input type="number" min="1" value={state.maxTokens} onChange={(event) => update({ maxTokens: Number(event.target.value) })} />
-                </label>
-                <label className="field">
-                  <span>Max turns</span>
-                  <Input type="number" min="1" value={state.maxIterations} onChange={(event) => update({ maxIterations: Number(event.target.value) })} />
-                </label>
-              </div>
-            </StepBody>
-          ) : null}
-
-          {step === "persona" ? (
-            <StepBody icon={<Sparkles size={20} />} title="SOUL" kicker="Persona">
-              <div className="setup-grid model-row">
-                <label className="field">
-                  <span>Preset</span>
-                  <Select value={state.preset} onChange={(event) => update({ preset: event.target.value })}>
-                    {(setupStatus?.presets || []).map((preset) => (
-                      <option key={preset} value={preset}>
-                        {preset}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <Button type="button" onClick={() => void loadPreset()} disabled={busy || !state.preset}>
-                  {busy ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
-                  Load
-                </Button>
-              </div>
-              <label className="field">
-                <span>SOUL.md</span>
-                <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
-              </label>
-            </StepBody>
-          ) : null}
-
-          {step === "tools" ? (
-            <StepBody icon={<ShieldCheck size={20} />} title="Tools" kicker="Middleware">
-              <div className="toggle-grid">
-                {Object.entries(state.middleware).map(([key, value]) => (
-                  <div className="toggle-row" key={key}>
-                    <span>{key}</span>
-                    <Switch
-                      checked={value}
-                      onCheckedChange={(checked) => setMiddleware(key as keyof WizardState["middleware"], checked)}
+              ) : (
+                <>
+                  {/* Native gateway config — only when the runtime is the native model.
+                      ACP hands turns to the coding agent, so the gateway isn't shown there.
+                      Temperature / max-tokens / max-turns are sensible defaults a new user
+                      shouldn't have to tune — they flow through finishSetup; tweak later in
+                      Settings. */}
+                  <div className="setup-grid two">
+                    <label className="field">
+                      <span>API base</span>
+                      <Input value={state.apiBase} onChange={(event) => update({ apiBase: event.target.value })} />
+                    </label>
+                    <label className="field">
+                      <span>API key</span>
+                      <Input
+                        type="password"
+                        value={state.apiKey}
+                        onChange={(event) => update({ apiKey: event.target.value })}
+                        autoComplete="off"
+                        placeholder="Leave blank to preserve current key"
+                      />
+                    </label>
+                  </div>
+                  <div className="setup-grid model-row">
+                    <label className="field">
+                      <span>Model</span>
+                      <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                      <datalist id="model-options">
+                        {models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                    </label>
+                    <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
+                      {busy ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
+                      Probe
+                    </Button>
+                    <TestConnectionButton
+                      onClick={() => void testConnection()}
+                      pending={busy}
+                      disabled={!state.apiBase.trim() || !state.modelName.trim()}
                     />
                   </div>
-                ))}
-              </div>
-              <label className="field">
-                <span>Researcher turns</span>
-                <Input type="number" min="1" value={state.researcherTurns} onChange={(event) => update({ researcherTurns: Number(event.target.value) })} />
-              </label>
+                  {tested ? (
+                    <div className={`setup-test ${tested.ok ? "ok" : "err"}`} role="status">
+                      {tested.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
+                      <span>
+                        {tested.ok
+                          ? "Connection OK — the model responded."
+                          : `Connection failed — ${tested.error || "the model did not respond."}`}
+                      </span>
+                    </div>
+                  ) : null}
+                </>
+              )}
             </StepBody>
           ) : null}
 
 
           {step === "finish" ? (
-            <StepBody icon={<Check size={20} />} title="Finish" kicker="Write config">
+            <StepBody icon={<Check size={20} />} title="You're all set" kicker="Review & finish">
               <div className="finish-list">
-                <StatusLine icon={<Bot size={15} />} label={state.agentName || "protoagent"} />
-                <StatusLine icon={<KeyRound size={15} />} label={state.modelName || "model"} />
-                <StatusLine icon={<Database size={15} />} label={state.knowledgePath || "knowledge"} />
-                <StatusLine icon={<Network size={15} />} label={`${state.researcherTurns} researcher turns`} />
+                <StatusLine icon={<Bot size={15} />} label={`Agent · ${state.agentName || "protoagent"}`} />
+                {state.runtimeKind === "acp" ? (
+                  <StatusLine icon={<KeyRound size={15} />} label={`Runtime · ${acpAgentLabel} (acp:${state.acpAgent})`} />
+                ) : (
+                  <StatusLine icon={<KeyRound size={15} />} label={`Model · ${state.modelName || "—"}`} />
+                )}
+                <StatusLine icon={<Sparkles size={15} />} label={`Persona · ${personaLabel}`} />
               </div>
+              <p className="setup-intro setup-intro-foot">
+                Finishing writes your config and starts the agent. Tools, knowledge, and
+                integrations are all in Settings.
+              </p>
               {message ? <Callout>{message}</Callout> : null}
             </StepBody>
           ) : null}

@@ -38,6 +38,18 @@ def test_archetypes_include_basic(client):
     assert any(a["id"] == "basic" and a["bundle"] is None for a in arr)
 
 
+def test_archetypes_carry_base_soul(client):
+    # Each archetype seeds the wizard's persona step with a base SOUL (ADR 0042) —
+    # the built-in Basic + PM read theirs from config/soul-presets/.
+    arr = client.get("/api/archetypes").json()["archetypes"]
+    by_id = {a["id"]: a for a in arr}
+    assert "soul" in by_id["basic"] and by_id["basic"]["soul"].strip()
+    assert by_id["pm-stack"]["soul"].strip()
+    # "Custom" is the catch-all write-your-own archetype, kept last with the
+    # fill-in template SOUL.
+    assert arr[-1]["id"] == "custom" and by_id["custom"]["soul"].strip()
+
+
 def test_create_list_start_stop_remove(client):
     # create (no bundle = Basic) + auto-start
     r = client.post("/api/fleet", json={"name": "alpha", "port": 7890})

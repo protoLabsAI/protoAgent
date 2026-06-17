@@ -589,4 +589,5 @@ export type Archetype = {
   icon: string; // lucide-react icon name
   blurb: string;
   bundle: string | null; // null = Basic; else the bundle git URL
+  soul: string; // base SOUL.md the wizard seeds when this archetype is picked ("" = none)
 };

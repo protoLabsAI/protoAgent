@@ -23,7 +23,9 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const list = archetypes.data?.archetypes ?? [];
+  // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
+  // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
+  const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom");
   const archetype = list.find((a) => a.id === picked) ?? list[0];
   const nameOk = NAME_RE.test(name);
 
