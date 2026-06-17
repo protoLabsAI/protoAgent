@@ -33,7 +33,7 @@ concurrency:
 jobs:
   prepare:
     name: Prepare Release
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # Opt-in guard (fork-friendly): set the `RELEASE_ENABLED` repo variable to
     # `true` to enable the release pipeline. Forks enable it without editing this
     # workflow — so upstream changes to the file don't conflict on re-sync.

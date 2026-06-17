@@ -357,7 +357,7 @@ jobs:
     if: >-
       github.event_name == 'push' && github.repository == 'protoLabsAI/protoAgent'
       && endsWith(github.ref_name, '.0')
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
       - name: Setup Node

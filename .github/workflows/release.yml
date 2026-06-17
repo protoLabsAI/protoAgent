@@ -23,7 +23,7 @@ env:
 jobs:
   release:
     name: Release
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # Opt-in guard (fork-friendly): set the `RELEASE_ENABLED` repo variable to
     # `true` to enable releases. Forks enable without editing this workflow.
     if: vars.RELEASE_ENABLED == 'true'

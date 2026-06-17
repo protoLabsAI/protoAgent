@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +43,7 @@ jobs:
     needs: build
     # Never deploy from a PR — PRs only validate the build above.
     if: github.event_name != 'pull_request'
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

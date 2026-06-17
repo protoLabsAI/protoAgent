@@ -26,7 +26,7 @@ concurrency:
 jobs:
   deploy:
     name: Build & deploy to Cloudflare Pages
-    runs-on: namespace-profile-protolabs-linux
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     steps:
       - uses: actions/checkout@v4
 
