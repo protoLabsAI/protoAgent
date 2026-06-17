@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import types
 
 import pytest
@@ -414,10 +415,12 @@ async def test_eviction_during_get_acp_runtime(monkeypatch):
         raising=False,
     )
 
-    # Pre-populate an expired entry.
+    # Pre-populate an expired entry. Seed the last-access RELATIVE to the real monotonic
+    # clock that _get_acp_runtime reads — an absolute 0.0 only evicts when time.monotonic()
+    # already exceeds the TTL (true on a long-up dev box, false on a fresh CI runner).
     stale = _MockRuntime("stale")
     chat._ACP_RUNTIMES["stale-thread"] = stale
-    chat._ACP_RUNTIME_ACCESS["stale-thread"] = 0.0  # ancient
+    chat._ACP_RUNTIME_ACCESS["stale-thread"] = time.monotonic() - chat._ACP_IDLE_TTL_S - 1  # ancient
 
     rt = await chat._get_acp_runtime("new-thread")
 
