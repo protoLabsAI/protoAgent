@@ -355,9 +355,14 @@ class AcpAdapter(Adapter):
     def config_schema(self) -> list[FieldSpec]:
         return [
             FieldSpec(
-                "command", "Command", "text", required=True, placeholder="proto", help="Binary on PATH that speaks ACP."
+                "command",
+                "Command",
+                "text",
+                required=True,
+                placeholder="proto",
+                help="Binary on PATH that speaks ACP (e.g. proto). For Claude Code use `claude-code` — an alias for the claude-agent-acp adapter.",
             ),
-            FieldSpec("args", "Args", "args", placeholder="--acp", help="Launch args, e.g. --acp."),
+            FieldSpec("args", "Args", "args", placeholder="--acp", help="Launch args (e.g. --acp). Leave empty for claude-code."),
             FieldSpec(
                 "workdir",
                 "Workdir",
@@ -393,6 +398,14 @@ class AcpAdapter(Adapter):
             raise DelegateError(f"acp delegate {d.name!r} needs command + workdir")
         args = raw.get("args") or []
         d.args = [str(a) for a in args] if isinstance(args, (list, tuple)) else []
+        # Convenience alias (issue #1116): Claude Code has NO native ACP mode — it needs
+        # the claude-agent-acp adapter (formerly @zed-industries/claude-code-acp, now
+        # deprecated). Let operators write the intuitive `command: claude-code` and map
+        # it to the adapter binary, which takes no launch args — instead of hand-authoring
+        # the incantation and getting an opaque `agent exited` at first dispatch.
+        if d.command in ("claude-code", "claude-acp"):
+            d.command = "claude-agent-acp"
+            d.args = []
         env = raw.get("env") if isinstance(raw.get("env"), dict) else {}
         d.env = {str(k): str(v) for k, v in env.items()}
         try:
@@ -460,15 +473,57 @@ class AcpAdapter(Adapter):
         return await forget_session(self._spec(d))
 
     async def probe(self, d: Delegate) -> dict:
+        """Reachability check for the panel's Test button.
+
+        Does a REAL ACP `initialize` handshake (spawn the command, complete the
+        protocol handshake, close — no session/prompt), so a launch command that's
+        on PATH and workdir-valid but doesn't actually speak ACP FAILS the probe
+        instead of showing green (issue #1116 — the old PATH+workdir check passed
+        `command: claude` while every dispatch failed with an opaque `agent exited`).
+        """
+        import asyncio
         import os
         import shutil
 
+        # Bare `claude` is on PATH but has no native ACP mode — the classic false-green.
+        # Steer to the adapter instead of spawning it only to watch the handshake hang.
+        if os.path.basename(d.command) == "claude":
+            return {
+                "ok": False,
+                "error": (
+                    "`claude` has no native ACP mode. Claude Code needs the claude-agent-acp "
+                    "adapter — `npm i -g @agentclientprotocol/claude-agent-acp`, then set "
+                    "command: claude-code (an alias) or claude-agent-acp."
+                ),
+            }
         if not shutil.which(d.command):
+            if os.path.basename(d.command) == "claude-agent-acp":
+                return {
+                    "ok": False,
+                    "error": "claude-agent-acp not installed — run `npm i -g @agentclientprotocol/claude-agent-acp`.",
+                }
             return {"ok": False, "error": f"binary not on PATH: {d.command!r}"}
         wd = os.path.expanduser(d.workdir)
         if not os.path.isdir(wd):
             return {"ok": False, "error": f"workdir does not exist: {wd}"}
-        return {"ok": True, "detail": f"{d.command} on PATH; workdir OK"}
+
+        # Real handshake. `_ensure_started` spawns the agent and runs ACP `initialize`
+        # (it does NOT open a session), so it's a cheap, side-effect-free liveness check.
+        from plugins.coding_agent.acp_client import AcpClient
+
+        client = AcpClient(command=d.command, args=d.args, cwd=wd, env=(d.env or None), name=d.name)
+        try:
+            await asyncio.wait_for(client._ensure_started(), timeout=45)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": f"ACP handshake timed out — does {d.command!r} speak ACP?"}
+        except Exception as exc:  # noqa: BLE001 — spawn/handshake failure → tool-visible string
+            return {"ok": False, "error": f"ACP handshake failed: {type(exc).__name__}: {exc}"}
+        finally:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
+        return {"ok": True, "detail": f"ACP handshake OK (protocol {client._protocol_version}) — {d.command}"}
 
 
 ADAPTERS: dict[str, Adapter] = {a.type: a for a in (A2aAdapter(), OpenAiAdapter(), AcpAdapter())}

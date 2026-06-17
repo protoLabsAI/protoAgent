@@ -54,25 +54,30 @@ Any agent that speaks ACP works — just point `command`/`args` at it:
 
 ```yaml
 delegates:
-  - { name: proto,       type: acp, command: proto, args: ["--acp"],                         workdir: ~/dev/my-repo }
-  - { name: claude-code, type: acp, command: npx,   args: ["--yes", "@zed-industries/claude-code-acp"], workdir: ~/dev/my-repo }
-  - { name: codex,       type: acp, command: codex, args: ["acp"],                            workdir: ~/dev/my-repo }
+  - { name: proto,       type: acp, command: proto,       args: ["--acp"],            workdir: ~/dev/my-repo }
+  - { name: claude-code, type: acp, command: claude-code, args: [],                   workdir: ~/dev/my-repo }   # alias → claude-agent-acp
+  - { name: codex,       type: acp, command: codex,       args: ["acp"],              workdir: ~/dev/my-repo }
   - { name: gemini,      type: acp, command: gemini, args: ["--experimental-acp"],            workdir: ~/dev/my-repo }
 ```
 
 The binary must be installed and on the `PATH` of the process running protoAgent.
-A missing binary returns a clear error string to the agent (it doesn't crash) — the
-delegates panel's **Test** button probes this.
+The delegates panel's **Test** button performs a real ACP `initialize` handshake — so
+a wrong launch command **fails the probe** instead of showing green (it's not just a
+missing-binary check). A misconfigured delegate surfaces at Test, not at first dispatch.
 
-The same `AcpClient` drives any of them — proto and Claude Code are both
-validated end-to-end. `--yes` on the `npx` form skips the first-run install
-prompt (which would otherwise hang the non-interactive spawn).
+**Claude Code has no native ACP mode.** Drive it through the
+[`claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)
+adapter: install it (`npm i -g @agentclientprotocol/claude-agent-acp`) and use the
+`claude-code` alias above — it maps to `command: claude-agent-acp` with no args, so you
+don't have to know the incantation. (The older `@zed-industries/claude-code-acp` is
+**deprecated** — it was renamed to `@agentclientprotocol/claude-agent-acp`.) Setting
+`command: claude` directly does **not** work — `claude` isn't an ACP server, and the
+probe will tell you so.
 
-> **Claude Code caveat:** `@zed-industries/claude-code-acp` launches the `claude`
-> binary, which **refuses to start nested inside another Claude Code session**
-> (`Error: Claude Code cannot be launched inside another Claude Code session`). Run
-> protoAgent from a normal shell — not from within a `claude` session — when using
-> the Claude Code agent.
+> **Caveat:** the adapter launches the `claude` binary, which **refuses to start
+> nested inside another Claude Code session** (`Error: Claude Code cannot be launched
+> inside another Claude Code session`). Run protoAgent from a normal shell / the
+> desktop app — not from within a `claude` session — when using the Claude Code agent.
 
 ## Use it
 
