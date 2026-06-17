@@ -1,0 +1,22 @@
+id: portfolio
+name: Portfolio (multi-team orchestration)
+version: 0.1.0
+description: >-
+  The PM / program orchestration layer (ADR 0055 P1). One agent orchestrates work
+  across MANY team-agents, each running its own project board for its own repo
+  (scale-out). Pure composition of three existing subsystems — the fleet
+  (team-agent registry), delegates (the A2A dispatch primitive), and project_board
+  (the remote board read). The PM treats each remote fleet member as a *board*
+  addressed by name: list them, dispatch a feature to one, read one back — over A2A.
+
+  Tools: portfolio_boards (enumerate), portfolio_dispatch (send a feature to a
+  team board over A2A), portfolio_board_read (structured read of a team board).
+  Ships DISABLED; enable with `plugins: { enabled: [portfolio] }`. Pairs with the
+  `delegates` plugin and remote fleet members (ADR 0042). See ADR 0055.
+
+enabled: false
+min_protoagent_version: "0.42.0"
+
+# Declarative only (console transparency).
+capabilities:
+  network: ["*"]   # A2A dispatch + project_board reads to remote team-agents
