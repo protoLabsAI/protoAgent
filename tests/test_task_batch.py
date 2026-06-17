@@ -43,8 +43,18 @@ def test_build_returns_task_and_batch(monkeypatch):
 async def test_single_task_is_unbounded(monkeypatch):
     rec = []
     tools = _build(monkeypatch, recorder=rec)
-    out = await tools["task"].ainvoke({"description": "d", "prompt": "p", "subagent_type": "researcher"})
-    assert out == "OUT:d"
+    # `task` carries an InjectedToolCallId (the cancellable-delegation key, Tier 2),
+    # so it must be invoked with a full model ToolCall — exactly how the graph's
+    # ToolNode calls it in production. Result comes back as a ToolMessage.
+    out = await tools["task"].ainvoke(
+        {
+            "name": "task",
+            "args": {"description": "d", "prompt": "p", "subagent_type": "researcher"},
+            "id": "tc-test",
+            "type": "tool_call",
+        }
+    )
+    assert out.content == "OUT:d"
     # single task must not truncate
     assert rec[0]["truncate"] is None
 
