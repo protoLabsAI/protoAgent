@@ -630,3 +630,30 @@ def test_ensure_live_config_scoped_inherits_base(monkeypatch, tmp_path: Path) ->
     assert "base-config" in scoped.read_text()  # inherited the base config
     assert scoped_secrets.read_text() == base_secrets.read_text()  # + secrets
     assert scoped_marker.exists()  # + setup state (no re-wizard)
+
+
+# ── scoped-instance installed-plugin config resolution (ADR 0055 P0) ─────────────
+
+
+def test_scoped_instance_resolves_unscoped_installed_plugin_config(tmp_path, monkeypatch):
+    """A plugin installed in the UNSCOPED live plugins dir must have its config section
+    resolved even when the config dir is instance-scoped (`PROTOAGENT_INSTANCE` →
+    config/<id>/), since the scoped dir has no plugins/ of its own and installs are
+    unscoped. Regression: a scoped instance loaded its installed plugins but silently
+    dropped their config sections (db_path/settings → manifest defaults), which broke
+    per-instance board isolation."""
+    from graph.config import _resolve_plugin_config
+
+    base = tmp_path / "config"
+    pdir = base / "plugins" / "demo"  # installs are UNSCOPED, under <base>/plugins
+    pdir.mkdir(parents=True)
+    (pdir / "protoagent.plugin.yaml").write_text(
+        'id: demo\nname: Demo\nversion: 0.1.0\ndescription: t\nconfig_section: demo\nconfig:\n  db_path: ""\n'
+    )
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "inst")  # → instance_id() == "inst"
+    scoped = base / "inst"  # the instance-scoped config dir (config/<id>/) — no plugins/ here
+    scoped.mkdir()
+    data = {"plugins": {"enabled": ["demo"]}, "demo": {"db_path": "/sandbox/x.db"}}
+    out = _resolve_plugin_config(data, {}, config_dir=scoped)
+    # de-scoped to <base>/plugins → demo discovered → its config section resolved
+    assert out.get("demo", {}).get("db_path") == "/sandbox/x.db"
