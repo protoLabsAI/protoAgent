@@ -156,6 +156,29 @@ describe("persist debouncing", () => {
     expect(setItem).toHaveBeenCalledTimes(4);
   });
 
+  it("reorderSessions reorders the tabs, preserves the active session, and flushes immediately", async () => {
+    const { chatStore } = await freshStore();
+    const first = chatStore.getSnapshot().currentSessionId!;
+    const b = chatStore.createSession();
+    const c = chatStore.createSession();
+    chatStore.switchSession(first); // active = first; order is [first, b, c]
+    setItem.mockClear();
+
+    chatStore.reorderSessions([c.id, first, b.id]); // drag c to the front
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual([c.id, first, b.id]);
+    expect(chatStore.getSnapshot().currentSessionId).toBe(first); // active untouched
+    expect(setItem).toHaveBeenCalledTimes(1); // structural → immediate flush
+  });
+
+  it("reorderSessions keeps a session the caller omitted (defensive)", async () => {
+    const { chatStore } = await freshStore();
+    const first = chatStore.getSnapshot().currentSessionId!;
+    const b = chatStore.createSession();
+
+    chatStore.reorderSessions([b.id]); // omit `first`
+    expect(chatStore.getSnapshot().sessions.map((s) => s.id)).toEqual([b.id, first]);
+  });
+
   it("flushes on stream done (setSessionStatus) so the final answer persists", async () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;

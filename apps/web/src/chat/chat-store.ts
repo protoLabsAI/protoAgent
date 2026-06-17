@@ -285,6 +285,25 @@ export const chatStore = {
     }));
   },
 
+  /** Reorder the session tabs to match `orderedIds` (from the DS TabBar's
+   *  `onReorder`, ui@0.43.0). Pure reordering — active session + status untouched;
+   *  persists immediately so the order survives reload. */
+  reorderSessions(orderedIds: string[]) {
+    setState((current) => {
+      const byId = new Map(current.sessions.map((s) => [s.id, s]));
+      const next = orderedIds
+        .map((id) => byId.get(id))
+        .filter((s): s is ChatSession => s != null);
+      // Defensive: keep any session the caller omitted, in its original order.
+      if (next.length !== current.sessions.length) {
+        for (const s of current.sessions) {
+          if (!orderedIds.includes(s.id)) next.push(s);
+        }
+      }
+      return { ...current, sessions: next };
+    });
+  },
+
   updateMessages(sessionId: string, messages: ChatMessage[]) {
     // Fires per streamed SSE frame (~24 chars) — debounce the localStorage
     // write. The stream-done path flushes via setSessionStatus right after the

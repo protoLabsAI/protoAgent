@@ -149,6 +149,7 @@ export function ChatSurface({
         onSelect={(id) => chatStore.switchSession(id)}
         onClose={(id) => setPendingClose(id)}
         onRename={(id, label) => chatStore.renameSession(id, label)}
+        onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
         onAdd={() => chatStore.createSession()}
         addLabel="New chat"
       />
