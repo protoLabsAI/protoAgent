@@ -19,9 +19,11 @@ registry), [delegates](/guides/delegates) (the A2A dispatch primitive), and
    host it's just `plugins: { enabled: [project_board, delegates] }`; for an isolated
    co-located instance, scope it (`PROTOAGENT_INSTANCE`, see
    [multi-instance](/guides/multi-instance)) and set `project_board.db_path`/`repo`.
-2. **Enable `portfolio` on the PM:** `plugins: { enabled: [portfolio] }` (it ships
-   disabled — enabling is the trust decision). The PM also needs `delegates` for the
-   A2A dispatch path.
+2. **Install + enable `portfolio` on the PM.** It's a standalone plugin
+   ([`protoLabsAI/portfolio-plugin`](https://github.com/protoLabsAI/portfolio-plugin)),
+   shipped in the **pm-stack** bundle alongside `project_board` — or install it directly
+   (`POST /api/plugins/install`). Then `plugins: { enabled: [delegates, portfolio] }` (it
+   ships disabled — enabling is the trust decision; `delegates` is the A2A dispatch path).
 3. **Register each team-agent as a remote fleet member** — Discover → *Add to this
    fleet* in the console, or `POST /api/fleet/remotes {name, url, token}`. The board is
    addressed by that **name**. The stored bearer authenticates both the team's `/a2a`

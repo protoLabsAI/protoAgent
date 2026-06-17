@@ -121,7 +121,10 @@ registry:
   plugin (#1107) — `portfolio_boards` / `portfolio_dispatch` (A2A) / `portfolio_board_read`.
   Pure composition of fleet × delegates × project_board. Live-verified end-to-end
   against a real team-agent over A2A (a dispatched feature was created on the team's
-  own isolated board and read back structured).
+  own isolated board and read back structured). *The plugin is a **standalone repo**
+  ([`protoLabsAI/portfolio-plugin`](https://github.com/protoLabsAI/portfolio-plugin)),
+  shipped in the **pm-stack** bundle alongside `project_board` — extracted from the host
+  so the PM ecosystem (pm · project_board · portfolio) is uniformly external + composable.*
 - **P2** — rollup + delta streaming (the bounded-context layer).
   - *Slice 1* ✅ *(shipped)* — `portfolio_rollup` (#1110): bounded cross-board view —
     per-board lane counts + only the blocked/critical-path items, never raw boards.
