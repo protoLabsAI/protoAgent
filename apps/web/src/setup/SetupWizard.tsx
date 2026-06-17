@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Field, Input, Select, Textarea } from "@protolabsai/ui/forms";
-import { Grid } from "@protolabsai/ui/layout";
+import { Field, FormField, Input, RadioCard, RadioCardGroup, Select, Textarea } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import {
@@ -455,24 +454,22 @@ export function SetupWizard({
               <p className="setup-hint">
                 Pick an archetype to seed the persona below — the agent&apos;s base SOUL. You can edit it freely.
               </p>
-              <Grid className="archetype-grid" min="160px" gap="sm">
+              <RadioCardGroup
+                name="archetype"
+                min="160px"
+                value={state.archetype}
+                onValueChange={(id) => {
+                  const a = archetypeList.find((x) => x.id === id);
+                  if (a) pickArchetype(a);
+                }}
+              >
                 {archetypeList.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`archetype-card${a.id === state.archetype ? " selected" : ""}`}
-                    aria-pressed={a.id === state.archetype}
-                    onClick={() => pickArchetype(a)}
-                  >
-                    <span className="archetype-icon">{lucideIcon(a.icon, 22)}</span>
-                    <span className="archetype-label">{a.label}</span>
-                    <span className="archetype-blurb">{a.blurb}</span>
-                  </button>
+                  <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
                 ))}
-              </Grid>
-              <WizardField label="SOUL.md">
+              </RadioCardGroup>
+              <FormField label="SOUL.md">
                 <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
-              </WizardField>
+              </FormField>
             </StepBody>
           ) : null}
 
@@ -483,28 +480,29 @@ export function SetupWizard({
               kicker={state.runtimeKind === "acp" ? "coding agent over ACP" : "OpenAI-compatible gateway"}
             >
               {/* How this agent thinks: native LangGraph loop on a gateway, or hand each
-                  turn to a CLI coding agent over ACP (ADR 0033). */}
-              <WizardField label="How this agent thinks">
-                <div className="setup-choices">
-                  {([
-                    ["native", "Native model", "Run turns on an OpenAI-compatible gateway."],
-                    ["acp", "Coding agent (ACP)", "Hand each turn to a CLI coding agent — it's the brain, no gateway key needed."],
-                  ] as const).map(([kind, label, blurb]) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      className={`setup-choice${state.runtimeKind === kind ? " selected" : ""}`}
-                      aria-pressed={state.runtimeKind === kind}
-                      onClick={() => update({ runtimeKind: kind })}
-                    >
-                      <strong>{label}</strong>
-                      <small>{blurb}</small>
-                    </button>
-                  ))}
-                </div>
-              </WizardField>
+                  turn to a CLI coding agent over ACP (ADR 0033). A radiogroup, so it gets a
+                  plain label (not a FormField <label>, which should point at one control). */}
+              <div className="pl-field">
+                <span className="pl-field__label">How this agent thinks</span>
+                <RadioCardGroup
+                  name="runtime"
+                  value={state.runtimeKind}
+                  onValueChange={(kind) => update({ runtimeKind: kind as WizardState["runtimeKind"] })}
+                >
+                  <RadioCard value="native" title="Native model" blurb="Run turns on an OpenAI-compatible gateway." />
+                  <RadioCard value="acp" title="Coding agent (ACP)" blurb="Hand each turn to a CLI coding agent — it's the brain, no gateway key needed." />
+                </RadioCardGroup>
+              </div>
               {state.runtimeKind === "acp" ? (
-                <WizardField label="Coding agent">
+                <FormField
+                  label="Coding agent"
+                  hint={
+                    <>
+                      {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
+                      <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
+                    </>
+                  }
+                >
                   <Select
                     value={state.acpAgent}
                     onChange={(event) => update({ acpAgent: event.target.value })}
@@ -513,11 +511,7 @@ export function SetupWizard({
                       <option key={a.id} value={a.id}>{a.label}</option>
                     ))}
                   </Select>
-                  <small className="field-hint">
-                    {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
-                    <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
-                  </small>
-                </WizardField>
+                </FormField>
               ) : (
                 <>
                   {/* Native gateway config — only when the runtime is the native model.
@@ -527,7 +521,7 @@ export function SetupWizard({
                       Settings. */}
                   <div className="setup-grid two">
                     <Field label="API base" value={state.apiBase} onValueChange={(value) => update({ apiBase: value })} />
-                    <WizardField label="API key">
+                    <FormField label="API key">
                       <Input
                         type="password"
                         value={state.apiKey}
@@ -535,17 +529,17 @@ export function SetupWizard({
                         autoComplete="off"
                         placeholder="Leave blank to preserve current key"
                       />
-                    </WizardField>
+                    </FormField>
                   </div>
                   <div className="setup-grid model-row">
-                    <WizardField label="Model">
+                    <FormField label="Model">
                       <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
                       <datalist id="model-options">
                         {models.map((model) => (
                           <option key={model} value={model} />
                         ))}
                       </datalist>
-                    </WizardField>
+                    </FormField>
                     <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
                       {busy ? <Spinner size={15} /> : <Search size={15} />}
                       Probe
@@ -635,18 +629,6 @@ function StepBody({
       </div>
       {children}
     </div>
-  );
-}
-
-// Label + an arbitrary DS control. The DS `Field` renders its OWN input, so it can't wrap
-// a Select / password Input / datalist — this reuses the DS `pl-field` classes so these
-// composite fields match `<Field>` exactly. Interim for a DS FormField primitive (gap filed).
-function WizardField({ label, children }: { label: ReactNode; children: ReactNode }) {
-  return (
-    <label className="pl-field">
-      <span className="pl-field__label">{label}</span>
-      {children}
-    </label>
   );
 }
 

@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 
+import { RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { Grid } from "@protolabsai/ui/layout";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { api } from "../lib/api";
@@ -60,21 +60,11 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         ) : null}
 
         <p className="fleet-section-label">Archetype</p>
-        <Grid className="archetype-grid" min="160px" gap="sm">
+        <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={setPicked}>
           {list.map((a: Archetype) => (
-            <button
-              key={a.id}
-              type="button"
-              className={`archetype-card${a.id === picked ? " selected" : ""}`}
-              aria-pressed={a.id === picked}
-              onClick={() => setPicked(a.id)}
-            >
-              <span className="archetype-icon">{lucideIcon(a.icon, 22)}</span>
-              <span className="archetype-label">{a.label}</span>
-              <span className="archetype-blurb">{a.blurb}</span>
-            </button>
+            <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
           ))}
-        </Grid>
+        </RadioCardGroup>
 
         <label className="field archetype-name-field">
           <span>Name</span>

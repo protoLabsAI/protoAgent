@@ -1447,43 +1447,8 @@ textarea {
   line-height: 1.4;
 }
 
-/* Runtime-kind picker — selectable cards. Mirrors .archetype-card's token usage so it
-   tracks the theme accent (was inline styles on the off-theme --brand-violet-light).
-   DS gap: a RadioCard/SegmentedControl primitive (see protoContent issues). */
-.setup-choices {
-  display: flex;
-  gap: 8px;
-}
-.setup-choice {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: left;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
-  color: inherit;
-  cursor: pointer;
-}
-.setup-choice:hover {
-  border-color: var(--fg-muted);
-}
-.setup-choice.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
-}
-.setup-choice strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-.setup-choice small {
-  color: var(--fg-muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
+/* Runtime-kind + archetype pickers are now the DS <RadioCardGroup> (protoContent #254);
+   the old .setup-choice / .archetype-card classes are retired. */
 
 .setup-actions {
   display: flex;
@@ -1867,41 +1832,7 @@ textarea {
   opacity: 0.45;
 }
 
-/* The grid track + gap are now the DS <Grid min="160px" gap="sm"> (#832); this
-   keeps only the spacing below the picker, merged onto Grid via className. */
-.archetype-grid {
-  margin-bottom: 18px;
-}
-.archetype-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  text-align: left;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-panel);
-  cursor: pointer;
-}
-.archetype-card:hover {
-  border-color: var(--fg-muted);
-}
-.archetype-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.archetype-icon {
-  color: var(--accent);
-  display: inline-flex;
-}
-.archetype-label {
-  font-weight: 600;
-}
-.archetype-blurb {
-  font-size: 12px;
-  color: var(--fg-muted);
-  line-height: 1.4;
-}
+/* Archetype picker is now the DS <RadioCardGroup> (protoContent #254). */
 .archetype-name-field {
   max-width: 380px;
 }
