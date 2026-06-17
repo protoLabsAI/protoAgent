@@ -23,6 +23,19 @@ import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView }
 
 const DELEGATES_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/delegates";
 
+// Known ACP coding agents — picking one fills the Command + Args fields below, so an
+// operator doesn't have to know each agent's launch incantation (issue #1116). Claude
+// Code uses the `claude-code` alias (→ the claude-agent-acp adapter); the others mirror
+// runtime/acp_runtime.py. "Custom" leaves the fields untouched for anything else.
+const ACP_AGENT_PRESETS: { id: string; label: string; command: string; args: string }[] = [
+  { id: "claude-code", label: "Claude Code", command: "claude-code", args: "" },
+  { id: "proto", label: "proto (protoCLI)", command: "proto", args: "--acp" },
+  { id: "codex", label: "Codex", command: "npx", args: "-y @zed-industries/codex-acp" },
+  { id: "gemini", label: "Gemini CLI", command: "gemini", args: "--experimental-acp" },
+  { id: "opencode", label: "OpenCode", command: "opencode", args: "acp" },
+  { id: "copilot", label: "Copilot CLI", command: "copilot", args: "--acp" },
+];
+
 // ── dotted-key helpers (delegate fields use keys like "auth.token") ───────────
 function setDotted(obj: Record<string, unknown>, key: string, val: unknown): void {
   const parts = key.split(".");
@@ -190,6 +203,7 @@ function DelegateForm({
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
   const [vals, setVals] = useState<Record<string, string>>(() => seed(initial, spec));
+  const [preset, setPreset] = useState(""); // ACP coding-agent preset (fills command/args)
   const [probe, setProbe] = useState<DelegateProbe | null>(null);
   const [err, setErr] = useState("");
 
@@ -233,7 +247,7 @@ function DelegateForm({
               key={s.type}
               type="button"
               className={`delegate-type-tile${type === s.type ? " active" : ""}`}
-              onClick={() => { setType(s.type); setProbe(null); }}
+              onClick={() => { setType(s.type); setProbe(null); setPreset(""); }}
             >
               <span className="delegate-type-tile-label">{s.label}</span>
               <span className="delegate-type-tile-blurb">{s.blurb}</span>
@@ -250,6 +264,30 @@ function DelegateForm({
         <span>Description</span>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What it's for (the model reads this to pick it)." />
       </label>
+
+      {type === "acp" ? (
+        <label className="field">
+          <span>Coding agent</span>
+          <Select
+            value={preset}
+            onChange={(e) => {
+              const id = e.target.value;
+              setPreset(id);
+              const p = ACP_AGENT_PRESETS.find((x) => x.id === id);
+              if (p) setVals((m) => ({ ...m, command: p.command, args: p.args }));
+            }}
+          >
+            <option value="">Custom / pick a preset…</option>
+            {ACP_AGENT_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </Select>
+          <small className="delegate-field-help">
+            Fills Command + Args below. Claude Code needs the claude-agent-acp adapter
+            (<code>npm i -g @agentclientprotocol/claude-agent-acp</code>); <code>claude-code</code> is an alias for it.
+          </small>
+        </label>
+      ) : null}
 
       {(current?.fields ?? []).map((f) => (
         <DelegateField
