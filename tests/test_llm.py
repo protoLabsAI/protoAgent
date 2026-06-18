@@ -116,3 +116,22 @@ def test_from_yaml_reads_sampling_block(tmp_path):
     assert cfg.presence_penalty == 0.3
     assert cfg.repetition_penalty == 1.05
     assert cfg.chat_template_kwargs == {"preserve_thinking": True}
+
+
+def test_create_llm_routes_acp_model_name_to_acp_aux(monkeypatch):
+    # An `acp:<agent>` override (aux_model / eval_model / compaction.model / a subagent's
+    # model) routes THAT call through the named ACP agent, not the gateway — regardless of
+    # the main runtime. Parses the agent off the prefix and hands it to make_acp_aux_model.
+    import runtime.acp_runtime as AR
+    from graph.llm import create_llm
+
+    captured = {}
+    sentinel = object()
+
+    def _fake(config, agent=None):
+        captured["agent"] = agent
+        return sentinel
+
+    monkeypatch.setattr(AR, "make_acp_aux_model", _fake)
+    out = create_llm(LangGraphConfig(), model_name="acp:claude")
+    assert out is sentinel and captured["agent"] == "claude"

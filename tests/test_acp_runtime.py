@@ -7,7 +7,13 @@ import types
 
 import pytest
 
-from runtime.acp_runtime import AcpRuntime, adapter_for, operator_mcp_server_spec, resolve_runtime
+from runtime.acp_runtime import (
+    AcpRuntime,
+    adapter_for,
+    make_acp_aux_model,
+    operator_mcp_server_spec,
+    resolve_runtime,
+)
 from runtime.context import AssembledContext
 
 
@@ -22,6 +28,16 @@ def test_resolve_runtime_variants():
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="acp:codex")) == ("acp", "codex")
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="acp")) == ("native", "")  # needs an agent
     assert resolve_runtime(types.SimpleNamespace(agent_runtime="bogus")) == ("native", "")
+
+
+def test_make_acp_aux_model_honors_explicit_agent():
+    # An explicit agent (from `aux_model: acp:claude`) wins over the main runtime's agent,
+    # so a coding agent can back the aux slots independent of the brain. (No spawn — the
+    # ACP client is created lazily on first prompt.)
+    m = make_acp_aux_model(_cfg(agent_runtime="acp:codex"), agent="claude")
+    assert m._llm_type == "acp:claude"
+    # Blank agent falls back to the main runtime's agent.
+    assert make_acp_aux_model(_cfg(agent_runtime="acp:codex"))._llm_type == "acp:codex"
 
 
 def test_adapter_default_and_override():

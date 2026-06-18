@@ -266,14 +266,17 @@ def _messages_to_text(messages) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def make_acp_aux_model(config):
-    """A `BaseChatModel` backed by the configured ACP agent — for aux LLM calls under an
-    ACP-only setup. Lazy + import-guarded so langchain stays optional at import time."""
+def make_acp_aux_model(config, agent: str | None = None):
+    """A `BaseChatModel` backed by an ACP agent — for aux LLM calls (compaction, goal-eval,
+    fact extraction, …). `agent` names which coding agent (e.g. "claude"); blank falls back
+    to the main runtime's agent, then "proto". Used both by the ACP-only fallback (no
+    gateway) and by an explicit per-slot override like `aux_model: acp:claude`. Lazy +
+    import-guarded so langchain stays optional at import time."""
     from langchain_core.language_models import BaseChatModel
     from langchain_core.messages import AIMessage
     from langchain_core.outputs import ChatGeneration, ChatResult
 
-    agent = resolve_runtime(config)[1] or "proto"
+    agent = (agent or "").strip() or resolve_runtime(config)[1] or "proto"
 
     class AcpChatModel(BaseChatModel):
         """Text-only chat model over the ACP coding agent (no tools)."""

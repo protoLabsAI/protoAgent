@@ -49,6 +49,11 @@ class Field:
     ui_hidden: bool = False
 
 
+# ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for
+# the auxiliary slots (aux / goal-eval / compaction). Mirrors runtime/acp_runtime._ACP_ADAPTERS.
+ACP_MODEL_OPTIONS = ["acp:proto", "acp:codex", "acp:claude", "acp:gemini", "acp:copilot", "acp:opencode"]
+
+
 # Ordered registry. Section order here is the order the UI renders groups in.
 FIELDS: list[Field] = [
     # ── Agent runtime (ADR 0033) — leads the Agent settings: "who runs the turn?" ──
@@ -60,7 +65,7 @@ FIELDS: list[Field] = [
         "Agent runtime",
         "Which brain drives a turn: the built-in LangGraph loop (native), or an external "
         "coding agent over ACP (needs its CLI installed + authenticated on the host).",
-        options=["native", "acp:proto", "acp:codex", "acp:claude", "acp:copilot", "acp:opencode"],
+        options=["native", *ACP_MODEL_OPTIONS],
     ),
     Field(
         "operator_mcp.tools",
@@ -135,8 +140,10 @@ FIELDS: list[Field] = [
         "Auxiliary (fast) model",
         "string",
         "Routing",
-        "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the main model.",
-        options_source="models",
+        "Cheap/fast alias for summarization, goal-verification, and subagents. Blank = use the "
+        "main model. Or pick an `acp:<agent>` to route these aux calls through a coding agent "
+        "(e.g. Opus via acp:claude) — needs that agent's CLI on the host.",
+        options_source="models+acp",
         scope="host",
     ),
     Field(
@@ -180,7 +187,9 @@ FIELDS: list[Field] = [
         "Summarizer model",
         "string",
         "Compaction",
-        "Blank = routing.aux_model, then the main model.",
+        "Blank = routing.aux_model, then the main model. Accepts an `acp:<agent>` to summarize "
+        "with a coding agent.",
+        options_source="models+acp",
     ),
     # ── Goal mode ────────────────────────────────────────────────────────────
     Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode"),
@@ -191,7 +200,9 @@ FIELDS: list[Field] = [
         "Verifier model",
         "string",
         "Goal mode",
-        "Blank = routing.aux_model, then the main model.",
+        "Blank = routing.aux_model, then the main model. Accepts an `acp:<agent>` to verify goals "
+        "with a coding agent.",
+        options_source="models+acp",
     ),
     # ── Programmatic tool calling ────────────────────────────────────────────
     Field(
@@ -767,7 +778,13 @@ def build_schema(
             "section": f.section,
             "description": f.description,
             "restart": f.restart,
-            "options": (model_options or []) if f.options_source == "models" else list(f.options),
+            "options": (
+                (model_options or [])
+                if f.options_source == "models"
+                else (model_options or []) + ACP_MODEL_OPTIONS
+                if f.options_source == "models+acp"
+                else list(f.options)
+            ),
             "default": _jsonable(getattr(defaults, f.attr, None)),
             "scope": f.scope,  # ADR 0047: "agent" | "host"
             "source": _source_for(f.key, agent_doc, host_doc),  # which layer set the live value

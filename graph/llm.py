@@ -97,6 +97,20 @@ def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> Cha
     for a different model on the same gateway (used for compaction /
     fallback models).
     """
+    # Explicit per-slot ACP override: an `acp:<agent>` model name (e.g. `aux_model: acp:claude`,
+    # `goal.eval_model: acp:claude`, `compaction.model: acp:claude`, or a subagent's model) routes
+    # THIS call through that ACP agent — regardless of the main runtime or whether a gateway is
+    # configured. Lets a strong coding agent (Claude Code/Opus) back the auxiliary slots while the
+    # main brain stays on the gateway. Falls back to the gateway model if the ACP path can't build.
+    if model_name and model_name.strip().startswith("acp:"):
+        try:
+            from runtime.acp_runtime import make_acp_aux_model
+
+            return make_acp_aux_model(config, agent=model_name.split(":", 1)[1].strip() or None)
+        except Exception:  # noqa: BLE001 — degrade to the gateway model rather than break the call
+            log.warning("[llm] ACP override %r unavailable; using the main model", model_name, exc_info=True)
+            model_name = None
+
     # ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
     # key is configured, back protoAgent's auxiliary LLM calls (compaction, goal-eval, fact
     # extraction) with that same ACP agent — so an ACP-only setup needs no OpenAI-compatible

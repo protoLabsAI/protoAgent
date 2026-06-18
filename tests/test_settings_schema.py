@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from graph.config import LangGraphConfig
 from graph.settings_schema import (
+    ACP_MODEL_OPTIONS,
     FIELDS,
     build_schema,
     nest_updates,
@@ -34,12 +35,19 @@ def test_schema_groups_and_values():
     assert model["type"] == "select" and model["options"] == ["a", "b"]
     # The free-text model fields ALSO carry the gateway list (as datalist
     # suggestions) — they stay `string` (blank/any alias allowed), not `select`.
-    for key in ("routing.aux_model", "knowledge.transcribe_model"):
+    transcribe = next(f for f in fields if f["key"] == "knowledge.transcribe_model")
+    assert transcribe["type"] == "string" and transcribe["options"] == ["a", "b"]
+    # The auxiliary-slot models additionally offer the ACP coding agents (acp:<agent>) so a
+    # coding agent can back aux/eval/compaction — still `string`, so any value validates.
+    for key in ("routing.aux_model", "compaction.model", "goal.eval_model"):
         f = next(f for f in fields if f["key"] == key)
-        assert f["type"] == "string" and f["options"] == ["a", "b"]
+        assert f["type"] == "string" and f["options"] == ["a", "b"] + ACP_MODEL_OPTIONS
     # The fallback list carries the gateway options too (rendered as combobox rows).
     fallback = next(f for f in fields if f["key"] == "routing.fallback_models")
     assert fallback["type"] == "string_list" and fallback["options"] == ["a", "b"]
+    # The main-brain runtime select offers native + every ACP agent (incl. gemini).
+    runtime = next(f for f in fields if f["key"] == "agent_runtime")
+    assert runtime["type"] == "select" and runtime["options"] == ["native", *ACP_MODEL_OPTIONS]
 
 
 def test_groups_carry_category_in_taxonomy_order():

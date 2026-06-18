@@ -208,6 +208,9 @@ checkpoint:
 #   aux_model: ONE cheap/fast alias for the non-reasoning calls — context
 #     summarization, goal verification, and subagent delegation all fall back
 #     to it unless they set a specific override. Blank = main model everywhere.
+#     Can also be an `acp:<agent>` (e.g. acp:claude) to route those aux calls
+#     through a coding agent instead of a gateway model — same for goal.eval_model
+#     and compaction.model. (The main brain itself is selected via agent_runtime.)
 #   fallback_models: on a primary error, retry on each in order. Empty = none.
 routing:
   # aux_model: protolabs/fast
