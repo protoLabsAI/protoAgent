@@ -309,7 +309,13 @@ function ChatSessionSlot({
   const slashMatches = useMemo(() => {
     if (slashQuery === null) return [];
     const q = slashQuery.toLowerCase();
-    return commands.filter(
+    // Deterministic client-side commands (ADR 0057) surface first, then server skills.
+    const all: SlashCommand[] = [
+      { name: "new", description: "Open a new chat tab" },
+      { name: "clear", description: "Clear this chat's history" },
+      ...commands,
+    ];
+    return all.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
   }, [slashQuery, commands]);
@@ -317,7 +323,32 @@ function ChatSessionSlot({
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
 
+  // Deterministic client-side commands (ADR 0057) — run locally, never sent to the
+  // agent. `/new` opens + focuses a fresh tab; `/clear` wipes THIS tab's history
+  // (server checkpoint + transcript), keeping the tab. Returns true if handled.
+  function runClientSlash(name: string): boolean {
+    if (name === "new") {
+      chatStore.createSession();
+      textareaRef.current?.focus();
+      return true;
+    }
+    if (name === "clear" && session) {
+      void api.deleteChatSession(session.id, false).catch(() => {});
+      chatStore.updateMessages(session.id, []);
+      textareaRef.current?.focus();
+      return true;
+    }
+    return false;
+  }
+
   function completeCommand(cmd: SlashCommand) {
+    // A client command runs on pick; a server skill fills the draft to edit + send.
+    if (runClientSlash(cmd.name)) {
+      setDraft("");
+      setSlashIndex(0);
+      setSlashDismissed(true);
+      return;
+    }
     setDraft(`/${cmd.name} `);
     setSlashIndex(0);
     setSlashDismissed(true); // a space follows, so it would close anyway
@@ -447,6 +478,8 @@ function ChatSessionSlot({
     if (!session || !canSend) return;
     const text = draft.trim();
     setDraft("");
+    // Deterministic client-side slash commands (ADR 0057) — handled locally, not sent.
+    if (text.startsWith("/") && runClientSlash(text.slice(1).trim())) return;
     // Native-vision images ride the turn as multimodal parts; pipeline attachments
     // contribute a prepended context block.
     const nativeImgs = attachments.filter((a) => a.status === "ready" && a.native && a.b64);

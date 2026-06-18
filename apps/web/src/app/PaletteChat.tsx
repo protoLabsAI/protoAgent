@@ -1,8 +1,8 @@
 // ADR 0057 — the command-palette chat. A COMPACT version of the main chat that
 // renders at full fidelity (markdown + streaming tool cards + reasoning + components)
 // by reusing the same renderers, and drives `api.streamChat` directly with full
-// handlers. Store-free: a single local message accumulator (no chat-store / sessions /
-// steering / HITL — those are ChatSurface-specific). An ephemeral context per open.
+// handlers. ONE preserved thread per agent (stable contextId + persisted transcript,
+// see paletteChatStore) — `/clear` wipes it (transcript + server checkpoint).
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Conversation, Message, PromptInput, Reasoning } from "@protolabsai/ui/ai";
@@ -12,7 +12,8 @@ import { ChatComponent } from "../chat/ChatComponent";
 import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
-import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text styles
+import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
+import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
 // Upsert a streaming tool event onto a message's toolCalls (mirrors ChatSurface's
 // onToolCall): start → a running card (nested under the last open `task`); end → flip
@@ -36,8 +37,7 @@ function upsertTool(message: ChatMessage, evt: ToolEvent): ChatMessage {
   return { ...message, toolCalls: calls };
 }
 
-// Finalize a completed turn — no tool can still be "running" (a tool_end racing the
-// terminal `done` would otherwise spin forever). Mirrors ChatSurface's onDone.
+// Finalize a completed turn — no tool can still be "running" (mirrors onDone).
 function finalize(message: ChatMessage): ChatMessage {
   const now = Date.now();
   const toolCalls = message.toolCalls?.map((c) =>
@@ -48,22 +48,28 @@ function finalize(message: ChatMessage): ChatMessage {
   return { ...message, status: message.status === "error" ? "error" : "done", toolCalls };
 }
 
+// Deterministic, client-side. `/clear` wipes the thread; typed or picked from the menu.
+const SLASH = [{ name: "clear", description: "Wipe this chat + its history" }];
+
 export function PaletteChat({ agentName }: { agentName: string }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [boot] = useState(loadPaletteThread); // run once
+  const [messages, setMessages] = useState<ChatMessage[]>(boot.messages);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const sessionRef = useRef("");
+  const contextRef = useRef(boot.contextId); // stable A2A contextId (= thread_id server-side)
 
-  // Focus the composer on open AND after each turn settles (streaming → false), so you
-  // never have to click/tab back. (The effect runs once the field is re-enabled.)
+  // Focus the composer on open AND after each turn settles (streaming → false).
   useEffect(() => {
     if (!streaming) inputRef.current?.focus();
   }, [streaming]);
   useEffect(() => () => abortRef.current?.abort(), []);
+  // Preserve the thread (debounced) — survives close/reopen and reload.
+  useEffect(() => {
+    savePaletteThread({ contextId: contextRef.current, messages });
+  }, [messages]);
 
-  // Mutate the in-progress (last) assistant message.
   const update = (fn: (m: ChatMessage) => ChatMessage) =>
     setMessages((ms) => {
       if (!ms.length) return ms;
@@ -72,12 +78,22 @@ export function PaletteChat({ agentName }: { agentName: string }) {
       return next;
     });
 
+  // `/clear` — wipe the server checkpoint for the current thread (no attachments on a
+  // palette chat, so the full retire is harmless) + start a fresh local thread.
+  const clearThread = () => {
+    void api.deleteChatSession(contextRef.current, false).catch(() => {});
+    contextRef.current = freshPaletteThread().contextId;
+    setMessages([]);
+    setDraft("");
+    inputRef.current?.focus();
+  };
+
   const send = async (raw: string) => {
     const content = raw.trim();
     if (!content || streaming) return;
-    // Fresh ephemeral context on the first turn of this open chat.
-    if (messages.every((m) => m.role !== "user")) {
-      sessionRef.current = `palette-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (content === "/clear") {
+      clearThread();
+      return;
     }
     setMessages((ms) => [
       ...ms,
@@ -88,13 +104,12 @@ export function PaletteChat({ agentName }: { agentName: string }) {
     setStreaming(true);
     const controller = new AbortController();
     abortRef.current = controller;
-    // Inherit the active tab's model so the palette talks to the same model.
     const snap = chatStore.getSnapshot();
     const model = snap.sessions.find((s) => s.id === snap.currentSessionId)?.model;
     try {
       await api.streamChat(
         content,
-        sessionRef.current,
+        contextRef.current,
         {
           signal: controller.signal,
           onText: (t, append) => update((m) => ({ ...m, content: append ? m.content + t : t })),
@@ -121,12 +136,20 @@ export function PaletteChat({ agentName }: { agentName: string }) {
   const empty = messages.length === 0;
   const last = messages.length - 1;
 
+  // Minimal slash menu — `/clear` hint while the draft starts with "/".
+  const slashMatches = draft.startsWith("/")
+    ? SLASH.filter((c) => c.name.startsWith(draft.slice(1).toLowerCase()))
+    : [];
+  const runSlash = (name: string) => {
+    if (name === "clear") clearThread();
+  };
+
   return (
     <div className="palette-chat" style={{ display: "flex", flexDirection: "column", height: 440, minHeight: 0 }}>
       <Conversation style={{ flex: 1, minHeight: 0, padding: "8px 8px 0" }}>
         {empty ? (
           <Message role="assistant">
-            <span style={{ color: "var(--pl-color-fg-muted)" }}>Ask {agentName} anything — a quick scratch chat.</span>
+            <span style={{ color: "var(--pl-color-fg-muted)" }}>Ask {agentName} anything. /clear wipes this thread.</span>
           </Message>
         ) : null}
         {messages.map((m, i) => {
@@ -158,7 +181,27 @@ export function PaletteChat({ agentName }: { agentName: string }) {
         onSubmit={() => (streaming ? stop() : send(draft))}
         loading={streaming}
         inputRef={inputRef}
-        placeholder={`Message ${agentName}…`}
+        placeholder={`Message ${agentName}…  (/clear)`}
+        overlay={
+          slashMatches.length ? (
+            <div className="slash-menu">
+              {slashMatches.map((c) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  className="slash-item"
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // keep focus; run before blur
+                    runSlash(c.name);
+                  }}
+                >
+                  <span className="slash-item__label">/{c.name}</span>
+                  <span className="slash-item__desc">{c.description}</span>
+                </button>
+              ))}
+            </div>
+          ) : null
+        }
       />
     </div>
   );

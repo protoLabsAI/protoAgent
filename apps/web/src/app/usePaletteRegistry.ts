@@ -131,29 +131,32 @@ export function usePaletteRegistry(
   const navSig = views.map((v) => `${v.id} ${v.title}`).join("|");
   const inlineSig = inlineViews.map((v) => `${v.id} ${v.url} ${v.title}`).join("|");
 
-  // Register inline plugin views as DS pluginViews (the morph targets).
+  // Views: inline plugin morph targets + the chat view. (View order doesn't affect the
+  // command-list order.)
   useEffect(() => {
-    if (inlineViews.length === 0) return;
-    return registry.registerViews(
-      inlineViews.map((v) =>
-        pluginView({
-          id: v.id,
-          title: v.title,
-          url: v.url,
-          theme: v.theme,
-          token: v.token,
-          sandbox: v.sandbox,
-          height: 460,
-        }),
-      ),
+    const vs: PaletteView[] = inlineViews.map((v) =>
+      pluginView({
+        id: v.id,
+        title: v.title,
+        url: v.url,
+        theme: v.theme,
+        token: v.token,
+        sandbox: v.sandbox,
+        height: 460,
+      }),
     );
+    if (chat) vs.push(chat.view);
+    if (vs.length === 0) return;
+    return registry.registerViews(vs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inlineSig, registry]);
+  }, [inlineSig, chat, registry]);
 
-  // Nav commands — an inline view's command MORPHS the palette into its iframe
-  // (`enter`, stays open); everything else navigates and closes.
+  // Commands, registered TOGETHER in a fixed order so SURFACES stay at the TOP of the
+  // list even when the nav set re-registers as plugins load (re-registering a command
+  // group re-appends it to the end — so registering them separately would sink the nav
+  // group below deep-links/chat). Order: surfaces → deep-links → chat.
   useEffect(() => {
-    const cmds: Command[] = views.map((v) => {
+    const nav: Command[] = views.map((v) => {
       const inline = inlineIds.has(v.id);
       return {
         id: `nav:${v.id}`,
@@ -170,37 +173,31 @@ export function usePaletteRegistry(
             },
       };
     });
-    return registry.registerCommands(cmds, { source: SURFACES });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, registry]);
-
-  useEffect(() => registry.registerCommands(deepLinkCommands(), { source: ACTIONS }), [registry]);
-
-  // Inline chat with the focused agent — ⌘K → morph the palette into a chat that
-  // streams turns via api.streamChat (an ephemeral context per open; see paletteChat).
-  // The DS chat view focuses its composer on open, so it's type-ready immediately.
-  useEffect(() => {
-    if (!chat) return;
-    const offView = registry.registerViews([chat.view]);
-    const offCmd = registry.registerCommands(
-      [
-        {
-          id: "chat",
-          label: `Chat with ${chat.name}`,
-          hint: "ask the agent",
-          icon: chat.icon,
-          group: "Agents",
-          keywords: ["chat", "ask", "talk", "agent"],
-          run: (c) => c.enter("chat"),
-        },
-      ],
-      { source: AGENTS },
-    );
+    const offNav = registry.registerCommands(nav, { source: SURFACES });
+    const offLinks = registry.registerCommands(deepLinkCommands(), { source: ACTIONS });
+    const offChat = chat
+      ? registry.registerCommands(
+          [
+            {
+              id: "chat",
+              label: `Chat with ${chat.name}`,
+              hint: "ask the agent",
+              icon: chat.icon,
+              group: "Agents",
+              keywords: ["chat", "ask", "talk", "agent"],
+              run: (c) => c.enter("chat"),
+            },
+          ],
+          { source: AGENTS },
+        )
+      : undefined;
     return () => {
-      offView();
-      offCmd();
+      offNav();
+      offLinks();
+      offChat?.();
     };
-  }, [registry, chat]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navSig, inlineSig, chat, registry]);
 
   return registry;
 }
