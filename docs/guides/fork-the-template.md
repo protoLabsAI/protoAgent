@@ -55,10 +55,11 @@ beads tools.
 (Editing `tools/lg_tools.py::get_all_tools()` directly still works, but it's a
 core edit that conflicts on every upstream re-sync — prefer config + plugins.)
 
-The bundled **Discord** and **Google** integrations are first-party *plugins*
-(`plugins/discord`, `plugins/google`). Turn either off — surface, routes, and
-tools — with `plugins: { disabled: [discord] }` / `[google]`, no directory
-delete, no core edit. Same `plugins.disabled` knob drops any bundled plugin.
+The bundled **Discord** integration is a first-party *plugin* (`plugins/discord`).
+Turn it off — surface, routes, and tools — with `plugins: { disabled: [discord] }`,
+no directory delete, no core edit. The same `plugins.disabled` knob drops any
+bundled plugin; integrations like Google and Slack install as external plugins
+from their own repos.
 
 See the [starter tools reference](/reference/starter-tools) for the shapes of the shipped ones.
 

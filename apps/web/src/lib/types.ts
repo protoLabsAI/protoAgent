@@ -426,12 +426,6 @@ export type AgentConfig = {
     bot_token?: string;
     admin_ids: string[];
   };
-  google?: {
-    enabled: boolean;
-    client_id: string;
-    client_secret?: string;
-    tz: string;
-  };
   runtime: {
     autostart_on_boot: boolean;
   };

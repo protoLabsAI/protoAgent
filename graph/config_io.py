@@ -112,9 +112,8 @@ SECRETS_YAML_PATH = _config_scope(_BASE_SECRETS_YAML)
 SECRET_PATHS: tuple[tuple[str, str], ...] = (
     ("model", "api_key"),
     ("auth", "token"),
-    # The discord (`discord.bot_token`) and google (`google.client_secret`)
-    # secrets are now declared by their plugin manifests and added dynamically
-    # via secret_paths() (ADR 0019).
+    # Plugin secrets (e.g. discord's `discord.bot_token`) are declared by their
+    # plugin manifests and added dynamically via secret_paths() (ADR 0019).
 )
 
 

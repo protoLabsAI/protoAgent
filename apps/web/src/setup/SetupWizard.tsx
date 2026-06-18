@@ -366,9 +366,9 @@ export function SetupWizard({
             project_dir: projectPath.trim(),
             allowed_dirs: allowedDirs,
           },
-          // Discord + Google are managed in System → Settings, not the setup
-          // wizard. They're omitted here so finishing setup leaves any existing
-          // integration config untouched (the YAML write merges, never replaces).
+          // Discord is managed in System → Settings, not the setup wizard. It's
+          // omitted here so finishing setup leaves any existing integration config
+          // untouched (the YAML write merges, never replaces).
         },
         state.soul,
       );

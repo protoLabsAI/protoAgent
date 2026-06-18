@@ -169,18 +169,18 @@ The server binds host `0.0.0.0`; the port is set by the `--port` CLI flag
 handler, REST API, metrics, and agent card are all served on that one port.
 (There is no `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT` env — those are not read.)
 
-## Plugin env fallbacks (Discord / Google)
+## Plugin env fallbacks (Discord)
 
-The bundled Discord and Google plugins prefer in-app config (Settings / wizard),
-but read env as a Docker/headless fallback:
+The bundled Discord plugin prefers in-app config (Settings / wizard), but reads
+env as a Docker/headless fallback:
 
 | Variable | What |
 |---|---|
 | `DISCORD_BOT_TOKEN` | Bot token for the `discord` plugin's gateway (fallback for `discord.bot_token`). |
 | `DISCORD_ADMIN_IDS` | Comma-separated Discord user IDs allowed to DM the bot (fallback for `discord.admin_ids`). |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth client for the `google` plugin's managed MCP server. |
-| `GOOGLE_TOKEN_PATH` | Where the cached OAuth token lives (set by the server to the per-user config dir). |
-| `GOOGLE_TZ` | IANA timezone for "today" day bounds (fallback for `google.tz`). |
+
+> External plugins (e.g. a Google or Slack integration installed from its own repo)
+> declare and read their own env fallbacks — see that plugin's docs.
 
 ## Peer federation (A2A peer-consult tools)
 
@@ -207,6 +207,5 @@ Action, which reads them from the job env.
 
 The core runtime stays credential-light, but some bundled tools/plugins do read
 their own env: the GitHub read tools authenticate via `GITHUB_TOKEN` / `GH_TOKEN`
-(or `gh`'s ambient login), and the Discord/Google plugins read the fallbacks
-above. Any *other* tool-specific credentials belong in your fork's tools/plugins,
+(or `gh`'s ambient login), and the Discord plugin reads the fallbacks above. Any *other* tool-specific credentials belong in your fork's tools/plugins,
 not the shared runtime.

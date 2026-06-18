@@ -224,12 +224,6 @@ CONFIG_TO_DICT_GOLDEN = {
         "eval_model": "",
         "max_iterations": 8,
     },
-    "google": {
-        "client_id": "",
-        "client_secret": "",
-        "enabled": False,
-        "tz": "",
-    },
     "identity": {
         "name": "protoagent",
         "operator": "",
@@ -345,8 +339,8 @@ CONFIG_TO_DICT_GOLDEN = {
 # leaf to the dataclass attr it feeds, (b) excludes attrs config_to_dict
 # does NOT emit. The round-trip test asserts equality over exactly this set.
 #
-# discord/google are plugin sections -> they round-trip via plugin_config,
-# checked separately. identity.org has no dataclass attr (getattr default).
+# discord is a plugin section -> it round-trips via plugin_config, checked
+# separately. identity.org has no dataclass attr (getattr default).
 EMITTED_ATTRS = {
     # model.*
     "model_provider",
@@ -537,7 +531,7 @@ def test_round_trip_preserves_emitted_fields(tmp_path):
             continue
         assert round_tripped == original, f"{attr}: {round_tripped!r} != {original!r}"
 
-    # discord/google are plugin sections — they round-trip via plugin_config.
+    # discord is a plugin section — it round-trips via plugin_config.
     assert reloaded.plugin_config == cfg.plugin_config
 
 

@@ -102,7 +102,6 @@ export default defineConfig({
             { text: "Build a communication plugin", link: "/guides/communication-plugins" },
             { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
             { text: "Discord surface", link: "/guides/discord" },
-            { text: "Google (Gmail + Calendar)", link: "/guides/google" },
           ],
         },
         {

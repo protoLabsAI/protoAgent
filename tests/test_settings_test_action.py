@@ -30,9 +30,9 @@ def test_manifest_parses_test_flag(tmp_path):
 
 
 def test_comms_manifests_declare_test():
-    # telegram + slack use the generic Test button via the chat_surface wirer;
-    # Discord keeps its bespoke button (with a guide link), so it doesn't set test.
-    for p in ("telegram", "slack"):
+    # telegram uses the generic Test button via the chat_surface wirer; Discord
+    # keeps its bespoke button (with a guide link), so it doesn't set test.
+    for p in ("telegram",):
         m = yaml.safe_load(Path(f"plugins/{p}/protoagent.plugin.yaml").read_text())
         assert m.get("test") is True, p
 

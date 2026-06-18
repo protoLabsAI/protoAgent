@@ -7,11 +7,13 @@ verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
 Plugins run **in-process** with the agent's privileges, so they're **disabled by
 default** and you opt in explicitly — only enable plugins you trust.
 
-> The first-party **Discord**, **Google**, and **GitHub** integrations ship as
-> plugins (`plugins/discord/`, `plugins/google/`, `plugins/github/`) — Discord/Google
-> are on by default (disable with `plugins: { disabled: [discord] }`); GitHub is
-> opt-in (`plugins: { enabled: [github] }`). To drive a **CLI coding agent over
-> ACP**, enable the **delegates** plugin and declare an `acp` delegate — see
+> The first-party **Discord**, **Telegram**, and **GitHub** integrations ship as
+> plugins (`plugins/discord/`, `plugins/telegram/`, `plugins/github/`) — Discord is
+> on by default (disable with `plugins: { disabled: [discord] }`); Telegram and
+> GitHub are opt-in (`plugins: { enabled: [telegram] }`). Integrations like
+> **Google** Gmail/Calendar and **Slack** install as external plugins from their
+> own repos. To drive a **CLI coding agent over ACP**, enable the **delegates**
+> plugin and declare an `acp` delegate — see
 > [CLI coding agents over ACP](/guides/coding-agents).
 
 > **Trust model.** This is the in-process / trusted model (matching Hermes): an
@@ -87,7 +89,7 @@ def register(registry):
     registry.register_router(_build_router())        # → GET /plugins/<id>/...
     registry.register_surface(_start, stop=_stop, name="my-surface")
     registry.register_subagent(_build_subagent())    # delegate via task/task_batch
-    registry.register_mcp_server(_server_factory)    # a managed MCP server (e.g. Google)
+    registry.register_mcp_server(_server_factory)    # a managed MCP server (e.g. an OAuth-gated surface)
     registry.register_thread_id_resolver(lambda md, sid: f"proj:{md.get('project')}:{sid}")
 ```
 
@@ -100,8 +102,8 @@ transport, command, args, env, ...}`) when the server should run, or `None` when
 it shouldn't (off / not yet connected) — so the server comes and goes with config.
 A returned entry whose `name` matches a configured server replaces it, and a
 factory that returns an entry activates MCP even when `mcp.enabled` is off. This
-is how the first-party **Google** plugin ships its OAuth-gated Gmail/Calendar
-server (`plugins/google/`). For a frozen desktop build (no `python` on PATH),
+is how an integration plugin can ship an OAuth-gated MCP surface (e.g. a Google
+Gmail/Calendar external plugin) without a core edit. For a frozen desktop build (no `python` on PATH),
 launch via `args: ["--mcp-plugin", "<id>"]` and expose a `mcp_main()` in your
 plugin module — the binary re-invokes itself and the shim runs it.
 
@@ -150,7 +152,7 @@ before any surface starts; guard for `None`):
 - `host.config()` — the live `LangGraphConfig` (current resolved values, incl.
   `plugin_config`), so a route reads fresh config instead of a load-time snapshot.
 - `host.apply_settings(patch)` — persist a nested config patch + reload once
-  (heavy — call via `asyncio.to_thread`). Lets a route apply config (e.g. Google's
+  (heavy — call via `asyncio.to_thread`). Lets a route apply config (e.g. an OAuth
   Connect flow flips `enabled` and reloads).
 
 ```python
@@ -260,8 +262,8 @@ def register(registry):
 ```
 
 A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`,
-…) is ignored. (`discord` and `google` are **not** reserved — they're claimed by
-the first-party Discord/Google plugins.)
+…) is ignored. (`discord` is **not** reserved — it's claimed by the first-party
+Discord plugin; plugins, bundled or external, claim their own sections the same way.)
 The **wizard step** is not yet plugin-contributable (Settings + a docs link
 suffice for now).
 
@@ -270,8 +272,9 @@ config reload reuses them, so changing `plugins.enabled` needs a restart
 (ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and
 never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
-`GET /api/runtime/status`. The `plugins/discord` and `plugins/google` first-party
-plugins are worked examples of a surface + route and a managed MCP server + route.
+`GET /api/runtime/status`. The `plugins/discord` (surface + route) and
+`plugins/telegram` (the reference `ChatAdapter`) first-party plugins are worked
+examples of the contribution types.
 
 ## Where plugins live & how they're enabled
 

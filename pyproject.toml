@@ -6,9 +6,9 @@ requires-python = ">=3.11"
 
 # Single source of truth for runtime deps. The `requirements-*.txt` files are
 # kept as readable, tier-scoped references (ADR 0010) but no longer the source
-# of truth: `requirements.txt` is a thin `-e .[google]` that routes pip
-# through this table, and `uv sync` reads it directly. Keep these lists in
-# step with requirements-core/google.txt — CI installs via pyproject.
+# of truth: `requirements.txt` is a thin `-e .` that routes pip through this
+# table, and `uv sync` reads it directly. Keep these lists in step with
+# requirements-core.txt — CI installs via pyproject.
 #
 # core (the `none`/`console` tiers) — mirrors requirements-core.txt:
 dependencies = [
@@ -42,16 +42,6 @@ dependencies = [
   "pypdf>=4.0",                  # PDF → text
   "youtube-transcript-api>=1.0", # YouTube captions → text (1.x instance API)
 ]
-
-[project.optional-dependencies]
-# google MCP surface (Slice 2) — mirrors requirements-google.txt:
-google = [
-  "mcp>=1.2",
-  "google-api-python-client>=2.120",
-  "google-auth-oauthlib>=1.2",
-]
-# convenience: everything (core + google), what `requirements.txt` installs:
-all = ["protoagent[google]"]
 
 [build-system]
 # Needed so `pip install -e .` / `uv pip install -e .` can build the project and
