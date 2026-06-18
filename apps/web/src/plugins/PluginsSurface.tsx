@@ -3,15 +3,16 @@ import "../settings/plugins.css";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
-import { useState } from "react";
-import { Download, ExternalLink, Github, Loader2, RefreshCw, Search, Store } from "lucide-react";
+import { Suspense, useState } from "react";
+import { Download, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
+import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { StagePanel } from "../app/ErrorBoundary";
 import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
 import { PluginsSection } from "../settings/PluginsSection";
+import { SettingsCategory } from "../settings/SettingsCategory";
 import { PluginFreshness } from "./PluginFreshness";
 import { catalogCategories, filterCatalog } from "./catalog";
 import { api } from "../lib/api";
@@ -40,6 +41,7 @@ function PluginRow({
   onToggle,
   onUpdate,
   updating,
+  configurable,
 }: {
   p: Plugin;
   update?: PluginUpdate;
@@ -47,44 +49,67 @@ function PluginRow({
   onToggle: (p: Plugin) => void;
   onUpdate: (p: Plugin) => void;
   updating: boolean;
+  configurable: boolean;
 }) {
   const on = p.enabled;
+  const [open, setOpen] = useState(false);
   return (
-    <div className="subagent-row" key={p.id}>
-      <div>
-        <strong>
-          {p.name}
-          {p.version ? <span className="muted"> v{p.version}</span> : null}
-          <PluginFreshness update={update} />
-        </strong>
-        <span>{contributionsLabel(p)}</span>
-      </div>
-      <div className="plugin-row-actions">
-        <StatusPill
-          label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
-          tone={p.loaded ? "success" : p.error ? "error" : "muted"}
-        />
-        {update?.behind ? (
+    <div className="plugin-row-wrap">
+      <div className="subagent-row">
+        <div>
+          <strong>
+            {p.name}
+            {p.version ? <span className="muted"> v{p.version}</span> : null}
+            <PluginFreshness update={update} />
+          </strong>
+          <span>{contributionsLabel(p)}</span>
+        </div>
+        <div className="plugin-row-actions">
+          <StatusPill
+            label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
+            tone={p.loaded ? "success" : p.error ? "error" : "muted"}
+          />
+          {update?.behind ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={updating}
+              onClick={() => onUpdate(p)}
+              title={`Update ${p.name} to the latest commit`}
+            >
+              {updating ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Update
+            </Button>
+          ) : null}
+          {/* Config folded in (ADR 0059, bd-23a.3) — expand to edit this plugin's settings inline. */}
+          {configurable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              aria-expanded={open}
+              onClick={() => setOpen((o) => !o)}
+              title={`Configure ${p.name}`}
+            >
+              <Settings2 size={14} /> Configure
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
-            disabled={updating}
-            onClick={() => onUpdate(p)}
-            title={`Update ${p.name} to the latest commit`}
+            disabled={busy}
+            onClick={() => onToggle(p)}
+            title={on ? `Disable ${p.name}` : `Enable ${p.name}`}
           >
-            {updating ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Update
+            {busy ? <Loader2 size={14} className="spin" /> : on ? "Disable" : "Enable"}
           </Button>
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => onToggle(p)}
-          title={on ? `Disable ${p.name}` : `Enable ${p.name}`}
-        >
-          {busy ? <Loader2 size={14} className="spin" /> : on ? "Disable" : "Enable"}
-        </Button>
+        </div>
       </div>
+      {configurable && open ? (
+        <div className="plugin-row-config">
+          <Suspense fallback={<p className="muted">Loading settings…</p>}>
+            <SettingsCategory category="Plugins" pluginId={p.id} title={`${p.name} settings`} />
+          </Suspense>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -138,6 +163,14 @@ function LocalTab() {
   const updatingId = update.isPending ? update.variables?.id : undefined;
   const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
+  // Which plugins have settings to fold in (ADR 0059) — the schema's plugin-tagged
+  // groups. Non-suspense + cached, so it never blocks the list and dedupes with the
+  // SettingsCategory the Configure expander renders.
+  const schema = useQuery(settingsSchemaQuery());
+  const configurableIds = new Set(
+    (schema.data?.groups ?? []).filter((g) => g.plugin_id).map((g) => g.plugin_id as string),
+  );
+
   const plugins = runtime.plugins ?? [];
   const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
@@ -153,13 +186,13 @@ function LocalTab() {
             {loaded.length ? (
               <>
                 <p className="panel-kicker">Loaded <span className="muted">· {loaded.length}</span></p>
-                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} />)}</div>
+                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} configurable={configurableIds.has(p.id)} />)}</div>
               </>
             ) : null}
             {disabled.length ? (
               <>
                 <p className="panel-kicker">Disabled <span className="muted">· {disabled.length}</span></p>
-                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} />)}</div>
+                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} configurable={configurableIds.has(p.id)} />)}</div>
               </>
             ) : null}
           </>

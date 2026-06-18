@@ -2,7 +2,8 @@ import { Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Palette, Pl
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { PanelHeader, SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { Button } from "@protolabsai/ui/primitives";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
 import { McpPanel } from "../app/McpPanel";
@@ -64,16 +65,33 @@ const WORKSPACE_SECTIONS: Section[] = [
     id: "plugins",
     label: "Plugins",
     icon: Puzzle,
-    render: () => (
-      <SettingsCategoryPanel
-        category="Plugins"
-        title="Plugin settings"
-        emptyHint="Plugins with their own view manage settings there. Anything view-less shows up here."
-        footer={<DelegatesSection />}
-      />
-    ),
+    render: () => <PluginSettingsHome />,
   },
 ];
+
+// ADR 0059 — per-plugin config now lives with each plugin in the Plugins panel
+// (Installed → Configure). This section points there + keeps the delegate registry
+// (which has its own richer UI, not generic settings fields).
+function PluginSettingsHome() {
+  const setSurface = useUI((s) => s.setSurface);
+  const setPluginsTab = useUI((s) => s.setPluginsTab);
+  const openPlugins = () => { setPluginsTab("local"); setSurface("plugins"); };
+  return (
+    <>
+      <PanelHeader title="Plugins" kicker="manage + configure in the Plugins panel" />
+      <div className="stage-body">
+        <p className="muted" style={{ marginTop: 0 }}>
+          Browse, install, enable, and <strong>configure</strong> plugins in the dedicated Plugins panel —
+          each installed plugin's settings now live with it (Installed → <strong>Configure</strong>).
+        </p>
+        <Button variant="primary" type="button" onClick={openPlugins}>
+          <Puzzle size={15} /> Open Plugins
+        </Button>
+        <DelegatesSection />
+      </div>
+    </>
+  );
+}
 
 export const SETTINGS_HOMES: Home[] = [
   { id: "host", label: "Global", icon: HardDrive, sections: HOST_SECTIONS },

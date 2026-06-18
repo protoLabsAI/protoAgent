@@ -843,7 +843,9 @@ def build_schema(
             if not dk.startswith(f"{sch.section}."):
                 dk = f"{sch.section}.{dk}"
             entry["depends_on"] = {**dep, "key": dk}
-        groups.setdefault(group, {"section": group, "fields": []})["fields"].append(entry)
+        # `plugin_id` tags the group with its owning plugin so the console can fold
+        # the config into that plugin's row in the Plugins surface (ADR 0059, bd-23a.3).
+        groups.setdefault(group, {"section": group, "fields": [], "plugin_id": getattr(sch, "plugin_id", None)})["fields"].append(entry)
         # A plugin that declares `test: true` (ADR 0029) gets a generic console
         # "Test connection" button posting the group's fields to its test route.
         if getattr(sch, "test", False):

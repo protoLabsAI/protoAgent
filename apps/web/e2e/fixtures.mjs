@@ -222,6 +222,16 @@ export const SETTINGS_SCHEMA = [
       { key: "runtime.autostart_on_boot", label: "Autostart on boot", type: "bool", section: "Runtime", restart: true, description: "Install/remove the boot LaunchAgent.", options: [], value: false, default: false, scope: "agent", source: "agent" },
     ],
   },
+  // A plugin-contributed group (ADR 0019/0059) — tagged with plugin_id so the
+  // Plugins surface folds it into the "Demo Plugin" Installed row (Configure).
+  {
+    section: "Demo Plugin",
+    category: "Plugins",
+    plugin_id: "demo",
+    fields: [
+      { key: "demo.greeting", label: "Greeting", type: "string", section: "Demo Plugin", restart: false, description: "Shown by the demo tool.", options: [], value: "hello", default: "hello", scope: "agent", source: "agent" },
+    ],
+  },
 ];
 
 /** restart_required for a flat updates payload, per the schema. */

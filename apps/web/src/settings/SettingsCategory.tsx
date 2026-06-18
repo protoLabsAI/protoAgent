@@ -99,6 +99,9 @@ export function SettingsCategory({
   // leaf. The default (false) is the per-agent Settings — every field, with the
   // inherited-vs-overridden badge + reset-to-inherited affordance.
   hostLayer = false,
+  // ADR 0059 — when set, render ONLY this plugin's group (its config folded into the
+  // plugin's row in the Plugins surface). Pairs with category="Plugins".
+  pluginId,
 }: {
   category: string;
   categories?: string[];
@@ -106,6 +109,7 @@ export function SettingsCategory({
   emptyHint?: string;
   footer?: ReactNode;
   hostLayer?: boolean;
+  pluginId?: string;
 }) {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(settingsSchemaQuery());
@@ -113,13 +117,14 @@ export function SettingsCategory({
     // One category, or (host-defaults view) several aggregated into one panel.
     const inScope = (g: SettingsGroup) =>
       categories ? categories.includes(g.category || "Plugins") : (g.category || "Plugins") === category;
-    const selected = data.groups.filter(inScope);
+    let selected = data.groups.filter(inScope);
+    if (pluginId) selected = selected.filter((g) => g.plugin_id === pluginId);  // one plugin's group (ADR 0059)
     if (!hostLayer) return selected;
     // Host-defaults view: keep only the host-scoped fields, dropping now-empty groups.
     return selected
       .map((g) => ({ ...g, fields: g.fields.filter((f) => f.scope === "host") }))
       .filter((g) => g.fields.length);
-  }, [data.groups, category, categories, hostLayer]);
+  }, [data.groups, category, categories, hostLayer, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState("");
   const dirtyKeys = Object.keys(dirty);
@@ -216,6 +221,40 @@ export function SettingsCategory({
 
   const discard = () => { setDirty({}); setStatus(""); };
 
+  // The fields + Test/Connect for one group — rendered inside an AccordionItem in the
+  // full Settings view, or flat (no accordion) when folded into a plugin's row (ADR 0059).
+  const renderGroupBody = (group: SettingsGroup) => (
+    <>
+      {group.fields.filter(isVisible).map((field) => (
+        <SettingRow
+          key={field.key}
+          field={field}
+          dirty={field.key in dirty}
+          value={field.key in dirty ? dirty[field.key] : field.value}
+          showInheritance={!hostLayer}
+          onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
+          onReset={() => reset.mutate([field.key])}
+          resetting={reset.isPending}
+        />
+      ))}
+      {hasDiscord && group.section === "Discord" ? (
+        <div className="settings-group-actions">
+          <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
+          <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
+        </div>
+      ) : null}
+      {group.test ? (
+        <div className="settings-group-actions">
+          <TestConnectionButton
+            onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
+            pending={testGroup.isPending && testingSection === group.section}
+            disabled={save.isPending}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <>
       <PanelHeader
@@ -273,54 +312,35 @@ export function SettingsCategory({
             you're editing. Collapsed by default — the operator expands groups as
             needed. A dirty-count badge rides the title so a collapsed group still
             announces it has unsaved edits. */}
-        <Accordion className="settings-groups">
-        {groups.map((group) => {
-          const visibleFields = group.fields.filter(isVisible);   // #963
-          const groupDirty = visibleFields.reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
-          return (
-          <AccordionItem
-            key={group.section}
-            title={
-              <span className="settings-group-head">
-                {group.section}
-                {groupDirty ? <Badge status="warning">{groupDirty} unsaved</Badge> : null}
-              </span>
-            }
-          >
-            {visibleFields.map((field) => (
-              <SettingRow
-                key={field.key}
-                field={field}
-                dirty={field.key in dirty}
-                value={field.key in dirty ? dirty[field.key] : field.value}
-                onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
-                // The host-defaults view edits the host layer directly — every field IS the
-                // shared default there, so the per-agent inheritance badge would be noise. The
-                // per-agent view shows the badge + reset affordance.
-                showInheritance={!hostLayer}
-                onReset={() => reset.mutate([field.key])}
-                resetting={reset.isPending}
-              />
+        {/* Folded into a plugin's row (ADR 0059): render the single group's fields
+            FLAT — the row's Configure toggle is the disclosure, so a nested accordion
+            would be a second click. The full Settings view keeps the collapsible groups. */}
+        {pluginId ? (
+          <div className="settings-groups">
+            {groups.map((group) => (
+              <div className="settings-flat-group" key={group.section}>{renderGroupBody(group)}</div>
             ))}
-            {hasDiscord && group.section === "Discord" ? (
-              <div className="settings-group-actions">
-                <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
-                <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
-              </div>
-            ) : null}
-            {group.test ? (
-              <div className="settings-group-actions">
-                <TestConnectionButton
-                  onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
-                  pending={testGroup.isPending && testingSection === group.section}
-                  disabled={save.isPending}
-                />
-              </div>
-            ) : null}
-          </AccordionItem>
-          );
-        })}
-        </Accordion>
+          </div>
+        ) : (
+          <Accordion className="settings-groups">
+            {groups.map((group) => {
+              const groupDirty = group.fields.filter(isVisible).reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
+              return (
+                <AccordionItem
+                  key={group.section}
+                  title={
+                    <span className="settings-group-head">
+                      {group.section}
+                      {groupDirty ? <Badge status="warning">{groupDirty} unsaved</Badge> : null}
+                    </span>
+                  }
+                >
+                  {renderGroupBody(group)}
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
+        )}
         {footer}
       </div>
     </>

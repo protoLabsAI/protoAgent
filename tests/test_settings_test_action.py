@@ -39,6 +39,7 @@ def test_comms_manifests_declare_test():
 
 def test_build_schema_adds_test_endpoint(monkeypatch):
     class FakeSch:
+        plugin_id = "telegram"
         section = "telegram"
         defaults = {"bot_token": ""}
         test = True
@@ -48,3 +49,19 @@ def test_build_schema_adds_test_endpoint(monkeypatch):
     groups = ss.build_schema(LangGraphConfig())
     g = next(g for g in groups if g["section"] == "Telegram")
     assert g.get("test") == {"endpoint": "/api/config/test-telegram"}
+
+
+def test_build_schema_tags_plugin_group_with_plugin_id(monkeypatch):
+    # ADR 0059 — plugin groups carry plugin_id so the Plugins surface can fold the
+    # config into that plugin's Installed row.
+    class FakeSch:
+        plugin_id = "discord"
+        section = "discord"
+        defaults = {"admin_ids": []}
+        test = False
+
+    spec = {"key": "admin_ids", "type": "string_list", "label": "Admins"}
+    monkeypatch.setattr(ss, "_plugin_field_specs", lambda: [(FakeSch(), "discord.admin_ids", "admin_ids", spec)])
+    groups = ss.build_schema(LangGraphConfig())
+    g = next(g for g in groups if g["section"] == "Discord")
+    assert g.get("plugin_id") == "discord"

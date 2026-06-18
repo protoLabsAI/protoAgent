@@ -223,6 +223,9 @@ export type SettingsGroup = {
   category?: string;
   fields: SettingsField[];
   test?: { endpoint: string };  // ADR 0029 — generic "Test connection" button
+  // The owning plugin id for a plugin-contributed group (ADR 0059) — lets the
+  // Plugins surface fold this group into that plugin's Installed row.
+  plugin_id?: string;
 };
 
 export type WorkflowSummary = {

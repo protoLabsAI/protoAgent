@@ -71,6 +71,13 @@ test("plugins section: Installed / Discover / Install URL tabs", async ({ page }
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
+  // Config folded in (ADR 0059, bd-23a.3) — Demo Plugin has a settings group, so its
+  // row exposes Configure → its fields render inline.
+  const demoRow = page.locator(".plugin-row-wrap", { hasText: "Demo Plugin" });
+  await demoRow.getByRole("button", { name: "Configure" }).click();
+  // Fields render flat (no nested accordion) — reachable immediately.
+  await expect(demoRow.locator('.plugin-row-config .setting-row[data-key="demo.greeting"]')).toBeVisible();
+
   // Discover tab — the in-app official-plugin directory (ADR 0059): cards + search.
   await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
   await expect(page.getByLabel("Search plugins")).toBeVisible();

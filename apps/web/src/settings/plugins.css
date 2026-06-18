@@ -76,3 +76,8 @@
 .plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
 .plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted); text-decoration: none; }
 .plugin-card-repo:hover { color: var(--fg-secondary); }
+
+/* Config folded into the Installed plugin rows (ADR 0059) — the Configure expander. */
+.plugin-row-wrap { display: flex; flex-direction: column; }
+.plugin-row-config { margin: 0 0 10px; padding: 4px 12px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--bg-raised) 55%, transparent); }
+.settings-flat-group { display: flex; flex-direction: column; }
