@@ -178,6 +178,14 @@ def register_config_routes(app) -> None:
 
         return {"name": name, "content": read_soul_preset(name)}
 
+    @app.get("/api/acp-agents")
+    async def _api_acp_agents():
+        """The canonical ACP coding-agent catalog (id, label, command, args) — one source
+        for the Delegates picker, the setup wizard, and the agent_runtime options."""
+        from runtime.acp_agents import acp_agent_catalog
+
+        return {"agents": acp_agent_catalog()}
+
     # --- Generic settings (schema-driven UI) --------------------------------
     @app.get("/api/settings/schema")
     async def _api_settings_schema():

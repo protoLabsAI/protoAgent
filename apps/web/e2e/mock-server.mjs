@@ -142,6 +142,13 @@ function handleApiGet(pathname, fleet = FLEET) {
       return { groups: SETTINGS_SCHEMA };
     case "/api/delegate-types":
       return DELEGATE_TYPES;
+    case "/api/acp-agents":
+      return {
+        agents: [
+          { id: "proto", label: "proto (protoCLI)", command: "proto", args: ["--acp"] },
+          { id: "claude", label: "Claude Code", command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"] },
+        ],
+      };
     case "/api/delegates":
       return DELEGATES;
     case "/api/plugins/installed":

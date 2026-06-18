@@ -447,3 +447,16 @@ async def test_eviction_during_get_acp_runtime(monkeypatch):
     # The requested runtime was created and returned.
     assert rt is chat._ACP_RUNTIMES["new-thread"]
     assert "new-thread" in chat._ACP_RUNTIME_ACCESS
+
+
+def test_adapters_derived_from_canonical_catalog():
+    # Single source: the launch specs + the settings options all come from acp_agents.
+    from graph.settings_schema import ACP_MODEL_OPTIONS
+    from runtime.acp_agents import acp_agent_catalog, acp_runtime_options
+    from runtime.acp_runtime import _ACP_ADAPTERS
+
+    catalog_ids = {a["id"] for a in acp_agent_catalog()}
+    assert set(_ACP_ADAPTERS) == catalog_ids
+    assert ACP_MODEL_OPTIONS == acp_runtime_options() == [f"acp:{a['id']}" for a in acp_agent_catalog()]
+    # claude maps to the current adapter (the deprecated @zed-industries one is gone).
+    assert "@agentclientprotocol/claude-agent-acp" in _ACP_ADAPTERS["claude"]["args"]

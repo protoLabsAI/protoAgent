@@ -1,4 +1,5 @@
 import type {
+  AcpAgent,
   ActivityHistory,
   AgentConfig,
   Archetype,
@@ -1279,6 +1280,10 @@ export const api = {
   // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.
   delegateTypes() {
     return request<{ types: DelegateTypeSpec[] }>("/api/delegate-types");
+  },
+  // The canonical ACP coding-agent catalog (single source — runtime/acp_agents.py).
+  acpAgents() {
+    return request<{ agents: AcpAgent[] }>("/api/acp-agents");
   },
   delegates() {
     return request<{ delegates: DelegateView[] }>("/api/delegates");

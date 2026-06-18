@@ -21,7 +21,7 @@ import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { lucideIcon } from "../lib/lucideIcon";
-import { archetypesQuery } from "../lib/queries";
+import { acpAgentsQuery, archetypesQuery } from "../lib/queries";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 
 // Four steps: intro, then "who the agent is" (name + persona), then "how it thinks"
@@ -37,14 +37,6 @@ type Step = "welcome" | "agent" | "brain" | "finish";
 //     tune later in Settings.
 const steps: Step[] = ["welcome", "agent", "brain", "finish"];
 
-// CLI coding agents that can be the runtime over ACP (ADR 0033) — agent_runtime: acp:<id>.
-const ACP_AGENTS: { id: string; label: string; hint: string }[] = [
-  { id: "proto", label: "proto", hint: "protoLabs CLI — proto --acp" },
-  { id: "codex", label: "Codex", hint: "OpenAI Codex — npx @zed-industries/codex-acp" },
-  { id: "claude", label: "Claude", hint: "Claude agent — npx @agentclientprotocol/claude-agent-acp" },
-  { id: "copilot", label: "Copilot", hint: "GitHub Copilot CLI — copilot --acp" },
-  { id: "opencode", label: "OpenCode", hint: "OpenCode — opencode acp" },
-];
 
 type WizardState = {
   agentName: string;
@@ -165,6 +157,7 @@ export function SetupWizard({
   // source the fleet new-agent picker uses. Each carries a base SOUL the persona
   // step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
+  const acpAgentList = useQuery(acpAgentsQuery()).data?.agents ?? [];
   const [models, setModels] = useState<string[]>([]);
   // Flips true once the initial config load finishes. The persona seed waits on it
   // so the async load() (which replaces the whole state) can't clobber the seed.
@@ -304,7 +297,9 @@ export function SetupWizard({
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
   const personaLabel = pickedArchetype?.label ?? state.archetype;
   const pickedBundle = pickedArchetype?.bundle ?? null;
-  const acpAgentLabel = ACP_AGENTS.find((a) => a.id === state.acpAgent)?.label ?? state.acpAgent;
+  const acpAgent = acpAgentList.find((a) => a.id === state.acpAgent);
+  const acpAgentLabel = acpAgent?.label ?? state.acpAgent;
+  const acpLaunchHint = acpAgent ? `${acpAgent.command} ${acpAgent.args.join(" ")}`.trim() : state.acpAgent;
 
   async function finishSetup() {
     setBusy(true);
@@ -498,7 +493,7 @@ export function SetupWizard({
                   label="Coding agent"
                   hint={
                     <>
-                      {ACP_AGENTS.find((a) => a.id === state.acpAgent)?.hint} — runtime set to{" "}
+                      Launches <code>{acpLaunchHint}</code> — runtime set to{" "}
                       <code>acp:{state.acpAgent}</code>. No gateway key needed; a fallback model for native delegates can be set later in Settings.
                     </>
                   }
@@ -507,7 +502,7 @@ export function SetupWizard({
                     value={state.acpAgent}
                     onChange={(event) => update({ acpAgent: event.target.value })}
                   >
-                    {ACP_AGENTS.map((a) => (
+                    {acpAgentList.map((a) => (
                       <option key={a.id} value={a.id}>{a.label}</option>
                     ))}
                   </Select>

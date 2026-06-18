@@ -18,6 +18,7 @@ export const queryKeys = {
   runtime: ["runtime"] as const,
   delegates: ["delegates"] as const,
   delegateTypes: ["delegates", "types"] as const,
+  acpAgents: ["acp", "agents"] as const,
   installedPlugins: ["plugins", "installed"] as const,
   pluginUpdates: ["plugins", "updates"] as const,
   fleet: ["fleet"] as const,
@@ -182,5 +183,13 @@ export const delegateTypesQuery = () =>
   queryOptions({
     queryKey: queryKeys.delegateTypes,
     queryFn: () => api.delegateTypes(),
+    retry: false,
+  });
+
+export const acpAgentsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.acpAgents,
+    queryFn: () => api.acpAgents(),
+    staleTime: Infinity, // a static catalog — fetch once
     retry: false,
   });

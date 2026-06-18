@@ -12,7 +12,7 @@ import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { delegatesQuery, delegateTypesQuery, queryKeys } from "../lib/queries";
+import { acpAgentsQuery, delegatesQuery, delegateTypesQuery, queryKeys } from "../lib/queries";
 import type { DelegateFieldSpec, DelegateProbe, DelegateTypeSpec, DelegateView } from "../lib/types";
 
 // Delegates panel (ADR 0025, PR3) — manage the agents & endpoints the agent can
@@ -190,10 +190,13 @@ function DelegateForm({
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
   const [vals, setVals] = useState<Record<string, string>>(() => seed(initial, spec));
+  const [preset, setPreset] = useState(""); // ACP coding-agent preset (fills command/args)
   const [probe, setProbe] = useState<DelegateProbe | null>(null);
   const [err, setErr] = useState("");
 
   const current = useMemo(() => spec.find((s) => s.type === type), [spec, type]);
+  // The canonical ACP coding-agent catalog (single source — /api/acp-agents).
+  const acpAgents = useQuery({ ...acpAgentsQuery(), enabled: type === "acp" });
 
   function buildEntry(): Record<string, unknown> {
     const entry: Record<string, unknown> = { name, type, description };
@@ -233,7 +236,7 @@ function DelegateForm({
               key={s.type}
               type="button"
               className={`delegate-type-tile${type === s.type ? " active" : ""}`}
-              onClick={() => { setType(s.type); setProbe(null); }}
+              onClick={() => { setType(s.type); setProbe(null); setPreset(""); }}
             >
               <span className="delegate-type-tile-label">{s.label}</span>
               <span className="delegate-type-tile-blurb">{s.blurb}</span>
@@ -250,6 +253,31 @@ function DelegateForm({
         <span>Description</span>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What it's for (the model reads this to pick it)." />
       </label>
+
+      {type === "acp" && (acpAgents.data?.agents?.length ?? 0) > 0 ? (
+        <label className="field">
+          <span>Coding agent</span>
+          <Select
+            id="acp-preset"
+            value={preset}
+            onChange={(e) => {
+              const id = e.target.value;
+              setPreset(id);
+              const a = acpAgents.data?.agents.find((x) => x.id === id);
+              if (a) setVals((m) => ({ ...m, command: a.command, args: a.args.join(" ") }));
+            }}
+          >
+            <option value="">Custom / pick a preset…</option>
+            {acpAgents.data?.agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.label}</option>
+            ))}
+          </Select>
+          <small className="delegate-field-help">
+            Pre-fills the launch fields below for a known coding agent. Claude Code needs the
+            adapter (<code>npm i -g @agentclientprotocol/claude-agent-acp</code>).
+          </small>
+        </label>
+      ) : null}
 
       {(current?.fields ?? []).map((f) => (
         <DelegateField

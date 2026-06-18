@@ -541,6 +541,9 @@ export type DelegateFieldSpec = {
   default?: unknown;
 };
 export type DelegateTypeSpec = { type: string; label: string; blurb: string; fields: DelegateFieldSpec[] };
+// A known ACP coding agent from the canonical backend catalog (/api/acp-agents) — the
+// single source for the Delegates picker + the setup wizard's runtime choices.
+export type AcpAgent = { id: string; label: string; command: string; args: string[] };
 export type DelegateProbe = { ok: boolean | null; latency_ms?: number; error?: string; detail?: string; checked_at?: number };
 export type DelegateView = {
   name: string;
