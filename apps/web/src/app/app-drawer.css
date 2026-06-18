@@ -83,6 +83,38 @@
   color: var(--fg-muted);
 }
 
+/* Footer: version badge + "built by protoLabs.studio" branding (pinned to the bottom). */
+.app-drawer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.app-drawer-version {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.app-drawer-built {
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.app-drawer-built strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.app-drawer-built:hover,
+.app-drawer-built:hover strong {
+  color: var(--pl-color-brand-lavender);
+}
+
 /* The mobile "more" is unified into THIS drawer (the header hamburger), so hide the
    DS bottom-bar's own "More" button — the bottom bar stays the quick-bar only. The
    .pl-mobilenav only mounts under the mobile breakpoint, so no media query is needed. */

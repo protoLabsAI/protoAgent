@@ -16,6 +16,11 @@ test("the header hamburger opens the app drawer → Global settings overlay", as
   await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "Docs" })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "GitHub" })).toBeVisible();
+  // Footer: version badge + protoLabs.studio branding link.
+  await expect(drawer.getByText("v9.9.9", { exact: true })).toBeVisible();
+  const built = drawer.getByRole("link", { name: /built by protoLabs\.studio/i });
+  await expect(built).toBeVisible();
+  await expect(built).toHaveAttribute("href", "https://protolabs.studio");
 
   await drawer.getByRole("button", { name: "Global settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Global settings" });

@@ -22,6 +22,7 @@ export function AppDrawer({
   activeSurface,
   onSelectSurface,
   onOpenGlobal,
+  version,
 }: {
   open: boolean;
   onClose: () => void;
@@ -30,6 +31,7 @@ export function AppDrawer({
   activeSurface: string;
   onSelectSurface: (id: string) => void;
   onOpenGlobal: (section?: string) => void;
+  version?: string;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -111,6 +113,19 @@ export function AppDrawer({
             </a>
           </section>
         </div>
+        <footer className="app-drawer-foot">
+          {version ? <span className="app-drawer-version">v{version}</span> : null}
+          {/* P4: the wordmark is sacred — protoLabs.studio, exactly. */}
+          <a
+            className="app-drawer-built"
+            href="https://protolabs.studio"
+            target="_blank"
+            rel="noreferrer"
+            onClick={onClose}
+          >
+            built by <strong>protoLabs.studio</strong>
+          </a>
+        </footer>
       </aside>
     </div>
   );
