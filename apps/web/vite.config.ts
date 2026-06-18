@@ -25,6 +25,12 @@ export default defineConfig(({ mode }) => {
         // (ADR 0026). In prod the backend serves /app + /plugins together; the dev
         // server must proxy them too, else a plugin view 404s on Vite's /app/ base.
         "/plugins": apiBase,
+        // The DS plugin-kit (CSS + JS) the backend serves same-origin at /_ds/… A plugin
+        // iframe base-splits to "" and requests root-absolute /_ds/plugin-kit.{css,js}; it
+        // bypasses Vite's /app/ base, so without this proxy it 404s on the dev server and
+        // EVERY plugin view loses its theme handshake (prod is fine — the backend serves
+        // /_ds from the built dist). Mirrors /plugins above.
+        "/_ds": apiBase,
         "/healthz": apiBase,
       },
     },
