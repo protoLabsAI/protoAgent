@@ -62,9 +62,9 @@ A **plugin** can contribute a managed MCP server (you never hand-edit
 `mcp.servers[]` entry, or `None` when the server shouldn't run (off / not yet
 connected), so the server comes and goes with config. A plugin entry whose `name`
 matches a configured server **replaces** it, and a plugin contributing a server
-**activates MCP even when `mcp.enabled` is off**. The first-party **Google**
-plugin (`plugins/google/`) is the worked example: an OAuth-gated Gmail/Calendar
-server, launched frozen via `--mcp-plugin google`. See [Plugins](./plugins.md).
+**activates MCP even when `mcp.enabled` is off**. An OAuth-gated Gmail/Calendar
+integration (e.g. a Google external plugin, launched frozen via the `--mcp-plugin`
+shim) is the canonical worked example. See [Plugins](./plugins.md).
 
 ## Keeping tools out of context (allowlist + lazy connect)
 

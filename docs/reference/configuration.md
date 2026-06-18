@@ -465,21 +465,16 @@ Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `discord`, `g
 
 ### Plugin-declared config sections (ADR 0019)
 
-A plugin can **claim a top-level config section** and declare its keys/secrets/Settings in its manifest (`config_section` / `config` defaults / `secrets` / `settings`). The section is resolved (manifest defaults ⊕ YAML ⊕ secrets overlay) into `config.plugin_config["<section>"]` and surfaced as a Settings group — with **no** edit to `config.py` / `config_io.py` / `settings_schema.py`. This is where the **Discord** and **Google** config now lives:
+A plugin can **claim a top-level config section** and declare its keys/secrets/Settings in its manifest (`config_section` / `config` defaults / `secrets` / `settings`). The section is resolved (manifest defaults ⊕ YAML ⊕ secrets overlay) into `config.plugin_config["<section>"]` and surfaced as a Settings group — with **no** edit to `config.py` / `config_io.py` / `settings_schema.py`. This is where the **Discord** config now lives:
 
 ```yaml
 discord:                 # claimed by plugins/discord/ — NOT a core config field
   enabled: false
   admin_ids: []
   # bot_token → secrets.yaml (plugin-declared secret)
-google:                  # claimed by plugins/google/
-  enabled: false
-  client_id: ""
-  tz: ""
-  # client_secret → secrets.yaml
 ```
 
-A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`, …) is ignored. Plugin secrets (e.g. `discord.bot_token`, `google.client_secret`) route to `secrets.yaml` dynamically — see **Secrets** above.
+A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`, …) is ignored. Plugin secrets (e.g. `discord.bot_token`) route to `secrets.yaml` dynamically — see **Secrets** above. External plugins (e.g. a Google or Slack integration installed from its own repo) claim their own sections the same way.
 
 ## Scheduler
 
