@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.50.0",
+    "date": "2026-06-18",
+    "changes": [
+      "Skills CRUD in the console."
+    ]
+  },
+  {
     "version": "v0.49.1",
     "date": "2026-06-18",
     "changes": []

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-06-18
+
 ### Added
 - **Skills CRUD in the console.** Settings ▸ Workspace ▸ Skills now lets you
   **author, edit, and delete** skills — not just browse, delete, and promote.
