@@ -96,13 +96,21 @@ function deepLinkCommands(): Command[] {
       ui().setSurface("plugins");
       ui().setPluginsTab("local");
     }),
-    link("box:telemetry", "Box: Telemetry", ["box", "telemetry", "metrics"], () => {
-      ui().setSurface("box");
-      ui().setBoxTab("telemetry");
+    // Box folded into Settings ▸ Global (ADR 0048 follow-up) — land on the section.
+    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], () => {
+      ui().setSurface("settings");
+      ui().setSettingsScope("host");
+      ui().setSettingsSection("fleet");
     }),
-    link("box:commons", "Box: Commons", ["box", "commons", "shared"], () => {
-      ui().setSurface("box");
-      ui().setBoxTab("commons");
+    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box"], () => {
+      ui().setSurface("settings");
+      ui().setSettingsScope("host");
+      ui().setSettingsSection("telemetry");
+    }),
+    link("box:commons", "Settings: Commons", ["commons", "shared", "skills", "box"], () => {
+      ui().setSurface("settings");
+      ui().setSettingsScope("host");
+      ui().setSettingsSection("commons");
     }),
   ];
 }

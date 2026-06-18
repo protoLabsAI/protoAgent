@@ -41,18 +41,21 @@ test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
     "Global",
     "Workspace",
   ]);
-  // The Global home is the box-shared cascade ONLY now (PR4) — Fleet/Telemetry/Commons
-  // moved out to the Box rail surface.
+  // The Global home = the box-shared cascade + the box-level ops (Fleet/Telemetry/
+  // Commons folded back in from the old Box rail surface).
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Overview",
     "Configuration",
+    "Fleet",
+    "Telemetry",
+    "Commons",
   ]);
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
   // The Workspace home → the focused agent's makeup + settings (ADR 0048 fold).
   await tab(page, "Workspace");
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Identity",
-    "Settings",
+    "Model & Routing",
     "Tools",
     "MCP",
     "Subagents",
@@ -69,24 +72,27 @@ test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
-test("Box surface hosts Fleet · Telemetry · Commons (moved out of Settings, PR4)", async ({ page }) => {
+test("Global home hosts Fleet · Telemetry · Commons (folded in from the Box surface)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
-  const tabs = page.locator(".pl-tabs").getByRole("tab");
-  await expect(tabs).toHaveCount(3);
-  expect(await tabs.allTextContents()).toEqual(["Fleet", "Telemetry", "Commons"]);
-  // Fleet is the default Box tab.
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Global", exact: true }).click();
+  const sidenav = page.locator(".pl-sidenav");
+  for (const s of ["Overview", "Configuration", "Fleet", "Telemetry", "Commons"]) {
+    await expect(sidenav.getByRole("tab", { name: s, exact: true })).toBeVisible();
+  }
+  // Fleet section shows the agents panel.
+  await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  // …and the moved Telemetry dashboard renders under its tab.
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Telemetry", exact: true }).click();
+  // …and Telemetry renders the dashboard.
+  await sidenav.getByRole("tab", { name: "Telemetry", exact: true }).click();
   await expect(page.getByTestId("telemetry-surface")).toBeVisible();
 });
 
-test("Workspace ▸ Settings shows the agent's Model + Routing fields", async ({ page }) => {
+test("Workspace ▸ Model & Routing shows the agent's Model + Routing fields", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
   // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
@@ -101,7 +107,7 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
   await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
@@ -129,7 +135,7 @@ test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ pag
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
   await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
   // model.name inherits from the host layer.
   await expect(

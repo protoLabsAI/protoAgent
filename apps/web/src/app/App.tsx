@@ -4,7 +4,6 @@ import {
   BookMarked,
   Database,
   BookOpen,
-  Box,
   Boxes,
   CalendarClock,
   CircleAlert,
@@ -110,7 +109,6 @@ import { StatusPill } from "./StatusPill";
 import { GoalsPanel } from "./GoalsPanel";
 import { BeadsPanel } from "./BeadsPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { BoxSurface } from "./BoxSurface";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
@@ -232,7 +230,8 @@ export function App() {
   const chatStreaming = useAnyChatStreaming();
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
-  const setBoxTab = useUI((s) => s.setBoxTab);
+  const setSettingsScope = useUI((s) => s.setSettingsScope);
+  const setSettingsSection = useUI((s) => s.setSettingsSection);
   const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const activityTab = useUI((s) => s.activityTab);
   const setActivityTab = useUI((s) => s.setActivityTab);
@@ -489,8 +488,6 @@ export function App() {
     { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
     // "agent" folded into Settings ▸ Workspace (ADR 0048 S-C) — no longer a rail surface.
     { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
-    // Box (PR4) — box-level ops (Fleet · Telemetry · Commons), moved out of Settings ▸ Global.
-    { id: "box", label: "Box", icon: <Box size={18} /> },
     { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
     { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
     { id: "goals", label: "Goals", icon: <Target size={18} /> },
@@ -604,10 +601,8 @@ export function App() {
         return <KnowledgeStore onError={setError} />;
       case "settings":
         // SettingsSurface owns its own two-level nav (home + section, ADR 0048).
+        // Box (Fleet/Telemetry/Commons) is folded into its Global home now.
         return <SettingsSurface />;
-      // Box (PR4) — owns its own Fleet/Telemetry/Commons sub-tabs.
-      case "box":
-        return <BoxSurface />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       case "beads":
@@ -790,10 +785,11 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
-              // Fleet now lives under the Box surface (PR4); ask the panel to open
-              // the new-agent picker on mount.
-              setSurface("box");
-              setBoxTab("fleet");
+              // Fleet lives under Settings ▸ Global ▸ Fleet now; open it + ask the
+              // panel to pop the new-agent picker on mount.
+              setSurface("settings");
+              setSettingsScope("host");
+              setSettingsSection("fleet");
               setFleetStartNew(true);
             }}
           />

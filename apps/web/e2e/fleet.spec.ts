@@ -18,11 +18,16 @@ test.beforeEach(async ({ page }, testInfo) => {
   await page.request.post("/api/__test__/fleet/reset", { headers: { "x-e2e-fleet": scope } });
 });
 
+async function openFleet(page) {
+  // Fleet lives under Settings ▸ Global now (folded in from the old Box rail surface).
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Global", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+}
+
 async function openAgents(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  // Fleet lives under the Box rail surface now (PR4), not Settings.
-  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
+  await openFleet(page);
 }
 
 test("Agents tab lists the host (this instance) + peers, host active by default", async ({ page }) => {
@@ -154,8 +159,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   await expect(page.getByTestId("fleet-switcher")).toContainText("remy");
 
   // Unregister from the fleet manager (the remote agent itself is untouched).
-  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Fleet", exact: true }).click();
+  await openFleet(page);
   await page.locator(".fleet-row", { hasText: "remy" })
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);

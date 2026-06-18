@@ -39,7 +39,7 @@ const _layoutStorage = createJSONStorage(() => ({
 // The "agent" surface folded into Settings ▸ Workspace (ADR 0048 S-C); Knowledge is
 // now store-only (its Memory settings live in Settings ▸ Workspace ▸ Memory).
 export type Surface =
-  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "box" | "settings" | (string & {});
+  | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "settings" | (string & {});
 // `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
 // (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
 export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<viewId>
@@ -50,9 +50,6 @@ export type PluginsTab = "local" | "market";
 // "schedule" joins thread/inbox here (#1075): cron is a trigger, so timed turns are a
 // tab of the Activity surface rather than a standalone rail surface.
 export type ActivityTab = "thread" | "inbox" | "schedule";
-// The Box surface (PR4 / ADR 0048 §5) — box-level operations that aren't per-agent
-// cascade settings, moved out of the Settings ▸ Global home into their own rail surface.
-export type BoxTab = "fleet" | "telemetry" | "commons";
 // Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
 // section sub-nav. `settingsScope` picks the home; `settingsSection` the active
 // section within it (a free string so each home owns its own section ids).
@@ -62,7 +59,6 @@ type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
   pluginsTab: PluginsTab;
-  boxTab: BoxTab;
   settingsScope: SettingsScope;
   settingsSection: string;
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
@@ -97,7 +93,6 @@ type UIState = {
   setSurface: (s: Surface) => void;
   setRightPanel: (p: RightPanel) => void;
   setPluginsTab: (t: PluginsTab) => void;
-  setBoxTab: (t: BoxTab) => void;
   setSettingsScope: (s: SettingsScope) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
@@ -130,24 +125,15 @@ export function migrateUiState(persisted: unknown): unknown {
       knowledgeTab: _drop4,
       ...rest
     } = persisted as Record<string, unknown>;
-    // v4 (PR4): the "Box" rail surface (Fleet/Telemetry/Commons moved out of Settings ▸
-    // Global). Inject it into a persisted railOrder that predates it — just before
-    // "settings" — so an existing drag-and-drop layout gains the surface instead of
-    // silently hiding it. (A fresh store seeds it via the default railOrder above.)
-    const ro = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
-    if (ro && Array.isArray(ro.left) && !ro.left.includes("box") && !(ro.right ?? []).includes("box")) {
-      const left = ro.left.slice();
-      const at = left.indexOf("settings");
-      left.splice(at >= 0 ? at : left.length, 0, "box");
-      rest.railOrder = { ...ro, left };
-    }
-    // v5 (#1075): "schedule" folded into the Activity surface (a tab), so prune it from a
-    // persisted railOrder — otherwise it lingers as a dead rail id with no surface metadata.
+    // Prune dead rail ids from a persisted railOrder (they'd linger with no surface
+    // metadata): "schedule" folded into Activity (#1075); "box" folded into Settings ▸
+    // Global (Fleet/Telemetry/Commons are sections there now).
     const ro2 = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
     if (ro2 && (Array.isArray(ro2.left) || Array.isArray(ro2.right))) {
+      const live = (x: string) => x !== "schedule" && x !== "box";
       rest.railOrder = {
-        left: (ro2.left ?? []).filter((x) => x !== "schedule"),
-        right: (ro2.right ?? []).filter((x) => x !== "schedule"),
+        left: (ro2.left ?? []).filter(live),
+        right: (ro2.right ?? []).filter(live),
       };
     }
     // v6 (bottom dock): railOrder gains a `bottom` dock — add the empty array to a
@@ -167,7 +153,6 @@ export const useUI = create<UIState>()(
       surface: "chat",
       rightPanel: "beads",
       pluginsTab: "local",
-      boxTab: "fleet",
       settingsScope: "host" as SettingsScope,
       settingsSection: "overview",
       fleetStartNew: false,
@@ -179,7 +164,7 @@ export const useUI = create<UIState>()(
       bottomHeight: 240,
       bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "activity", "studio", "knowledge", "plugins", "box", "settings"],
+        left: ["chat", "activity", "studio", "knowledge", "plugins", "settings"],
         right: ["beads", "goals"],
         bottom: [],
       },
@@ -228,7 +213,6 @@ export const useUI = create<UIState>()(
       setSurface: (surface) => set({ surface }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setPluginsTab: (pluginsTab) => set({ pluginsTab }),
-      setBoxTab: (boxTab) => set({ boxTab }),
       // Switching home resets to that home's first section (its own default lives in
       // SettingsSurface); callers that want a specific section call setSettingsSection too.
       setSettingsScope: (settingsScope) => set({ settingsScope }),
