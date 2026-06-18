@@ -1,6 +1,6 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { ArrowUpToLine, BookMarked, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -461,12 +461,6 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
           ? `Remove "${pending.name}"${pending.origin === "user" ? " — its SKILL.md is deleted too." : "."}`
           : undefined}
       </ConfirmDialog>
-
-      <p className="playbook-foot">
-        <BookMarked size={13} /> Skills (`SKILL.md`) are methodology the agent <strong>retrieves</strong> into
-        context — they advise, they don't run. For deterministic step-by-step runs
-        across subagents, see <strong>Studio → Workflows</strong>.
-      </p>
     </section>
   );
 }
