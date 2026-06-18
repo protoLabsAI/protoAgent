@@ -10,7 +10,7 @@ import { Markdown } from "../chat/LazyMarkdown";
 import { ToolCalls } from "../chat/ToolCalls";
 import { ChatComponent } from "../chat/ChatComponent";
 import { api } from "../lib/api";
-import { chatStore } from "../chat/chat-store";
+import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
@@ -105,7 +105,8 @@ export function PaletteChat({ agentName }: { agentName: string }) {
     const controller = new AbortController();
     abortRef.current = controller;
     const snap = chatStore.getSnapshot();
-    const model = snap.sessions.find((s) => s.id === snap.currentSessionId)?.model;
+    const sess = snap.sessions.find((s) => s.id === snap.currentSessionId);
+    const model = sess?.model;
     try {
       await api.streamChat(
         content,
@@ -119,7 +120,7 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           onFailed: (detail) => update((m) => ({ ...m, content: m.content || `⚠️ ${detail}`, status: "error" })),
           onDone: () => update(finalize),
         },
-        { model },
+        { model, reasoningEffort: effectiveReasoningEffort(sess) },
       );
     } catch (e) {
       if (!controller.signal.aborted) {

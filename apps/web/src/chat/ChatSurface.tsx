@@ -28,7 +28,13 @@ import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
-import { chatStore, useChatState } from "./chat-store";
+import {
+  chatStore,
+  useChatState,
+  DEFAULT_REASONING_EFFORT,
+  REASONING_EFFORTS,
+  effectiveReasoningEffort,
+} from "./chat-store";
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
@@ -320,6 +326,7 @@ function ChatSessionSlot({
     const all: SlashCommand[] = [
       { name: "new", description: "Open a new chat tab" },
       { name: "clear", description: "Clear this chat's history" },
+      { name: "effort", description: "Reasoning effort: low | medium | high | max | off" },
       ...commands,
     ];
     return all.filter(
@@ -330,18 +337,48 @@ function ChatSessionSlot({
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
 
+  // A local-only system note in the thread (e.g. /effort confirmation) — never sent
+  // to the agent, just shown so the operator sees the command took effect.
+  function noteToThread(text: string) {
+    if (!session) return;
+    const base = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? [];
+    chatStore.updateMessages(session.id, [
+      ...base,
+      { id: messageId(), role: "assistant", content: text, createdAt: Date.now(), status: "done" },
+    ]);
+  }
+
   // Deterministic client-side commands (ADR 0057) — run locally, never sent to the
   // agent. `/new` opens + focuses a fresh tab; `/clear` wipes THIS tab's history
-  // (server checkpoint + transcript), keeping the tab. Returns true if handled.
-  function runClientSlash(name: string): boolean {
-    if (name === "new") {
+  // (server checkpoint + transcript), keeping the tab; `/effort <level>` sets this
+  // tab's reasoning effort (sent with each turn). `raw` is the command minus the
+  // slash, e.g. "effort high". Returns true if handled.
+  function runClientSlash(raw: string): boolean {
+    const [verb, ...rest] = raw.split(/\s+/);
+    const arg = rest.join(" ").trim().toLowerCase();
+    if (verb === "new") {
       chatStore.createSession();
       textareaRef.current?.focus();
       return true;
     }
-    if (name === "clear" && session) {
+    if (verb === "clear" && session) {
       void api.deleteChatSession(session.id, false).catch(() => {});
       chatStore.updateMessages(session.id, []);
+      textareaRef.current?.focus();
+      return true;
+    }
+    if (verb === "effort" && session) {
+      const opts = REASONING_EFFORTS.join(" · ");
+      if (!arg) {
+        const cur = session.reasoningEffort ?? `${DEFAULT_REASONING_EFFORT} (default)`;
+        noteToThread(`⚙ Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
+      } else if ((REASONING_EFFORTS as readonly string[]).includes(arg)) {
+        chatStore.setSessionReasoningEffort(session.id, arg);
+        const off = arg === "off" ? " — reasoning disabled for this tab" : "";
+        noteToThread(`⚙ Reasoning effort set to **${arg}**${off}. Applies to the next message.`);
+      } else {
+        noteToThread(`⚠ Unknown effort \`${arg}\`. Options: ${opts}.`);
+      }
       textareaRef.current?.focus();
       return true;
     }
@@ -885,7 +922,7 @@ function ChatSessionSlot({
             }),
           );
         },
-      }, { images: opts.images, model: session.model });
+      }, { images: opts.images, model: session.model, reasoningEffort: effectiveReasoningEffort(session) });
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
       void reconcileSteer();

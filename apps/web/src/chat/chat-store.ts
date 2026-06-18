@@ -14,7 +14,23 @@ export type ChatSession = {
   // Per-tab model override (gateway model id). Undefined → the configured
   // default. Sent with each turn so this tab talks to its own model.
   model?: string;
+  // Per-tab reasoning effort (the /effort command). Undefined → the default
+  // (DEFAULT_REASONING_EFFORT, auto-enabled); "off" → no reasoning this tab;
+  // else low|medium|high|max. Sent each turn so the tab reasons at its own level.
+  reasoningEffort?: string;
 };
+
+// Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
+// this level until the operator changes it with /effort. "off" disables it per-tab.
+export const DEFAULT_REASONING_EFFORT = "medium";
+export const REASONING_EFFORTS = ["off", "low", "medium", "high", "max"] as const;
+
+/** The effort to actually send for a tab: the tab's explicit pick, or the default.
+ *  "off" → undefined so the turn carries no effort (the model's own default). */
+export function effectiveReasoningEffort(session?: { reasoningEffort?: string } | null): string | undefined {
+  const e = session?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+  return e === "off" ? undefined : e;
+}
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
@@ -348,6 +364,17 @@ export const chatStore = {
       ...current,
       sessions: current.sessions.map((session) =>
         session.id === sessionId ? { ...session, model: model || undefined } : session,
+      ),
+    }));
+  },
+
+  // Per-tab reasoning effort (the /effort command). Empty string clears it (→ the
+  // default level on the next turn).
+  setSessionReasoningEffort(sessionId: string, effort: string) {
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? { ...session, reasoningEffort: effort || undefined } : session,
       ),
     }));
   },

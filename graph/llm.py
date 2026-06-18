@@ -88,14 +88,17 @@ def _build_llm_kwargs(config: LangGraphConfig) -> dict:
     return kwargs
 
 
-def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> ChatOpenAI:
+def create_llm(
+    config: LangGraphConfig, *, model_name: str | None = None, reasoning_effort: str | None = None
+) -> ChatOpenAI:
     """Create a LangChain ChatModel from config.
 
     Routes through the LiteLLM gateway which handles provider
     routing (Anthropic, OpenAI, vLLM, etc.) behind a single
     OpenAI-compatible endpoint. Pass ``model_name`` to build an instance
     for a different model on the same gateway (used for compaction /
-    fallback models).
+    fallback models). Pass ``reasoning_effort`` to override the config's
+    effort for THIS build (the per-turn /effort chat command).
     """
     # Explicit per-slot ACP override: an `acp:<agent>` model name (e.g. `aux_model: acp:claude`,
     # `goal.eval_model: acp:claude`, `compaction.model: acp:claude`, or a subagent's model) routes
@@ -126,6 +129,11 @@ def create_llm(config: LangGraphConfig, *, model_name: str | None = None) -> Cha
     kwargs = _build_llm_kwargs(config)
     if model_name:
         kwargs["model"] = model_name
+    # Per-turn reasoning-effort override (the /effort chat command). When the turn carries
+    # an explicit effort it wins over the config default for THIS build; the middleware
+    # caches per (model, effort) so the rebuild is paid once.
+    if reasoning_effort:
+        kwargs["reasoning_effort"] = reasoning_effort
     return ChatOpenAI(**kwargs)
 
 

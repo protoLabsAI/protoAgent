@@ -258,7 +258,9 @@ def _last_tool_text(result) -> str:
     return ""
 
 
-async def _run_turn_stream(message: str, session_id: str, config: dict, *, resume_value=None, images=None, model=None):
+async def _run_turn_stream(
+    message: str, session_id: str, config: dict, *, resume_value=None, images=None, model=None, reasoning_effort=None
+):
     """Run one graph turn over ``astream_events``.
 
     Yields the same ``(kind, payload)`` status/usage frames the A2A handler
@@ -294,9 +296,10 @@ async def _run_turn_stream(message: str, session_id: str, config: dict, *, resum
         else {
             "messages": _drain_background_messages(session_id) + [human],
             "session_id": session_id,
-            # Per-tab model override (ModelOverrideMiddleware reads it); omit the
-            # key when unset so the configured default applies.
+            # Per-tab model + reasoning-effort override (ModelOverrideMiddleware reads
+            # both); omit each key when unset so the configured default applies.
             **({"model": model} if model else {}),
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
         }
     )
     from observability import metrics
@@ -834,11 +837,12 @@ async def _chat_langgraph_stream(
                 "recursion_limit": 200,
             }
 
-            # Per-tab model override (the console puts the tab's chosen model in
-            # the A2A request metadata). Threaded into every turn this stream runs
-            # — initial, kicker, goal continuation — so the whole conversation
-            # stays on the tab's model. Unset → the configured default.
+            # Per-tab model + reasoning-effort override (the console puts the tab's chosen
+            # model + the /effort level in the A2A request metadata). Threaded into every
+            # turn this stream runs — initial, kicker, goal continuation — so the whole
+            # conversation stays on the tab's model/effort. Unset → the configured default.
             _model = ((request_metadata or {}).get("model") or "").strip() or None
+            _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
 
             # When a goal is already active, the whole turn is goal-driven —
             # suppress cross-session prior_sessions on the initial turn (and the
@@ -860,6 +864,7 @@ async def _chat_langgraph_stream(
                     resume_value=(message if resume else None),
                     images=images,
                     model=_model,
+                    reasoning_effort=_effort,
                 ):
                     if kind == "__raw__":
                         accumulated_raw = payload
@@ -893,7 +898,7 @@ async def _chat_langgraph_stream(
                 retry_raw = ""
                 with goal_turn(goal_active):
                     async for kind, payload in _run_turn_stream(
-                        DROPPED_SCRATCH_KICKER, session_id, config, model=_model
+                        DROPPED_SCRATCH_KICKER, session_id, config, model=_model, reasoning_effort=_effort
                     ):
                         if kind == "__raw__":
                             retry_raw = payload
@@ -940,7 +945,7 @@ async def _chat_langgraph_stream(
                     cont_raw = ""
                     with goal_turn():
                         async for kind, payload in _run_turn_stream(
-                            decision.message, session_id, cont_config, model=_model
+                            decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort
                         ):
                             if kind == "__raw__":
                                 cont_raw = payload
