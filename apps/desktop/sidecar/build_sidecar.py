@@ -43,6 +43,10 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     ("pyproject.toml", "."),
     ("config/langgraph-config.example.yaml", "config"),
     ("config/SOUL.md", "config"),
+    # The curated Discover directory (ADR 0059). The catalog route reads it from
+    # REPO_ROOT/config (→ _MEIPASS/config when frozen); without it the desktop app's
+    # Plugins ▸ Discover shows "0 official plugins" (every entry is unreachable).
+    ("config/plugin-catalog.json", "config"),
     ("config/soul-presets", "config/soul-presets"),
     ("static", "static"),
     # Bundled first-party plugins (ADR 0018/0019). Loaded by file path (importlib)
