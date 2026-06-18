@@ -197,7 +197,7 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 <div id="wrap">
   <div id="bar"><span id="status">Notes</span>
     <button id="toggle" class="pl-btn pl-btn--sm" type="button">Preview</button></div>
-  <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false"></textarea>
+  <textarea id="ed" placeholder="A shared note — you and the agent both write here." spellcheck="false" autofocus></textarea>
   <div id="pv"></div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
@@ -259,7 +259,7 @@ _QUICK_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 </style></head><body>
 <div id="wrap">
   <div id="bar"><span id="status">Quick note</span></div>
-  <textarea id="ed" placeholder="Jot — saves to the shared note." spellcheck="false"></textarea>
+  <textarea id="ed" placeholder="Jot — saves to the shared note." spellcheck="false" autofocus></textarea>
 </div>
 <script type="module">
   "use strict";

@@ -61,7 +61,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
@@ -117,6 +117,7 @@ import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { usePaletteRegistry } from "./usePaletteRegistry";
+import { makeChatTransport } from "./paletteChat";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -553,7 +554,20 @@ export function App() {
       token: authToken(),
       sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox",
     }));
-  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews);
+  // Inline chat with the focused agent (ADR 0057) — ⌘K → a quick chat that streams via
+  // api.streamChat (ephemeral context per open). Memoized so the transport (+ its
+  // session) is stable across renders; re-created only when the agent name changes.
+  const chatAgentName = brandName(runtime?.identity?.name);
+  const paletteChat = useMemo(
+    () => ({
+      name: chatAgentName,
+      transport: makeChatTransport(chatAgentName),
+      icon: <MessageSquare size={16} />,
+      greeting: `Ask ${chatAgentName} anything — a quick scratch chat (its own context).`,
+    }),
+    [chatAgentName],
+  );
+  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
   const [paletteOpen, setPaletteOpen] = useState(false);
   usePaletteHotkey(() => setPaletteOpen((o) => !o));
 

@@ -8,13 +8,23 @@
 // of navigating to its rail. (Plugin-declared `commands:` + dispatch are step 3b.)
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
-import { createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
-import type { Command, PaletteRegistry, PaletteSource } from "@protolabsai/ui/command-palette";
+import { chatView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
+import type { AgentTransport, Command, PaletteRegistry, PaletteSource } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View, ViewKind } from "../lib/viewRegistry";
 
 const SURFACES: PaletteSource = { id: "surfaces", label: "Surfaces" };
 const ACTIONS: PaletteSource = { id: "actions", label: "Actions" };
+const AGENTS: PaletteSource = { id: "agents", label: "Agents" };
+
+/** Optional inline chat with the focused agent (ADR 0057). App builds the transport
+ *  (it owns the agent name + the icon node); the adapter registers the view + command. */
+export type PaletteChat = {
+  name: string;
+  transport: AgentTransport;
+  icon?: ReactNode;
+  greeting?: ReactNode;
+};
 
 const GROUP: Record<ViewKind, string> = {
   surface: "Surfaces",
@@ -99,7 +109,11 @@ function deepLinkCommands(): Command[] {
 /** Build the palette registry from the resolved view list + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
-export function usePaletteRegistry(views: View[], inlineViews: InlinePluginView[] = []): PaletteRegistry {
+export function usePaletteRegistry(
+  views: View[],
+  inlineViews: InlinePluginView[] = [],
+  chat?: PaletteChat,
+): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
 
@@ -152,6 +166,32 @@ export function usePaletteRegistry(views: View[], inlineViews: InlinePluginView[
   }, [navSig, inlineSig, registry]);
 
   useEffect(() => registry.registerCommands(deepLinkCommands(), { source: ACTIONS }), [registry]);
+
+  // Inline chat with the focused agent — ⌘K → morph the palette into a chat that
+  // streams turns via api.streamChat (an ephemeral context per open; see paletteChat).
+  // The DS chat view focuses its composer on open, so it's type-ready immediately.
+  useEffect(() => {
+    if (!chat) return;
+    const offView = registry.registerViews([chatView({ title: chat.name })]);
+    const offCmd = registry.registerCommands(
+      [
+        {
+          id: "chat",
+          label: `Chat with ${chat.name}`,
+          hint: "ask the agent",
+          icon: chat.icon,
+          group: "Agents",
+          keywords: ["chat", "ask", "talk", "agent"],
+          run: (c) => c.enter("chat", { transport: chat.transport, greeting: chat.greeting }),
+        },
+      ],
+      { source: AGENTS },
+    );
+    return () => {
+      offView();
+      offCmd();
+    };
+  }, [registry, chat]);
 
   return registry;
 }
