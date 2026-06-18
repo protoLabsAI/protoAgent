@@ -4,7 +4,7 @@
 // handlers. ONE preserved thread per agent (stable contextId + persisted transcript,
 // see paletteChatStore) — `/clear` wipes it (transcript + server checkpoint).
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { BookOpen, Loader2 } from "lucide-react";
 import { Conversation, Message, PromptInput, Reasoning } from "@protolabsai/ui/ai";
 import { Markdown } from "../chat/LazyMarkdown";
 import { ToolCalls } from "../chat/ToolCalls";
@@ -115,6 +115,12 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           signal: controller.signal,
           onText: (t, append) => update((m) => ({ ...m, content: append ? m.content + t : t })),
           onReasoning: (d) => update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d })),
+          onSkills: (skills) =>
+            update((m) => {
+              const byName = new Map((m.skillsLoaded ?? []).map((s) => [s.name, s]));
+              for (const s of skills) byName.set(s.name, s);
+              return { ...m, skillsLoaded: [...byName.values()] };
+            }),
           onToolCall: (evt) => update((m) => upsertTool(m, evt)),
           onComponent: (spec) => update((m) => ({ ...m, components: [...(m.components ?? []), spec] })),
           onFailed: (detail) => update((m) => ({ ...m, content: m.content || `⚠️ ${detail}`, status: "error" })),
@@ -164,6 +170,18 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           }
           return (
             <Message key={i} role={m.role} streaming={isStreaming}>
+              {m.skillsLoaded && m.skillsLoaded.length ? (
+                <div className="chat-skills-chip" role="note">
+                  <BookOpen size={13} aria-hidden />
+                  <span className="chat-skills-chip-label">Skills:</span>
+                  {m.skillsLoaded.map((s, j) => (
+                    <span key={s.name} className="chat-skills-chip-item" title={s.description || s.name}>
+                      {s.name}
+                      {j < m.skillsLoaded!.length - 1 ? <span aria-hidden> · </span> : null}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {m.reasoning ? <Reasoning streaming={isStreaming && !m.content}>{m.reasoning}</Reasoning> : null}
               {m.toolCalls && m.toolCalls.length ? <ToolCalls calls={m.toolCalls} /> : null}
               {m.content ? (

@@ -149,8 +149,8 @@ The lead agent also has **`save_workflow(name, description, steps, inputs?, outp
 Once it's worked out a multi-step process ad-hoc (via `task` / `task_batch`), it
 can capture it as a reusable recipe — *"save that as a workflow called
 competitor-scan"* — which is validated, written to `workflows.dir`, and
-immediately runnable via `run_workflow`. This generalizes `skill-v1` emission
-(a single-subagent recipe) to multi-step flows.
+immediately runnable via `run_workflow`. This is the multi-step analogue of a
+single-subagent skill (`SKILL.md`).
 
 ## Related
 

@@ -1,7 +1,7 @@
-"""Tests for persisting agent-emitted skills alongside disk SKILL.md skills.
+"""Tests for the skill index's `source` column and disk/non-disk separation.
 
-Covers the `source` column, disk/emitted separation on re-seed, emitted dedup,
-the curator pinning disk skills, and the _run_subagent → index persist path.
+Covers schema migration, the `source` tag on stored skills, that re-seeding the
+disk source leaves other sources intact, and the curator pinning disk skills.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from graph.config import LangGraphConfig
 from graph.skills.index import SkillsIndex
 
 
@@ -44,47 +43,31 @@ def test_v2_db_migrates_to_v3(tmp_path) -> None:
     conn.commit()
     conn.close()
 
-    idx = SkillsIndex(str(p))  # detects v2 → backup + rebuild to v3
-    idx.add_skill(_artifact("post-migrate"), source="emitted")
-    assert any(s["name"] == "post-migrate" and s["source"] == "emitted" for s in idx.all_skills())
+    idx = SkillsIndex(str(p))  # detects v2 → backup + rebuild to the current schema
+    idx.add_skill(_artifact("post-migrate"), source="disk")
+    assert any(s["name"] == "post-migrate" and s["source"] == "disk" for s in idx.all_skills())
 
 
 def test_add_skill_records_source(tmp_path) -> None:
     idx = SkillsIndex(str(tmp_path / "s.db"))
-    idx.add_skill(_artifact("a"), source="emitted")
+    idx.add_skill(_artifact("a"), source="promoted")
     idx.add_skill(_artifact("b"), source="disk")
     by_name = {s["name"]: s["source"] for s in idx.all_skills()}
-    assert by_name == {"a": "emitted", "b": "disk"}
+    assert by_name == {"a": "promoted", "b": "disk"}
 
 
-def test_replace_disk_skills_preserves_emitted(tmp_path) -> None:
+def test_replace_disk_skills_preserves_other_sources(tmp_path) -> None:
     idx = SkillsIndex(str(tmp_path / "s.db"))
-    idx.add_emitted_skill(_artifact("learned"))
+    idx.add_skill(_artifact("promoted-one"), source="promoted")
     idx.replace_disk_skills([_artifact("disk-one"), _artifact("disk-two")])
     names = {s["name"]: s["source"] for s in idx.all_skills()}
-    assert names == {"learned": "emitted", "disk-one": "disk", "disk-two": "disk"}
+    assert names == {"promoted-one": "promoted", "disk-one": "disk", "disk-two": "disk"}
 
-    # Re-seeding disk again still leaves the emitted skill intact, and refreshes
+    # Re-seeding disk again still leaves the non-disk skill intact, and refreshes
     # the disk set (disk-two dropped).
     idx.replace_disk_skills([_artifact("disk-one")])
     names = {s["name"]: s["source"] for s in idx.all_skills()}
-    assert names == {"learned": "emitted", "disk-one": "disk"}
-
-
-def test_add_emitted_skill_dedupes_by_name(tmp_path) -> None:
-    idx = SkillsIndex(str(tmp_path / "s.db"))
-    idx.add_emitted_skill(_artifact("dup", prompt="v1"))
-    idx.add_emitted_skill(_artifact("dup", prompt="v2"))
-    rows = [s for s in idx.all_skills() if s["name"] == "dup"]
-    assert len(rows) == 1 and rows[0]["prompt_template"] == "v2"
-
-
-def test_emitted_dedup_does_not_touch_same_name_disk(tmp_path) -> None:
-    idx = SkillsIndex(str(tmp_path / "s.db"))
-    idx.replace_disk_skills([_artifact("shared", prompt="disk")])
-    idx.add_emitted_skill(_artifact("shared", prompt="emitted"))
-    by_source = {s["source"]: s["prompt_template"] for s in idx.all_skills() if s["name"] == "shared"}
-    assert by_source == {"disk": "disk", "emitted": "emitted"}
+    assert names == {"promoted-one": "promoted", "disk-one": "disk"}
 
 
 def test_curator_pins_disk_skills(tmp_path) -> None:
@@ -92,7 +75,7 @@ def test_curator_pins_disk_skills(tmp_path) -> None:
 
     idx = SkillsIndex(str(tmp_path / "s.db"))
     idx.replace_disk_skills([_artifact("pinned")])
-    idx.add_emitted_skill(_artifact("ephemeral"))
+    idx.add_skill(_artifact("ephemeral"), source="promoted")
 
     curator = SkillCurator(db_path=str(tmp_path / "s.db"), index=idx)
     loaded = {s["name"] for s in curator._load_index()}
@@ -102,74 +85,3 @@ def test_curator_pins_disk_skills(tmp_path) -> None:
     curator.run()
     remaining = {s["name"] for s in idx.all_skills()}
     assert "pinned" in remaining
-
-
-async def test_run_subagent_persists_emitted_skill(tmp_path, monkeypatch) -> None:
-    from langchain_core.messages import AIMessage
-    from langchain_core.tools import tool
-
-    from graph import agent as agentmod
-
-    class _FakeAgent:
-        async def ainvoke(self, *_a, **_k):
-            return {
-                "messages": [
-                    AIMessage(
-                        content="found the answer",
-                        tool_calls=[{"name": "web_search", "args": {}, "id": "tc1"}],
-                    )
-                ]
-            }
-
-    monkeypatch.setattr(agentmod, "create_agent", lambda **_k: _FakeAgent())
-
-    @tool
-    async def web_search(query: str) -> str:
-        """search"""
-        return ""
-
-    idx = SkillsIndex(str(tmp_path / "s.db"))
-    out = await agentmod._run_subagent(
-        config=LangGraphConfig(),
-        tool_map={"web_search": web_search},
-        available_subagents="researcher",
-        description="find the capital of France",
-        prompt="research the capital of France",
-        subagent_type="researcher",
-        emit_skill=True,
-        skills_index=idx,
-    )
-    assert "found the answer" in out
-    persisted = idx.all_skills()
-    assert any(s["name"] == "find the capital of France" and s["source"] == "emitted" for s in persisted)
-
-
-async def test_run_subagent_no_persist_without_index(tmp_path, monkeypatch) -> None:
-    # emit_skill=True but no index → must not raise; nothing persisted anywhere.
-    from langchain_core.messages import AIMessage
-    from langchain_core.tools import tool
-
-    from graph import agent as agentmod
-
-    class _FakeAgent:
-        async def ainvoke(self, *_a, **_k):
-            return {"messages": [AIMessage(content="ok", tool_calls=[{"name": "web_search", "args": {}, "id": "t"}])]}
-
-    monkeypatch.setattr(agentmod, "create_agent", lambda **_k: _FakeAgent())
-
-    @tool
-    async def web_search(query: str) -> str:
-        """search"""
-        return ""
-
-    out = await agentmod._run_subagent(
-        config=LangGraphConfig(),
-        tool_map={"web_search": web_search},
-        available_subagents="researcher",
-        description="x",
-        prompt="y",
-        subagent_type="researcher",
-        emit_skill=True,
-        skills_index=None,
-    )
-    assert "ok" in out

@@ -366,6 +366,7 @@ def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
                 "enabled": config.skills_enabled,
                 "db_path": config.skills_db_path,
                 "dir": config.skills_dir,
+                "announce": config.skills_announce,
             },
             # Every plugins.* key from_dict consumes must be emitted here, or any
             # consumer treating this dict as the COMPLETE config silently loses it

@@ -504,6 +504,11 @@ class LangGraphConfig:
     skills_db_path: str = "/sandbox/skills.db"
     skills_top_k: int = 5
     skills_dir: str = ""
+    # When True, the agent surfaces the skills it auto-retrieved for a turn as a
+    # "skills loaded" chip in chat (a skills-v1 DataPart on the working frame), so
+    # the user can see what guidance shaped the answer. Off → silent retrieval
+    # (legacy behavior). Slash-invoked skills are visible regardless.
+    skills_announce: bool = True
     # Tiered stores (ADR 0041) — `shared` lifts a store out of per-instance scoping
     # into the COMMONS (read by every agent on the host); `scoped` keeps it private.
     # Slice 1: skills can be shared (a fleet's compounding skill library). Default
@@ -880,6 +885,7 @@ class LangGraphConfig:
             skills_db_path=skills.get("db_path", cls.skills_db_path),
             skills_top_k=skills.get("top_k", cls.skills_top_k),
             skills_dir=skills.get("dir", cls.skills_dir),
+            skills_announce=skills.get("announce", cls.skills_announce),
             skills_shared=skills.get("shared", cls.skills_shared),
             skills_scope=skills.get("scope", cls.skills_scope),
             commons_path=(data.get("commons", {}) or {}).get("path", cls.commons_path),

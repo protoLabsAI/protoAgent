@@ -5,7 +5,10 @@ open `SKILL.md` format — the same portable format Claude Code, Hermes, and
 OpenClaw use. A skill teaches the agent *how and when* to use its tools for a
 recurring task. Relevant skills are retrieved and injected into the system
 prompt at inference time (the `<learned_skills>` block), so the agent picks the
-right approach without you re-explaining it each turn.
+right approach without you re-explaining it each turn. When that happens the
+console shows a small **"Skills: …" chip** above the answer (hover a name for its
+description) so you can see what guidance shaped the turn — set `skills.announce:
+false` to silence it.
 
 > The console surfaces the skill index under **Agent → Skills**. A skill
 > **advises** (retrieved guidance the model may adapt); it does **not** execute. For
@@ -59,8 +62,10 @@ Two roots, mirroring protoAgent's config bundle/live split:
 If a live skill and a bundled skill share a `name`, the live one wins.
 Sub-folders are organizational only — the skill is named by its frontmatter.
 
-Skills are (re)loaded into the FTS index on server start; drop a folder in and
-restart (or trigger a config reload) to pick it up.
+Skills authored in the console (**Agent → Skills**) are indexed **live** — create,
+edit, and delete take effect immediately, no restart. Skills you drop on disk by
+hand (a new `SKILL.md` folder) are picked up on the next server start or config
+reload, since there's no filesystem watch on the skill roots.
 
 ## Configuration
 
@@ -69,6 +74,7 @@ skills:
   enabled: true            # default
   db_path: /sandbox/skills.db   # falls back to ~/.protoagent/skills.db
   top_k: 5                 # max skills injected per turn
+  announce: true           # show a "skills loaded" chip in chat (default)
   dir: ""                  # optional override for the writable skills root
 ```
 
@@ -79,7 +85,8 @@ loaded.
 
 - Skills are *retrieved by relevance* (BM25 over name/description/body), so a
   precise, trigger-oriented `description` matters most.
-- This is the human-authored half. protoAgent also captures **agent-authored**
-  skills from successful `task()` runs (skill-v1 procedural memory); surfacing
-  those alongside `SKILL.md` skills is a planned follow-up.
+- The agent can also **author its own** skills: the `/distill` subagent turns a
+  proven workflow into a new `SKILL.md` (same `disk` source, indexed and retrieved
+  exactly like the ones you write). The skill curator (`graph/skills/curator.py`)
+  decays and prunes non-pinned skills; disk skills are pinned.
 - OS/binary gating fields are parsed but not yet enforced.

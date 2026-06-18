@@ -39,9 +39,6 @@ class LayeredSkillsIndex:
     def add_skill(self, artifact, source: str = "emitted") -> None:
         self._private.add_skill(artifact, source)
 
-    def add_emitted_skill(self, artifact) -> None:
-        self._private.add_emitted_skill(artifact)
-
     def replace_disk_skills(self, artifacts: list) -> None:
         self._private.replace_disk_skills(artifacts)
 

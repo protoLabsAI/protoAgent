@@ -139,7 +139,7 @@ Add these before the React UI depends on them:
 |---|---|
 | `GET /api/runtime/status` | setup state, configured model, enabled middleware, knowledge path, scheduler state |
 | `GET /api/subagents` | list `SUBAGENT_REGISTRY` entries, tool allowlists, max turns, enabled state |
-| `POST /api/subagents/run` | manually launch one subagent with `{session_id, type, description, prompt, emit_skill}` |
+| `POST /api/subagents/run` | manually launch one subagent with `{session_id, type, description, prompt}` |
 | `POST /api/subagents/batch` | manually launch independent subagent jobs concurrently |
 | `GET /api/beads/status` | report the in-process beads store ready (agent-global; always initialized) |
 | `POST /api/beads/init` | no-op confirmation (the store is always ready) |
@@ -404,12 +404,12 @@ note when the store is disabled or empty.
 The **Agent ▸ Skills** surface (`apps/web/src/playbooks/PlaybooksSurface.tsx`,
 ADR 0009) browses the procedural-memory skill index (`skills.db`) the operator
 was otherwise blind to. It lists each skill as **pinned** (a `SKILL.md` on disk,
-re-seeded at boot) or **learned** (agent-emitted, curated/decaying), with
+re-seeded at boot) or **learned** (a non-disk skill, curated/decaying), with
 confidence + last-used, a search filter, and delete-with-confirm. Reads
 `GET /api/playbooks`; deletes via `DELETE /api/playbooks/{id}`. "Playbooks" is
-the operator-facing name for skill-v1 artifacts — see ADR 0009 (it disambiguates
-from the A2A agent-card `skills` field). Confidence-tuning + curator-audit
-read-back are noted follow-ups.
+the operator-facing name for skills — see ADR 0009 (it disambiguates from the
+A2A agent-card `skills` field). Confidence-tuning + curator-audit read-back are
+noted follow-ups.
 
 ## Settings surface
 

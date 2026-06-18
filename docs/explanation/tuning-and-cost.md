@@ -129,9 +129,9 @@ freed. Needs the knowledge middleware enabled.
   cleanly without corrupting history.
 - **Search-don't-load memory** — `KnowledgeMiddleware` retrieves top-k relevant
   memory rather than replaying full history into every prompt.
-- **Self-authored skills** — successful subagent runs emit reusable `skill-v1`
-  recipes, indexed in FTS5 and recalled into later prompts (the "closed learning
-  loop").
+- **Self-authored skills** — the agent distills proven workflows into reusable
+  `SKILL.md` skills (`/distill`), indexed in FTS5 and recalled into later prompts
+  (the "closed learning loop").
 
 ## Related
 

@@ -311,7 +311,6 @@ export type Subagent = {
   default_tools: string[];
   max_turns: number;
   default_max_turns: number;
-  allow_skill_emission: boolean;
 };
 
 // A live wired tool (Agent → Tools): its source (core/plugin/mcp) + the subsystem
@@ -364,6 +363,10 @@ export type BackgroundJobDTO = {
 // rendered inline by the curated chat component registry.
 export type ComponentSpec = { component: string; props: Record<string, unknown> };
 
+// A skill the agent auto-retrieved for a turn (skills-v1 DataPart) — surfaced as a
+// "skills loaded" chip so the user can see what guidance shaped the answer.
+export type SkillChip = { name: string; description?: string };
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
@@ -373,6 +376,8 @@ export type ChatMessage = {
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;
+  /** Skills the agent auto-retrieved for this turn — shown as a chip above the answer. */
+  skillsLoaded?: SkillChip[];
   createdAt?: number;
   status?: "streaming" | "done" | "error";
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be

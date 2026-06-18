@@ -143,6 +143,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "routing_fallback_models": [],
     "scheduler_enabled": True,
     "security_callback_allowlist": [],
+    "skills_announce": True,
     "skills_db_path": "/sandbox/skills.db",
     "skills_dir": "",
     "skills_enabled": True,
@@ -303,6 +304,7 @@ CONFIG_TO_DICT_GOLDEN = {
         "autostart_on_boot": False,
     },
     "skills": {
+        "announce": True,
         "db_path": "/sandbox/skills.db",
         "dir": "",
         "enabled": True,
@@ -377,6 +379,7 @@ EMITTED_ATTRS = {
     "skills_db_path",
     "skills_top_k",
     "skills_dir",
+    "skills_announce",
     # mcp.*
     "mcp_enabled",
     "mcp_servers",

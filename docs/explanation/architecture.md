@@ -98,22 +98,17 @@ The three layers compose: auth proves the caller is known, redaction ensures the
 
 ## Skill loop
 
-The `task()` subagent tool captures successful workflows as **skill-v1 artifacts** so the agent can reuse them on similar future problems. This is the "gets better the longer it runs" property you see in systems like Hermes Agent, adapted to protoAgent's A2A-native shape.
+A **skill** teaches the agent how and when to run a recurring workflow. Skills are retrieved by relevance and injected each turn, so the agent reuses proven approaches on similar future problems — the "gets better the longer it runs" property, adapted to protoAgent's A2A-native shape.
 
-Four pieces:
+Three pieces:
 
-1. **Emission** — when a subagent completes successfully and `task(..., emit_skill=True)` was called (and the subagent's config has `allow_skill_emission: true`), `graph/extensions/skills.py` serializes a `SkillV1Artifact` (name, description, prompt_template, tools_used, source_session_id), and `_run_subagent` **persists it to the index** (`source=emitted`, de-duped by name).
-2. **Collection** — the same artifact is also surfaced to A2A consumers as a DataPart with `mimeType: application/vnd.protolabs.skill-v1+json` on the terminal artifact. See the [skill-v1 extension reference](/reference/extensions#skill-v1).
-3. **Indexing** — `graph/skills/index.py` is a SQLite/FTS5 store at `/sandbox/skills.db` (→ `~/.protoagent/skills.db` when `/sandbox` isn't writable). It holds two sources: `emitted` (agent-authored, above) and `disk` — human-authored [`SKILL.md`](/guides/skills) folders re-seeded on every boot. Both are retrieved together.
-4. **Retrieval** — `KnowledgeMiddleware.load_skills(query)` returns the top-k matches (default 5, BM25-ranked) for the current user message + recent context, injected as a `<learned_skills>` block in the system prompt. Same 2 K-token budget discipline as `<prior_sessions>`. (The index is wired into `KnowledgeMiddleware` via `create_agent_graph`'s `skills_index`.)
+1. **Authoring** — a skill is an [AgentSkills `SKILL.md`](/guides/skills) folder. You drop them in by hand, and the agent can author its own from a proven workflow via the `/distill` subagent (it writes a new `SKILL.md`). All land in the index as `source=disk`.
+2. **Indexing** — `graph/skills/index.py` is a SQLite/FTS5 store at `/sandbox/skills.db` (→ `~/.protoagent/skills.db` when `/sandbox` isn't writable). `SKILL.md` folders are re-seeded on every boot; console edits (Agent → Skills) index live.
+3. **Retrieval** — `KnowledgeMiddleware.load_skills(query)` returns the top-k matches (default 5, BM25-ranked) for the current user message + recent context, injected as a `<learned_skills>` block in the system prompt. Same 2 K-token budget discipline as `<prior_sessions>`. The retrieved set is surfaced to the user as a "skills loaded" chip in chat (`skills.announce`, default on). (The index is wired into `KnowledgeMiddleware` via `create_agent_graph`'s `skills_index`.)
 
-**Curation** — `python -m graph.skills.curator` runs a periodic sweep that deduplicates near-identical skills and decays confidence 50 % every 90 days of idleness. Skills below 0.2 confidence are pruned. It operates only on `emitted` skills; `disk` skills are **pinned** (they're re-seeded from `SKILL.md` files, not curated). Run it on a cron or let operators trigger it manually — no automatic scheduling in the template.
-
-**Opting out per subagent** — set `allow_skill_emission: false` in `graph/subagents/config.py` for subagents whose runs shouldn't be captured (e.g. sensitive ones). The `disallowed_tools` mechanism is unaffected — skill emission is orthogonal to tool access control.
+**Curation** — `python -m graph.skills.curator` runs a periodic sweep that deduplicates near-identical skills and decays confidence 50 % every 90 days of idleness. Skills below 0.2 confidence are pruned. `disk` skills are **pinned** (re-seeded from `SKILL.md` files, not curated). Run it on a cron or let operators trigger it manually — no automatic scheduling in the template.
 
 **Why SQLite + FTS5** — the index lives inside the container, survives restarts if `/sandbox` is volume-mounted, handles tens of thousands of skills without a separate service, and the fts5 virtual table gives BM25 ranking without embedding model overhead. You can swap in a vector store later if recall beats keyword BM25 for your domain; the `KnowledgeMiddleware.load_skills()` seam is the single swap point.
-
-See the [skill loop tutorial](/tutorials/skill-loop) for the end-to-end walkthrough.
 
 ## Extending the agent (tools, skills, plugins)
 

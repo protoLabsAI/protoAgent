@@ -223,7 +223,6 @@ async def _operator_subagent_run(req: dict):
         description=req.get("description", ""),
         prompt=req.get("prompt", ""),
         subagent_type=req.get("type") or req.get("subagent_type", "researcher"),
-        emit_skill=bool(req.get("emit_skill", False)),
         extra_tools=STATE.plugin_tools + STATE.mcp_tools,
     )
 

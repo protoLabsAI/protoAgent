@@ -242,20 +242,19 @@ on forks. Update the repo check in all three when forking.
 
 ## Skill loop — agents that learn from experience
 
-protoAgent includes an end-to-end **skill loop** where the agent **learns from
-its own runs** — successful subagent workflows are captured as reusable skills,
-retrieved automatically on future tasks, and periodically optimised by the skill
-curator. The same index also serves **human-authored skills** dropped in as
-[`SKILL.md`](./docs/guides/skills.md) folders, so authored and agent-emitted
-skills are retrieved together.
+protoAgent includes an end-to-end **skill loop**. **Human-authored skills**
+dropped in as [`SKILL.md`](./docs/guides/skills.md) folders are loaded into the
+index and **retrieved automatically** on future tasks, then surfaced as a "skills
+loaded" chip in chat. The agent can also **author its own** skills from a proven
+workflow via `/distill` (it writes a new `SKILL.md`), and the skill curator
+periodically deduplicates, decays, and prunes non-pinned skills.
 
 | Component | Where it lives | What it does |
 |---|---|---|
-| `SKILL.md` skills | `config/skills/`, `<config>/skills/`, plugins | Human-authored skills (AgentSkills format) loaded into the index on boot (`source=disk`). See [Skills](./docs/guides/skills.md) |
-| Skill emission | `graph/extensions/skills.py` | Captures `task()` results as `SkillV1Artifact` when `emit_skill=True`, **persisted** to the index (`source=emitted`) |
-| Skill index | `/sandbox/skills.db` (→ `~/.protoagent`) | SQLite (FTS5) store of authored + emitted skills, queried by `KnowledgeMiddleware` |
-| Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as a `<learned_skills>` block |
-| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes *emitted* skills (disk skills are pinned) |
+| `SKILL.md` skills | `config/skills/`, `<config>/skills/`, plugins | Human-authored skills (AgentSkills format) loaded into the index on boot (`source=disk`). Also how the agent self-authors skills, via `/distill`. See [Skills](./docs/guides/skills.md) |
+| Skill index | `/sandbox/skills.db` (→ `~/.protoagent`) | SQLite (FTS5) store of loaded skills, queried by `KnowledgeMiddleware` |
+| Knowledge injection | `graph/middleware/knowledge.py` | Queries index before each LLM call, injects top-k matching skills as a `<learned_skills>` block (surfaced as a "skills loaded" chip in chat) |
+| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes non-pinned skills (disk skills are pinned) |
 
 ### Running the curator
 
@@ -269,11 +268,11 @@ python -m graph.skills.curator
 
 The curator applies a **90-day confidence half-life** (confidence halves for
 every 90 days a skill goes unused), clusters near-duplicate skills by
-similarity and keeps the highest-confidence copy, and prunes any skill whose
-confidence has fallen below 0.2.
+similarity and keeps the highest-confidence copy, and prunes any non-pinned
+skill whose confidence has fallen below 0.2 (disk `SKILL.md` skills are pinned).
 
-See [docs/tutorials/skill-loop.md](./docs/tutorials/skill-loop.md) for a
-complete end-to-end example and cron setup.
+See the [Skills guide](./docs/guides/skills.md) and
+[architecture § Skill loop](./docs/explanation/architecture.md) for the details.
 
 ## Contributing
 

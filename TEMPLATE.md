@@ -222,20 +222,21 @@ firing model and integration notes.
 
 ## 9a. Understand the skill loop
 
-protoAgent's skill loop lets your agent learn from experience automatically.
+protoAgent's skill loop lets your agent reuse proven workflows.
 After forking, review the skill loop lifecycle:
 
-1. **Emission** — subagents configured with `allow_skill_emission=True` capture
-   successful `task()` runs as `SkillV1Artifact` objects stored in the skill
-   index (`/sandbox/skills.db`, SQLite + FTS5).
+1. **Authoring** — skills are [`SKILL.md`](./docs/guides/skills.md) folders. You
+   drop them in by hand; the agent can also distill a proven workflow into a new
+   one via `/distill`. All land in the skill index (`/sandbox/skills.db`, SQLite
+   + FTS5) as `source=disk`.
 2. **Retrieval** — `KnowledgeMiddleware` injects the top-k most relevant skills
-   before each LLM call, so the agent reuses proven workflows.
+   before each LLM call (shown as a "skills loaded" chip in chat), so the agent
+   reuses proven workflows.
 3. **Curation** — run `python -m graph.skills.curator` periodically (or via
    cron) to deduplicate near-identical skills, apply the 90-day confidence
-   half-life decay, and prune stale entries below confidence 0.2.
+   half-life decay, and prune stale non-pinned entries below confidence 0.2.
 
-See [docs/tutorials/skill-loop.md](./docs/tutorials/skill-loop.md) for a
-complete end-to-end example with cron setup and audit log inspection.
+See the [Skills guide](./docs/guides/skills.md) for the full reference.
 
 ## 10. Delete this file
 

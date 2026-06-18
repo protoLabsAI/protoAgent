@@ -117,6 +117,9 @@ skills:
   db_path: /sandbox/skills.db
   top_k: 5
   max_tokens: 2000
+  # Show a "Skills: …" chip in chat naming the skills the agent auto-retrieved for
+  # a turn (hover a name for its description). Set false for silent retrieval.
+  announce: true
   # Tier (ADR 0041 slice 3): scope = scoped (private) | shared (one commons for all)
   # | layered (read commons ∪ private, write private, promote to commons). Blank →
   # derived from `shared` below. `python -m server skills promote <name>` lifts a

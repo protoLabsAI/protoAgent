@@ -466,6 +466,52 @@ def test_before_model_injects_learned_skills(tmp_db) -> None:
     assert "web-research" in result["context"]
 
 
+def test_before_model_announces_loaded_skills(tmp_db, monkeypatch) -> None:
+    """before_model() emits a `skills_loaded` custom event (name + description) for
+    the retrieved skills when skills_announce is on — the chat chip's signal."""
+    import langchain_core.callbacks as lc_callbacks
+
+    idx = SkillsIndex(db_path=tmp_db)
+    idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
+
+    captured: list = []
+    monkeypatch.setattr(lc_callbacks, "dispatch_custom_event", lambda name, data: captured.append((name, data)))
+
+    store = MagicMock()
+    store.search.return_value = []
+    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_announce=True)
+    km._prior_sessions_cache = ""
+
+    km.before_model({"messages": [HumanMessage(content="research web search topics")]}, runtime=None)
+
+    assert captured, "no skills_loaded event dispatched"
+    name, data = captured[0]
+    assert name == "skills_loaded"
+    skills = data["skills"]
+    assert any(s["name"] == "web-research" and s["description"] for s in skills)
+
+
+def test_before_model_does_not_announce_when_disabled(tmp_db, monkeypatch) -> None:
+    """skills_announce=False suppresses the chip event but still injects the block."""
+    import langchain_core.callbacks as lc_callbacks
+
+    idx = SkillsIndex(db_path=tmp_db)
+    idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
+
+    captured: list = []
+    monkeypatch.setattr(lc_callbacks, "dispatch_custom_event", lambda name, data: captured.append((name, data)))
+
+    store = MagicMock()
+    store.search.return_value = []
+    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_announce=False)
+    km._prior_sessions_cache = ""
+
+    result = km.before_model({"messages": [HumanMessage(content="research web search topics")]}, runtime=None)
+
+    assert captured == []
+    assert "<learned_skills>" in result["context"]  # injection unaffected by the gate
+
+
 def test_before_model_no_skills_no_learned_block(tmp_db) -> None:
     """before_model() must omit <learned_skills> block when index is empty."""
     idx = SkillsIndex(db_path=tmp_db)  # empty index
