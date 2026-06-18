@@ -160,6 +160,7 @@ export function ChatSurface({
             key={sessionId}
             sessionId={sessionId}
             visible={sessionId === currentSession?.id}
+            surfaceActive={active}
             onError={onError}
           />
         ))}
@@ -201,10 +202,14 @@ export function ChatSurface({
 function ChatSessionSlot({
   sessionId,
   visible,
+  surfaceActive,
   onError,
 }: {
   sessionId: string;
   visible: boolean;
+  // The chat SURFACE is the active rail surface (not just: this is the active session
+  // tab). Both must be true for the composer to grab focus.
+  surfaceActive: boolean;
   onError: (message: string) => void;
 }) {
   const session = useSession(sessionId);
@@ -228,11 +233,13 @@ function ChatSessionSlot({
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // Autofocus the composer when this session becomes the visible one, so you can type
-  // immediately on open / tab-switch — the field doesn't grab focus on its own.
+  // Autofocus the composer when this becomes the active session AND the chat surface is
+  // the active rail surface — so clicking the Chat rail item (or switching tabs) lands
+  // focus in the composer without a click. (`visible` alone is the active tab, which
+  // doesn't change when you switch INTO the chat surface from another rail item.)
   useEffect(() => {
-    if (visible) textareaRef.current?.focus();
-  }, [visible]);
+    if (visible && surfaceActive) textareaRef.current?.focus();
+  }, [visible, surfaceActive]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
