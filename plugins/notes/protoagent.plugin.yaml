@@ -13,6 +13,8 @@ capabilities:
 # The plugin self-serves its editor page (ADR 0038) — a sandboxed iframe, no host build, so it's
 # git-installable like any plugin. (Was a federated `ui: react` remote; federation retired.)
 views:
-  # `palette: inline` (ADR 0057) — ⌘K → "Notes" morphs the editor into the command
-  # palette body (themed/authed via the same handshake) instead of jumping to the rail.
-  - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/plugins/notes/view", palette: inline }
+  # Separate panel vs palette views (ADR 0057): the RAIL panel keeps the full editor
+  # (`path: /view`), while ⌘K → "Notes" morphs a DISTINCT compact quick-note page
+  # (`palette: { path: /quick }`) into the palette body. (`palette: inline` would reuse
+  # the same /view page for both.)
+  - { id: notes, label: "Notes", icon: "FileText", placement: right, path: "/plugins/notes/view", palette: { path: "/plugins/notes/quick" } }

@@ -62,3 +62,18 @@ def test_editor_view_follows_the_four_rules() -> None:
     # antipattern the kit replaces.
     assert "#0a0a0c" not in html
     assert 'addEventListener("message"' not in html
+
+
+def test_quick_palette_view_follows_the_four_rules() -> None:
+    """The compact palette page (ADR 0057 — `palette: { path: /quick }`) must stay
+    four-rules compliant too: it's the same sandboxed-iframe contract as the editor."""
+    html = _load_notes()._QUICK_HTML
+    assert "/_ds/plugin-kit.css" in html
+    assert "/_ds/plugin-kit.js" in html
+    assert 'location.pathname.split("/plugins/")[0]' in html  # slug-aware base
+    assert 'apiFetch("/api/plugins/notes/note"' in html  # gated data via the kit
+    assert "initPluginView" in html
+    assert 'type="module"' in html
+    assert 'import(window.__base + "/_ds/plugin-kit.js")' in html  # ESM dynamic import
+    assert "#0a0a0c" not in html
+    assert 'addEventListener("message"' not in html

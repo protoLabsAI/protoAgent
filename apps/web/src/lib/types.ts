@@ -101,9 +101,11 @@ export type PluginView = {
   slot?: "chat";
   // ADR 0057 — opt this view into the command palette as an INLINE morph target: its
   // ⌘K command expands the plugin's iframe in the palette body (themed/authed via the
-  // same handshake) instead of navigating to its rail. Passes through `_parse_views`
-  // verbatim (it keeps the whole view dict), so it's a manifest-only opt-in.
-  palette?: "inline";
+  // same handshake) instead of navigating to its rail. `"inline"` reuses this view's
+  // `path`; `{ path }` ships a DISTINCT page for the palette (e.g. a tighter quick
+  // editor) vs the full rail panel — so a plugin can ship separate panel/palette views.
+  // Passes through `_parse_views` verbatim (it keeps the whole view dict) — manifest-only.
+  palette?: "inline" | { path?: string };
   // Owning plugin's load state, stamped on by App so the view host can surface a real,
   // actionable error (loaded=false ⇒ the view route isn't serving — missing env / bad
   // deps / mount race; `pluginError` is the loader's exact diagnostic) instead of a

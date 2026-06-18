@@ -537,15 +537,17 @@ export function App() {
       .filter((s) => !s.requiresPlugin || enabledPluginIds.has(s.requiresPlugin))
       .map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
   });
-  // Plugin views opted into inline palette morphing (manifest `views[].palette:
-  // "inline"`): ⌘K → the view's command expands its iframe in the palette body,
-  // themed + authed via the same handshake PluginView uses.
+  // Plugin views opted into inline palette morphing (manifest `views[].palette`):
+  // ⌘K → the view's command expands its iframe in the palette body, themed + authed
+  // via the same handshake PluginView uses. `"inline"` reuses the rail page; an object
+  // `{ path }` ships a DISTINCT page for the palette (e.g. a tighter quick editor) vs
+  // the full rail panel — so a plugin can serve separate panel and palette views.
   const inlinePaletteViews = allPluginViews
-    .filter((v) => v.palette === "inline")
+    .filter((v) => v.palette === "inline" || (typeof v.palette === "object" && v.palette !== null))
     .map((v) => ({
       id: v.key,
       title: v.label,
-      url: apiUrl(v.path),
+      url: apiUrl(typeof v.palette === "object" && v.palette?.path ? v.palette.path : v.path),
       icon: pluginViewIcon(v.icon),
       theme: consoleTheme(),
       token: authToken(),

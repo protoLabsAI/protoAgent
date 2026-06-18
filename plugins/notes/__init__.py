@@ -110,6 +110,14 @@ def _build_view_router():
     async def _view():
         return HTMLResponse(_EDITOR_HTML)
 
+    # The compact "quick note" PAGE (ADR 0057) — the plugin's PALETTE view: the same
+    # shared note + autosave, trimmed chrome (no preview toggle) to fit the ⌘K palette
+    # body. Demonstrates a DISTINCT palette page vs the full rail editor — the manifest
+    # points the palette morph here via `palette: { path: /plugins/notes/quick }`.
+    @router.get("/quick")
+    async def _quick():
+        return HTMLResponse(_QUICK_HTML)
+
     return router
 
 
@@ -224,6 +232,53 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
     }catch(e){} }
   load();
   // Be a good desktop citizen: don't poll while the window is hidden/minimized; refresh on return.
+  setInterval(function(){ if(!document.hidden && !dirty) load(); }, 4000);
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty) load(); });
+</script></body></html>"""
+
+
+# The compact PALETTE page (ADR 0057) — same shared note + autosave + adopt-the-agent's
+# writes, but trimmed to a single textarea (no preview toggle / marked) so it fits the
+# ⌘K palette body. Four-rules compliant like the full editor (slug-aware base, the DS
+# kit owns theme + authed fetch).
+_QUICK_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
+<script>
+  "use strict";
+  window.__base = location.pathname.split("/plugins/")[0];
+  document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
+</script>
+<style>
+  html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
+    font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
+  #wrap{display:flex;flex-direction:column;height:100%}
+  #bar{padding:6px 10px;border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border);
+    font-size:11px;color:var(--pl-color-fg-muted)}
+  #ed{flex:1;min-height:0;resize:none;border:0;outline:none;padding:10px 12px;background:transparent;
+    color:var(--pl-color-fg);font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);
+    font-size:13px;line-height:1.55}
+</style></head><body>
+<div id="wrap">
+  <div id="bar"><span id="status">Quick note</span></div>
+  <textarea id="ed" placeholder="Jot — saves to the shared note." spellcheck="false"></textarea>
+</div>
+<script type="module">
+  "use strict";
+  let kit;
+  try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
+  catch (e) { kit = { initPluginView(){}, apiFetch:(p,i)=>fetch(window.__base+p,i) }; }
+  var lastSynced="", dirty=false, t=null;
+  var ed=document.getElementById("ed"), st=document.getElementById("status");
+  kit.initPluginView(function(){ if(!dirty) load(); });
+  ed.addEventListener("input", function(){ dirty=true; st.textContent="Saving…"; clearTimeout(t); t=setTimeout(save,600); });
+  async function save(){ try{
+      var r=await kit.apiFetch("/api/plugins/notes/note",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:ed.value})});
+      if(!r.ok)throw 0; lastSynced=ed.value; dirty=false; st.textContent="Saved ✓";
+    }catch(e){ st.textContent="Save failed"; } }
+  async function load(){ try{
+      var a=await kit.apiFetch("/api/plugins/notes/note").then(function(r){return r.json();});
+      if(typeof a.content==="string" && a.content!==lastSynced && !dirty){ ed.value=a.content; lastSynced=a.content; }
+    }catch(e){} }
+  load();
   setInterval(function(){ if(!document.hidden && !dirty) load(); }, 4000);
   document.addEventListener("visibilitychange", function(){ if(!document.hidden && !dirty) load(); });
 </script></body></html>"""
