@@ -13,6 +13,7 @@ For *untrusted* code use MCP (out-of-process), not a git plugin.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -170,6 +172,157 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
+# --- Git-less fetch for the frozen desktop app (ADR 0058 D1) ---------------
+# The frozen PyInstaller sidecar has no `git` (and no `pip`), but the loader
+# already discovers + importlib-loads plugins from the live root in frozen mode.
+# So the only gap is *fetching* the code: download a GitHub archive tarball over
+# HTTPS (the bundled httpx) and extract it — an on-disk result identical to a
+# shallow clone. `git` stays the path on a dev/server box (history, ssh, private
+# auth); the archive path is preferred when git is absent or we're frozen.
+
+_GH_RE = re.compile(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _frozen_like() -> bool:
+    """True in the frozen desktop sidecar (no git/pip). ``PROTOAGENT_PLUGIN_FROZEN``
+    lets a dev box simulate it for testing."""
+    return bool(getattr(sys, "frozen", False)) or os.environ.get("PROTOAGENT_PLUGIN_FROZEN") == "1"
+
+
+def _prefer_archive() -> bool:
+    """Use the git-less HTTPS-archive fetch instead of ``git clone``? Forced either
+    way by ``PROTOAGENT_PLUGIN_FETCH=archive|git`` (testing); otherwise when we're
+    frozen or git isn't on PATH."""
+    mode = os.environ.get("PROTOAGENT_PLUGIN_FETCH", "").strip().lower()
+    if mode == "archive":
+        return True
+    if mode == "git":
+        return False
+    return _frozen_like() or shutil.which("git") is None
+
+
+def _github_owner_repo(url: str) -> tuple[str, str]:
+    m = _GH_RE.search(url.strip())
+    if not m:
+        raise InstallError(
+            f"git-less install needs a github.com URL (the desktop runtime can't run git) — got {url!r}."
+        )
+    return m.group(1), m.group(2)
+
+
+def _http_get(url: str, *, accept: str | None = None) -> "object":
+    """GET ``url`` following redirects (codeload), raising InstallError on failure.
+    Sends a GitHub token from ``GITHUB_TOKEN``/``GH_TOKEN`` if set (private repos +
+    higher rate limits)."""
+    import httpx
+
+    headers = {"User-Agent": "protoAgent-plugin-installer"}
+    if accept:
+        headers["Accept"] = accept
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=30.0)
+        resp.raise_for_status()
+        return resp
+    except httpx.HTTPError as e:
+        raise InstallError(f"fetch failed for {url}: {e}") from e
+
+
+def _resolve_sha_github(owner: str, repo: str, ref: str | None) -> str:
+    """Resolve ``ref`` (branch/tag, or the default branch when empty) to a full
+    commit SHA via the GitHub API — the git-less equivalent of ``git ls-remote``."""
+    api = f"https://api.github.com/repos/{owner}/{repo}/commits/{ref or 'HEAD'}"
+    resp = _http_get(api, accept="application/vnd.github.sha")
+    sha = resp.text.strip()
+    if not _SHA_RE.match(sha) or len(sha) != 40:
+        raise InstallError(f"could not resolve {ref or 'HEAD'} at {owner}/{repo} (got {sha[:80]!r}).")
+    return sha
+
+
+def _safe_extract_tar(data: bytes, dest: Path) -> None:
+    """Extract a GitHub ``tar.gz`` into ``dest``, stripping the single top-level
+    ``<repo>-<sha>/`` component. Path-traversal-safe (rejects abs paths / ``..``)
+    and ignores symlinks/special files — a plugin repo is plain files + dirs."""
+    dest = dest.resolve()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            inner = m.name.split("/", 1)[1] if "/" in m.name else ""
+            if not inner:
+                continue
+            target = (dest / inner).resolve()
+            if target != dest and not str(target).startswith(str(dest) + os.sep):
+                raise InstallError(f"unsafe path in archive: {m.name!r}")
+            if m.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif m.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                src = tar.extractfile(m)
+                if src is not None:
+                    target.write_bytes(src.read())
+            # symlinks/devices are skipped on purpose (a supply-chain vector)
+
+
+def _fetch_archive(url: str, ref: str | None, dest: Path) -> str:
+    """Git-less fetch: resolve ``ref`` → SHA, download the GitHub archive at that
+    SHA, extract into ``dest``. Returns the resolved SHA (pinned in the lock)."""
+    owner, repo = _github_owner_repo(url)
+    sha = ref if (ref and _SHA_RE.match(ref) and len(ref) == 40) else _resolve_sha_github(owner, repo, ref)
+    resp = _http_get(f"https://codeload.github.com/{owner}/{repo}/tar.gz/{sha}")
+    dest.mkdir(parents=True, exist_ok=True)
+    _safe_extract_tar(resp.content, dest)
+    return sha
+
+
+def _fetch(url: str, ref: str | None, dest: Path) -> str:
+    """Fetch the plugin repo at ``ref`` into ``dest``; return the resolved SHA.
+    ``git`` on a dev/server box; the git-less HTTPS archive (GitHub) when git is
+    unavailable or in the frozen desktop app (ADR 0058 D1)."""
+    if _prefer_archive():
+        return _fetch_archive(url, ref, dest)
+    return _clone(url, ref, dest)
+
+
+# --- Bundled-dep gate for the frozen app (ADR 0058 D2) ---------------------
+# The frozen runtime has no pip, so a plugin can only run if its declared
+# `requires_pip` are ALREADY importable in the bundle. Gate at install time with
+# a clear refusal rather than a cryptic enable-time ImportError.
+
+_PKG_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _dep_pkg_name(spec: str) -> str:
+    """The distribution name from a PEP 508 spec (``websockets>=12`` → ``websockets``)."""
+    m = _PKG_NAME_RE.match(spec or "")
+    return m.group(1) if m else ""
+
+
+def _importable(pkg: str) -> bool:
+    """Is ``pkg`` present in this runtime? Distribution metadata first, then a
+    best-effort module-name probe (covers deps whose .dist-info isn't bundled)."""
+    import importlib.metadata as md
+    import importlib.util as iu
+
+    try:
+        md.version(pkg)
+        return True
+    except md.PackageNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001 — metadata read is best-effort
+        pass
+    try:
+        return iu.find_spec(pkg.replace("-", "_")) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _deps_satisfied(deps: list[str]) -> tuple[bool, list[str]]:
+    """(all importable?, [missing dist names]) for a plugin's ``requires_pip``."""
+    missing = [n for spec in deps if (n := _dep_pkg_name(spec)) and not _importable(n)]
+    return (not missing, missing)
+
+
 def install(
     url: str, ref: str | None = None, *, force: bool = False, by: str = "cli", allow: list[str] | None = None
 ) -> dict:
@@ -187,7 +340,7 @@ def install(
 
     with tempfile.TemporaryDirectory(prefix="pa-plugin-") as tmp:
         staging = Path(tmp) / "repo"
-        sha = _clone(url, ref, staging)
+        sha = _fetch(url, ref, staging)
 
         # A bundle repo (protoagent.bundle.yaml) carries no code — it names a set of
         # plugin repos to install together. Fan out to per-plugin install().
@@ -205,6 +358,17 @@ def install(
         # No silent shadowing of a built-in (repo) plugin.
         if (REPO_ROOT / "plugins" / pid).exists():
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
+
+        # Frozen runtime (desktop): no pip — a plugin can only run if its declared
+        # deps are already importable in the bundle. Refuse early with a clear
+        # message instead of a cryptic enable-time ImportError (ADR 0058 D2).
+        if _frozen_like() and manifest.requires_pip:
+            ok, missing = _deps_satisfied(manifest.requires_pip)
+            if not ok:
+                raise InstallError(
+                    f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
+                    f"install it on a server/Docker build instead."
+                )
 
         target = target_root / pid
         if target.exists():
@@ -409,6 +573,17 @@ def install_deps(plugin_id: str) -> list[str]:
     deps = list(manifest.requires_pip)
     if not deps:
         return []
+    # Frozen runtime (desktop): no pip. The deps must already be bundled — confirm
+    # (nothing to install) or refuse with a clear message (ADR 0058 D2).
+    if _frozen_like():
+        ok, missing = _deps_satisfied(deps)
+        if not ok:
+            raise InstallError(
+                f"{plugin_id!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
+                f"install it on a server/Docker build instead."
+            )
+        log.info("[plugins] %s deps already in the runtime — nothing to install", plugin_id)
+        return deps
     proc = subprocess.run(
         [sys.executable, "-m", "pip", "install", *deps],
         capture_output=True,
