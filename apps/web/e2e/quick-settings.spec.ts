@@ -4,7 +4,9 @@ import { expect, test } from "@playwright/test";
 // opens a dialog editing fields via the same /api/settings path, and the central
 // two-home one-stop-shop is also openable as an overlay from the topbar.
 
-test("the header menu opens the Settings overlay (the two-home one-stop-shop)", async ({ page }) => {
+// The header hamburger was removed (to be re-homed later); the Settings overlay it
+// opened has no trigger for now. Skipped until the global-actions entry point lands.
+test.skip("the header menu opens the Settings overlay (the two-home one-stop-shop)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
