@@ -34,6 +34,24 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
   await expect(surface.getByText("web-research")).toBeHidden();
 });
 
+test("the + button opens the New skill DIALOG, not an inline panel form", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
+  const surface = page.getByTestId("playbooks-surface");
+  await expect(surface).toBeVisible();
+
+  // Closed: the form isn't anywhere yet.
+  await expect(surface.getByLabel("skill name")).toHaveCount(0);
+
+  await page.getByTestId("playbook-new").click();
+  // It opens as a MODAL dialog (role=dialog) — an inline panel form wouldn't be one.
+  const dialog = page.getByRole("dialog", { name: "New skill" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("skill name")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Create skill" })).toBeVisible();
+});
+
 test("layered skills show tier badges and promote a private skill to the commons", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();

@@ -4,7 +4,7 @@ import { ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } f
 
 import { useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
@@ -198,7 +198,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
   function openCreate() {
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
-    setAdding((v) => !v);
+    setAdding(true);
   }
 
   async function startEdit(p: Playbook) {
@@ -329,17 +329,6 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
           onChange={(e) => setQuery(e.target.value)}
         />
 
-        {adding ? (
-          <SkillForm
-            draft={draft}
-            setDraft={setDraft}
-            onSave={() => void save()}
-            onCancel={cancelForm}
-            saving={saving}
-            saveLabel="Create skill"
-          />
-        ) : null}
-
         {!enabled ? (
           <Empty>The skills index is disabled (set <code>skills.enabled: true</code>).</Empty>
         ) : filtered.length === 0 ? (
@@ -355,17 +344,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
           <ul className="playbook-list">
             {filtered.map((p) => (
               <li key={p.id} className="playbook-card">
-                {editingId === p.id ? (
-                  <SkillForm
-                    draft={draft}
-                    setDraft={setDraft}
-                    onSave={() => void save()}
-                    onCancel={cancelForm}
-                    saving={saving}
-                    saveLabel="Save changes"
-                  />
-                ) : (
-                  <>
+                <>
                     <div className="playbook-main">
                       <div className="playbook-title">
                         <SourceBadge p={p} />
@@ -441,8 +420,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
                         </span>
                       )}
                     </div>
-                  </>
-                )}
+                </>
               </li>
             ))}
           </ul>
@@ -461,6 +439,24 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
           ? `Remove "${pending.name}"${pending.origin === "user" ? " — its SKILL.md is deleted too." : "."}`
           : undefined}
       </ConfirmDialog>
+
+      {/* Author / edit a skill in a modal — keeps the list intact instead of taking
+          over the panel. One form for both; the title + save label adapt. */}
+      <Dialog
+        open={adding || editingId !== null}
+        onClose={cancelForm}
+        title={editingId !== null ? "Edit skill" : "New skill"}
+        width="min(640px, 94vw)"
+      >
+        <SkillForm
+          draft={draft}
+          setDraft={setDraft}
+          onSave={() => void save()}
+          onCancel={cancelForm}
+          saving={saving}
+          saveLabel={editingId !== null ? "Save changes" : "Create skill"}
+        />
+      </Dialog>
     </section>
   );
 }
