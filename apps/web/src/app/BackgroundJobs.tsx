@@ -1,6 +1,6 @@
 import { Dialog } from "@protolabsai/ui/overlays";
 import { Bot, CheckCircle2, Loader2, Square, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
@@ -23,13 +23,14 @@ export function BackgroundJobs() {
   const [unread, setUnread] = useState(0);
   const [, setTick] = useState(0); // re-render for live elapsed while open
 
-  // Hydrate from the durable registry.
-  useEffect(() => {
-    let alive = true;
+  // Pull the durable registry — every job's FULL result. The live bus only carries a
+  // trimmed ~2k preview (so a still-open chat can render the outcome without a refetch),
+  // so the API is the source of truth for the dialog. We re-hydrate when the dialog opens
+  // and when a job completes, so "show result" always renders the entire report.
+  const hydrate = useCallback(() => {
     api
       .background()
       .then((d) => {
-        if (!alive) return;
         setEnabled(!!d.enabled);
         const m: Record<string, BackgroundJobDTO> = {};
         for (const j of d.jobs || []) m[j.id] = j;
@@ -38,10 +39,12 @@ export function BackgroundJobs() {
       .catch(() => {
         /* feature off / unreachable — the pill stays hidden */
       });
-    return () => {
-      alive = false;
-    };
   }, []);
+
+  // Hydrate on mount.
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
 
   // Live updates off the event bus.
   useEffect(() => {
@@ -101,6 +104,9 @@ export function BackgroundJobs() {
         completed_at: nowIso(),
       });
       setUnread((u) => u + 1);
+      // The event's `result` is the trimmed preview — pull the durable full result so
+      // "show result" renders the entire report, not the …[truncated] copy.
+      hydrate();
     });
 
     return () => {
@@ -108,7 +114,7 @@ export function BackgroundJobs() {
       offProgress();
       offDone();
     };
-  }, []);
+  }, [hydrate]);
 
   const list = useMemo(() => Object.values(jobs).sort(byRecency), [jobs]);
   const running = list.filter((j) => j.status === "running").length;
@@ -140,6 +146,7 @@ export function BackgroundJobs() {
         onClick={() => {
           setOpen(true);
           setUnread(0);
+          hydrate(); // fetch the FULL results when the panel opens (replaces any live previews)
         }}
         title="Background agents"
         aria-label={`Background agents${running ? ` — ${running} running` : ""}`}

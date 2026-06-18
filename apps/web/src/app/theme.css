@@ -225,6 +225,11 @@
   padding: 4px 12px 12px 33px;
   font-size: 13px;
   border-top: 1px solid var(--border, #2a2a31);
+  /* A long report (research agents emit thousands of words) scrolls within the row
+     so the whole thing is readable without the dialog growing unbounded. */
+  max-height: 50vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .topbar {
