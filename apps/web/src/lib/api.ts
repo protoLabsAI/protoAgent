@@ -564,6 +564,19 @@ export const api = {
     );
   },
 
+  // Delete a FINISHED background job's entry (housekeeping). Running jobs are kept.
+  deleteBackground(jobId: string) {
+    return request<{ ok: boolean; deleted?: boolean }>(
+      `/api/background/${encodeURIComponent(jobId)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  // Delete all FINISHED background jobs (clears the stacked-up history).
+  clearFinishedBackground() {
+    return request<{ ok: boolean; cleared?: number }>("/api/background/clear", { method: "POST" });
+  },
+
   telemetrySummary(since?: string) {
     const q = since ? `?since=${encodeURIComponent(since)}` : "";
     return request<{ enabled: boolean; summary: TelemetrySummary | null }>(

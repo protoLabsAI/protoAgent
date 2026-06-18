@@ -266,3 +266,29 @@ class BackgroundStore:
             return [_row_to_job(r) for r in rows]
         finally:
             db.close()
+
+    def delete(self, job_id: str) -> bool:
+        """Delete a finished job's row (housekeeping). A running job is left alone —
+        cancel it first. Returns ``True`` if a row was removed."""
+        db = self._connect()
+        try:
+            cur = db.execute("DELETE FROM background_jobs WHERE id = ? AND status != 'running'", (job_id,))
+            db.commit()
+            return cur.rowcount > 0
+        finally:
+            db.close()
+
+    def clear_finished(self, origin_session: str | None = None) -> int:
+        """Delete all finished (non-running) jobs, optionally scoped to one originating
+        session. Running jobs are kept. Returns the number removed."""
+        clauses, params = ["status != 'running'"], []
+        if origin_session is not None:
+            clauses.append("origin_session = ?")
+            params.append(origin_session)
+        db = self._connect()
+        try:
+            cur = db.execute(f"DELETE FROM background_jobs WHERE {' AND '.join(clauses)}", params)
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()

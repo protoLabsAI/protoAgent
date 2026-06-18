@@ -179,6 +179,27 @@
   color: var(--pl-color-status-error, #e5484d);
   background: var(--bg-elevated-hover, rgba(255, 255, 255, 0.03));
 }
+.bg-jobs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px 8px;
+}
+.bg-jobs-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 12px;
+  border: 1px solid var(--border, #2a2a31);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.bg-jobs-clear:hover {
+  color: var(--pl-color-status-error, #e5484d);
+  border-color: var(--pl-color-status-error, #e5484d);
+}
 .bg-jobs-icon {
   flex: none;
   margin-top: 1px;
