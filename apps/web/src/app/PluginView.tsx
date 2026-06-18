@@ -14,8 +14,9 @@ function pluginIdFromPath(path: string): string {
 }
 
 // Curated console theme tokens forwarded to a plugin view so it can match the
-// console look (ADR 0026 theming bridge).
-function consoleTheme(): Record<string, string> {
+// console look (ADR 0026 theming bridge). Exported so the command palette (ADR 0057)
+// can hand the same 6-key theme to an inline-morphed plugin iframe.
+export function consoleTheme(): Record<string, string> {
   if (typeof window === "undefined") return {};
   const s = getComputedStyle(document.documentElement);
   const g = (n: string) => s.getPropertyValue(n).trim();

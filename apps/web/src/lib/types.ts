@@ -99,6 +99,11 @@ export type PluginView = {
   // rail id, stays mounted for the app's lifetime (streaming continuity, #613), and
   // does not get its own rail entry. First enabled claimant wins.
   slot?: "chat";
+  // ADR 0057 — opt this view into the command palette as an INLINE morph target: its
+  // ⌘K command expands the plugin's iframe in the palette body (themed/authed via the
+  // same handshake) instead of navigating to its rail. Passes through `_parse_views`
+  // verbatim (it keeps the whole view dict), so it's a manifest-only opt-in.
+  palette?: "inline";
   // Owning plugin's load state, stamped on by App so the view host can surface a real,
   // actionable error (loaded=false ⇒ the view route isn't serving — missing env / bad
   // deps / mount race; `pluginError` is the loader's exact diagnostic) instead of a

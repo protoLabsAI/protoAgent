@@ -92,8 +92,8 @@ import {
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
-import { api, is401 } from "../lib/api";
-import { PluginView } from "./PluginView";
+import { api, apiUrl, authToken, is401 } from "../lib/api";
+import { PluginView, consoleTheme } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
@@ -537,7 +537,21 @@ export function App() {
       .filter((s) => !s.requiresPlugin || enabledPluginIds.has(s.requiresPlugin))
       .map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
   });
-  const paletteRegistry = usePaletteRegistry(paletteViews);
+  // Plugin views opted into inline palette morphing (manifest `views[].palette:
+  // "inline"`): ⌘K → the view's command expands its iframe in the palette body,
+  // themed + authed via the same handshake PluginView uses.
+  const inlinePaletteViews = allPluginViews
+    .filter((v) => v.palette === "inline")
+    .map((v) => ({
+      id: v.key,
+      title: v.label,
+      url: apiUrl(v.path),
+      icon: pluginViewIcon(v.icon),
+      theme: consoleTheme(),
+      token: authToken(),
+      sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox",
+    }));
+  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews);
   const [paletteOpen, setPaletteOpen] = useState(false);
   usePaletteHotkey(() => setPaletteOpen((o) => !o));
 
