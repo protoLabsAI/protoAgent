@@ -21,21 +21,18 @@ import os
 import sys
 from pathlib import Path
 
+from runtime.acp_agents import ACP_AGENT_CATALOG
 from runtime.context import ContextAssembler
 
 log = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where the `server` pkg lives)
 
-# Best-effort launch commands per agent — ACP servers drift, so these are *defaults*
-# the operator can override in config (``acp.agents.<name>: {command, args}``).
+# Best-effort launch commands per agent, derived from the canonical catalog
+# (runtime/acp_agents.py) — ACP servers drift, so these are *defaults* the operator can
+# override in config (``acp.agents.<name>: {command, args}``).
 _ACP_ADAPTERS: dict[str, dict] = {
-    "proto": {"command": "proto", "args": ["--acp"]},
-    "codex": {"command": "npx", "args": ["-y", "@zed-industries/codex-acp"]},
-    "claude": {"command": "npx", "args": ["-y", "@agentclientprotocol/claude-agent-acp"]},
-    "gemini": {"command": "gemini", "args": ["--experimental-acp"]},
-    "opencode": {"command": "opencode", "args": ["acp"]},
-    "copilot": {"command": "copilot", "args": ["--acp"]},
+    a["id"]: {"command": a["command"], "args": list(a["args"])} for a in ACP_AGENT_CATALOG
 }
 
 

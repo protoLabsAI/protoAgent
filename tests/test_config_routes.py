@@ -37,6 +37,16 @@ def test_get_config_delegates(monkeypatch):
     assert body == {"config": {"model": "x"}, "soul": "SOUL"}
 
 
+def test_acp_agents_route_serves_the_catalog():
+    # The canonical ACP catalog is served for the web pickers (single source).
+    body = _client().get("/api/acp-agents").json()
+    agents = body["agents"]
+    ids = {a["id"] for a in agents}
+    assert {"proto", "claude", "gemini"} <= ids
+    claude = next(a for a in agents if a["id"] == "claude")
+    assert claude["label"] and claude["command"] and isinstance(claude["args"], list)
+
+
 def test_setup_status_and_reset(monkeypatch):
     seen = {}
     monkeypatch.setitem(

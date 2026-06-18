@@ -37,4 +37,10 @@ test("Add opens a type picker and a schema-driven form", async ({ page }) => {
   await panel.locator(".delegate-type-tile", { hasText: "Coding agent" }).click();
   await expect(panel.getByText("Command", { exact: false })).toBeVisible();
   await expect(panel.getByText("Workdir", { exact: false })).toBeVisible();
+
+  // The coding-agent preset picker (from the canonical /api/acp-agents catalog) fills
+  // Command + Args when an agent is chosen.
+  await expect(panel.locator("#acp-preset")).toBeVisible();
+  await panel.locator("#acp-preset").selectOption("claude");
+  await expect(panel.locator("#del-command")).toHaveValue("npx");
 });

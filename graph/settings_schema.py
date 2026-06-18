@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from runtime.acp_agents import acp_runtime_options
+
 
 @dataclass
 class Field:
@@ -49,9 +51,10 @@ class Field:
     ui_hidden: bool = False
 
 
-# ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for
-# the auxiliary slots (aux / goal-eval / compaction). Mirrors runtime/acp_runtime._ACP_ADAPTERS.
-ACP_MODEL_OPTIONS = ["acp:proto", "acp:codex", "acp:claude", "acp:gemini", "acp:copilot", "acp:opencode"]
+# ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
+# auxiliary slots (aux / goal-eval / compaction). Derived from the canonical catalog
+# (runtime/acp_agents.py) so the list lives in exactly one place.
+ACP_MODEL_OPTIONS = acp_runtime_options()
 
 
 # Ordered registry. Section order here is the order the UI renders groups in.
