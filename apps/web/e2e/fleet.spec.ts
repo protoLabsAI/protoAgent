@@ -19,15 +19,23 @@ test.beforeEach(async ({ page }, testInfo) => {
 });
 
 async function openFleet(page) {
-  // Fleet lives under Settings ▸ Global now (folded in from the old Box rail surface).
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Global", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
+  // Fleet lives under the Global settings overlay now, opened from the header
+  // hamburger → app drawer → Global settings (folded in from the old Box rail surface).
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Global settings", exact: true }).click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
 }
 
 async function openAgents(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await openFleet(page);
+}
+
+// Fleet lives in the Global settings overlay (a modal) now, so its backdrop intercepts
+// the topbar switcher — close it before interacting with the top bar.
+async function closeOverlay(page) {
+  await page.locator(".settings-overlay .pl-dialog__close").click();
+  await expect(page.locator(".settings-overlay")).toHaveCount(0);
 }
 
 test("Agents tab lists the host (this instance) + peers, host active by default", async ({ page }) => {
@@ -132,6 +140,7 @@ test("rename edits the display name; the id/slug stays", async ({ page }) => {
   await expect(renamed).toBeVisible();
   // The slug (stable id) is untouched: switching to the renamed agent still
   // navigates to its original id URL.
+  await closeOverlay(page);
   await page.getByTestId("fleet-switcher").click();
   await page.getByRole("menuitem", { name: /nova/ }).click();
   await expect(page).toHaveURL(/\/app\/agent\/ava\//);
@@ -153,6 +162,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
 
   // And switchable: the topbar switcher navigates to its slug window, where the hub
   // proxies the console (the mock strips /agents/<slug>/ — the app boots normally).
+  await closeOverlay(page);
   await page.getByTestId("fleet-switcher").click();
   await page.getByRole("menuitem", { name: /remy/ }).click();
   await expect(page).toHaveURL(/\/app\/agent\/remy-re01\//);

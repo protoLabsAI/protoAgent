@@ -21,6 +21,17 @@
 .app-topbar {
   flex: 0 0 48px;
   min-height: 48px;
+  position: relative;
+}
+/* The header hamburger, pinned top-right over the DS Header. */
+.app-topbar-menu {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  z-index: 5;
 }
 
 /* Operational warning strip under the topbar (#706 co-located instances etc.) —

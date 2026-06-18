@@ -6,7 +6,6 @@ import { expect, test } from "@playwright/test";
 test("Agent → Skills lists pinned + learned skills and supports search", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
 
   const surface = page.getByTestId("playbooks-surface");
@@ -27,7 +26,6 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
 test("layered skills show tier badges and promote a private skill to the commons", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -48,7 +46,6 @@ test("layered skills show tier badges and promote a private skill to the commons
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();

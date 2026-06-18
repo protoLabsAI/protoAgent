@@ -94,21 +94,16 @@ function deepLinkCommands(): Command[] {
       ui().setSurface("plugins");
       ui().setPluginsTab("local");
     }),
-    // Box folded into Settings ▸ Global (ADR 0048 follow-up) — land on the section.
-    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], () => {
-      ui().setSurface("settings");
-      ui().setSettingsScope("host");
-      ui().setSettingsSection("fleet");
+    // Global settings (Fleet/Telemetry/Commons) is the header-drawer overlay now
+    // (2026-06-18 IA pass) — open it deep-linked to the section.
+    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box", "global"], () => {
+      ui().openGlobalSettings("fleet");
     }),
-    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box"], () => {
-      ui().setSurface("settings");
-      ui().setSettingsScope("host");
-      ui().setSettingsSection("telemetry");
+    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], () => {
+      ui().openGlobalSettings("telemetry");
     }),
-    link("box:commons", "Settings: Commons", ["commons", "shared", "skills", "box"], () => {
-      ui().setSurface("settings");
-      ui().setSettingsScope("host");
-      ui().setSettingsSection("commons");
+    link("box:commons", "Settings: Commons", ["commons", "shared", "skills", "box", "global"], () => {
+      ui().openGlobalSettings("commons");
     }),
   ];
 }

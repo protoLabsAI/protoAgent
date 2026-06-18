@@ -1,30 +1,33 @@
 import { expect, test } from "@playwright/test";
 
-// Settings IA (ADR 0048): scope is the primary axis — TWO homes, each with its own
-// section sub-nav. 🖥 Global (box-shared) and 🧩 Workspace (the focused agent).
-// Each section renders GET /api/settings/schema groups for its category and saves via
-// POST /api/settings (auto-reload). The Agent rail surface still hosts the agent
-// makeup until the S-C collapse.
+// Settings IA (2026-06-18 pass): WORKSPACE settings live in the rail "Settings"
+// surface (no scope toggle); GLOBAL settings open from the header hamburger → app
+// drawer → an overlay dialog. Each section renders GET /api/settings/schema groups
+// and saves via POST /api/settings (auto-reload).
 
+// The rail Settings surface — Workspace-only now.
 async function openSettings(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
 }
 
-// Click a home (the segmented scope toggle in the SideNav header, role=button) or a
-// section (the DS SideNav rail, role=tab). Names are unique across both.
-async function tab(page, name) {
-  const home = page.locator(".pl-tabs--segmented").getByRole("button", { name, exact: true });
-  if (await home.count()) {
-    await home.click();
-    return;
-  }
-  await page.locator(".pl-sidenav").getByRole("tab", { name, exact: true }).click();
+// Global settings open from the header drawer; `item` picks the drawer entry
+// ("Global settings" lands on Overview, "Telemetry" deep-links that section).
+async function openGlobal(page, item = "Global settings") {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  const drawer = page.getByTestId("app-drawer");
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: item, exact: true }).click();
+  await expect(page.locator(".settings-overlay")).toBeVisible();
 }
 
-// Field groups are collapsed by default (the operator expands as needed) — open
-// every group so the fields under them are visible/interactable in a test. Waits
-// for the suspense load, then toggles only the still-collapsed triggers.
+// Click a section in a sidenav (the rail's, or — scoped — the overlay's).
+async function section(page, name, scope = ".pl-sidenav") {
+  await page.locator(scope).getByRole("tab", { name, exact: true }).click();
+}
+
+// Field groups are collapsed by default — open every group so the fields are visible.
 async function expandAllGroups(page) {
   await expect(page.locator(".pl-accordion__trigger").first()).toBeVisible();
   const triggers = page.locator(".pl-accordion__trigger");
@@ -34,25 +37,10 @@ async function expandAllGroups(page) {
   }
 }
 
-test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
+test("Workspace settings live in the rail (no scope toggle)", async ({ page }) => {
   await openSettings(page);
-  // The two scope homes (ADR 0048) — the segmented toggle pinned atop the SideNav.
-  expect(await page.locator(".pl-tabs--segmented").locator("button").allTextContents()).toEqual([
-    "Global",
-    "Workspace",
-  ]);
-  // The Global home = the box-shared cascade + the box-level ops (Fleet/Telemetry/
-  // Commons folded back in from the old Box rail surface).
-  expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
-    "Overview",
-    "Configuration",
-    "Fleet",
-    "Telemetry",
-    "Commons",
-  ]);
-  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible(); // default section
-  // The Workspace home → the focused agent's makeup + settings (ADR 0048 fold).
-  await tab(page, "Workspace");
+  // No Global/Workspace segmented toggle anymore — the rail is Workspace directly.
+  await expect(page.locator(".pl-tabs--segmented")).toHaveCount(0);
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Identity",
     "Model & Routing",
@@ -66,49 +54,47 @@ test("Settings is a two-home shell (Global · Workspace)", async ({ page }) => {
     "Theme",
     "Plugins",
   ]);
-  await tab(page, "System");
-  // Field groups are collapsible accordions (DS 0.29); titles render in the trigger.
-  await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
+  await section(page, "System");
+  await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
-test("Global home hosts Fleet · Telemetry · Commons (folded in from the Box surface)", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Global", exact: true }).click();
-  const sidenav = page.locator(".pl-sidenav");
-  for (const s of ["Overview", "Configuration", "Fleet", "Telemetry", "Commons"]) {
-    await expect(sidenav.getByRole("tab", { name: s, exact: true })).toBeVisible();
-  }
-  // Fleet section shows the agents panel.
+test("Global settings open from the header drawer → overlay (Overview · Configuration · Fleet · Telemetry · Commons)", async ({ page }) => {
+  await openGlobal(page);
+  const sidenav = page.locator(".settings-overlay .pl-sidenav");
+  expect(await sidenav.locator("button").allTextContents()).toEqual([
+    "Overview",
+    "Configuration",
+    "Fleet",
+    "Telemetry",
+    "Commons",
+  ]);
+  // Fleet section shows the agents panel; Telemetry renders the dashboard.
   await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  // …and Telemetry renders the dashboard.
   await sidenav.getByRole("tab", { name: "Telemetry", exact: true }).click();
   await expect(page.getByTestId("telemetry-surface")).toBeVisible();
 });
 
+test("the drawer's Telemetry item deep-links the Global Telemetry section", async ({ page }) => {
+  await openGlobal(page, "Telemetry");
+  await expect(page.getByTestId("telemetry-surface")).toBeVisible();
+});
+
 test("Workspace ▸ Model & Routing shows the agent's Model + Routing fields", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
-  // Model + Routing render here (the agent makeup folded into Workspace, ADR 0048).
-  await expect(page.locator(".pl-accordion__title").first()).toBeVisible(); // wait for the suspense load
+  await openSettings(page);
+  await section(page, "Model & Routing");
+  await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Routing"]);
-  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
-  const aux = page.locator('.setting-row[data-key="routing.aux_model"] input');
-  await expect(aux).toHaveValue("protolabs/fast");
-  const key = page.locator('.setting-row[data-key="model.api_key"] input');
-  await expect(key).toHaveAttribute("placeholder", /set/);
+  await expandAllGroups(page);
+  await expect(page.locator('.setting-row[data-key="routing.aux_model"] input')).toHaveValue("protolabs/fast");
+  await expect(page.locator('.setting-row[data-key="model.api_key"] input')).toHaveAttribute("placeholder", /set/);
 });
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
-  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
+  await openSettings(page);
+  await section(page, "Model & Routing");
+  await expandAllGroups(page);
   const save = page.getByRole("button", { name: /Save & apply/ });
   await expect(save).toBeDisabled();
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/turbo");
@@ -119,54 +105,40 @@ test("editing an Agent setting enables save and round-trips", async ({ page }) =
 
 test("a restart-flagged System field shows the restart banner", async ({ page }) => {
   await openSettings(page);
-  await tab(page, "Workspace");
-  await tab(page, "System");
+  await section(page, "System");
   await expect(page.locator(".settings-banner")).toHaveCount(0);
-  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
-  // The bool setting renders as a DS Switch (its native checkbox is 0×0/opacity:0,
-  // so click the switch label to toggle it on rather than .check() the input).
+  await expandAllGroups(page);
   await page.locator('.setting-row[data-key="runtime.autostart_on_boot"] .pl-switch').click();
   await expect(page.locator(".settings-banner")).toContainText("restart");
 });
 
-// ADR 0047 hybrid layered settings — per-agent Settings shows every field with an
+// ADR 0047 hybrid layered settings — per-agent settings show every field with an
 // inheritance badge; an overridden host-scoped field offers reset-to-inherited.
 test("per-agent settings show ADR 0047 inheritance badges + reset", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
-  await page.locator(".pl-sidenav").getByRole("tab", { name: "Model & Routing", exact: true }).click();
-  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
-  // model.name inherits from the host layer.
-  await expect(
-    page.locator('.setting-row[data-key="model.name"] .setting-inheritance'),
-  ).toContainText("inherited from Global");
-  // routing.aux_model inherits the App default.
-  await expect(
-    page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance'),
-  ).toContainText("inherited from default");
-  // model.temperature is host-scoped but overridden here → reset affordance.
+  await openSettings(page);
+  await section(page, "Model & Routing");
+  await expandAllGroups(page);
+  await expect(page.locator('.setting-row[data-key="model.name"] .setting-inheritance')).toContainText(
+    "inherited from Global",
+  );
+  await expect(page.locator('.setting-row[data-key="routing.aux_model"] .setting-inheritance')).toContainText(
+    "inherited from default",
+  );
   const temp = page.locator('.setting-row[data-key="model.temperature"]');
   await expect(temp.locator(".setting-inheritance")).toContainText("overridden here");
   await temp.getByRole("button", { name: /Reset to inherited/ }).click();
   await expect(page.locator(".settings-status")).toContainText("inherited");
-  // routing.fallback_models is a plain agent setting — no badge.
-  await expect(
-    page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance'),
-  ).toHaveCount(0);
+  await expect(page.locator('.setting-row[data-key="routing.fallback_models"] .setting-inheritance')).toHaveCount(0);
 });
 
-test("Configuration edits the host-scoped subset and saves to the host layer", async ({ page }) => {
-  await openSettings(page);
-  await tab(page, "Configuration"); // Global is the default home; host console → editable
+test("Configuration (Global) edits the host-scoped subset and saves to the host layer", async ({ page }) => {
+  await openGlobal(page);
+  await section(page, "Configuration", ".settings-overlay .pl-sidenav");
   await expect(page.locator(".settings-banner").first()).toContainText("box-shared");
-  await expandAllGroups(page); // groups are collapsed by default — open to reach the fields
-  // Only host-scoped fields appear — model.name (host) is here; the agent-scoped
-  // model.api_key + routing.fallback_models are NOT.
+  await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="model.name"]')).toBeVisible();
   await expect(page.locator('.setting-row[data-key="model.api_key"]')).toHaveCount(0);
   await expect(page.locator('.setting-row[data-key="routing.fallback_models"]')).toHaveCount(0);
-  // A save writes to the host layer (the mock echoes the layer).
   await page.locator('.setting-row[data-key="routing.aux_model"] input').fill("protolabs/host-fast");
   const save = page.getByRole("button", { name: /Save & apply/ }).first();
   await save.click();
