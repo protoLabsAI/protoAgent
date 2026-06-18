@@ -11,7 +11,7 @@
   (plugin nav surfaces), [ADR 0045](./0045-chat-panel-slot.md) (chat slot),
   [ADR 0039](./0039-plugin-event-bus.md) (event bus / plugin dots),
   [ADR 0042](./0042-fleet-supervisor-unified-console.md) (slug proxy + bearer),
-  [ADR 0038](./0038-plugin-view-theming-bridge.md) (theming bridge),
+  [ADR 0038](./0038-generative-ui-artifacts-two-mode.md) (two-mode iframe plugin UI / theme handshake),
   [ADR 0056](./0056-unified-dockable-view-model.md) (the unified `View` /
   `viewFor(id)` it forces). Touches `apps/web` (`app/App.tsx` surface registry,
   `state/uiStore.ts`, `app/PluginView.tsx`), `graph/plugins/manifest.py`, and
