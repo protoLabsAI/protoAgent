@@ -228,6 +228,7 @@ export type SettingsGroup = {
   // The owning plugin id for a plugin-contributed group (ADR 0059) — lets the
   // Plugins surface fold this group into that plugin's Installed row.
   plugin_id?: string;
+  guide_url?: string;  // ADR 0059 — optional setup-guide link rendered next to the group
 };
 
 export type WorkflowSummary = {

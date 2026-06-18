@@ -710,14 +710,6 @@ export const api = {
     });
   },
 
-  // Verify a Discord bot token by fetching its identity. Blank falls back to the
-  // saved token. Returns the bot username on success ("Connected as <bot>").
-  testDiscord(botToken: string) {
-    return request<{ ok: boolean; error: string; bot_user: string | null }>("/api/config/test-discord", {
-      method: "POST",
-      body: { bot_token: botToken },
-    });
-  },
 
   finishSetup(config: Partial<AgentConfig>, soul: string) {
     return request<{ ok: boolean; message: string }>("/api/config/setup", {

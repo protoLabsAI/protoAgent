@@ -89,7 +89,9 @@ def _build_router(registry):
         body = req or DiscordProbe()
         token = body.bot_token or (registry.config.get("bot_token") or "")
         ok, bot_user, error = await validate_token(token)
-        return {"ok": ok, "error": error, "bot_user": (bot_user or {}).get("username") if ok else None}
+        # `identity` is the generic test-route field the console renders (ADR 0029) —
+        # the bot's username on success.
+        return {"ok": ok, "error": error, "identity": (bot_user or {}).get("username") if ok else None}
 
     return router
 

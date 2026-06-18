@@ -46,6 +46,9 @@ class PluginManifest:
     # one), and the console renders a generic "Test connection" button for the
     # group. No console edit needed per plugin.
     test: bool = False
+    # Optional setup-guide URL (ADR 0059) — the console renders a generic "Setup
+    # guide" link next to the plugin's settings, so no per-plugin frontend is needed.
+    guide_url: str = ""
     # Console surfaces (ADR 0026) — each entry adds a left-rail icon opening a
     # full view (an iframe of a page the plugin serves at `path`). Declared as
     # data so it's known without importing the plugin, and surfaced to the
@@ -165,6 +168,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
         settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
         test=bool(data.get("test", False)),
+        guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
         emits=[str(x) for x in emits] if isinstance(emits, (list, tuple)) else [],
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],

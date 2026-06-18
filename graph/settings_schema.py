@@ -850,6 +850,10 @@ def build_schema(
         # "Test connection" button posting the group's fields to its test route.
         if getattr(sch, "test", False):
             groups[group]["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
+        # Optional setup-guide link (ADR 0059) — rendered generically next to the
+        # group, so a plugin needs no bespoke console frontend.
+        if getattr(sch, "guide_url", ""):
+            groups[group]["guide_url"] = sch.guide_url
 
     out = list(groups.values())
     # Insertion order = first appearance in FIELDS (core), then plugins.

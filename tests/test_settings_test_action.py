@@ -21,20 +21,30 @@ def test_manifest_parses_test_flag(tmp_path):
                 "name": "Demo",
                 "config_section": "demo",
                 "test": True,
+                "guide_url": "https://example.com/setup",
                 "settings": [{"key": "bot_token", "type": "secret", "label": "Token"}],
             }
         )
     )
     m = load_manifest(d)
     assert m.test is True
+    assert m.guide_url == "https://example.com/setup"
 
 
 def test_comms_manifests_declare_test():
-    # telegram uses the generic Test button via the chat_surface wirer; Discord
-    # keeps its bespoke button (with a guide link), so it doesn't set test.
-    for p in ("telegram",):
+    # The generic Test button (ADR 0029): telegram via the chat_surface wirer,
+    # Discord via its own route — both data-driven, no bespoke console frontend (ADR 0059).
+    for p in ("telegram", "discord"):
         m = yaml.safe_load(Path(f"plugins/{p}/protoagent.plugin.yaml").read_text())
         assert m.get("test") is True, p
+
+
+def test_discord_manifest_declares_generic_affordances():
+    # ADR 0059 — Discord's Test button + setup-guide link are now manifest-declared
+    # (test + guide_url), so the console renders them generically (no Discord frontend).
+    m = yaml.safe_load(Path("plugins/discord/protoagent.plugin.yaml").read_text())
+    assert m.get("test") is True
+    assert str(m.get("guide_url", "")).startswith("http")
 
 
 def test_build_schema_adds_test_endpoint(monkeypatch):
@@ -65,3 +75,20 @@ def test_build_schema_tags_plugin_group_with_plugin_id(monkeypatch):
     groups = ss.build_schema(LangGraphConfig())
     g = next(g for g in groups if g["section"] == "Discord")
     assert g.get("plugin_id") == "discord"
+
+
+def test_build_schema_surfaces_guide_url(monkeypatch):
+    # ADR 0059 — a manifest guide_url flows to the group so the console renders a
+    # generic "Setup guide" link (no per-plugin frontend).
+    class FakeSch:
+        plugin_id = "discord"
+        section = "discord"
+        defaults = {"admin_ids": []}
+        test = True
+        guide_url = "https://example.com/guide"
+
+    spec = {"key": "admin_ids", "type": "string_list", "label": "Admins"}
+    monkeypatch.setattr(ss, "_plugin_field_specs", lambda: [(FakeSch(), "discord.admin_ids", "admin_ids", spec)])
+    g = next(g for g in ss.build_schema(LangGraphConfig()) if g["section"] == "Discord")
+    assert g.get("guide_url") == "https://example.com/guide"
+    assert g.get("test") == {"endpoint": "/api/config/test-discord"}
