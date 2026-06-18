@@ -1,6 +1,6 @@
 import "./settings.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -145,8 +145,8 @@ function QuickSettingDialog({
               <div className="setting-meta">
                 <label className="setting-label" htmlFor={`set-${field.key}`}>
                   {field.label}
-                  {field.restart ? <span className="setting-restart">restart</span> : null}
-                  {field.scope === "host" ? <span className="setting-restart">box-shared</span> : null}
+                  {field.restart ? <Badge status="warning">restart</Badge> : null}
+                  {field.scope === "host" ? <Badge status="info">box-shared</Badge> : null}
                 </label>
                 {field.description ? <p className="setting-desc">{field.description}</p> : null}
               </div>

@@ -1,7 +1,7 @@
 import "../settings/telemetry.css";
 
 import { Table, THead, TBody, Tr, Th, Td } from "@protolabsai/ui/data";
-import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { useSuspenseQuery } from "@tanstack/react-query";
 
 import {
@@ -158,7 +158,7 @@ function TelemetryBody() {
                       <Td>{usd(t.cost_usd)}</Td>
                       <Td>{ms(t.duration_ms)}</Td>
                       <Td>{t.llm_calls}/{t.tool_calls}</Td>
-                      <Td><span className={`turn-state turn-state-${t.state}`}>{t.state}</span></Td>
+                      <Td><Badge status={t.state === "completed" ? "success" : t.state === "failed" ? "error" : "neutral"}>{t.state}</Badge></Td>
                     </Tr>
                   ))}
                 </TBody>

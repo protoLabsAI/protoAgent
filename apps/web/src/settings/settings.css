@@ -157,16 +157,7 @@
   font-size: 0.86rem;
   color: var(--fg);
 }
-.setting-restart {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warning) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
-  color: var(--warning);
-  font-size: 0.62rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
+/* .setting-restart retired — the "restart" / "box-shared" markers are DS <Badge>s now. */
 .setting-desc {
   margin: 3px 0 0;
   font-size: 0.76rem;
@@ -189,25 +180,11 @@
   color: var(--warning);
 }
 .setting-control { min-width: 0; }
-.setting-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 11px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-.setting-input:focus {
-  outline: none;
-  border-color: var(--brand-violet);
-}
-.setting-textarea {
-  resize: vertical;
-  line-height: 1.45;
-}
+/* The DS control (Input/Select/Combobox/Textarea → .pl-input) owns its chrome,
+   sizing, and accent focus ring. The only deviation we keep is mono for the
+   technical settings values (model names, API bases, paths), which read better
+   monospaced — we no longer re-border, re-background, or override the focus. */
+.setting-input { font-family: var(--font-mono); }
 .setting-toggle {
   display: inline-flex;
   align-items: center;

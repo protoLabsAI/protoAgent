@@ -1,8 +1,10 @@
 import "./settings.css";
 import "./delegates.css";
 
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Input, RadioCard, RadioCardGroup, Select, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
+
+import { StatusDot } from "@protolabsai/ui/data";
 
 import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
@@ -115,12 +117,11 @@ export function DelegatesSection() {
                 <strong>
                   {d.health ? (
                     <span
-                      className={`delegate-health ${d.health.ok ? "ok" : d.health.ok === false ? "down" : "unknown"}`}
                       title={d.health.ok
                         ? `${d.health.detail || "reachable"}${d.health.latency_ms != null ? ` (${d.health.latency_ms} ms)` : ""}`
                         : d.health.error || "unreachable"}
                     >
-                      ●
+                      <StatusDot status={d.health.ok ? "success" : d.health.ok === false ? "error" : "neutral"} />
                     </span>
                   ) : null}
                   {d.name} <Badge status="neutral">{d.type}</Badge>
@@ -230,19 +231,16 @@ function DelegateForm({
       </div>
 
       {!editing ? (
-        <div className="delegate-type-picker">
+        <RadioCardGroup
+          name="delegate-type"
+          min="160px"
+          value={type}
+          onValueChange={(v) => { setType(v); setProbe(null); setPreset(""); }}
+        >
           {spec.map((s) => (
-            <button
-              key={s.type}
-              type="button"
-              className={`delegate-type-tile${type === s.type ? " active" : ""}`}
-              onClick={() => { setType(s.type); setProbe(null); setPreset(""); }}
-            >
-              <span className="delegate-type-tile-label">{s.label}</span>
-              <span className="delegate-type-tile-blurb">{s.blurb}</span>
-            </button>
+            <RadioCard key={s.type} value={s.type} title={s.label} blurb={s.blurb} />
           ))}
-        </div>
+        </RadioCardGroup>
       ) : null}
 
       <label className="field">

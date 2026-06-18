@@ -1,0 +1,43 @@
+/* Tools panel (Workspace ▸ Tools) — the live tool inventory grouped into collapsible
+   DS Accordion sections by subsystem. Chrome (the accordion + source/count badges)
+   comes from @protolabsai/ui; only the row layout lives here. */
+.tools-groups {
+  margin-top: 12px;
+}
+.tools-group-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tools-list {
+  display: flex;
+  flex-direction: column;
+}
+.tools-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.tools-row:last-child {
+  border-bottom: 0;
+}
+.tools-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.tools-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.tools-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-width: 0;
+}

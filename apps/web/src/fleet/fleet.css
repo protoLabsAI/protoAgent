@@ -14,9 +14,8 @@
 .fleet-row.active {
   background: var(--bg-hover);
 }
-/* NB: .fleet-dot* is NOT here — it's shared with the always-mounted topbar
-   FleetSwitcher, so it lives in the always-loaded layer (theme.css), not this
-   Settings-only module (which would only load once Settings → Agents opens). */
+/* The row status dot is the DS <StatusDot> now (FleetSwitcher + FleetManager both use it);
+   the hand-rolled .fleet-dot* is retired. */
 .fleet-row-main {
   flex: 1 1 auto;
   min-width: 0;
@@ -58,10 +57,7 @@
   letter-spacing: 0.05em;
   margin: 4px 0 8px;
 }
-.fleet-error {
-  color: var(--error);
-  margin-bottom: 10px;
-}
+/* .fleet-error retired — the fleet manager + new-agent errors are DS <Alert status="error"> now. */
 .fleet-purge {
   display: flex;
   align-items: center;

@@ -5,6 +5,7 @@ import { Link2, Pencil, Play, Plus, Radar, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
+import { Alert, StatusDot } from "@protolabsai/ui/data";
 import { EditableText, Switch } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -155,9 +156,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       />
       <div className="stage-body">
         {error ? (
-          <p className="fleet-error" role="alert">
-            {error}
-            {needsEnable ? (
+          <Alert
+            status="error"
+            action={needsEnable ? (
               <Button
                 variant="default"
                 disabled={enableDelegates.isPending || addDelegate.isPending}
@@ -165,8 +166,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                 data-testid="enable-delegates">
                 {enableDelegates.isPending ? "Enabling…" : "Enable delegates on this agent"}
               </Button>
-            ) : null}
-          </p>
+            ) : undefined}
+          >
+            {error}
+          </Alert>
         ) : null}
         {fleet.isLoading ? (
           <Empty>Loading the fleet…</Empty>
@@ -186,11 +189,9 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               const isActive = (a.host ? "host" : a.id) === slug; // slug = stable id, not name
               return (
                 <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
-                  <span
-                    className={`fleet-dot ${a.running ? "running" : "stopped"}`}
-                    title={a.running ? "running" : "stopped"}
-                    aria-label={a.running ? "running" : "stopped"}
-                  />
+                  <span role="img" title={a.running ? "running" : "stopped"} aria-label={a.running ? "running" : "stopped"}>
+                    <StatusDot status={a.running ? "success" : "neutral"} pulse={a.running} />
+                  </span>
                   <div className="fleet-row-main">
                     <span className="fleet-name">
                       {renaming === a.id ? (
@@ -304,7 +305,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               <ul className="fleet-list">
                 {discovered.map((d) => (
                   <li key={d.url} className="fleet-row">
-                    <span className="fleet-dot running" aria-hidden />
+                    <StatusDot status="success" />
                     <div className="fleet-row-main">
                       <span className="fleet-name">{d.name}</span>
                       <span className="fleet-meta">{d.url}</span>

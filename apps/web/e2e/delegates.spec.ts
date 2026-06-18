@@ -19,8 +19,8 @@ test("lists configured delegates with type + secret badges", async ({ page }) =>
   await expect(row).toBeVisible();
   await expect(row.getByText("openai", { exact: true })).toBeVisible(); // DS Badge (#832)
   await expect(row.getByText("secret set")).toBeVisible();
-  // Health prober (PR4): the cached status surfaces as a dot.
-  await expect(row.locator(".delegate-health.ok")).toBeVisible();
+  // Health prober (PR4): the cached status surfaces as a DS StatusDot.
+  await expect(row.locator(".pl-dot--success")).toBeVisible();
 });
 
 test("Add opens a type picker and a schema-driven form", async ({ page }) => {
@@ -28,13 +28,13 @@ test("Add opens a type picker and a schema-driven form", async ({ page }) => {
   const panel = page.locator(".delegates-section");
   await panel.getByRole("button", { name: /Add delegate/ }).click();
 
-  // Three type tiles from /api/delegate-types.
-  const tiles = panel.locator(".delegate-type-tile");
+  // Three type cards from /api/delegate-types (DS RadioCard).
+  const tiles = panel.locator(".pl-radiocard");
   await expect(tiles).toHaveCount(3);
 
   // Default type (a2a) renders its URL field; switching to acp renders Command.
   await expect(panel.getByText("URL", { exact: false })).toBeVisible();
-  await panel.locator(".delegate-type-tile", { hasText: "Coding agent" }).click();
+  await panel.locator(".pl-radiocard", { hasText: "Coding agent" }).click();
   await expect(panel.getByText("Command", { exact: false })).toBeVisible();
   await expect(panel.getByText("Workdir", { exact: false })).toBeVisible();
 

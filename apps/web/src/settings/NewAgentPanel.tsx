@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 
-import { RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
+import { Input, RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
+import { Alert } from "@protolabsai/ui/data";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
 import { api } from "../lib/api";
@@ -53,11 +54,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
         }
       />
       <div className="stage-body">
-        {error ? (
-          <p className="fleet-error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        {error ? <Alert status="error">{error}</Alert> : null}
 
         <p className="fleet-section-label">Archetype</p>
         <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={setPicked}>
@@ -68,7 +65,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
 
         <label className="field archetype-name-field">
           <span>Name</span>
-          <input
+          <Input
             value={name}
             autoFocus
             placeholder="e.g. ava, roxy, research-bot"

@@ -375,7 +375,7 @@ function SettingRow({
               indicator a saved key looks identical to an empty one ("did it save?").
               Mirror the Delegates panel's "secret set" pill. */}
           {field.type === "secret" && field.is_set ? <Badge status="success">set</Badge> : null}
-          {field.restart ? <span className="setting-restart">restart</span> : null}
+          {field.restart ? <Badge status="warning">restart</Badge> : null}
         </label>
         {field.description ? <p className="setting-desc">{field.description}</p> : null}
         {inherit ? (

@@ -36,18 +36,15 @@
 
 /* Plugins panel (ADR 0027) — install from a git URL, under Settings → Integrations. */
 .plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
-.plugin-install-form input { flex: 1; min-width: 220px; padding: 7px 10px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 7px; color: var(--fg); font-size: 13px; }
+/* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
+.plugin-install-form input { flex: 1; min-width: 220px; }
 .plugin-install-status { font-size: 12px; color: var(--fg-secondary); margin: 4px 0 10px; }
-.plugin-sync-banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; font-size: 12px; border-radius: 7px; background: color-mix(in srgb, var(--warning) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); color: var(--fg-secondary); }
-.plugin-sync-banner > svg { color: var(--warning); flex-shrink: 0; }
+/* .plugin-sync-banner retired — the locked-but-missing notice is a DS <Alert status="warning"> now. */
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .plugin-row-main { flex: 1; min-width: 0; }
 .plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .plugin-ver { font-size: 11px; color: var(--fg-muted); }
-.plugin-state { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 999px; }
-.plugin-state.on { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
-.plugin-state.off { background: var(--bg-hover); color: var(--fg-muted); }
-.plugin-state.warn { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); display: inline-flex; align-items: center; gap: 3px; }
+/* .plugin-state* retired — enabled / not-enabled / missing / local are DS <Badge>s now. */
 .plugin-desc { font-size: 12px; color: var(--fg-secondary); margin: 4px 0; }
 .plugin-meta { font-size: 11px; color: var(--fg-muted); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
 .plugin-review { font-size: 11px; color: var(--fg-muted); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }

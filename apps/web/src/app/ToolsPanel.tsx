@@ -1,17 +1,18 @@
+import "./tools.css";
+
 import { Input } from "@protolabsai/ui/forms";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
+import { Badge } from "@protolabsai/ui/primitives";
 import { toolsQuery } from "../lib/queries";
 import { StagePanel } from "./ErrorBoundary";
-import { StatusPill } from "./StatusPill";
 
 // Runtime → Tools: the live tool inventory the lead agent + subagents can call,
 // grouped by source (core / plugin / mcp). Searchable — the list grows as you
-// add plugins and MCP servers.
-
-const SOURCE_TONE = { core: "success", plugin: "muted", mcp: "muted" } as const;
+// add plugins and MCP servers. Each subsystem is a collapsible DS Accordion
+// section so a long inventory stays scannable; a search expands every match.
 
 // Subsystem ordering — General leads; integrations next; plugin/MCP last.
 const CATEGORY_ORDER = [
@@ -51,22 +52,39 @@ function ToolsBody() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        {ordered.map((cat) => (
-          <div key={cat}>
-            <p className="panel-kicker">{cat} <span className="muted">· {groups.get(cat)!.length}</span></p>
-            <div className="table-list">
-              {groups.get(cat)!.map((t) => (
-                <div className="table-row" key={t.name}>
-                  <span>
-                    <strong>{t.name}</strong>
-                    {t.description ? <span className="muted"> — {t.description}</span> : null}
-                  </span>
-                  <StatusPill label={t.source} tone={SOURCE_TONE[t.source] ?? "muted"} />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+        {ordered.length ? (
+          <Accordion className="tools-groups">
+            {ordered.map((cat, i) => {
+              const items = groups.get(cat)!;
+              return (
+                <AccordionItem
+                  // Re-key on the query so a search remounts the sections with the
+                  // "expand every match" defaultOpen (defaultOpen only applies on mount).
+                  key={`${cat}::${query}`}
+                  defaultOpen={Boolean(query) || i === 0}
+                  title={
+                    <span className="tools-group-head">
+                      {cat}
+                      <Badge status="neutral">{items.length}</Badge>
+                    </span>
+                  }
+                >
+                  <div className="tools-list">
+                    {items.map((t) => (
+                      <div className="tools-row" key={t.name}>
+                        <div className="tools-row-main">
+                          <code className="tools-name">{t.name}</code>
+                          {t.description ? <span className="tools-desc">{t.description}</span> : null}
+                        </div>
+                        <Badge status={t.source === "core" ? "success" : "neutral"}>{t.source}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
+        ) : null}
         {tools.length === 0 ? <p className="muted">No tools match.</p> : null}
       </div>
     </>

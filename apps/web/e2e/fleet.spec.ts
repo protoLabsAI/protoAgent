@@ -61,7 +61,9 @@ test("stop a running agent flips its status dot", async ({ page }) => {
   const stop = ava.getByRole("button", { name: "Stop" });
   if (await stop.count()) {
     await stop.click();
-    await expect(ava.locator(".fleet-dot.stopped")).toBeVisible();
+    // Stopped agents drop the success dot and surface a Start button.
+    await expect(ava.getByRole("button", { name: "Start" })).toBeVisible();
+    await expect(ava.locator(".pl-dot--success")).toHaveCount(0);
   }
 });
 
@@ -111,7 +113,7 @@ test("host without delegates: add → 404 → Enable delegates → retried add s
     .getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })
     .click();
 
-  const error = page.locator(".fleet-error");
+  const error = page.locator(".pl-alert--error");
   await expect(error).toContainText("can't hold delegates");
   await page.getByTestId("enable-delegates").click();
 

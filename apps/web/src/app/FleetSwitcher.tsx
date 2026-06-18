@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
 import { Badge } from "@protolabsai/ui/primitives";
+import { StatusDot } from "@protolabsai/ui/data";
 
 import { agentHref, api, currentSlug } from "../lib/api";
 import { queryKeys } from "../lib/queries";
@@ -42,7 +43,7 @@ export function FleetSwitcher({ fallbackName, onNewAgent }: { fallbackName: Reac
         return (
           <MenuItem
             key={a.name}
-            icon={<span className={`fleet-dot ${a.running ? "running" : "stopped"}`} aria-hidden />}
+            icon={<StatusDot status={a.running ? "success" : "neutral"} pulse={a.running} />}
             onSelect={() => {
               if (!isCurrent) window.location.href = agentHref(slugOf(a)); // navigate → this agent
             }}

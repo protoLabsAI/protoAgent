@@ -1,7 +1,8 @@
 import "./plugins.css";
 
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Input } from "@protolabsai/ui/forms";
+import { Alert } from "@protolabsai/ui/data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, DownloadCloud, Loader2, Package, Plus, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -146,23 +147,24 @@ export function PluginsSection() {
 
       {/* Locked-but-missing plugins (fresh clone / restored data dir) → one-click sync */}
       {missing.length ? (
-        <div className="plugin-sync-banner" role="status">
-          <AlertTriangle size={14} />
-          <span>
-            {missing.length === 1 ? <><code>{missing[0].id}</code> is</> : <>{missing.length} plugins are</>}{" "}
-            in <code>plugins.lock</code> but missing on disk.
-          </span>
-          <Button
-            type="button"
-            variant="default"
-            size="sm"
-            disabled={sync.isPending}
-            onClick={() => { setStatus(""); sync.mutate(); }}
-            title="Re-clone every locked plugin at its pinned commit"
-          >
-            {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
-          </Button>
-        </div>
+        <Alert
+          status="warning"
+          action={
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              disabled={sync.isPending}
+              onClick={() => { setStatus(""); sync.mutate(); }}
+              title="Re-clone every locked plugin at its pinned commit"
+            >
+              {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
+            </Button>
+          }
+        >
+          {missing.length === 1 ? <><code>{missing[0].id}</code> is</> : <>{missing.length} plugins are</>}{" "}
+          in <code>plugins.lock</code> but missing on disk.
+        </Alert>
       ) : null}
 
       {/* Installed list */}
@@ -245,7 +247,7 @@ function PluginRow({
           <strong>{m?.name || p.id}</strong>
           {m?.version ? <span className="plugin-ver">v{m.version}</span> : null}
           {local ? (
-            <span className="plugin-state" title="On disk but not in plugins.lock — a local copy. Not update-tracked.">local</span>
+            <span title="On disk but not in plugins.lock — a local copy. Not update-tracked."><Badge status="neutral">local</Badge></span>
           ) : (
             <PluginFreshness update={update} />
           )}
@@ -261,8 +263,8 @@ function PluginRow({
               {updating ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Update
             </Button>
           ) : null}
-          <span className={`plugin-state ${p.enabled ? "on" : "off"}`}>{p.enabled ? "enabled" : "not enabled"}</span>
-          {!p.present ? <span className="plugin-state warn"><AlertTriangle size={12} /> missing — sync above</span> : null}
+          <Badge status={p.enabled ? "success" : "neutral"}>{p.enabled ? "enabled" : "not enabled"}</Badge>
+          {!p.present ? <Badge status="warning"><AlertTriangle size={12} /> missing — sync above</Badge> : null}
         </div>
         {m?.description ? <p className="plugin-desc">{m.description}</p> : null}
         <p className="plugin-meta">

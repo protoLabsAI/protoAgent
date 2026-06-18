@@ -12,24 +12,8 @@
   gap: 12px;
 }
 .delegate-form-head { display: flex; align-items: center; justify-content: space-between; }
-.delegate-type-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
-.delegate-type-tile {
-  display: grid;
-  gap: 3px;
-  text-align: left;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-.delegate-type-tile:hover { border-color: var(--brand-violet); }
-.delegate-type-tile.active { border-color: var(--brand-violet); background: color-mix(in srgb, var(--brand-violet) 12%, var(--bg)); }
-.delegate-type-tile-label { font-size: 13px; font-weight: 600; }
-.delegate-type-tile-blurb { font-size: 11px; color: var(--fg-muted); }
+/* The delegate-type picker is the DS RadioCardGroup/RadioCard now (matches the
+   archetype picker in NewAgentPanel) — the hand-rolled .delegate-type-tile* tiles
+   are retired. */
 .delegate-field-help { font-size: 11px; color: var(--fg-muted); }
-.delegate-health { font-size: 10px; line-height: 1; }
-.delegate-health.ok { color: var(--success); }
-.delegate-health.down { color: var(--error); }
-.delegate-health.unknown { color: var(--fg-muted); }
+/* .delegate-health* retired — the row health indicator is a DS <StatusDot> now. */

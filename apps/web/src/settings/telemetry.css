@@ -31,21 +31,7 @@
 .telemetry-table tr.turn-failed td {
   color: var(--error);
 }
-.turn-state {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-}
-.turn-state-completed {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 40%, transparent);
-}
-.turn-state-failed {
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 40%, transparent);
-}
+/* .turn-state* retired — the State cell is a DS <Badge> (success/error/neutral) now. */
 
 /* Telemetry insights (ADR 0006 Slice 4 — advise-only) */
 .telemetry-insights {

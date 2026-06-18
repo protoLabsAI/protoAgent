@@ -1816,26 +1816,9 @@ textarea {
    rules moved to src/fleet/fleet.css (#832). The .fleet-active-tag / .fleet-delegate-tag /
    .fleet-host-tag text tags are now DS <Badge> (#832).
    Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), .field-hint
-   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), and .fleet-dot*
-   — both rendered by the always-mounted topbar FleetSwitcher AND the FleetManager
-   panel, so they stay in this always-loaded layer (not a Settings-only module that loads lazily),
-   plus the global ::view-transition root crossfade. */
-
-/* Status dot — shared by the topbar FleetSwitcher and the FleetManager panel. */
-.fleet-dot {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--fg-muted);
-}
-.fleet-dot.running {
-  background: var(--success);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 50%, transparent);
-}
-.fleet-dot.stopped {
-  opacity: 0.45;
-}
+   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), plus the global
+   ::view-transition root crossfade. The status dots (FleetSwitcher + FleetManager) are the DS
+   <StatusDot> now, so the hand-rolled .fleet-dot* is retired. */
 
 /* Archetype picker is now the DS <RadioCardGroup> (protoContent #254). */
 .archetype-name-field {
