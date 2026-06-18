@@ -36,6 +36,11 @@ REPO_ROOT = _BUNDLE_CONFIG_DIR.parent
 LOCK_PATH = Path(os.environ.get("PROTOAGENT_PLUGINS_LOCK", str(REPO_ROOT / "plugins.lock")))
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+# A git ref we'll accept from a caller — branch/tag/sha shapes only. Keeps a ref
+# from being interpolated into the GitHub API URL (path/query injection) or passed
+# to git as an option (a leading `-`). Permissive enough for real refs
+# (`release/1.2`, `v1.0.0`, a 40-char sha) but no `..`, control chars, or schemes.
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://", "/")
 
 # `git ls-remote` network safety (check_updates): a bounded timeout so a slow/dead
@@ -72,6 +77,13 @@ def _git(*args: str, cwd: Path | None = None, timeout: float | None = None) -> s
 def _validate_url(url: str) -> None:
     if not any(url.startswith(s) for s in _ALLOWED_SCHEMES):
         raise InstallError(f"unsupported source {url!r} — use https://, ssh://, git@, or a local path.")
+
+
+def _validate_ref(ref: str) -> None:
+    """Reject a ref that could escape the GitHub API URL path / inject a query, or
+    reach git as an option. Empty = the default branch (resolved separately)."""
+    if ".." in ref or not _REF_RE.match(ref):
+        raise InstallError(f"invalid ref {ref!r} — use a branch, tag, or commit SHA.")
 
 
 def _source_allowed(url: str, allow: list[str] | None) -> bool:
@@ -330,6 +342,8 @@ def install(
     to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
     install its deps. Returns the install summary."""
     _validate_url(url)
+    if ref:
+        _validate_ref(ref)  # before it reaches git or the GitHub API URL (PR #1140 QA)
     if not _source_allowed(url, allow):
         raise InstallError(
             f"source {url!r} is not on plugins.sources.allow — add it or install from an allowed origin."

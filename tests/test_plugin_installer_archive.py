@@ -69,6 +69,26 @@ def test_github_owner_repo_rejects_non_github():
         installer._github_owner_repo("https://gitlab.com/x/y")
 
 
+@pytest.mark.parametrize("ref", ["main", "release/1.2", "v1.0.0", "a" * 40, "feature_x"])
+def test_validate_ref_accepts_real_refs(ref):
+    installer._validate_ref(ref)  # no raise
+
+
+@pytest.mark.parametrize("ref", ["../../etc/passwd", "main..evil", "-upload-pack=x", "a b", "x?y=z", "/abs", "a#frag"])
+def test_validate_ref_rejects_unsafe(ref):
+    with pytest.raises(installer.InstallError, match="invalid ref"):
+        installer._validate_ref(ref)
+
+
+def test_install_rejects_unsafe_ref_before_fetch(env, monkeypatch):
+    # Refused at validation — never reaches the GitHub API URL or git.
+    called = {"fetch": False}
+    monkeypatch.setattr(installer, "_fetch", lambda *a, **k: called.__setitem__("fetch", True))
+    with pytest.raises(installer.InstallError, match="invalid ref"):
+        installer.install("https://github.com/acme/demo_ext", "../../evil")
+    assert called["fetch"] is False
+
+
 @pytest.mark.parametrize("spec,name", [("websockets>=12", "websockets"), ("httpx", "httpx"), ("pkg[extra]>=1", "pkg")])
 def test_dep_pkg_name(spec, name):
     assert installer._dep_pkg_name(spec) == name
