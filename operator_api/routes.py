@@ -255,6 +255,36 @@ def register_operator_routes(
         except Exception as exc:
             raise _http_error(exc) from exc
 
+    @app.delete("/api/background/{job_id}")
+    async def _background_delete(job_id: str):
+        """Delete a FINISHED background job's entry (housekeeping). Running jobs are kept —
+        cancel them first. Returns ``{ok, deleted}``."""
+        from runtime.state import STATE
+
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is None:
+            return {"ok": False, "detail": "Background jobs are not available."}
+        try:
+            deleted = await asyncio.to_thread(mgr.store.delete, job_id)
+            return {"ok": True, "deleted": bool(deleted)}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
+    @app.post("/api/background/clear")
+    async def _background_clear(session: str = ""):
+        """Delete all FINISHED background jobs (optionally scoped to an originating
+        ``session``). Running jobs are kept. Returns ``{ok, cleared}``."""
+        from runtime.state import STATE
+
+        mgr = getattr(STATE, "background_mgr", None)
+        if mgr is None:
+            return {"ok": False, "detail": "Background jobs are not available."}
+        try:
+            cleared = await asyncio.to_thread(mgr.store.clear_finished, session or None)
+            return {"ok": True, "cleared": int(cleared)}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @app.post("/api/subagents/run")
     async def _subagent_run(req: SubagentRunRequest):
         try:

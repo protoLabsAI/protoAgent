@@ -1,5 +1,5 @@
 import { Dialog } from "@protolabsai/ui/overlays";
-import { Bot, CheckCircle2, Loader2, Square, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
@@ -118,6 +118,7 @@ export function BackgroundJobs() {
 
   const list = useMemo(() => Object.values(jobs).sort(byRecency), [jobs]);
   const running = list.filter((j) => j.status === "running").length;
+  const finished = list.length - running;
 
   // Tick the elapsed clock once a second while the dialog is open and work runs.
   useEffect(() => {
@@ -133,6 +134,30 @@ export function BackgroundJobs() {
       await api.stopBackground(jobId);
     } catch {
       /* best-effort; the registry stays source of truth */
+    }
+  }
+
+  // Delete a single finished entry — optimistic remove; the registry is source of truth.
+  async function del(jobId: string) {
+    setJobs((m) => {
+      const next = { ...m };
+      delete next[jobId];
+      return next;
+    });
+    try {
+      await api.deleteBackground(jobId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Clear all finished entries at once (running jobs stay).
+  async function clearFinished() {
+    setJobs((m) => Object.fromEntries(Object.entries(m).filter(([, j]) => j.status === "running")));
+    try {
+      await api.clearFinishedBackground();
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -161,11 +186,20 @@ export function BackgroundJobs() {
           {list.length === 0 ? (
             <p className="bg-jobs-empty">No background agents have run yet.</p>
           ) : (
-            <ul className="bg-jobs-list">
-              {list.map((j) => (
-                <BgJobRow key={j.id} job={j} tools={progress[j.id] || []} onStop={stop} />
-              ))}
-            </ul>
+            <>
+              {finished > 0 ? (
+                <div className="bg-jobs-toolbar">
+                  <button type="button" className="bg-jobs-clear" onClick={clearFinished}>
+                    <Trash2 size={12} /> Clear finished ({finished})
+                  </button>
+                </div>
+              ) : null}
+              <ul className="bg-jobs-list">
+                {list.map((j) => (
+                  <BgJobRow key={j.id} job={j} tools={progress[j.id] || []} onStop={stop} onDelete={del} />
+                ))}
+              </ul>
+            </>
           )}
         </Dialog>
       ) : null}
@@ -177,10 +211,12 @@ function BgJobRow({
   job,
   tools,
   onStop,
+  onDelete,
 }: {
   job: BackgroundJobDTO;
   tools: ProgressTool[];
   onStop: (jobId: string) => void;
+  onDelete: (jobId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const running = job.status === "running";
@@ -235,7 +271,17 @@ function BgJobRow({
           >
             <Square size={12} />
           </button>
-        ) : null}
+        ) : (
+          <button
+            type="button"
+            className="bg-jobs-stop"
+            onClick={() => onDelete(job.id)}
+            title="Delete this entry"
+            aria-label="Delete"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
       </div>
       {hasResult && expanded ? (
         <div className="bg-jobs-result">
