@@ -40,6 +40,8 @@ def test_runtime_status_redacts_secret_values() -> None:
     assert status["project"]["path"] == "/tmp/protoagent"
     assert status["project"]["allowed_dirs"] == ["/tmp/protoagent", "/home/kj/projects/foo"]
     assert status["knowledge"]["resolved_path"] == "/tmp/protoagent/knowledge.db"
+    # Flag on (default) + store built → ready.
+    assert status["knowledge"]["status"] == "ready"
     assert status["scheduler"]["backend"] == "local"
     assert "sk-secret" not in repr(status)
 
@@ -55,6 +57,8 @@ def test_runtime_status_handles_missing_config() -> None:
     assert status["graph_loaded"] is False
     assert status["model"] is None
     assert status["knowledge"]["enabled"] is False
+    # No config yet (booting) → initializing, not "disabled".
+    assert status["knowledge"]["status"] == "initializing"
     assert status["project"]["allowed_dirs"] == []
     assert status["version"] == ""  # not passed — defaults empty, key still present
 

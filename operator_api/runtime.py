@@ -62,7 +62,7 @@ def build_runtime_status(
             "model": None,
             "identity": None,
             "middleware": {},
-            "knowledge": {"enabled": False, "configured_path": None, "resolved_path": None},
+            "knowledge": {"enabled": False, "status": "initializing", "configured_path": None, "resolved_path": None},
             "skills": {"enabled": False, "count": skill_count, "configured_path": None},
             "mcp": mcp_block,
             "plugins": plugins_block,
@@ -73,6 +73,13 @@ def build_runtime_status(
             "instance_uid": instance_uid,
             "version": version,
         }
+
+    # Knowledge can be ON (the config flag) but still building its store during the
+    # boot/recompile window — surface that as "initializing" so the UI doesn't read a
+    # warming store as "disabled" (the flag is the source of truth for on/off).
+    _kn_on = bool(getattr(config, "knowledge_middleware", False))
+    _kn_resolved = str(getattr(knowledge_store, "path", "") or "") or None
+    _kn_status = "disabled" if not _kn_on else ("ready" if _kn_resolved else "initializing")
 
     return {
         "setup_complete": bool(setup_complete),
@@ -105,9 +112,10 @@ def build_runtime_status(
             "execute_code": bool(getattr(config, "execute_code_enabled", False)),
         },
         "knowledge": {
-            "enabled": bool(getattr(config, "knowledge_middleware", False)),
+            "enabled": _kn_on,
+            "status": _kn_status,
             "configured_path": getattr(config, "knowledge_db_path", None),
-            "resolved_path": str(getattr(knowledge_store, "path", "") or "") or None,
+            "resolved_path": _kn_resolved,
             "top_k": getattr(config, "knowledge_top_k", None),
         },
         "skills": {

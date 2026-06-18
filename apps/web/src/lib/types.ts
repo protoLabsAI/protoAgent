@@ -28,6 +28,9 @@ export type RuntimeStatus = {
   middleware: Record<string, boolean>;
   knowledge: {
     enabled: boolean;
+    // "ready" (store built) · "initializing" (flag on, store still warming up during
+    // boot/recompile) · "disabled" (flag off). Optional for older backends.
+    status?: "ready" | "initializing" | "disabled";
     configured_path: string | null;
     resolved_path: string | null;
     top_k?: number | null;

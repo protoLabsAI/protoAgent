@@ -47,7 +47,17 @@ function StatusBody() {
           <Metric icon={<Bot size={16} />} label="Agent" value={brandName(runtime.identity?.name)} />
           <Metric icon={<Tag size={16} />} label="Version" value={runtime.version ? `v${runtime.version}` : "—"} />
           <Metric icon={<Settings2 size={16} />} label="Provider" value={runtime.model?.provider || "none"} />
-          <Metric icon={<Database size={16} />} label="Knowledge" value={runtime.knowledge.resolved_path || runtime.knowledge.configured_path || "disabled"} />
+          <Metric
+            icon={<Database size={16} />}
+            label="Knowledge"
+            value={
+              runtime.knowledge.status === "initializing"
+                ? "initializing…"
+                : runtime.knowledge.resolved_path ||
+                  runtime.knowledge.configured_path ||
+                  (runtime.knowledge.enabled ? "enabled" : "disabled")
+            }
+          />
           <Metric icon={<Sparkles size={16} />} label="Goal mode" value={runtime.goal.enabled ? "on" : "off"} />
         </div>
         {runtime.storage ? (
