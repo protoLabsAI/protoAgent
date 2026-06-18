@@ -27,6 +27,7 @@ routes don't serve until a process restart, so both routes flag it.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import HTTPException
 
@@ -131,6 +132,52 @@ def register_plugin_routes(app) -> None:
                     "secrets": m.secrets,
                 }
             out.append(item)
+        return {"plugins": out}
+
+    @app.get("/api/plugins/catalog")
+    async def _catalog():
+        """The curated official-plugin directory (ADR 0059) — `config/plugin-catalog.json`
+        (live dir overrides the bundle), merged with install state so the Discover UI can
+        show **Available / Installed / Bundled**. State is matched by `repo` URL (robust)
+        or id; one-click install runs `plugin install <repo>` (ADR 0058)."""
+        import json
+
+        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+
+        entries: list[dict] = []
+        for base in (_live_config_dir(), _BUNDLE_CONFIG_DIR):
+            f = base / "plugin-catalog.json"
+            if f.exists():
+                try:
+                    entries = (json.loads(f.read_text()) or {}).get("plugins") or []
+                except (json.JSONDecodeError, OSError):
+                    log.warning("[plugins] plugin-catalog.json unreadable at %s", f)
+                break
+
+        def _norm(u: str | None) -> str:
+            return re.sub(r"\.git$", "", (u or "").strip().rstrip("/")).lower()
+
+        installed = installer.list_installed()
+        by_url = {_norm(e.get("source_url")): e["id"] for e in installed if e.get("source_url")}
+        by_id = {e["id"] for e in installed}
+        enabled = {p["id"]: bool(p.get("enabled")) for p in (STATE.plugin_meta or [])}
+
+        out = []
+        for entry in entries:
+            eid = entry.get("id") or ""
+            repo = entry.get("repo") or entry.get("install_url") or ""
+            # Bundled built-in (still in the repo's plugins/ tree) — already present, can't
+            # be git-installed over (the installer's built-in guard); show as "Bundled".
+            bundled = bool(eid) and (installer.REPO_ROOT / "plugins" / eid).exists()
+            inst_id = by_url.get(_norm(repo)) or (eid if eid in by_id else None)
+            out.append(
+                {
+                    **entry,
+                    "bundled": bundled,
+                    "installed": inst_id is not None,
+                    "enabled": enabled.get(inst_id, False) if inst_id else False,
+                }
+            )
         return {"plugins": out}
 
     @app.post("/api/plugins/install")

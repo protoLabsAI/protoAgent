@@ -153,6 +153,24 @@ function handleApiGet(pathname, fleet = FLEET) {
       return DELEGATES;
     case "/api/plugins/installed":
       return { plugins: INSTALLED_PLUGINS };
+    case "/api/plugins/catalog":
+      // Discover directory (ADR 0059) — official entries with mixed install state.
+      return {
+        plugins: [
+          {
+            id: "artifact", name: "Artifact", category: "Generative UI", official: true,
+            repo: "https://github.com/protoLabsAI/artifact-plugin",
+            tagline: "Render HTML/SVG/Mermaid/React into a sandboxed iframe.",
+            bundled: false, installed: false, enabled: false,
+          },
+          {
+            id: "discord", name: "Discord", category: "Communication", official: true,
+            repo: "https://github.com/protoLabsAI/discord-plugin",
+            tagline: "Run your agent as a Discord bot.",
+            bundled: false, installed: true, enabled: true,
+          },
+        ],
+      };
     case "/api/plugins/updates":
       // Per-plugin freshness (ADR 0027). Console-installed plugins are up to date
       // (their resolved_sha is the latest); the seeded fixtures exercise the other
