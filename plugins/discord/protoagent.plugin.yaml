@@ -11,6 +11,11 @@ requires_env: []
 # Config section (ADR 0019) — claims the top-level `discord` section, so the
 # existing Settings group + wizard step keep working unchanged.
 config_section: discord
+# Generic console Test button (ADR 0029) → POST /api/config/test-discord (served by
+# this plugin's router below); `guide_url` adds a generic "Setup guide" link next to
+# it — so the console needs NO Discord-specific frontend (ADR 0059 bd-23a.5).
+test: true
+guide_url: "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup"
 config:
   enabled: false
   admin_ids: []

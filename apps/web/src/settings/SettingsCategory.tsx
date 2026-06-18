@@ -76,9 +76,6 @@ export function HostConfigLocked() {
   );
 }
 
-// Setup walkthroughs live in the template's docs (forks don't ship their own site).
-const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
-
 // One category's settings — the field groups tagged with `category`, rendered with
 // their own dirty-tracking, Save-&-apply, and per-group Test buttons. Extracted from
 // the old monolithic SettingsSurface so settings can live in their home view (Agent,
@@ -140,7 +137,6 @@ export function SettingsCategory({
   const isVisible = (field: SettingsField): boolean => fieldVisible(field, (k) => currentValues.get(k));
 
   const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
-  const hasDiscord = groups.some((g) => g.section === "Discord");
 
   // Active agent runtime (ADR 0033) — for the banner + header badge when this category
   // carries the selector (the Agent settings). Reflects the pending (dirty) choice live.
@@ -212,13 +208,6 @@ export function SettingsCategory({
     onSettled: () => setTestingSection(null),
   });
 
-  const testDiscord = useMutation({
-    mutationFn: () => api.testDiscord(asStr(dirty["discord.bot_token"])),
-    onMutate: () => setStatus("testing Discord…"),
-    onSuccess: (r) => setStatus(r.ok ? `Discord OK — connected as ${r.bot_user || "your bot"}.` : `Discord connection failed — ${r.error || "check the token"}`),
-    onError: (e) => setStatus(`Discord test failed: ${errMsg(e)}`),
-  });
-
   const discard = () => { setDirty({}); setStatus(""); };
 
   // The fields + Test/Connect for one group — rendered inside an AccordionItem in the
@@ -237,19 +226,19 @@ export function SettingsCategory({
           resetting={reset.isPending}
         />
       ))}
-      {hasDiscord && group.section === "Discord" ? (
+      {/* Generic, data-driven group actions (ADR 0059) — a Test button from the
+          manifest's `test: true` and a setup-guide link from `guide_url`. No
+          per-plugin frontend. */}
+      {group.test || group.guide_url ? (
         <div className="settings-group-actions">
-          <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
-          <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
-        </div>
-      ) : null}
-      {group.test ? (
-        <div className="settings-group-actions">
-          <TestConnectionButton
-            onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
-            pending={testGroup.isPending && testingSection === group.section}
-            disabled={save.isPending}
-          />
+          {group.test ? (
+            <TestConnectionButton
+              onClick={() => { setTestingSection(group.section); testGroup.mutate({ endpoint: group.test!.endpoint, fields: groupFields(group) }); }}
+              pending={testGroup.isPending && testingSection === group.section}
+              disabled={save.isPending}
+            />
+          ) : null}
+          {group.guide_url ? <HelpLink href={group.guide_url}>Setup guide</HelpLink> : null}
         </div>
       ) : null}
     </>

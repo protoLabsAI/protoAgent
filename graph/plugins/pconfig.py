@@ -60,6 +60,7 @@ class PluginConfigSchema:
     secrets: list = field(default_factory=list)
     settings: list = field(default_factory=list)
     test: bool = False  # has a /api/config/test-<section> check (ADR 0029)
+    guide_url: str = ""  # optional setup-guide link rendered next to the group (ADR 0059)
 
 
 def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[PluginConfigSchema]:
@@ -101,6 +102,7 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None) -> list[Plugin
                     list(m.secrets or []),
                     list(m.settings or []),
                     test=bool(getattr(m, "test", False)),
+                    guide_url=str(getattr(m, "guide_url", "") or ""),
                 )
             )
         return out
