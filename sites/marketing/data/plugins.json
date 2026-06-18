@@ -88,40 +88,6 @@
     }
   },
   {
-    "id": "slack",
-    "name": "Slack",
-    "category": "Communication",
-    "official": true,
-    "tagline": "Run your agent as a Slack app over Socket Mode (no public URL) — inbound messages, replies back out.",
-    "adds": [
-      "surface",
-      "config"
-    ],
-    "bundled": true,
-    "enable": "slack",
-    "links": {
-      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/slack",
-      "docs": "/docs/guides/communication-plugins"
-    }
-  },
-  {
-    "id": "google",
-    "name": "Google (Gmail + Calendar)",
-    "category": "Integrations",
-    "official": true,
-    "tagline": "Gmail + Calendar via a managed MCP server, connected in-app with an OAuth consent flow — no credentials.json to wrangle.",
-    "adds": [
-      "mcp",
-      "secrets"
-    ],
-    "bundled": true,
-    "enable": "google",
-    "links": {
-      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/google",
-      "docs": "/docs/guides/plugins"
-    }
-  },
-  {
     "id": "github",
     "name": "GitHub (read tools)",
     "category": "Integrations",

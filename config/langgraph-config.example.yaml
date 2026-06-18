@@ -280,15 +280,3 @@ discord:
   enabled: false
   # bot_token: stored in secrets.yaml (set via the UI), not here
   admin_ids: []
-
-# Google surface (ADR 0017) — Gmail + Calendar via the bundled MCP server.
-# Configure in-app (setup wizard / System → Settings → Google): paste your Google
-# Cloud "Desktop app" OAuth client (id + secret → secrets.yaml), then click
-# "Connect Google" to run the consent flow (opens your browser) — the token is
-# cached in the per-user config dir. When enabled + connected the google MCP
-# server is auto-wired (no mcp.servers editing). `tz` sets day bounds for "today".
-google:
-  enabled: false
-  # client_id: set via the UI
-  # client_secret: stored in secrets.yaml (set via the UI)
-  tz: ""

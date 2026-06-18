@@ -148,8 +148,8 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
     - ``servers_meta`` — ``[{name, transport, tool_count}]`` for runtime status.
 
     ``plugin_servers`` is a list of factories ``factory(config) -> entry|None``
-    contributed by plugins (``register_mcp_server``) — e.g. the Google plugin's
-    OAuth-gated managed server. A factory's entry is injected like a configured
+    contributed by plugins (``register_mcp_server``) — e.g. an OAuth-gated managed
+    server. A factory's entry is injected like a configured
     server (and replaces a same-named ``mcp.servers`` entry), and its presence
     alone is enough to treat MCP as active, so the operator never edits
     ``mcp.servers`` to use a plugin's managed server.
@@ -161,8 +161,8 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
     tools: list = []
     meta: list[dict] = []
 
-    # Plugin-contributed managed MCP servers (ADR 0019) — e.g. the Google surface.
-    # A factory returns an entry only when its surface is on + connected, so the
+    # Plugin-contributed managed MCP servers (ADR 0019). A factory returns an
+    # entry only when its surface is on + connected, so the
     # server comes and goes with config without the operator touching mcp.servers.
     servers = list(getattr(config, "mcp_servers", []) or [])
     plugin_entries = []

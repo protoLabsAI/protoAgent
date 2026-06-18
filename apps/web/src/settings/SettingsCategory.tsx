@@ -3,8 +3,8 @@ import "./settings.css";
 import { Alert } from "@protolabsai/ui/data";
 import { Combobox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Link2, Loader2, RotateCcw, Save } from "lucide-react";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { Loader2, RotateCcw, Save } from "lucide-react";
 
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -78,7 +78,6 @@ export function HostConfigLocked() {
 
 // Setup walkthroughs live in the template's docs (forks don't ship their own site).
 const DISCORD_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/discord#bot-setup";
-const GOOGLE_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/google#oauth-client";
 
 // One category's settings — the field groups tagged with `category`, rendered with
 // their own dirty-tracking, Save-&-apply, and per-group Test buttons. Extracted from
@@ -137,7 +136,6 @@ export function SettingsCategory({
 
   const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
   const hasDiscord = groups.some((g) => g.section === "Discord");
-  const hasGoogle = groups.some((g) => g.section === "Google");
 
   // Active agent runtime (ADR 0033) — for the banner + header badge when this category
   // carries the selector (the Agent settings). Reflects the pending (dirty) choice live.
@@ -215,19 +213,6 @@ export function SettingsCategory({
     onSuccess: (r) => setStatus(r.ok ? `Discord OK — connected as ${r.bot_user || "your bot"}.` : `Discord connection failed — ${r.error || "check the token"}`),
     onError: (e) => setStatus(`Discord test failed: ${errMsg(e)}`),
   });
-
-  const googleStatus = useQuery({ queryKey: ["google-status"], queryFn: () => api.googleStatus(), enabled: hasGoogle });
-  const googleConnect = useMutation({
-    mutationFn: () => api.googleConnect(),
-    onMutate: () => setStatus("opening Google consent in your browser…"),
-    onSuccess: (r) => {
-      setStatus(r.ok ? `Google connected${r.email ? ` as ${r.email}` : ""}.` : `Google connect failed — ${r.error || "try again"}`);
-      void googleStatus.refetch();
-      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
-    },
-    onError: (e) => setStatus(`Google connect failed: ${errMsg(e)}`),
-  });
-  const dirtyGoogleClient = "google.client_id" in dirty || "google.client_secret" in dirty;
 
   const discard = () => { setDirty({}); setStatus(""); };
 
@@ -321,28 +306,6 @@ export function SettingsCategory({
               <div className="settings-group-actions">
                 <TestConnectionButton onClick={() => testDiscord.mutate()} pending={testDiscord.isPending} disabled={save.isPending} />
                 <HelpLink href={DISCORD_GUIDE_URL}>How to create a bot</HelpLink>
-              </div>
-            ) : null}
-            {hasGoogle && group.section === "Google" ? (
-              <div className="settings-group-actions">
-                <Button
-                 
-                  type="button"
-                  onClick={() => googleConnect.mutate()}
-                  disabled={googleConnect.isPending || save.isPending || dirtyGoogleClient}
-                  title={dirtyGoogleClient ? "Save the client ID + secret first" : undefined}
-                >
-                  {googleConnect.isPending ? <Loader2 className="spin" size={15} /> : <Link2 size={15} />}
-                  {googleStatus.data?.connected ? "Reconnect Google" : "Connect Google"}
-                </Button>
-                <span className="settings-inline-status">
-                  {googleStatus.data?.connected
-                    ? `Connected${googleStatus.data.email ? ` as ${googleStatus.data.email}` : ""}`
-                    : dirtyGoogleClient
-                      ? "Save the client ID + secret, then connect"
-                      : "Not connected"}
-                </span>
-                <HelpLink href={GOOGLE_GUIDE_URL}>Get an OAuth client</HelpLink>
               </div>
             ) : null}
             {group.test ? (

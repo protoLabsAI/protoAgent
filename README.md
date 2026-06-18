@@ -40,7 +40,7 @@ rename / release-pipeline wiring.
 | Delegate to other agents | `plugins/delegates/`, `plugins/coding_agent/` | **`delegate_to`** routes a sub-task to another agent or endpoint over **a2a / openai / acp** — managed + hot-swappable from the console (Settings → Integrations), with a health prober. The **acp** type spawns a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol. See [Delegates](./docs/guides/delegates.md), [Spawn CLI coding agents](./docs/guides/coding-agents.md), ADR [0024](./docs/adr/0024-spawn-cli-coding-agents-acp.md) / [0025](./docs/adr/0025-unified-delegate-registry-and-panel.md) |
 | Starter tools | `tools/lg_tools.py` | Default-on set: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 2 HITL (`ask_human`, `request_user_input`) + 4 notes + 4 memory + 3 scheduler + 4 beads + inbox/peer (conditional). GitHub read tools are the opt-in `github` plugin. Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
 | Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
-| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, auto-retrieved), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`python -m server plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Discord** (`plugins/discord`) and **Google** Gmail/Calendar (`plugins/google`) ship this way — disable with `plugins.disabled`. See [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Plugin console views](./docs/guides/plugin-views.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
+| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, auto-retrieved), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`python -m server plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Discord** (`plugins/discord`) and **Telegram** (`plugins/telegram`) integrations ship this way — disable with `plugins.disabled`; others (e.g. **Google** Gmail/Calendar, **Slack**) install from their own repos. See [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Plugin console views](./docs/guides/plugin-views.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
 | Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
 | Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
 | Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
@@ -59,13 +59,11 @@ cd my-agent
 # 2. Install deps + run — uv (recommended): creates the venv, installs the
 #    core deps from pyproject.toml, and runs the server. No env vars required.
 uv sync && uv run python -m server          # core, serves the React console (--ui console)
-# Want the Google surface? Add the extra:
-#   uv sync --extra google && uv run python -m server
 # Already synced? `uv run --no-sync python -m server` skips the re-resolve.
 
-# 2b. Or with pip — `requirements.txt` installs core + the Google surface:
+# 2b. Or with pip — `requirements.txt` installs the core runtime:
 #   python -m venv .venv && source .venv/bin/activate
-#   pip install -r requirements.txt        # == pip install -e .[google]
+#   pip install -r requirements.txt        # == pip install -e .
 #   python -m server
 
 # 3. Open the wizard — pick your endpoint, pick a model, name the
@@ -150,9 +148,11 @@ First-party plugins ship in `plugins/` (off by default — enable via `plugins.e
 | [`coding_agent`](./plugins/coding_agent/) | tool | Spawn a CLI coding agent (protoCLI, Claude Code, Codex, Gemini) over ACP |
 | [`discord`](./plugins/discord/) | surface · tool | Run the agent as a Discord bot — inbound DMs + outbound posting |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
-| [`slack`](./plugins/slack/) | surface | Run the agent as a Slack app over Socket Mode (websocket transport) |
-| [`google`](./plugins/google/) | mcp | Gmail + Calendar via a managed MCP server with in-app OAuth |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
+
+Integrations like **Slack** (Socket Mode `ChatAdapter`) and **Google** Gmail/Calendar
+(managed MCP server with in-app OAuth) install as **external plugins** from their own
+repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
 
 **Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
 small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,

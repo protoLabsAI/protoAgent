@@ -269,8 +269,8 @@ class PluginRegistry:
         ``mcp.servers[]`` entry (``{name, transport, command, args, env, ...}``) or
         ``None`` when the server shouldn't start (off / not yet connected). It's
         called at every graph build with the live ``LangGraphConfig``, so the
-        server comes and goes with config — this is how the Google surface ships
-        its OAuth-gated MCP server without a core edit. A returned entry whose
+        server comes and goes with config — this is how a plugin ships an
+        OAuth-gated MCP server without a core edit. A returned entry whose
         ``name`` matches a user-defined ``mcp.servers`` entry replaces it.
         """
         if not callable(factory):

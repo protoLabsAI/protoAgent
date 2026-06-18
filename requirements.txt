@@ -1,13 +1,11 @@
-# SOURCE OF TRUTH: pyproject.toml ([project.dependencies] + optional-dependencies).
+# SOURCE OF TRUTH: pyproject.toml ([project.dependencies]).
 # This file is a thin shim so `pip install -r requirements.txt` keeps working —
-# it installs the project in editable mode with the `google` extra (the Discord +
-# Google MCP surfaces). pip routes through pyproject, so there is no second list to
-# drift.
+# it installs the project in editable mode. pip routes through pyproject, so there
+# is no second list to drift.
 #
-# Modern path: `uv sync` (core only) or `uv sync --extra google`, or
-# `pip install -e .[google]` directly. Core-only (`uv sync` / `pip install -e .`)
-# is the lean install for the `console` and `none` UI tiers (ADR 0010).
+# Modern path: `uv sync`, or `pip install -e .` directly. This is the lean install
+# for the `console` and `none` UI tiers (ADR 0010).
 #
-# The requirements-core/google.txt files are kept as readable, tier-scoped
-# references; the live dependency lists live in pyproject.toml.
--e .[google]
+# requirements-core.txt is kept as a readable, tier-scoped reference; the live
+# dependency list lives in pyproject.toml.
+-e .

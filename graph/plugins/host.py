@@ -36,7 +36,7 @@ class PluginHost:
     # (patch: dict) -> (ok, messages) — persist a nested config patch to YAML
     # (secrets routed automatically) and reload the graph once. Heavy (a full
     # reload) — a route should call it via ``asyncio.to_thread``. Lets a plugin
-    # route apply config + reload (e.g. Google's Connect flow flipping enabled).
+    # route apply config + reload (e.g. an OAuth Connect flow flipping enabled).
     apply_settings: Optional[Callable[[dict], Any]] = None
 
 

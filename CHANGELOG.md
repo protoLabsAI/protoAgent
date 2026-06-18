@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Google (Gmail + Calendar) and Slack are no longer bundled — they move to
+  standalone external plugins.** The `google` plugin (`plugins/google/` +
+  `mcp_servers/google/`, OAuth-gated managed MCP server) and the `slack`
+  communication plugin (`plugins/slack/`, Socket Mode `ChatAdapter`) have been
+  removed from core. They're re-published as installable external plugins from
+  their own repos (tracked by GitHub issues), following the same pattern as the
+  other standalone plugins — nothing about the integrations themselves changes,
+  only where they live. The plugin contracts (ADR 0018/0019/0029) make this a
+  no-core-edit lift-and-shift. The **Telegram** plugin (`plugins/telegram/`) stays
+  in core as the reference `ChatAdapter` (ADR 0029). Existing `google:` / `slack:`
+  config sections are simply unclaimed once the plugins are gone; install the
+  external plugin to restore them. The `google` pip extra (`pip install -e .[google]`)
+  and `requirements-google.txt` are gone — `requirements.txt` now installs core
+  only (`-e .`); the dead "Connect Google" console affordance was removed from the
+  Settings UI.
+
 ## [0.46.0] - 2026-06-17
 
 ## [0.45.0] - 2026-06-17

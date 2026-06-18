@@ -717,21 +717,6 @@ export const api = {
     });
   },
 
-  // Google surface (ADR 0017). status → {configured, connected, email}.
-  googleStatus() {
-    return request<{ configured: boolean; connected: boolean; email: string | null; error?: string }>(
-      "/api/config/google/status",
-    );
-  },
-  // Runs the OAuth consent (opens the operator's browser) — long-lived until they
-  // approve. Returns the connected account email on success.
-  googleConnect() {
-    return request<{ ok: boolean; email?: string; error?: string }>("/api/config/google/connect", {
-      method: "POST",
-      body: {},
-    });
-  },
-
   finishSetup(config: Partial<AgentConfig>, soul: string) {
     return request<{ ok: boolean; message: string }>("/api/config/setup", {
       method: "POST",

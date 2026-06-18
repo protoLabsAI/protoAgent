@@ -1,6 +1,13 @@
 # ADR 0017 — In-app Google (Gmail + Calendar) connect flow
 
-- **Status:** Accepted (2026-06-03)
+> **Update (2026-06-17):** the Google surface has been **removed from core** and
+> moved to a standalone **external plugin** (installable from its own repo). The
+> in-app connect flow, OAuth-gated managed MCP server, and config/secrets/Settings
+> described below are unchanged — they now live in the external plugin rather than
+> `plugins/google/` + `mcp_servers/google/`. The plugin contracts this ADR relies
+> on (ADR 0018/0019) made the move a no-core-edit lift-and-shift.
+
+- **Status:** Accepted (2026-06-03); Google surface extracted to an external plugin (2026-06-17)
 - **Date:** 2026-06-03
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** surface, google, oauth, mcp, onboarding, operator, desktop, opt-in

@@ -278,12 +278,8 @@ class LangGraphConfig:
 
     # The Discord surface (ADR 0015/0016) is now the first-party `discord` plugin
     # (ADR 0018/0019, plugins/discord/) — its config lives in plugin_config["discord"],
-    # not a typed field here.
-
-    # The Google surface (ADR 0017) is now the first-party `google` plugin (ADR
-    # 0019, plugins/google/) — a managed MCP server it injects via
-    # register_mcp_server. Its config lives in plugin_config["google"], not typed
-    # fields here.
+    # not a typed field here. The Google surface (ADR 0017) moved out of core to an
+    # external plugin entirely; a managed MCP server it injects via register_mcp_server.
 
     # Enforcement gate — opt-in safety middleware that blocks tool calls
     # before they execute (deny list + per-tool rate limits). Off by default;

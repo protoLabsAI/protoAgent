@@ -514,10 +514,9 @@ FIELDS: list[Field] = [
         "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live.",
     ),
     # Discord's Settings group is now declared by the discord plugin's manifest
-    # (ADR 0019) and rendered via the plugin-fields path in build_schema.
-    # Google's Settings group is now declared by the google plugin's manifest
-    # (ADR 0019) and rendered via the plugin-fields path in build_schema. The
-    # "Connect Google" button (consent flow) is a console affordance, not a field.
+    # (ADR 0019) and rendered via the plugin-fields path in build_schema. Any
+    # plugin's settings group (bundled or external) renders the same way — a plugin
+    # can also add a console affordance (e.g. an OAuth "Connect" button) of its own.
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field(
         "runtime.autostart_on_boot",
