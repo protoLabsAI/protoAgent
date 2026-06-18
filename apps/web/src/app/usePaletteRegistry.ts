@@ -102,7 +102,7 @@ function deepLinkCommands(): Command[] {
     link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], () => {
       ui().openGlobalSettings("telemetry");
     }),
-    link("box:commons", "Settings: Commons", ["commons", "shared", "skills", "box", "global"], () => {
+    link("box:commons", "Settings: Shared Skills", ["commons", "shared", "skills", "box", "global"], () => {
       ui().openGlobalSettings("commons");
     }),
   ];

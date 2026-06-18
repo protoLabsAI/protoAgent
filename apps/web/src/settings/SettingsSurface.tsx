@@ -45,7 +45,7 @@ const HOST_SECTIONS: Section[] = [
   // Box-level operations (formerly the standalone Box rail surface).
   { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
   { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-  { id: "commons", label: "Commons", icon: Library, render: () => <CommonsPanel /> },
+  { id: "commons", label: "Shared Skills", icon: Library, render: () => <CommonsPanel /> },
 ];
 
 // The Workspace home (ADR 0048 §3.2) — the focused agent, everything that defines it:

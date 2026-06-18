@@ -457,10 +457,10 @@ FIELDS: list[Field] = [
     Field(
         "commons.path",
         "commons_path",
-        "Commons location",
+        "Shared skills location",
         "string",
         "Skills",
-        "Box-shared skill commons read by every agent on this machine. Blank = ~/.protoagent/commons.",
+        "Box-shared skill library read by every agent on this machine. Blank = ~/.protoagent/commons.",
         scope="host",
     ),
     # ── Middleware toggles ───────────────────────────────────────────────────
