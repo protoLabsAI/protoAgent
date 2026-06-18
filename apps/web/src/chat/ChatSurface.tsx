@@ -228,6 +228,11 @@ function ChatSessionSlot({
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Autofocus the composer when this session becomes the visible one, so you can type
+  // immediately on open / tab-switch — the field doesn't grab focus on its own.
+  useEffect(() => {
+    if (visible) textareaRef.current?.focus();
+  }, [visible]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
