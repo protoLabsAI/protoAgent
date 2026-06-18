@@ -1,4 +1,4 @@
-import { Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Palette, Plug, Puzzle, Settings2, Sparkles, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -12,8 +12,11 @@ import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
 import { isHostConsole } from "../lib/api";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
+import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useUI, type SettingsScope } from "../state/uiStore";
+import { CommonsPanel } from "./CommonsPanel";
 import { DelegatesSection } from "./DelegatesSection";
+import { FleetSurface } from "./FleetSurface";
 import { OverviewPanel } from "./OverviewPanel";
 import { HostConfigLocked, HostDefaultsPanel, SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -21,38 +24,40 @@ import { ThemeSurface } from "./ThemeSurface";
 // Settings IA (ADR 0048 + PR4) — scope is the primary axis. TWO homes, each with its
 // own section sub-nav:
 //
-//   🖥 Global       — the box-shared cascade ONLY (ADR 0047): Overview + Configuration
-//                     (the host-scoped fields). Editable on the host console; a
-//                     workspace console sees them read-only. Set once, every agent
+//   🖥 Global       — box-shared: the host cascade (Overview + Configuration, ADR 0047)
+//                     PLUS the box-level ops — Fleet, Telemetry, Commons (folded back in
+//                     from the old standalone Box rail surface). Set once, every agent
 //                     inherits; per-agent overrides win.
 //   🧩 Workspace    — the focused agent: everything that defines it.
-//
-// Box-level *tools* that aren't cascade settings — Fleet, Telemetry, Commons — moved
-// OUT of Global to the dedicated Box rail surface (src/app/BoxSurface.tsx, PR4).
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
 type Home = { id: SettingsScope; label: string; icon: LucideIcon; sections: Section[] };
 
-// Global = the box-shared cascade ONLY (ADR 0047): Overview + the host-scoped fields.
-// Fleet / Telemetry / Commons were box-level *tools*, not cascade settings — moved out
-// to the Box rail surface (PR4). Host config is gated to the host console; a workspace
-// console sees a read-only pointer instead (ADR 0047 §7.7).
+// Global = box-shared: the host cascade (Overview + the host-scoped Configuration
+// fields, ADR 0047) + the box-level ops Fleet / Telemetry / Commons (folded in here
+// from the former standalone "Box" rail surface). Host config is gated to the host
+// console; a workspace console sees a read-only pointer instead (ADR 0047 §7.7).
 const HOST_SECTIONS: Section[] = [
   { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
   // The host-scoped FIELDS (model gateway · routing · caching · org + the commons
   // location) in ONE panel, saving to the box's host-config.yaml (ADR 0047).
   { id: "config", label: "Configuration", icon: HardDrive, render: () => (isHostConsole() ? <HostDefaultsPanel title="Configuration" /> : <HostConfigLocked />) },
+  // Box-level operations (formerly the standalone Box rail surface).
+  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
+  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
+  { id: "commons", label: "Commons", icon: Library, render: () => <CommonsPanel /> },
 ];
 
 // The Workspace home (ADR 0048 §3.2) — the focused agent, everything that defines it:
 // the makeup panels (Identity/Tools/MCP/Subagents/Skills/Middleware) folded in from the
 // old Agent rail surface + Theme, plus the agent-scoped field settings (Agent/Memory/
 // System/Plugins categories). Host-scoped fields that appear here (e.g. model.name)
-// keep their ADR 0047 "inherited from Host" badge + override. (A later refinement can
-// regroup the field sections into the ADR's idealized Model/Behavior cut.)
+// keep their ADR 0047 "inherited from Host" badge + override. The agent-scoped field
+// panel is "Model & Routing" (not a generic "Settings" item nested under Settings).
 const WORKSPACE_SECTIONS: Section[] = [
   { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
-  { id: "settings", label: "Settings", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Agent settings" /> },
+  // id stays "settings" for persisted-section compat; the label is the un-nested name.
+  { id: "settings", label: "Model & Routing", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Model & Routing" /> },
   { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
   { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
   { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },

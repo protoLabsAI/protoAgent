@@ -38,6 +38,8 @@
   min-height: 0;
   display: flex;
   gap: 14px;
+  /* Breathing room on the left so the sidenav + panel don't hug the rail edge. */
+  padding-left: 16px;
 }
 /* The rail column — fixed width (SideNav renders without `responsive`, so it stays a
    vertical tablist and never collapses to the <select>; see SettingsSurface). */

@@ -3,12 +3,13 @@ import { expect, test } from "@playwright/test";
 // The Box ▸ Telemetry tab renders the per-turn rollups from
 // /api/telemetry/* (ADR 0006 Slice 3): summary cards + a recent-turns table.
 
-test("Box → Telemetry shows the telemetry summary cards and recent turns", async ({ page }) => {
+test("Settings ▸ Global ▸ Telemetry shows the summary cards and recent turns", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Telemetry moved from Settings ▸ Global to the Box rail surface (PR4).
-  await page.locator(".pl-rail").getByRole("button", { name: "Box", exact: true }).click();
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Telemetry", exact: true }).click();
+  // Telemetry lives under Settings ▸ Global now (folded in from the old Box rail).
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Global", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Telemetry", exact: true }).click();
 
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();
