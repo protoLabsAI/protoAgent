@@ -1,15 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-// The console opens a server→client SSE channel (GET /api/events, ADR 0003) for
-// the app's lifetime. The topbar "live" indicator reflects the connection.
-
-test("live indicator turns connected when the event stream opens", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  const dot = page.getByTestId("live-indicator");
-  await expect(dot).toBeVisible();
-  // EventSource onopen flips it live shortly after the response headers arrive.
-  await expect(dot).toHaveAttribute("data-live", "true");
-});
+// The console opens a server→client SSE channel (GET /api/events, ADR 0003) for the
+// app's lifetime. The dedicated topbar "live" indicator was removed with the status
+// light; the goal.achieved toast below still exercises the channel end-to-end — the
+// event only arrives if the SSE connected.
 
 test("a goal.achieved bus event surfaces a toast", async ({ page }) => {
   // ADR 0039 — the mock pushes a one-shot goal.achieved; the console toasts it so a plain

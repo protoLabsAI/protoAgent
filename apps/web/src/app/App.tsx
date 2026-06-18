@@ -83,7 +83,7 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
-import { ThemeQuickButton } from "../settings/ThemeQuickButton";
+import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
@@ -459,22 +459,9 @@ export function App() {
   // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
   // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.
 
-  // One glanceable health light for the topbar (detail on hover; full status in
-  // System → Runtime). Worst-state wins. Derived from the runtime query — while
-  // it's still loading (no data, e.g. the sidecar booting) we show "starting".
-  const statusLabel = runtimeQ.isError
-    ? "error"
-    : !runtime
-      ? "starting server…"
-      : runtimeQ.isFetching
-        ? "refreshing"
-        : "ready";
-  const health: { tone: "ok" | "warning" | "error"; label: string } =
-    !runtime && runtimeQ.isError ? { tone: "error", label: "error" }
-    : !runtime ? { tone: "warning", label: "starting…" }
-    : !runtime.setup_complete ? { tone: "warning", label: "setup pending" }
-    : !runtime.graph_loaded ? { tone: "error", label: "graph offline" }
-    : { tone: "ok", label: "ready" };
+  // (The topbar health light was removed — its status/health derivation went with it.
+  // Runtime health still surfaces via the warnings strip + the boot gate; full detail
+  // lives in Settings ▸ Runtime. SSE connection state is still tracked via `setLive`.)
 
   // Desktop (macOS) runs with an overlay/invisible title bar — no chrome, the
   // native traffic lights float over the content. Detect that build so the
@@ -763,42 +750,10 @@ export function App() {
         }
         org={runtime?.identity?.org || "protoLabs.studio"}
         actions={
-          <>
-            {/* Quick-settings (ADR 0048). Model tuning lives on the chat composer (by the
-                input); the topbar keeps appearance + the gear to the full one-stop-shop. */}
-            <ThemeQuickButton />
-            <Button
-              icon
-              variant="ghost"
-              type="button"
-              title="Open settings"
-              aria-label="Open settings"
-              data-testid="topbar-settings"
-              onClick={() => setSettingsOverlayOpen(true)}
-            >
-              <Settings2 size={16} />
-            </Button>
-          </>
-        }
-        status={
-          <button
-            type="button"
-            className={`status-dot tone-${health.tone}`}
-            onClick={() => {
-              void runtimeQ.refetch();
-            }}
-            title={
-              `Setup: ${runtime?.setup_complete ? "complete" : "pending"}\n` +
-              `Graph: ${runtime?.graph_loaded ? "loaded" : "offline"}\n` +
-              `Event stream: ${live ? "connected" : "offline"}\n` +
-              `Status: ${statusLabel}` +
-              (error ? `\nError: ${error}` : "") +
-              `\n\nClick to refresh.`
-            }
-            aria-label={`Status: ${health.label}. Click to refresh.`}
-            data-testid="live-indicator"
-            data-live={live ? "true" : "false"}
-          />
+          // Always-on hamburger — the new home for global actions as Settings get
+          // rearranged app-wide. Replaces the old theme toggle + settings gear + status
+          // light (theme lives in Settings ▸ Appearance; Settings is also a rail surface).
+          <HamburgerMenu onOpenSettings={() => setSettingsOverlayOpen(true)} />
         }
       />
       </div>
