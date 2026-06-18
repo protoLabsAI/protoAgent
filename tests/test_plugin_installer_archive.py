@@ -1,4 +1,4 @@
-"""Git-less plugin install for the frozen desktop app (ADR 0057) — HTTPS archive
+"""Git-less plugin install for the frozen desktop app (ADR 0058) — HTTPS archive
 fetch (D1) + the bundled-dep gate (D2). No git, no pip, no network: the fetch
 seams (`_resolve_sha_github` / `_http_get`) are monkeypatched."""
 

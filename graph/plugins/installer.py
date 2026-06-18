@@ -172,7 +172,7 @@ def _clone(url: str, ref: str | None, dest: Path) -> str:
     return _git("rev-parse", "HEAD", cwd=dest)
 
 
-# --- Git-less fetch for the frozen desktop app (ADR 0057 D1) ---------------
+# --- Git-less fetch for the frozen desktop app (ADR 0058 D1) ---------------
 # The frozen PyInstaller sidecar has no `git` (and no `pip`), but the loader
 # already discovers + importlib-loads plugins from the live root in frozen mode.
 # So the only gap is *fetching* the code: download a GitHub archive tarball over
@@ -278,13 +278,13 @@ def _fetch_archive(url: str, ref: str | None, dest: Path) -> str:
 def _fetch(url: str, ref: str | None, dest: Path) -> str:
     """Fetch the plugin repo at ``ref`` into ``dest``; return the resolved SHA.
     ``git`` on a dev/server box; the git-less HTTPS archive (GitHub) when git is
-    unavailable or in the frozen desktop app (ADR 0057 D1)."""
+    unavailable or in the frozen desktop app (ADR 0058 D1)."""
     if _prefer_archive():
         return _fetch_archive(url, ref, dest)
     return _clone(url, ref, dest)
 
 
-# --- Bundled-dep gate for the frozen app (ADR 0057 D2) ---------------------
+# --- Bundled-dep gate for the frozen app (ADR 0058 D2) ---------------------
 # The frozen runtime has no pip, so a plugin can only run if its declared
 # `requires_pip` are ALREADY importable in the bundle. Gate at install time with
 # a clear refusal rather than a cryptic enable-time ImportError.
@@ -361,7 +361,7 @@ def install(
 
         # Frozen runtime (desktop): no pip — a plugin can only run if its declared
         # deps are already importable in the bundle. Refuse early with a clear
-        # message instead of a cryptic enable-time ImportError (ADR 0057 D2).
+        # message instead of a cryptic enable-time ImportError (ADR 0058 D2).
         if _frozen_like() and manifest.requires_pip:
             ok, missing = _deps_satisfied(manifest.requires_pip)
             if not ok:
@@ -574,7 +574,7 @@ def install_deps(plugin_id: str) -> list[str]:
     if not deps:
         return []
     # Frozen runtime (desktop): no pip. The deps must already be bundled — confirm
-    # (nothing to install) or refuse with a clear message (ADR 0057 D2).
+    # (nothing to install) or refuse with a clear message (ADR 0058 D2).
     if _frozen_like():
         ok, missing = _deps_satisfied(deps)
         if not ok:
