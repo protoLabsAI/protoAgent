@@ -32,19 +32,11 @@ def test_manifest_parses_test_flag(tmp_path):
 
 
 def test_comms_manifests_declare_test():
-    # The generic Test button (ADR 0029): telegram via the chat_surface wirer,
-    # Discord via its own route — both data-driven, no bespoke console frontend (ADR 0059).
-    for p in ("telegram", "discord"):
+    # The generic Test button (ADR 0029): telegram declares it via the chat_surface
+    # wirer. (Discord ships as an external plugin now — its manifest is tested there.)
+    for p in ("telegram",):
         m = yaml.safe_load(Path(f"plugins/{p}/protoagent.plugin.yaml").read_text())
         assert m.get("test") is True, p
-
-
-def test_discord_manifest_declares_generic_affordances():
-    # ADR 0059 — Discord's Test button + setup-guide link are now manifest-declared
-    # (test + guide_url), so the console renders them generically (no Discord frontend).
-    m = yaml.safe_load(Path("plugins/discord/protoagent.plugin.yaml").read_text())
-    assert m.get("test") is True
-    assert str(m.get("guide_url", "")).startswith("http")
 
 
 def test_build_schema_adds_test_endpoint(monkeypatch):

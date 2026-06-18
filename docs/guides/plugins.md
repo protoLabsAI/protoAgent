@@ -7,12 +7,11 @@ verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
 Plugins run **in-process** with the agent's privileges, so they're **disabled by
 default** and you opt in explicitly — only enable plugins you trust.
 
-> The first-party **Discord**, **Telegram**, and **GitHub** integrations ship as
-> plugins (`plugins/discord/`, `plugins/telegram/`, `plugins/github/`) — Discord is
-> on by default (disable with `plugins: { disabled: [discord] }`); Telegram and
-> GitHub are opt-in (`plugins: { enabled: [telegram] }`). Integrations like
-> **Google** Gmail/Calendar and **Slack** install as external plugins from their
-> own repos. To drive a **CLI coding agent over ACP**, enable the **delegates**
+> The first-party **Telegram** and **GitHub** integrations ship bundled as plugins
+> (`plugins/telegram/`, `plugins/github/`), opt-in via `plugins: { enabled: [telegram] }`.
+> Integrations like **Discord**, **Google** Gmail/Calendar, and **Slack** install as
+> **external** plugins from their own repos (browse + install them in Settings ▸
+> Plugins ▸ Discover). To drive a **CLI coding agent over ACP**, enable the **delegates**
 > plugin and declare an `acp` delegate — see
 > [CLI coding agents over ACP](/guides/coding-agents).
 
@@ -262,8 +261,8 @@ def register(registry):
 ```
 
 A plugin section colliding with a reserved built-in (`model`, `mcp`, `plugins`,
-…) is ignored. (`discord` is **not** reserved — it's claimed by the first-party
-Discord plugin; plugins, bundled or external, claim their own sections the same way.)
+…) is ignored. (A plugin section like `discord` is **not** reserved — a plugin,
+bundled or external, claims its own section the same way.)
 The **wizard step** is not yet plugin-contributable (Settings + a docs link
 suffice for now).
 
@@ -272,9 +271,9 @@ config reload reuses them, so changing `plugins.enabled` needs a restart
 (ADR 0018). Everything is best-effort: a failing plugin/route/surface logs and
 never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
-`GET /api/runtime/status`. The `plugins/discord` (surface + route) and
-`plugins/telegram` (the reference `ChatAdapter`) first-party plugins are worked
-examples of the contribution types.
+`GET /api/runtime/status`. The bundled `plugins/telegram` (the reference
+`ChatAdapter`) and `plugins/github` first-party plugins are worked examples of the
+contribution types; the external `discord-plugin` is a fuller surface + route + tools.
 
 ## Where plugins live & how they're enabled
 

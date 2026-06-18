@@ -273,12 +273,12 @@ These bridge the Notes panel's permission toggles to the agent — without them,
 
 ## `discord_send` / `discord_read` / `discord_react`
 
-**Provided by the first-party `discord` plugin** (`plugins/discord/`, ADR
-0018/0019), not by `get_all_tools` — the outbound (REST) half of the Discord
-surface ([ADR 0015](/adr/0015-discord-ingress-surface)). Raw Discord REST **v10**
-over `httpx` (no `discord.py`). The plugin registers them only when a token is set
-(`discord.bot_token` in Settings or `DISCORD_BOT_TOKEN`); disabling the plugin
-(`plugins.disabled: [discord]`) removes the surface **and** these tools. A direct
+**Provided by the external `discord` plugin** (`protoLabsAI/discord-plugin`, ADR
+0018/0019/0058 — install from Settings ▸ Plugins ▸ Discover), not by `get_all_tools`
+— the outbound (REST) half of the Discord surface ([ADR 0015](/adr/0015-discord-ingress-surface)).
+Raw Discord REST **v10** over `httpx` (no `discord.py`). The plugin registers them
+only when a token is set (`discord.bot_token` in Settings or `DISCORD_BOT_TOKEN`);
+uninstalling/disabling the plugin removes the surface **and** these tools. A direct
 call without a token degrades to a readable error.
 
 ```python

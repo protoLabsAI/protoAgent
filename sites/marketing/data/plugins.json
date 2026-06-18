@@ -63,10 +63,10 @@
       "tool",
       "secrets"
     ],
-    "bundled": true,
+    "bundled": false,
     "enable": "discord",
     "links": {
-      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/discord",
+      "source": "https://github.com/protoLabsAI/discord-plugin",
       "docs": "/docs/guides/plugins"
     }
   },

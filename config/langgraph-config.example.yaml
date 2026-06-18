@@ -272,14 +272,3 @@ fleet:
   warm:
     max: 0                  # warm-agent cap (0 = unlimited)
     grace_seconds: 0        # spare agents touched within N seconds from LRU eviction
-
-# Discord surface (ADR 0015/0016) — inbound DM gateway. Configure this in-app
-# (setup wizard step / System → Settings → Discord) rather than by hand: the
-# bot_token is stored in the gitignored secrets.yaml overlay, never here.
-# `admin_ids` are the Discord user IDs allowed to DM the bot (empty = anyone).
-# Off until enabled with a token. The DISCORD_BOT_TOKEN / DISCORD_ADMIN_IDS env
-# vars remain a fallback for Docker deploys.
-discord:
-  enabled: false
-  # bot_token: stored in secrets.yaml (set via the UI), not here
-  admin_ids: []

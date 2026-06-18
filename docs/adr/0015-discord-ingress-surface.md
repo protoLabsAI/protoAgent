@@ -1,6 +1,13 @@
 # ADR 0015 — Optional native Discord surface (ingress + outbound)
 
-- **Status:** Accepted (2026-06-03) — design/decisions; implementation to follow
+> **Update (2026-06-18):** the Discord surface has been **extracted from core** into a
+> standalone external plugin ([`protoLabsAI/discord-plugin`](https://github.com/protoLabsAI/discord-plugin),
+> ADR 0058) — installed at runtime, not bundled. The gateway/conversation/context/
+> turn_log/return_address modules (formerly `surfaces/discord/`) and the outbound tools
+> (formerly `tools/discord_tools.py`) now live in that repo. The design below is
+> unchanged — only its location.
+
+- **Status:** Accepted (2026-06-03); extracted to an external plugin (2026-06-18)
 - **Date:** 2026-06-03
 - **Deciders:** Josh Mabry; protoAgent maintainers
 - **Tags:** surface, ingress, discord, reactive, operator, opt-in, deployment

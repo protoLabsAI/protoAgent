@@ -34,9 +34,8 @@ _RESERVED_SECTIONS = {
     "routing",
     "goal",
     "execute_code",
-    # NB: `discord` is NOT reserved — it's a first-party plugin (ADR 0018/0019)
-    # that legitimately claims that section. Plugins (bundled or external) claim
-    # their own config sections the same way.
+    # NB: plugin sections (e.g. `discord` from the external discord plugin) are NOT
+    # reserved — a plugin (bundled or external) legitimately claims its own section.
     "operator",
     "tools",
     "mcp",

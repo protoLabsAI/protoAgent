@@ -169,18 +169,19 @@ The server binds host `0.0.0.0`; the port is set by the `--port` CLI flag
 handler, REST API, metrics, and agent card are all served on that one port.
 (There is no `GRADIO_SERVER_NAME` / `GRADIO_SERVER_PORT` env — those are not read.)
 
-## Plugin env fallbacks (Discord)
+## Plugin env fallbacks
 
-The bundled Discord plugin prefers in-app config (Settings / wizard), but reads
-env as a Docker/headless fallback:
+Plugins prefer in-app config (Settings), but read env as a Docker/headless fallback.
+The **external Discord plugin** (installable from Settings ▸ Plugins ▸ Discover)
+reads:
 
 | Variable | What |
 |---|---|
-| `DISCORD_BOT_TOKEN` | Bot token for the `discord` plugin's gateway (fallback for `discord.bot_token`). |
+| `DISCORD_BOT_TOKEN` | Bot token for the discord plugin's gateway (fallback for `discord.bot_token`). |
 | `DISCORD_ADMIN_IDS` | Comma-separated Discord user IDs allowed to DM the bot (fallback for `discord.admin_ids`). |
 
-> External plugins (e.g. a Google or Slack integration installed from its own repo)
-> declare and read their own env fallbacks — see that plugin's docs.
+> Other external plugins (e.g. a Google or Slack integration) declare and read their
+> own env fallbacks — see that plugin's docs.
 
 ## Peer federation (A2A peer-consult tools)
 

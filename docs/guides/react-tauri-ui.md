@@ -327,12 +327,13 @@ Desktop requirements:
 **The sidecar now ships.** `apps/desktop/sidecar/build_sidecar.py` PyInstaller-freezes
 the headless server (`binaries/protoagent-server-<triple>`), and `src-tauri/src/lib.rs`
 spawns it via `externalBin` with `--ui console` on a fixed port (`7870`). The
-frozen build bundles the **`plugins/` tree** (`--add-data plugins:plugins`) and
-**`--collect-all tools`** (alongside `surfaces`, `mcp`, `mcp_servers`, `websockets`)
-— plugins are loaded by file path (importlib), which PyInstaller's import-scan
-misses, so without these the Discord/Google plugins fail to load in the frozen app
-(`No module named 'tools.discord_tools'`). A frozen plugin's
-managed MCP server is launched via the generic `--mcp-plugin <id>` shim.
+frozen build bundles the **`plugins/` tree** (`--add-data plugins:plugins`) for the
+bundled first-party plugins, plus **`--collect-all`** of `tools`, `websockets`, and
+`mcp` — plugins are loaded by file path (importlib), which PyInstaller's import-scan
+misses, and a comms plugin installed at **runtime** (ADR 0058) can only import what's
+bundled, so `websockets` ships for Discord/Slack. External plugins (Discord, Google,
+…) install at runtime into the live dir; a frozen plugin's managed MCP server is
+launched via the generic `--mcp-plugin <id>` shim.
 
 ## Migration Slices
 

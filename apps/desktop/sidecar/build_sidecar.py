@@ -45,10 +45,10 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     ("config/SOUL.md", "config"),
     ("config/soul-presets", "config/soul-presets"),
     ("static", "static"),
-    # First-party plugins (ADR 0018/0019) — incl. the Discord + Google surfaces.
-    # Loaded by file path (importlib) at runtime, so PyInstaller's import-scan
-    # misses them; ship the tree as data so the frozen app finds them under
-    # _MEIPASS/plugins (the loader's bundle root).
+    # Bundled first-party plugins (ADR 0018/0019). Loaded by file path (importlib)
+    # at runtime, so PyInstaller's import-scan misses them; ship the tree as data so
+    # the frozen app finds them under _MEIPASS/plugins (the loader's bundle root).
+    # Externals (Discord, Google, …) install at runtime into the live dir (ADR 0058).
     ("plugins", "plugins"),
 ]
 
@@ -71,21 +71,17 @@ COLLECT_ALL = [
     # the import-scan misses them — collect explicitly.
     "aiosqlite",
     "sqlalchemy",
-    # The Discord surface (ADR 0015) is loaded by the discord plugin (and the
-    # gateway imports ``websockets`` lazily), so the import-scan misses it.
-    # Collect both so Discord works in the frozen app.
-    "surfaces",
+    # Comms-plugin runtime deps (ADR 0058): a plugin installed at runtime in the
+    # frozen app can only import what's bundled. `websockets` is what the Discord /
+    # Slack comms plugins use (httpx is already pulled by the core deps); `tools` is
+    # the core tools package, collected whole because a plugin may import a core tool
+    # module by file path (the import-scan misses those).
     "websockets",
-    # The `tools` package — the discord plugin imports `tools.discord_tools`
-    # (and future plugins may import other tool modules). Plugins are loaded by
-    # file path, so PyInstaller's import-scan never sees these; collect the whole
-    # package so plugin-only tool imports resolve in the frozen app.
     "tools",
-    # Google surface (ADR 0017): the MCP SDK (FastMCP) + the repo's google MCP
-    # server module, loaded by the google plugin and re-invoked frozen via the
-    # ``--mcp-plugin google`` self-reinvoke entry.
+    # MCP client (tools/mcp_tools) — connect external MCP servers; the SDK is lazily
+    # imported, so collect it explicitly. (An external Google Gmail/Calendar MCP
+    # plugin re-invokes the frozen binary via the generic ``--mcp-plugin <id>`` shim.)
     "mcp",
-    "mcp_servers",
 ]
 
 # Google client libraries (ADR 0017) — bundled only when installed in the build

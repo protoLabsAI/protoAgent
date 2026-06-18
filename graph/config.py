@@ -276,10 +276,9 @@ class LangGraphConfig:
     memory_middleware: bool = True
     scheduler_enabled: bool = True
 
-    # The Discord surface (ADR 0015/0016) is now the first-party `discord` plugin
-    # (ADR 0018/0019, plugins/discord/) — its config lives in plugin_config["discord"],
-    # not a typed field here. The Google surface (ADR 0017) moved out of core to an
-    # external plugin entirely; a managed MCP server it injects via register_mcp_server.
+    # The Discord (ADR 0015/0016) and Google (ADR 0017) surfaces moved out of core
+    # to external plugins (ADR 0058/0059) — installed at runtime, their config lives
+    # in plugin_config[<section>], never a typed field here.
 
     # Enforcement gate — opt-in safety middleware that blocks tool calls
     # before they execute (deny list + per-tool rate limits). Off by default;
@@ -558,7 +557,7 @@ class LangGraphConfig:
     # See graph/plugins/ and docs/guides/plugins.md.
     plugins_enabled: list[str] = field(default_factory=list)
     # Denylist — turn OFF a plugin even if its manifest says ``enabled: true``.
-    # Lets a fork disable a bundled first-party plugin (e.g. the Discord surface)
+    # Lets a fork disable a bundled first-party plugin (e.g. github, telegram)
     # without deleting its directory or editing core.
     plugins_disabled: list[str] = field(default_factory=list)
     plugins_dir: str = ""

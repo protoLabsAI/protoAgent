@@ -1048,9 +1048,9 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_
     # 0025, plugins/delegates) — it replaced the env-var `peer_consult`/`peer_list`
     # tools, which were retired (delegate_to does a2a + openai + acp behind one tool
     # with a console panel). Nothing to wire here.
-    # Outbound Discord tools now come from the discord plugin (ADR 0018/0019) —
-    # it registers them when a token is set, so disabling the plugin
-    # (`plugins.disabled: [discord]`) removes the surface AND the tools.
+    # Outbound chat-channel tools (e.g. Discord) come from their plugins (ADR
+    # 0018/0019) — an installed comms plugin registers its tools when a token is set;
+    # nothing to wire here.
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store))
     if scheduler is not None:

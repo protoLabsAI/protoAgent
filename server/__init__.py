@@ -628,12 +628,6 @@ def _main():
                 await STATE.cache_warmer.stop()
             except Exception:
                 log.exception("[cache-warmer] shutdown failed")
-        try:
-            from surfaces.discord import stop as _stop_discord
-
-            await _stop_discord()
-        except Exception:
-            log.exception("[discord] shutdown failed")
         if STATE.checkpoint_prune_task is not None:
             STATE.checkpoint_prune_task.cancel()
         if STATE.monitor_goals_task is not None:

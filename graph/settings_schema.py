@@ -527,10 +527,9 @@ FIELDS: list[Field] = [
         "Identity",
         "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live.",
     ),
-    # Discord's Settings group is now declared by the discord plugin's manifest
-    # (ADR 0019) and rendered via the plugin-fields path in build_schema. Any
-    # plugin's settings group (bundled or external) renders the same way — a plugin
-    # can also add a console affordance (e.g. an OAuth "Connect" button) of its own.
+    # A plugin's Settings group is declared by its manifest (ADR 0019) and rendered
+    # via the plugin-fields path in build_schema — same for bundled or external
+    # plugins; the generic Test button + guide link come from the manifest (ADR 0059).
     # ── Runtime (restart) ────────────────────────────────────────────────────
     Field(
         "runtime.autostart_on_boot",

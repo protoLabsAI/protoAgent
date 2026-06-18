@@ -2,21 +2,24 @@
 
 An **optional native Discord surface** ([ADR 0015](/adr/0015-discord-ingress-surface),
 [ADR 0016](/adr/0016-discord-ui-config)) — DMs and @-mentions reach the agent,
-replies post back. Self-contained: raw Discord Gateway + REST **v10** over `httpx`
-+ `websockets` (both already core), no `discord.py`. **Off until you give it a bot
-token** — when unset the gateway never starts and the outbound tools aren't
-registered.
+replies post back. Raw Discord Gateway + REST **v10** over `httpx` + `websockets`
+(both already core), no `discord.py`. It's a **standalone plugin**
+([`protoLabsAI/discord-plugin`](https://github.com/protoLabsAI/discord-plugin), ADR
+0058) — install it at runtime, then give it a bot token. **Off until you do** — when
+unset the gateway never starts and the outbound tools aren't registered.
 
 ## Connect it in the app
 
 The quickest path — no files, no env vars:
 
-1. **Create a bot and copy its token** — follow [Bot setup](#bot-setup) below
+1. **Install the plugin** — open **System → Settings → Plugins → Discover**, find
+   **Discord**, and click **Install** (works on every surface, including the desktop
+   app). Then enable it.
+2. **Create a bot and copy its token** — follow [Bot setup](#bot-setup) below
    (≈2 minutes in Discord's Developer Portal).
-2. In the app, open **System → Settings → Discord** (or the **Discord** step in
-   first-run setup), paste the **Bot token**, and optionally your **Discord user
-   ID(s)** (so only you can talk to it).
-3. Click **Test connection** — it verifies the token and shows the bot's name.
+3. Under **Installed → Discord → Configure**, paste the **Bot token**, and optionally
+   your **Discord user ID(s)** (so only you can talk to it).
+4. Click **Test connection** — it verifies the token and shows the bot's name.
    Turn **Enable Discord** on, then **Save & apply** — the gateway connects live,
    no restart.
 
@@ -24,15 +27,14 @@ The token is stored in the per-agent `secrets.yaml` (never committed). The
 `DISCORD_BOT_TOKEN` / `DISCORD_ADMIN_IDS` **env vars still work as a fallback**
 for Docker/headless deploys.
 
-Two halves:
+Two halves (both in the plugin):
 
-- **Inbound gateway** (`surfaces/discord/`) — a persistent listener. A Discord
-  DM is conversational, so it invokes the agent as a **chat surface** with a
-  per-conversation `session_id` (the LangGraph thread key) — multi-turn memory
-  persists per Discord conversation. It also publishes a `discord.message` bus
-  event so the console can surface Discord activity.
-- **Outbound tools** (`tools/discord_tools.py`) — `discord_send` / `discord_read`
-  / `discord_react`, for pushing into channels. See [starter tools](/reference/starter-tools).
+- **Inbound gateway** — a persistent listener. A Discord DM is conversational, so
+  it invokes the agent as a **chat surface** with a per-conversation `session_id`
+  (the LangGraph thread key) — multi-turn memory persists per Discord conversation.
+  It also publishes a `discord.message` bus event so the console can surface activity.
+- **Outbound tools** — `discord_send` / `discord_read` / `discord_react`, for pushing
+  into channels. See [starter tools](/reference/starter-tools).
 
 ## Bot setup
 
@@ -82,11 +84,12 @@ GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | MESSAGE_CONTENT`.
 
 ## Configuration
 
-Discord ships as a **first-party plugin** (`plugins/discord/`, ADR 0018/0019) —
-the gateway, the `test-discord` route, the outbound tools, and this `discord`
-config section are all declared by `plugins/discord/protoagent.plugin.yaml`, not
-wired into the core `server/` package. Disable it entirely with `plugins: { disabled: [discord] }`,
-or replace it with your own ingress plugin — no core edit. See [Plugins](./plugins.md).
+Discord is a **standalone external plugin** ([`protoLabsAI/discord-plugin`](https://github.com/protoLabsAI/discord-plugin),
+ADR 0018/0019/0058) — the gateway, the `test-discord` route, the outbound tools, and
+this `discord` config section are all declared by its `protoagent.plugin.yaml`, never
+wired into the core `server/` package. Install it from Settings ▸ Plugins ▸ Discover;
+uninstall or `plugins: { disabled: [discord] }` to turn it off — no core edit. See
+[Plugins](./plugins.md).
 
 The token, admin list, and on/off toggle are set **in the app** (Settings →
 Discord, or the setup wizard) and stored in the per-agent config — `bot_token`

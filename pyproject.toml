@@ -80,7 +80,6 @@ packages = [
   "scheduler",
   "security",
   "server",
-  "surfaces",
   "tools",
 ]
 
