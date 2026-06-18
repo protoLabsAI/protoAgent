@@ -95,6 +95,7 @@ import {
 import { api, is401 } from "../lib/api";
 import { PluginView } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
+import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
@@ -114,6 +115,8 @@ import { BoxSurface } from "./BoxSurface";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
+import { buildViews } from "../lib/viewRegistry";
+import { usePaletteRegistry } from "./usePaletteRegistry";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -522,6 +525,22 @@ export function App() {
     return [...ordered, ...extra, ...ext];
   }
 
+  // ── Command palette (⌘K, ADR 0057) ────────────────────────────────────────────
+  // Every resolvable View becomes a "go to" command (via openView → setSurface);
+  // deep-link actions ride alongside. Plugin-declared `commands:` + inline plugin
+  // views are step 3. The registry re-resolves as plugin views appear/disappear.
+  const { views: paletteViews } = buildViews({
+    core: CORE_SURFACES,
+    plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginViewIcon(v.icon) })),
+    ext: registeredSurfaces()
+      .filter((s) => s.id !== "chat") // the chat slot isn't a separate surface
+      .filter((s) => !s.requiresPlugin || enabledPluginIds.has(s.requiresPlugin))
+      .map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
+  });
+  const paletteRegistry = usePaletteRegistry(paletteViews);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  usePaletteHotkey(() => setPaletteOpen((o) => !o));
+
   function renderSurface(id: string): ReactNode {
     switch (id) {
       case "activity":
@@ -648,6 +667,9 @@ export function App() {
 
   return (
     <>
+    {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
+        backs the desktop quick-command (step 4). */}
+    <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
       {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
           2.5s then hands off via the View Transitions API cross-fade (the
