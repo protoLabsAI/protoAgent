@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
@@ -21,6 +22,59 @@ from fastapi.responses import JSONResponse
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
+
+
+# ── Playbooks (skills) helpers ────────────────────────────────────────────────
+# Operator-authored skills are persisted as real SKILL.md files under the writable
+# user-skills root (so they survive reboots + are exportable); the route layer
+# composes that file layer (graph.skills.authoring) with the live SkillsIndex so a
+# create/edit shows up without a restart.
+
+
+def _user_skills_root():
+    """The writable root for operator-authored ``SKILL.md`` skills. Not created
+    here — only a write (``write_skill``) mkdirs it, so the read/list path is a
+    pure lookup with no filesystem side effects."""
+    from infra.paths import user_skills_dir
+
+    return user_skills_dir()
+
+
+def _as_str_list(value) -> list[str]:
+    """Coerce a tools field (list, or comma/newline string) to a clean string list."""
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        return [t.strip() for t in re.split(r"[,\n]", value) if t.strip()]
+    return []
+
+
+def _find_skill(idx, skill_id: int, *, writable_only: bool = False):
+    """Return the skill dict with rowid *skill_id*, or None. With ``writable_only``
+    skip commons-tier rows — their rowids live in a separate DB and are read-only
+    here, so an id never resolves to a shared skill for a write/delete."""
+    for s in idx.all_skills():
+        if s.get("id") != skill_id:
+            continue
+        if writable_only and s.get("tier") == "commons":
+            continue
+        return s
+    return None
+
+
+def _skill_response(idx, name: str, root):
+    """The metadata row (no prompt_template) for the just-written skill *name*,
+    tagged with origin/editable — the shape the list route returns."""
+    from graph.skills.authoring import classify, slugify
+
+    target = slugify(name)
+    for s in idx.all_skills():
+        if slugify(s.get("name", "")) == target and s.get("tier") != "commons":
+            origin, editable = classify(s, root)
+            row = {k: v for k, v in s.items() if k != "prompt_template"}
+            row["origin"], row["editable"] = origin, editable
+            return row
+    return None
 
 
 def _knowledge_row(d: dict) -> dict:
@@ -60,18 +114,140 @@ def register_knowledge_routes(app) -> None:
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[playbooks] all_skills failed")
             return {"enabled": True, "playbooks": []}
-        # Drop the (potentially large) prompt_template from the list payload;
-        # the table only needs metadata. Sort pinned-first, then by confidence.
-        out = [{k: v for k, v in s.items() if k != "prompt_template"} for s in skills]
+        # Drop the (potentially large) prompt_template from the list payload; the
+        # table only needs metadata. Tag each row with origin/editable so the UI
+        # knows which skills it can edit (user-authored + learned) vs which are
+        # read-only (bundled examples, shared commons). Sort pinned-first, then by
+        # confidence.
+        from graph.skills.authoring import classify
+
+        root = _user_skills_root()
+        out = []
+        for s in skills:
+            origin, editable = classify(s, root)
+            row = {k: v for k, v in s.items() if k != "prompt_template"}
+            row["origin"], row["editable"] = origin, editable
+            out.append(row)
         out.sort(key=lambda s: (s.get("source") != "disk", -(s.get("confidence") or 0)))
         return {"enabled": True, "playbooks": out}
 
+    # Create an operator-authored skill: write a real SKILL.md under the user-skills
+    # root (durable + exportable) and index it live so it works without a restart.
+    @app.post("/api/playbooks")
+    async def _api_playbook_create(body: dict | None = None):
+        idx = STATE.skills_index
+        if idx is None:
+            return {"enabled": False, "id": None}
+        body = body or {}
+        name = str(body.get("name", "")).strip()
+        description = str(body.get("description", "")).strip()
+        prompt = str(body.get("prompt_template", body.get("body", ""))).strip()
+        if not name or not description or not prompt:
+            return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
+        from graph.skills.authoring import slugify, write_skill
+
+        slug = slugify(name)
+        if not slug:
+            return JSONResponse({"detail": "name must contain letters or digits"}, status_code=400)
+        if any(slugify(s.get("name", "")) == slug for s in idx.all_skills()):
+            return JSONResponse({"detail": f"a skill named “{name}” already exists"}, status_code=409)
+        root = _user_skills_root()
+        try:
+            artifact = write_skill(
+                root, name, description, prompt,
+                tools=_as_str_list(body.get("tools") or body.get("tools_used")),
+                user_facing=bool(body.get("user_facing", False)),
+                slash=str(body.get("slash", "")).strip(),
+            )
+            idx.add_skill(artifact, source="disk")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[playbooks] create failed")
+            return JSONResponse({"detail": f"create failed: {exc}"}, status_code=400)
+        created = _skill_response(idx, name, root)
+        return {"enabled": True, "id": (created or {}).get("id"), "skill": created}
+
+    # Fetch one skill WITH its full prompt_template (the list omits it) so the editor
+    # can pre-fill. Read-only — returns commons/bundled skills too (for viewing).
+    @app.get("/api/playbooks/{skill_id}")
+    async def _api_playbook_get(skill_id: int):
+        idx = STATE.skills_index
+        if idx is None:
+            return JSONResponse({"detail": "skills index disabled"}, status_code=404)
+        s = _find_skill(idx, skill_id)
+        if s is None:
+            return JSONResponse({"detail": "no skill with that id"}, status_code=404)
+        from graph.skills.authoring import classify
+
+        origin, editable = classify(s, _user_skills_root())
+        return {"enabled": True, "skill": {**s, "origin": origin, "editable": editable}}
+
+    # Edit a skill: rewrite its SKILL.md and re-index. Editing a learned (DB-only)
+    # skill MATERIALIZES it as a durable user SKILL.md (curation = persistence).
+    # Bundled examples + shared commons skills are read-only.
+    @app.put("/api/playbooks/{skill_id}")
+    async def _api_playbook_update(skill_id: int, body: dict | None = None):
+        idx = STATE.skills_index
+        if idx is None:
+            return {"enabled": False, "id": None}
+        root = _user_skills_root()
+        from graph.skills.authoring import classify, remove_skill, slugify, write_skill
+
+        cur = _find_skill(idx, skill_id, writable_only=True)
+        if cur is None:
+            return JSONResponse({"detail": "no editable skill with that id"}, status_code=404)
+        origin, editable = classify(cur, root)
+        if not editable:
+            return JSONResponse({"detail": f"{origin} skills are read-only"}, status_code=403)
+        body = body or {}
+        name = str(body.get("name", cur.get("name", ""))).strip()
+        description = str(body.get("description", "")).strip()
+        prompt = str(body.get("prompt_template", body.get("body", ""))).strip()
+        if not name or not description or not prompt:
+            return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
+        new_slug, old_slug = slugify(name), slugify(cur.get("name", ""))
+        if new_slug != old_slug and any(
+            slugify(s.get("name", "")) == new_slug and s.get("id") != skill_id for s in idx.all_skills()
+        ):
+            return JSONResponse({"detail": f"a skill named “{name}” already exists"}, status_code=409)
+        try:
+            artifact = write_skill(
+                root, name, description, prompt,
+                tools=_as_str_list(body.get("tools") or body.get("tools_used")),
+                user_facing=bool(body.get("user_facing", cur.get("user_facing", False))),
+                slash=str(body.get("slash", cur.get("slash", "") or "")).strip(),
+            )
+            idx.delete_skill(skill_id)
+            if new_slug != old_slug:
+                remove_skill(root, cur.get("name", ""))  # renamed → drop the old folder
+            idx.add_skill(artifact, source="disk")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[playbooks] update failed")
+            return JSONResponse({"detail": f"update failed: {exc}"}, status_code=400)
+        updated = _skill_response(idx, name, root)
+        return {"enabled": True, "id": (updated or {}).get("id"), "skill": updated}
+
     @app.delete("/api/playbooks/{skill_id}")
     async def _api_playbook_delete(skill_id: int):
-        if STATE.skills_index is None:
+        idx = STATE.skills_index
+        if idx is None:
             return {"enabled": False, "deleted": False}
+        root = _user_skills_root()
+        from graph.skills.authoring import classify, remove_skill
+
+        cur = _find_skill(idx, skill_id, writable_only=True)
+        if cur is None:
+            return {"enabled": True, "deleted": False, "error": "no deletable skill with that id"}
+        origin, _editable = classify(cur, root)
+        if origin == "bundled":
+            return {
+                "enabled": True,
+                "deleted": False,
+                "error": "bundled example skills are read-only (edit their SKILL.md in config/skills)",
+            }
         try:
-            STATE.skills_index.delete_skill(skill_id)
+            if origin == "user":
+                remove_skill(root, cur.get("name", ""))  # drop the file too, not just the row
+            idx.delete_skill(skill_id)
             return {"enabled": True, "deleted": True}
         except Exception as exc:  # noqa: BLE001
             log.exception("[playbooks] delete failed")

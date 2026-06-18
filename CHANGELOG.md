@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Skills CRUD in the console.** Settings ▸ Workspace ▸ Skills now lets you
+  **author, edit, and delete** skills — not just browse, delete, and promote.
+  Operator-authored skills are persisted as portable `SKILL.md` files under a
+  writable data-home root (`~/.protoagent/skills`, instance-scoped, via
+  `infra.paths.user_skills_dir`) and seeded into the index on boot like any
+  skill root, so they survive restarts, stay out of the repo working tree, and
+  are exportable. Editing an agent-**learned** skill materializes it as a
+  durable `SKILL.md` (curation = persistence); **bundled** examples and shared
+  **commons** skills are read-only. New routes: `POST /api/playbooks` (create),
+  `GET /api/playbooks/{id}` (full body), `PUT /api/playbooks/{id}` (edit); the
+  list payload now tags each skill with `origin`/`editable`.
+
 ## [0.49.1] - 2026-06-18
 
 ## [0.49.0] - 2026-06-18

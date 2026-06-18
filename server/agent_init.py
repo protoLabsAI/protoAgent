@@ -455,6 +455,11 @@ def _build_skills_index(config, extra_skill_dirs=None):
         live_root = Path(config.skills_dir).expanduser() if config.skills_dir else (_live_config_dir() / "skills")
         roots = [_BUNDLE_CONFIG_DIR / "skills", live_root]  # bundle first, live overrides
         roots.extend(Path(d) for d in (extra_skill_dirs or []))  # plugin-bundled skills
+        # Operator-authored skills (UI/console CRUD) live under the data home and
+        # win last — an explicit edit always overrides a bundled/plugin example.
+        from infra.paths import user_skills_dir
+
+        roots.append(user_skills_dir())
         count = seed_skills_index(index, roots)
         log.info("[skills] indexed %d SKILL.md skill(s) into %s", count, db_path)
         return index

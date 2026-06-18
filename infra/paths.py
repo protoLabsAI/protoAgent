@@ -272,6 +272,20 @@ def instance_root() -> Path:
     return home / _safe_segment(iid) if iid else home
 
 
+def user_skills_dir(*, create: bool = False) -> Path:
+    """Writable root for operator-authored ``SKILL.md`` skills (``instance_root()/skills``).
+
+    Distinct from the bundled ``config/skills`` (git-tracked, shipped examples) and
+    the live ``<config_dir>/skills`` drop-in: this lives under the data home, so
+    UI-managed skills survive a reboot (it's a skill seed root, re-seeded each boot)
+    and stay OUT of the repo working tree. Instance-scoped, same as ``skills.db``.
+    ``create=True`` mkdirs it."""
+    d = instance_root() / "skills"
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _instances_dir() -> Path:
     """`.instances/` under THIS instance's data root (scoped or shared)."""
     return instance_root() / ".instances"

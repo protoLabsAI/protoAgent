@@ -540,6 +540,16 @@ export type Playbook = {
   // index is layered (the agent reads a shared commons ∪ its private library);
   // absent in scoped/shared mode, where there's a single library and no promote.
   tier?: "private" | "commons";
+  // Skills CRUD — the list route tags each row so the UI shows edit/delete only on
+  // skills the operator owns: "user" (authored SKILL.md) and "learned" (agent-
+  // emitted) are editable; "bundled" (shipped example) and "commons" are read-only.
+  origin?: "user" | "learned" | "bundled" | "commons";
+  editable?: boolean;
+  user_facing?: boolean;
+  slash?: string;
+  // Full procedure body — present only on the single-skill detail (GET
+  // /api/playbooks/:id); the list payload omits it to stay light.
+  prompt_template?: string;
 };
 
 // One row from the knowledge store (knowledge/store.py chunks table), as the

@@ -647,6 +647,43 @@ export const api = {
     }>("/api/knowledge/attach", form);
   },
 
+  // Skills CRUD — author/edit operator skills. A create/edit writes a real
+  // SKILL.md under the user-skills root (durable + exportable) and re-indexes it
+  // live; editing a learned skill materializes it as a durable SKILL.md.
+  createPlaybook(body: {
+    name: string;
+    description: string;
+    prompt_template: string;
+    tools_used?: string[];
+    user_facing?: boolean;
+    slash?: string;
+  }) {
+    return request<{ enabled: boolean; id: number | null; skill: Playbook | null }>(
+      "/api/playbooks",
+      { method: "POST", body },
+    );
+  },
+  // Fetch one skill WITH its full prompt_template (the list omits it) to pre-fill the editor.
+  getPlaybook(id: number) {
+    return request<{ enabled: boolean; skill: Playbook | null }>(`/api/playbooks/${id}`);
+  },
+  updatePlaybook(
+    id: number,
+    body: {
+      name: string;
+      description: string;
+      prompt_template: string;
+      tools_used?: string[];
+      user_facing?: boolean;
+      slash?: string;
+    },
+  ) {
+    return request<{ enabled: boolean; id: number | null; skill: Playbook | null }>(
+      `/api/playbooks/${id}`,
+      { method: "PUT", body },
+    );
+  },
+
   deletePlaybook(id: number) {
     return request<{ enabled: boolean; deleted: boolean; error?: string }>(
       `/api/playbooks/${id}`,
