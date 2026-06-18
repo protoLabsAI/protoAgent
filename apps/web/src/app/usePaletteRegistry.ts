@@ -87,13 +87,14 @@ function deepLinkCommands(): Command[] {
       ui().setSurface("activity");
       ui().setActivityTab("schedule");
     }),
-    link("plug:market", "Plugins: Market", ["plugins", "market", "directory"], () => {
+    link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], () => {
       ui().setSurface("plugins");
       ui().setPluginsTab("market");
     }),
-    link("plug:download", "Plugins: Install from URL", ["plugins", "install", "download", "url"], () => {
+    // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
+    link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], () => {
       ui().setSurface("plugins");
-      ui().setPluginsTab("download");
+      ui().setPluginsTab("local");
     }),
     link("box:telemetry", "Box: Telemetry", ["box", "telemetry", "metrics"], () => {
       ui().setSurface("box");

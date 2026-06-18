@@ -114,7 +114,7 @@ function PluginRow({
   );
 }
 
-type PluginsTab = "local" | "market" | "download";
+type PluginsTab = "local" | "market";
 
 // Local — installed plugins, grouped Loaded → Disabled (alpha), with enable/disable.
 function LocalTab() {
@@ -124,6 +124,7 @@ function LocalTab() {
   const updates = useQuery(pluginUpdatesQuery());
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
+  const [urlOpen, setUrlOpen] = useState(false); // advanced: install-from-URL (ADR 0059 D4)
   const toggle = useMutation({
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
     onSuccess: (res, p) => {
@@ -199,11 +200,19 @@ function LocalTab() {
         ) : (
           <div className="table-list">
             <div className="table-row">
-              <span>no plugins installed — see the Discover or Download tabs</span>
+              <span>no plugins installed — browse the Discover tab, or install from a git URL below</span>
               <StatusPill label="none" tone="muted" />
             </div>
           </div>
         )}
+        {/* Install-from-URL is the advanced path (ADR 0059 D4) — the curated Discover
+            directory is the primary way to add a plugin. */}
+        <div className="plugin-install-advanced">
+          <Button type="button" variant="ghost" aria-expanded={urlOpen} onClick={() => setUrlOpen((o) => !o)}>
+            <Download size={14} /> Install from a git URL
+          </Button>
+          {urlOpen ? <PluginsSection /> : null}
+        </div>
       </div>
     </>
   );
@@ -295,22 +304,9 @@ function DiscoverTab() {
   );
 }
 
-// Download — install from a git URL (PluginsSection ships its own header + form).
-function DownloadTab() {
-  return (
-    <>
-      <PanelHeader title="Download" kicker="install from a git URL" />
-      <div className="stage-body">
-        <PluginsSection />
-      </div>
-    </>
-  );
-}
-
 const TABS: Record<PluginsTab, () => JSX.Element> = {
   local: LocalTab,
   market: DiscoverTab,
-  download: DownloadTab,
 };
 
 export function PluginsSurface({ tab = "local" }: { tab?: PluginsTab }) {

@@ -81,3 +81,4 @@
 .plugin-row-wrap { display: flex; flex-direction: column; }
 .plugin-row-config { margin: 0 0 10px; padding: 4px 12px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--bg-raised) 55%, transparent); }
 .settings-flat-group { display: flex; flex-direction: column; }
+.plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }

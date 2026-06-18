@@ -43,7 +43,10 @@ export type Surface =
 // `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
 // (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
 export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<viewId>
-export type PluginsTab = "local" | "market" | "download";
+// Two sections (ADR 0059 D4): "local" = Installed (+ advanced install-from-URL),
+// "market" = Discover. (Keys kept for persisted-state compat; the old "download"
+// tab is gone — a stale persisted value falls back to Installed.)
+export type PluginsTab = "local" | "market";
 // "schedule" joins thread/inbox here (#1075): cron is a trigger, so timed turns are a
 // tab of the Activity surface rather than a standalone rail surface.
 export type ActivityTab = "thread" | "inbox" | "schedule";

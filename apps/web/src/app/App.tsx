@@ -19,7 +19,6 @@ import {
   PanelRight,
   Plus,
   Puzzle,
-  Download,
   Store,
   Save,
   Settings2,
@@ -595,7 +594,6 @@ export function App() {
             <Tabs responsive active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
               { id: "local", label: "Installed", icon: Boxes },
               { id: "market", label: "Discover", icon: Store },
-              { id: "download", label: "Install URL", icon: Download },
             ].map(toTab)} />
             <PluginsSurface tab={pluginsTab} />
           </>

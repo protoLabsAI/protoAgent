@@ -61,8 +61,11 @@ test("workspace settings: identity lands, then tools and MCP sections", async ({
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
-test("plugins section: Installed / Discover / Install URL tabs", async ({ page }) => {
+test("plugins section: Installed / Discover (config + advanced install folded in)", async ({ page }) => {
   await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
+
+  // Two sections only now (ADR 0059 D4) — no separate "Install URL" tab.
+  await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true })).toHaveCount(0);
 
   // Installed (default tab) — both status groups + the enable toggle.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
@@ -71,12 +74,14 @@ test("plugins section: Installed / Discover / Install URL tabs", async ({ page }
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
-  // Config folded in (ADR 0059, bd-23a.3) — Demo Plugin has a settings group, so its
-  // row exposes Configure → its fields render inline.
+  // Config folded in (ADR 0059, bd-23a.3) — Demo Plugin's row exposes Configure → fields inline.
   const demoRow = page.locator(".plugin-row-wrap", { hasText: "Demo Plugin" });
   await demoRow.getByRole("button", { name: "Configure" }).click();
-  // Fields render flat (no nested accordion) — reachable immediately.
   await expect(demoRow.locator('.plugin-row-config .setting-row[data-key="demo.greeting"]')).toBeVisible();
+
+  // Install-from-URL is now the advanced action under Installed (ADR 0059 D4), not a tab.
+  await page.getByRole("button", { name: "Install from a git URL" }).click();
+  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 
   // Discover tab — the in-app official-plugin directory (ADR 0059): cards + search.
   await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
@@ -84,10 +89,6 @@ test("plugins section: Installed / Discover / Install URL tabs", async ({ page }
   const artifact = page.locator(".plugin-card", { hasText: "Artifact" });
   await expect(artifact.getByRole("button", { name: /Install/ })).toBeVisible();   // not installed → installable
   await expect(page.locator(".plugin-card", { hasText: "Discord" })).toContainText(/installed/);
-
-  // Install URL tab — install from a git URL (advanced).
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
 
 test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async ({ page }) => {
