@@ -47,9 +47,10 @@ export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<vi
 // "market" = Discover. (Keys kept for persisted-state compat; the old "download"
 // tab is gone — a stale persisted value falls back to Installed.)
 export type PluginsTab = "local" | "market";
-// "schedule" joins thread/inbox here (#1075): cron is a trigger, so timed turns are a
-// tab of the Activity surface rather than a standalone rail surface.
-export type ActivityTab = "thread" | "inbox" | "schedule";
+// Activity = the trigger/event surface: what happened (thread) + inbound (inbox).
+// "schedule" was briefly folded in here (#1075) but is its own top-level rail surface
+// again — cron is a trigger, but timed work earns its own rail.
+export type ActivityTab = "thread" | "inbox";
 // Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
 // section sub-nav. `settingsScope` picks the home; `settingsSection` the active
 // section within it (a free string so each home owns its own section ids).
@@ -126,11 +127,11 @@ export function migrateUiState(persisted: unknown): unknown {
       ...rest
     } = persisted as Record<string, unknown>;
     // Prune dead rail ids from a persisted railOrder (they'd linger with no surface
-    // metadata): "schedule" folded into Activity (#1075); "box" folded into Settings ▸
-    // Global (Fleet/Telemetry/Commons are sections there now).
+    // metadata): "box" folded into Settings ▸ Global (Fleet/Telemetry/Commons are
+    // sections there now). ("schedule" is a live rail surface again — v7 below.)
     const ro2 = rest.railOrder as { left?: string[]; right?: string[] } | undefined;
     if (ro2 && (Array.isArray(ro2.left) || Array.isArray(ro2.right))) {
-      const live = (x: string) => x !== "schedule" && x !== "box";
+      const live = (x: string) => x !== "box";
       rest.railOrder = {
         left: (ro2.left ?? []).filter(live),
         right: (ro2.right ?? []).filter(live),
@@ -141,6 +142,20 @@ export function migrateUiState(persisted: unknown): unknown {
     const ro3 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
     if (ro3 && !Array.isArray(ro3.bottom)) {
       rest.railOrder = { ...ro3, bottom: [] };
+    }
+    // v7: "schedule" is a top-level rail surface again (un-fold from #1075). Re-add it
+    // to a persisted layout that had it pruned/folded — after "activity" on the left —
+    // unless the user already keeps it on some dock.
+    const ro4 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro4) {
+      const has = (arr?: string[]) => Array.isArray(arr) && arr.includes("schedule");
+      if (!has(ro4.left) && !has(ro4.right) && !has(ro4.bottom)) {
+        const left = Array.isArray(ro4.left) ? ro4.left.slice() : [];
+        const at = left.indexOf("activity");
+        if (at >= 0) left.splice(at + 1, 0, "schedule");
+        else left.push("schedule");
+        rest.railOrder = { ...ro4, left };
+      }
     }
     return rest;
   }
@@ -164,7 +179,7 @@ export const useUI = create<UIState>()(
       bottomHeight: 240,
       bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "activity", "studio", "knowledge", "plugins", "settings"],
+        left: ["chat", "activity", "schedule", "studio", "knowledge", "plugins", "settings"],
         right: ["beads", "goals"],
         bottom: [],
       },
@@ -245,7 +260,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 6, // …v4 +Box · v5 Schedule→Activity tab (#1075) · v6 +bottom dock
+      version: 7, // …v5 Schedule→Activity tab (#1075) · v6 +bottom dock · v7 Schedule→rail surface again
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
     },
   ),

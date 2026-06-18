@@ -83,10 +83,8 @@ function deepLinkCommands(): Command[] {
       ui().setSurface("activity");
       ui().setActivityTab("inbox");
     }),
-    link("act:schedule", "Activity: Schedule", ["activity", "schedule", "cron"], () => {
-      ui().setSurface("activity");
-      ui().setActivityTab("schedule");
-    }),
+    // (Schedule is a top-level rail surface again — it auto-registers as a "go to"
+    // nav command, so no Activity deep-link here.)
     link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], () => {
       ui().setSurface("plugins");
       ui().setPluginsTab("market");

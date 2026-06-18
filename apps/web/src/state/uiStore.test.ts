@@ -28,31 +28,40 @@ describe("migrateUiState", () => {
   // persisted railOrder rather than leaving a dead rail id with no surface metadata.
   it("prunes the obsolete 'box' rail surface", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "plugins", "box", "settings"], right: ["beads"] },
+      railOrder: { left: ["chat", "schedule", "plugins", "box", "settings"], right: ["beads"] },
     }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "plugins", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "schedule", "plugins", "settings"]);
     expect(out.railOrder.left).not.toContain("box");
     expect(out.railOrder.right).toEqual(["beads"]);
   });
 
-  // v4→v5 (#1075): "schedule" folded into the Activity surface (a tab), so it's pruned
-  // from a persisted railOrder rather than lingering as a dead rail id.
-  it("prunes the obsolete 'schedule' rail surface", () => {
+  // v7: "schedule" is a top-level rail surface again (un-fold from #1075). A persisted
+  // layout that lost it (it was pruned/folded) gets it re-injected after "activity".
+  it("restores the 'schedule' rail surface to a layout that lacks it", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "settings"], right: ["beads", "goals", "schedule"] },
+      railOrder: { left: ["chat", "activity", "settings"], right: ["beads", "goals"] },
     }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.right).toEqual(["beads", "goals"]);
+    expect(out.railOrder.left).toEqual(["chat", "activity", "schedule", "settings"]);
+  });
+
+  // …but if the user keeps "schedule" on some dock already, don't duplicate it.
+  it("keeps a user-placed 'schedule' where it is", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "activity", "settings"], right: ["beads", "goals", "schedule"] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.right).toContain("schedule");
     expect(out.railOrder.left).not.toContain("schedule");
   });
 
   // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a
   // persisted layout that predates it.
   it("adds the bottom dock to a pre-v6 railOrder", () => {
+    // (schedule already present so the v7 inject is a no-op — keep this test on the dock)
     const out = migrateUiState({
-      railOrder: { left: ["chat", "settings"], right: ["beads"] },
+      railOrder: { left: ["chat", "schedule", "settings"], right: ["beads"] },
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] } };
     expect(out.railOrder.bottom).toEqual([]);
-    expect(out.railOrder.left).toEqual(["chat", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
   });
 
   it("does not mutate the input object", () => {
