@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-06-18
+
 ### Removed
 - **Google (Gmail + Calendar) and Slack are no longer bundled — they move to
   standalone external plugins.** The `google` plugin (`plugins/google/` +
