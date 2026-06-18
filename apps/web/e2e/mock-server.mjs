@@ -81,6 +81,13 @@ let INSTALLED_PLUGINS = [];
 // `POST /{id}/update` the entry is cleared so the row flips to "up to date".
 let PLUGIN_UPDATES = {};
 
+// Playbooks are MUTATED by the promote spec (a skill flips private→commons), so
+// serve a working copy that each playbooks test resets via
+// POST /api/__test__/playbooks/reset — otherwise the promote leaks into the
+// delete test (a commons skill is read-only, so its delete button is gone).
+const clonePlaybooks = () => JSON.parse(JSON.stringify(PLAYBOOKS));
+let playbooks = clonePlaybooks();
+
 // Fleet state is the one slice of the mock backend the specs MUTATE (create /
 // stop / rename / add-remote). Isolate it PER SPEC so parallel files and serial-
 // group retries can't observe each other's writes: every `x-e2e-fleet` request
@@ -211,7 +218,7 @@ function handleApiGet(pathname, fleet = FLEET) {
     case "/api/telemetry/insights":
       return { enabled: true, insights: TELEMETRY_INSIGHTS };
     case "/api/playbooks":
-      return { enabled: true, playbooks: PLAYBOOKS };
+      return { enabled: true, playbooks };
     case "/api/knowledge/search":
       return {
         enabled: true, query: "", results: KNOWLEDGE_CHUNKS,
@@ -374,6 +381,11 @@ const server = createServer(async (req, res) => {
       fleetScopes.set(req.headers["x-e2e-fleet"] || "default", cloneFleet(FLEET));
       return sendJson(res, { ok: true });
     }
+    if (pathname === "/api/__test__/playbooks/reset" && req.method === "POST") {
+      // Per-test hermeticity: undo any promote (private→commons) from a prior test.
+      playbooks = clonePlaybooks();
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/settings") {
       // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"
       // (box-shared host-config.yaml). The mock just echoes which layer it wrote.
@@ -453,7 +465,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && /^\/api\/playbooks\/\d+\/promote$/.test(pathname)) {
       const id = Number(pathname.split("/").at(-2));
-      const p = PLAYBOOKS.find((x) => x.id === id);
+      const p = playbooks.find((x) => x.id === id);
       if (p) p.tier = "commons"; // promoted: now reads from the commons tier
       return sendJson(res, { enabled: true, promoted: true, name: p?.name });
     }
