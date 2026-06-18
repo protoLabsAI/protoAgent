@@ -59,7 +59,7 @@ test("Workspace settings live in the rail (no scope toggle)", async ({ page }) =
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
-test("Global settings open from the header drawer → overlay (Overview · Configuration · Fleet · Telemetry · Commons)", async ({ page }) => {
+test("Global settings open from the header drawer → overlay (Overview · Configuration · Fleet · Telemetry · Shared Skills)", async ({ page }) => {
   await openGlobal(page);
   const sidenav = page.locator(".settings-overlay .pl-sidenav");
   expect(await sidenav.locator("button").allTextContents()).toEqual([
@@ -67,7 +67,7 @@ test("Global settings open from the header drawer → overlay (Overview · Confi
     "Configuration",
     "Fleet",
     "Telemetry",
-    "Commons",
+    "Shared Skills",
   ]);
   // Fleet section shows the agents panel; Telemetry renders the dashboard.
   await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
