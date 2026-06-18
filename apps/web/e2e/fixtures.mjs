@@ -11,6 +11,7 @@ export const RUNTIME_STATUS = {
   setup_complete: true,
   instance_uid: "mock-uid-1", // TenantGuard keys per-origin client state on this
   graph_loaded: true,
+  version: "9.9.9",
   project: { path: "/tmp/e2e-project", allowed_dirs: ["/tmp/e2e-project"] },
   model: {
     provider: "openai",

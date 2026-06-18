@@ -993,6 +993,7 @@ export function App() {
       activeSurface={isMobile ? mobileActive : leftActive}
       onSelectSurface={setMobileActive}
       onOpenGlobal={openGlobalSettings}
+      version={runtime?.version}
     />
     {/* Global settings overlay — opened from the drawer or a palette deep-link (store-driven). */}
     <SettingsOverlay
