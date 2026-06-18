@@ -94,6 +94,7 @@ import { api, apiUrl, authToken, is401 } from "../lib/api";
 import { PluginView, consoleTheme } from "./PluginView";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
+import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
@@ -114,7 +115,7 @@ import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { usePaletteRegistry } from "./usePaletteRegistry";
-import { makeChatTransport } from "./paletteChat";
+import { PaletteChat } from "./PaletteChat";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -557,9 +558,13 @@ export function App() {
   const paletteChat = useMemo(
     () => ({
       name: chatAgentName,
-      transport: makeChatTransport(chatAgentName),
       icon: <MessageSquare size={16} />,
-      greeting: `Ask ${chatAgentName} anything — a quick scratch chat (its own context).`,
+      view: {
+        id: "chat",
+        title: chatAgentName,
+        width: 620,
+        render: () => <PaletteChat agentName={chatAgentName} />,
+      } as PaletteView,
     }),
     [chatAgentName],
   );

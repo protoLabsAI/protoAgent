@@ -8,8 +8,8 @@
 // of navigating to its rail. (Plugin-declared `commands:` + dispatch are step 3b.)
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
-import { chatView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
-import type { AgentTransport, Command, PaletteRegistry, PaletteSource } from "@protolabsai/ui/command-palette";
+import { createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
+import type { Command, PaletteRegistry, PaletteSource, PaletteView } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View, ViewKind } from "../lib/viewRegistry";
 
@@ -17,13 +17,13 @@ const SURFACES: PaletteSource = { id: "surfaces", label: "Surfaces" };
 const ACTIONS: PaletteSource = { id: "actions", label: "Actions" };
 const AGENTS: PaletteSource = { id: "agents", label: "Agents" };
 
-/** Optional inline chat with the focused agent (ADR 0057). App builds the transport
- *  (it owns the agent name + the icon node); the adapter registers the view + command. */
-export type PaletteChat = {
+/** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
+ *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
+ *  "Chat with <agent>" command that morphs into it. */
+export type PaletteChatConfig = {
   name: string;
-  transport: AgentTransport;
   icon?: ReactNode;
-  greeting?: ReactNode;
+  view: PaletteView;
 };
 
 const GROUP: Record<ViewKind, string> = {
@@ -121,7 +121,7 @@ function deepLinkCommands(): Command[] {
 export function usePaletteRegistry(
   views: View[],
   inlineViews: InlinePluginView[] = [],
-  chat?: PaletteChat,
+  chat?: PaletteChatConfig,
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
@@ -181,7 +181,7 @@ export function usePaletteRegistry(
   // The DS chat view focuses its composer on open, so it's type-ready immediately.
   useEffect(() => {
     if (!chat) return;
-    const offView = registry.registerViews([chatView({ title: chat.name })]);
+    const offView = registry.registerViews([chat.view]);
     const offCmd = registry.registerCommands(
       [
         {
@@ -191,7 +191,7 @@ export function usePaletteRegistry(
           icon: chat.icon,
           group: "Agents",
           keywords: ["chat", "ask", "talk", "agent"],
-          run: (c) => c.enter("chat", { transport: chat.transport, greeting: chat.greeting }),
+          run: (c) => c.enter("chat"),
         },
       ],
       { source: AGENTS },
