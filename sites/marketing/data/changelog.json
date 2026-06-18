@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.47.0",
+    "date": "2026-06-18",
+    "changes": [
+      "**Google (Gmail + Calendar) and Slack are no longer bundled"
+    ]
+  },
+  {
     "version": "v0.46.0",
     "date": "2026-06-17",
     "changes": []
