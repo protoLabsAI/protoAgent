@@ -17,6 +17,7 @@ import type {
   GoalState,
   HitlPayload,
   InboxItem,
+  CatalogPlugin,
   InstalledPlugin,
   PluginInstallSummary,
   PluginUpdate,
@@ -1291,6 +1292,11 @@ export const api = {
   // Git-installed plugins (ADR 0027). install fetches code only (does NOT enable).
   installedPlugins() {
     return request<{ plugins: InstalledPlugin[] }>("/api/plugins/installed");
+  },
+  // The curated official-plugin directory (Discover, ADR 0059), merged with install
+  // state. One-click install posts each entry's `repo` to installPlugin().
+  pluginCatalog() {
+    return request<{ plugins: CatalogPlugin[] }>("/api/plugins/catalog");
   },
   // Install AUTO-ENABLES + runs the plugin (trust-by-default): `enabled` lists the
   // ids now live; `reloaded` whether the hot-reload landed; `enable_error` is set if

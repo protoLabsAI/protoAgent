@@ -577,9 +577,9 @@ export function App() {
         return (
           <>
             <Tabs responsive active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
-              { id: "local", label: "Local", icon: Boxes },
-              { id: "market", label: "Market", icon: Store },
-              { id: "download", label: "Download", icon: Download },
+              { id: "local", label: "Installed", icon: Boxes },
+              { id: "market", label: "Discover", icon: Store },
+              { id: "download", label: "Install URL", icon: Download },
             ].map(toTab)} />
             <PluginsSurface tab={pluginsTab} />
           </>

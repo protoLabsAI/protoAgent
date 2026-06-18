@@ -141,6 +141,22 @@ export type InstalledPlugin = {
   };
 };
 
+// An entry in the official-plugin directory (GET /api/plugins/catalog, ADR 0059),
+// merged with install state. `repo` is the install URL — one-click install runs
+// `plugin install <repo>`. `bundled` = a built-in still shipped with the host (not
+// separately installable); `installed` = present in the live plugins dir.
+export type CatalogPlugin = {
+  id: string;
+  name: string;
+  tagline?: string;
+  category?: string;
+  official?: boolean;
+  repo: string;
+  bundled: boolean;
+  installed: boolean;
+  enabled: boolean;
+};
+
 // Per-plugin update status (GET /api/plugins/updates, ADR 0027). The backend
 // TTL-caches these — a *pinned* plugin (its requested_ref is a full SHA) skips
 // the network; the rest ls-remote their ref. `behind` ⇒ the recorded

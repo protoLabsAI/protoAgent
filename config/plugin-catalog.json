@@ -1,0 +1,93 @@
+{
+  "_comment": "Curated official-plugin directory served by GET /api/plugins/catalog and rendered in the Plugins ▸ Discover section (ADR 0059). The official source; keep in sync with sites/marketing/data/plugins.json. A fork can override it by placing its own plugin-catalog.json in the live config dir. `repo` is the install URL (one-click install runs `plugin install <repo>`, ADR 0058 — works on every surface incl. the frozen desktop app).",
+  "plugins": [
+    {
+      "id": "discord",
+      "name": "Discord",
+      "category": "Communication",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/discord-plugin",
+      "tagline": "Run your agent as a Discord bot — inbound DMs + @-mentions, outbound send/read/react tools."
+    },
+    {
+      "id": "artifact",
+      "name": "Artifact (Generative UI)",
+      "category": "Generative UI",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/artifact-plugin",
+      "tagline": "Render HTML/SVG/Mermaid/React into a sandboxed iframe (show_artifact). The reference external plugin."
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "category": "Tools",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/terminal-plugin",
+      "tagline": "A full terminal (xterm.js + a real PTY over WebSocket) as a console view, themed from the design system."
+    },
+    {
+      "id": "agent_browser",
+      "name": "Agent Browser",
+      "category": "Automation",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/agent-browser-plugin",
+      "tagline": "Browser automation backed by vercel-labs/agent-browser: tools + skill + workflows + a live browser panel."
+    },
+    {
+      "id": "project_board",
+      "name": "Project Board",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/projectBoard-plugin",
+      "tagline": "Board-driven coding orchestration — a beads board + ACP spawn loop + planning layer + console view."
+    },
+    {
+      "id": "portfolio",
+      "name": "Portfolio",
+      "category": "Orchestration",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/portfolio-plugin",
+      "tagline": "Multi-team orchestration — one PM across many project boards over A2A (ADR 0055)."
+    },
+    {
+      "id": "pm",
+      "name": "Product Manager",
+      "category": "Product",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/pm-plugin",
+      "tagline": "PM toolkit — 65 PM skills, a provenance-enforced PM Brain, specialist subagents, and a brain dashboard."
+    },
+    {
+      "id": "spacetraders",
+      "name": "SpaceTraders",
+      "category": "Examples",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/spacetraders-plugin",
+      "tagline": "Autonomous SpaceTraders fleet commander — tools, crew, workflows, skills, and a console dashboard."
+    },
+    {
+      "id": "prototrader-finance",
+      "name": "protoTrader Finance",
+      "category": "Finance",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/prototrader-finance",
+      "tagline": "Market data, backtesting, factor IC, a gated paper broker, the research desk, and a Quant Desk view."
+    },
+    {
+      "id": "monarch_money",
+      "name": "Monarch Money",
+      "category": "Finance",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/monarch-money-plugin",
+      "tagline": "Give your agent access to Monarch Money via its MCP server."
+    },
+    {
+      "id": "doom",
+      "name": "DOOM",
+      "category": "Examples",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/doom-plugin",
+      "tagline": "But can it run DOOM? Play shareware DOOM in a console view via WebAssembly (prboom)."
+    }
+  ]
+}

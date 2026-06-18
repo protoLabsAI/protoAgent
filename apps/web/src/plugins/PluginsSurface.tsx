@@ -4,7 +4,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { useState } from "react";
-import { ExternalLink, Github, Loader2, RefreshCw, Store } from "lucide-react";
+import { Download, ExternalLink, Github, Loader2, RefreshCw, Search, Store } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
@@ -13,8 +13,9 @@ import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
 import { PluginsSection } from "../settings/PluginsSection";
 import { PluginFreshness } from "./PluginFreshness";
+import { catalogCategories, filterCatalog } from "./catalog";
 import { api } from "../lib/api";
-import type { PluginUpdate, RuntimeStatus } from "../lib/types";
+import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
 
@@ -165,7 +166,7 @@ function LocalTab() {
         ) : (
           <div className="table-list">
             <div className="table-row">
-              <span>no plugins installed — see the Market or Download tabs</span>
+              <span>no plugins installed — see the Discover or Download tabs</span>
               <StatusPill label="none" tone="muted" />
             </div>
           </div>
@@ -175,16 +176,79 @@ function LocalTab() {
   );
 }
 
-// Market — discover plugins (directory + GitHub topic).
-function MarketTab() {
+// Discover — the in-app official-plugin directory (ADR 0059): browse the curated
+// catalog + one-click install (runtime install, works on every surface incl. the
+// frozen desktop app via ADR 0058).
+function DiscoverTab() {
+  const qc = useQueryClient();
+  const catalog = useQuery({ queryKey: ["plugin-catalog"], queryFn: () => api.pluginCatalog(), retry: false });
+  const [q, setQ] = useState("");
+  const [cat, setCat] = useState("All");
+  const [hint, setHint] = useState<string | null>(null);
+
+  const install = useMutation({
+    mutationFn: (p: CatalogPlugin) => api.installPlugin(p.repo),
+    onSuccess: (res, p) => {
+      qc.invalidateQueries({ queryKey: ["plugin-catalog"] });
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      setHint(`${p.name} installed${res.reloaded ? " + enabled" : ""}.`);
+    },
+    onError: (err: unknown, p) => setHint(`Couldn't install ${p.name}: ${errMsg(err)}`),
+  });
+  const installingRepo = install.isPending ? install.variables?.repo : undefined;
+
+  const plugins = catalog.data?.plugins ?? [];
+  const categories = catalogCategories(plugins);
+  const shown = filterCatalog(plugins, q, cat);
+
   return (
     <>
-      <PanelHeader title="Market" kicker="discover plugins" />
+      <PanelHeader title="Discover" kicker={`${plugins.length} official plugins`} />
       <div className="stage-body">
-        <div className="plugin-market">
+        {hint ? <p className="plugin-hint">{hint}</p> : null}
+        <div className="plugin-discover-controls">
+          <div className="plugin-search">
+            <Search size={14} />
+            <input placeholder="Search plugins…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search plugins" />
+          </div>
+          <div className="plugin-cats">
+            {categories.map((c) => (
+              <button key={c} type="button" className={c === cat ? "plugin-cat on" : "plugin-cat"} onClick={() => setCat(c)}>{c}</button>
+            ))}
+          </div>
+        </div>
+        {catalog.isLoading ? <p className="muted">Loading directory…</p> : null}
+        {catalog.isError ? <p className="plugin-hint">Couldn't load the catalog: {errMsg(catalog.error)}</p> : null}
+        <div className="plugin-card-grid">
+          {shown.map((p) => (
+            <div className="plugin-card" key={p.id}>
+              <div className="plugin-card-head">
+                <strong>{p.name}</strong>
+                {p.category ? <span className="plugin-chip">{p.category}</span> : null}
+              </div>
+              <p className="plugin-card-tagline">{p.tagline}</p>
+              <div className="plugin-card-foot">
+                <a className="plugin-card-repo" href={p.repo} target="_blank" rel="noopener noreferrer">
+                  <Github size={13} /> repo <ExternalLink size={11} />
+                </a>
+                {p.bundled ? (
+                  <StatusPill label="bundled" tone="muted" />
+                ) : p.installed ? (
+                  <StatusPill label={p.enabled ? "installed · on" : "installed"} tone="success" />
+                ) : (
+                  <Button type="button" disabled={install.isPending} onClick={() => { setHint(null); install.mutate(p); }}>
+                    {installingRepo === p.repo ? <Loader2 size={14} className="spin" /> : <Download size={14} />} Install
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {!shown.length && !catalog.isLoading ? <p className="muted">No plugins match.</p> : null}
+        </div>
+        <div className="plugin-market" style={{ marginTop: 14 }}>
           <a className="plugin-market-link" href={DIRECTORY_URL} target="_blank" rel="noopener noreferrer">
             <Store size={16} />
-            <span><strong>Browse the directory</strong><span className="muted">Curated + community plugins, with install URLs</span></span>
+            <span><strong>Full directory</strong><span className="muted">Curated + community plugins online</span></span>
             <ExternalLink size={14} />
           </a>
           <a className="plugin-market-link" href={TOPIC_URL} target="_blank" rel="noopener noreferrer">
@@ -193,9 +257,6 @@ function MarketTab() {
             <ExternalLink size={14} />
           </a>
         </div>
-        <p className="muted" style={{ marginTop: 10 }}>
-          Found one? Copy its git URL and install it from the <strong>Download</strong> tab.
-        </p>
       </div>
     </>
   );
@@ -215,7 +276,7 @@ function DownloadTab() {
 
 const TABS: Record<PluginsTab, () => JSX.Element> = {
   local: LocalTab,
-  market: MarketTab,
+  market: DiscoverTab,
   download: DownloadTab,
 };
 

@@ -61,22 +61,25 @@ test("workspace settings: identity lands, then tools and MCP sections", async ({
   await expect(page.getByText("echo · stdio")).toBeVisible(); // MCP server
 });
 
-test("plugins section: Local / Market / Download tabs", async ({ page }) => {
+test("plugins section: Installed / Discover / Install URL tabs", async ({ page }) => {
   await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
 
-  // Local (default tab) — both status groups + the enable toggle.
+  // Installed (default tab) — both status groups + the enable toggle.
   await expect(page.getByText("Demo Plugin", { exact: false })).toBeVisible();
   await expect(page.getByText("Zzz Disabled", { exact: false })).toBeVisible();
   await page.locator(".subagent-row", { hasText: "Zzz Disabled" })
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
-  // Market tab — discovery links.
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Market", exact: true }).click();
-  await expect(page.getByRole("link", { name: /Browse the directory/ })).toBeVisible();
+  // Discover tab — the in-app official-plugin directory (ADR 0059): cards + search.
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
+  await expect(page.getByLabel("Search plugins")).toBeVisible();
+  const artifact = page.locator(".plugin-card", { hasText: "Artifact" });
+  await expect(artifact.getByRole("button", { name: /Install/ })).toBeVisible();   // not installed → installable
+  await expect(page.locator(".plugin-card", { hasText: "Discord" })).toContainText(/installed/);
 
-  // Download tab — install from a git URL.
-  await page.locator(".pl-tabs").getByRole("tab", { name: "Download", exact: true }).click();
+  // Install URL tab — install from a git URL (advanced).
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
 });
 
