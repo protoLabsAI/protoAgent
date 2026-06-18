@@ -4,17 +4,24 @@ import { expect, test } from "@playwright/test";
 // opens a dialog editing fields via the same /api/settings path, and the central
 // two-home one-stop-shop is also openable as an overlay from the topbar.
 
-// The header hamburger was removed (to be re-homed later); the Settings overlay it
-// opened has no trigger for now. Skipped until the global-actions entry point lands.
-test.skip("the header menu opens the Settings overlay (the two-home one-stop-shop)", async ({ page }) => {
+// The header hamburger opens the app drawer (2026-06-18 IA pass): global actions
+// (Global settings, Telemetry) + the Docs/GitHub links. "Global settings" opens the
+// Global-only overlay — Workspace settings live in the rail surface, not here.
+test("the header hamburger opens the app drawer → Global settings overlay", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
-  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const drawer = page.getByTestId("app-drawer");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Global settings", exact: true })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toBeVisible();
+  await expect(drawer.getByRole("link", { name: "Docs" })).toBeVisible();
+  await expect(drawer.getByRole("link", { name: "GitHub" })).toBeVisible();
+
+  await drawer.getByRole("button", { name: "Global settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Global settings" });
   await expect(dialog).toBeVisible();
-  // The same two scope homes render inside the overlay (the segmented toggle).
-  await expect(dialog.getByRole("button", { name: "Global", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Workspace", exact: true })).toBeVisible();
+  // Global-only — no scope toggle inside (the two-home toggle is gone).
+  await expect(dialog.locator(".pl-tabs--segmented")).toHaveCount(0);
 });
 
 test("the chat composer model picker overrides the model per-tab (no global save)", async ({ page }) => {

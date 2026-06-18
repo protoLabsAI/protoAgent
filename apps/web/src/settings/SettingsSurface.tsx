@@ -1,6 +1,6 @@
 import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { PanelHeader, SideNav, Tabs } from "@protolabsai/ui/navigation";
 import { Button } from "@protolabsai/ui/primitives";
@@ -103,13 +103,26 @@ export const SETTINGS_HOMES: Home[] = [
   { id: "workspace", label: "Workspace", icon: Boxes, sections: WORKSPACE_SECTIONS },
 ];
 
-export function SettingsSurface() {
-  const scope = useUI((s) => s.settingsScope);
-  const section = useUI((s) => s.settingsSection);
+// `only` renders a single scope's sections WITHOUT the Global/Workspace toggle —
+// Workspace lives in the rail surface, Global in the header-drawer's overlay
+// (separated per the 2026-06-18 IA pass). The Global overlay keeps its own section
+// in local state (seeded by `initialSection`) so it never fights the rail's persisted
+// workspace section. Bare `<SettingsSurface />` keeps the legacy two-home toggle.
+export function SettingsSurface({ only, initialSection }: { only?: SettingsScope; initialSection?: string } = {}) {
+  const persistedScope = useUI((s) => s.settingsScope);
+  const persistedSection = useUI((s) => s.settingsSection);
   const setScope = useUI((s) => s.setSettingsScope);
-  const setSection = useUI((s) => s.setSettingsSection);
+  const setPersistedSection = useUI((s) => s.setSettingsSection);
 
+  const scope: SettingsScope = only ?? persistedScope;
   const home = SETTINGS_HOMES.find((h) => h.id === scope) ?? SETTINGS_HOMES[0];
+
+  // The Global overlay (only="host") tracks its section locally; the rail (workspace
+  // or the legacy toggle) uses the persisted store.
+  const overlay = only === "host";
+  const [localSection, setLocalSection] = useState(initialSection ?? home.sections[0].id);
+  const section = overlay ? localSection : persistedSection;
+  const setSection = overlay ? setLocalSection : setPersistedSection;
   const active = home.sections.find((s) => s.id === section) ?? home.sections[0];
 
   // Switching home lands on its first section unless the current section id also
@@ -135,15 +148,18 @@ export function SettingsSurface() {
         active={active.id}
         onSelect={(t) => setSection(t)}
         items={home.sections.map((s) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> }))}
-        // Scope toggle pinned atop the rail; text-only so both home labels fit.
+        // Scope toggle pinned atop the rail — only for the legacy two-home surface.
+        // A scoped surface (`only`) shows just its own sections, no toggle.
         header={
-          <Tabs
-            variant="segmented"
-            ariaLabel="Settings scope"
-            active={scope}
-            onSelect={(t) => selectHome(t as SettingsScope)}
-            items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
-          />
+          only ? undefined : (
+            <Tabs
+              variant="segmented"
+              ariaLabel="Settings scope"
+              active={scope}
+              onSelect={(t) => selectHome(t as SettingsScope)}
+              items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
+            />
+          )
         }
       />
       <div className="settings-content">{active.render()}</div>

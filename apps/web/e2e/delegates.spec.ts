@@ -6,8 +6,7 @@ import { expect, test } from "@playwright/test";
 
 async function openIntegrations(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
 }
 

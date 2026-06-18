@@ -65,6 +65,13 @@ type UIState = {
   // One-shot: the FleetSwitcher's "+ New agent" deep-link routes to Host/App ▸ Fleet
   // and asks the fleet panel to open the new-agent picker on mount, then clears it.
   fleetStartNew: boolean;
+  // Global settings overlay (the Global home; opened from the header drawer or a
+  // command-palette deep-link). EPHEMERAL — partialized out of persistence so a refresh
+  // never reopens it. The section deep-links a Global section (e.g. "telemetry").
+  globalSettingsOpen: boolean;
+  globalSettingsSection?: string;
+  openGlobalSettings: (section?: string) => void;
+  closeGlobalSettings: () => void;
   activityTab: ActivityTab;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
@@ -171,6 +178,10 @@ export const useUI = create<UIState>()(
       settingsScope: "host" as SettingsScope,
       settingsSection: "overview",
       fleetStartNew: false,
+      globalSettingsOpen: false,
+      globalSettingsSection: undefined,
+      openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
+      closeGlobalSettings: () => set({ globalSettingsOpen: false }),
       activityTab: "thread",
       rightCollapsed: false,
       leftCollapsed: false,
@@ -262,6 +273,9 @@ export const useUI = create<UIState>()(
       storage: _layoutStorage,
       version: 7, // …v5 Schedule→Activity tab (#1075) · v6 +bottom dock · v7 Schedule→rail surface again
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
+      // The Global settings overlay is ephemeral UI state — drop it from persistence so a
+      // refresh never reopens it (everything else persists as before).
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, ...rest }) => rest,
     },
   ),
 );

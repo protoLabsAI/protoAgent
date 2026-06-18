@@ -47,9 +47,9 @@ test("beads tab in the right sidebar lists issues (query-backed)", async ({ page
 });
 
 test("workspace settings: identity lands, then tools and MCP sections", async ({ page }) => {
-  // The agent makeup folded into Settings ▸ Workspace (ADR 0048 S-C).
+  // The agent makeup folded into Settings ▸ Workspace (ADR 0048 S-C); the rail
+  // Settings surface is Workspace-direct now (Global moved to the header drawer).
   await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.locator(".pl-tabs--segmented").getByRole("button", { name: "Workspace", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing section
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
@@ -155,7 +155,7 @@ test("right-click → Move to bottom dock docks the surface at the bottom", asyn
   await expect(page.locator(".pl-appshell__bottom").getByRole("heading", { name: "Beads" })).toBeVisible();
 });
 
-test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({ page }) => {
+test("mobile shell: bottom quick-bar + unified header drawer (ADR 0035 S4)", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto("/app/", { waitUntil: "load" });
 
@@ -167,10 +167,12 @@ test("mobile shell: bottom quick-bar + hamburger drawer (ADR 0035 S4)", async ({
   // A default quick-bar surface switches the single active surface.
   await bar.getByRole("button", { name: "Knowledge", exact: true }).click();
 
-  // The hamburger opens a drawer with the full surface list.
-  await bar.getByRole("button", { name: "All surfaces" }).click();
-  const drawer = page.getByRole("dialog", { name: "Surfaces" });
+  // The DS bottom-bar "More" is hidden (2026-06-18 IA pass) — the unified mobile
+  // "more" is the header hamburger's app drawer, which on mobile also lists surfaces.
+  await expect(bar.getByRole("button", { name: "All surfaces" })).toBeHidden();
+  await page.getByTestId("header-menu").click();
+  const drawer = page.getByTestId("app-drawer");
   await expect(drawer).toBeVisible();
   await drawer.getByRole("button", { name: "Beads", exact: true }).click();
-  await expect(drawer).toHaveCount(0); // picking closes it
+  await expect(drawer).toHaveCount(0); // picking a surface closes the drawer
 });

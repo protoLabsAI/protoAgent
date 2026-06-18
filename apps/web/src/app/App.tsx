@@ -9,7 +9,6 @@ import {
   CircleAlert,
   FileText,
   Gauge,
-  Github,
   Inbox,
   LayoutDashboard,
   Loader2,
@@ -81,6 +80,8 @@ import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsSurface } from "../settings/SettingsSurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
+import { AppDrawer } from "./AppDrawer";
+import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
@@ -230,8 +231,6 @@ export function App() {
   const chatStreaming = useAnyChatStreaming();
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
-  const setSettingsScope = useUI((s) => s.setSettingsScope);
-  const setSettingsSection = useUI((s) => s.setSettingsSection);
   const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const activityTab = useUI((s) => s.activityTab);
   const setActivityTab = useUI((s) => s.setActivityTab);
@@ -264,8 +263,14 @@ export function App() {
   >(null);
   const [activityUnread, setActivityUnread] = useState(0);
   const [inboxUnread, setInboxUnread] = useState(0);
-  // The one-stop-shop Settings overlay (ADR 0048) — opened by the topbar gear.
-  const [settingsOverlayOpen, setSettingsOverlayOpen] = useState(false);
+  // Global settings overlay (the Global home) — store-driven so BOTH the header drawer
+  // and command-palette deep-links (Fleet/Telemetry/Commons) can open it. The header
+  // hamburger's app drawer itself is local (only App triggers it).
+  const globalSettingsOpen = useUI((s) => s.globalSettingsOpen);
+  const globalSettingsSection = useUI((s) => s.globalSettingsSection);
+  const openGlobalSettings = useUI((s) => s.openGlobalSettings);
+  const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
   // always renders; the retry doubles as the desktop sidecar boot-probe. The
@@ -605,9 +610,9 @@ export function App() {
       case "knowledge":
         return <KnowledgeStore onError={setError} />;
       case "settings":
-        // SettingsSurface owns its own two-level nav (home + section, ADR 0048).
-        // Box (Fleet/Telemetry/Commons) is folded into its Global home now.
-        return <SettingsSurface />;
+        // The rail Settings surface is Workspace-only now (2026-06-18 IA pass) — no
+        // scope toggle. Global settings live in the header drawer's overlay instead.
+        return <SettingsSurface only="workspace" />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       case "beads":
@@ -790,17 +795,19 @@ export function App() {
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}
             onNewAgent={() => {
-              // Fleet lives under Settings ▸ Global ▸ Fleet now; open it + ask the
-              // panel to pop the new-agent picker on mount.
-              setSurface("settings");
-              setSettingsScope("host");
-              setSettingsSection("fleet");
+              // Fleet lives in the Global settings overlay now (header drawer). Open it on
+              // the Fleet section + ask the panel to pop the new-agent picker on mount.
               setFleetStartNew(true);
+              openGlobalSettings("fleet");
             }}
           />
         }
         org={runtime?.identity?.org || "protoLabs.studio"}
       />
+      {/* Top-right hamburger → the app drawer (Global settings, Telemetry, links; mobile nav). */}
+      <div className="app-topbar-menu">
+        <HamburgerMenu onOpen={() => setDrawerOpen(true)} />
+      </div>
       </div>
 
       {/* Operational warnings from the runtime status (#706 co-located instances etc.) —
@@ -868,10 +875,13 @@ export function App() {
         // Let the left column narrow to 200 before it snaps/collapses (the DS default is
         // 280, which left a 140–280 dead zone where a narrowed left snapped back up).
         minLeftWidth={200}
-        mobileItems={[...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")].map((s) => ({
-          ...s,
-          dot: pluginDots[s.id] || undefined,
-        }))}
+        // Mobile bottom bar = the quick-bar (first 5 of quickBarIds). The DS shell's own
+        // "More" button is hidden (app-drawer.css) — the unified mobile "more" is the
+        // header hamburger's AppDrawer (surfaces + global settings + links). We still pass
+        // the full surface set so the bar resolves its quick icons (and the DS sheet would
+        // degrade gracefully if ever shown).
+        mobileItems={[...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")]
+          .map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
         mobileActiveId={mobileActive}
         onMobileSelect={setMobileActive}
         quickBarIds={quickBar}
@@ -912,16 +922,7 @@ export function App() {
         bottomContent={bottomActive ? renderSurface(bottomActive) : null}
         utilityBar={
           <UtilityBar
-            start={
-              <>
-                <a className="util-btn" href="https://protolabsai.github.io/protoAgent/" target="_blank" rel="noreferrer" title="Documentation" aria-label="Documentation">
-                  <BookOpen size={14} />
-                </a>
-                <a className="util-btn" href="https://github.com/protoLabsAI/protoAgent" target="_blank" rel="noreferrer" title="GitHub repository" aria-label="GitHub repository">
-                  <Github size={14} />
-                </a>
-              </>
-            }
+            // Docs + GitHub moved into the header drawer (2026-06-18 IA pass).
             end={
               <>
                 {/* Background subagents (ADR 0050 Phase 3) — live pill + jobs dialog. */}
@@ -979,8 +980,26 @@ export function App() {
         Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
         its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
     <ContextMenuRenderer />
-    {/* The one-stop-shop Settings overlay (ADR 0048) — the topbar gear opens it. */}
-    <SettingsOverlay open={settingsOverlayOpen} onClose={() => setSettingsOverlayOpen(false)} />
+    {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}
+    <AppDrawer
+      open={drawerOpen}
+      onClose={() => setDrawerOpen(false)}
+      mobile={isMobile}
+      surfaces={[...railSurfaces("left"), ...railSurfaces("right"), ...railSurfaces("bottom")].map((s) => ({
+        id: s.id,
+        label: s.label,
+        icon: s.icon,
+      }))}
+      activeSurface={isMobile ? mobileActive : leftActive}
+      onSelectSurface={setMobileActive}
+      onOpenGlobal={openGlobalSettings}
+    />
+    {/* Global settings overlay — opened from the drawer or a palette deep-link (store-driven). */}
+    <SettingsOverlay
+      open={globalSettingsOpen}
+      section={globalSettingsSection}
+      onClose={closeGlobalSettings}
+    />
     </>
   );
 }
