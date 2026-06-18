@@ -63,12 +63,18 @@ class KnowledgeMiddleware(AgentMiddleware):
         top_k: int = 5,
         skills_index: "SkillsIndex | None" = None,
         skills_top_k: int = 5,
+        skills_announce: bool = True,
     ):
         super().__init__()
         self._store = knowledge_store
         self._top_k = top_k
         self._skills_index = skills_index
         self._skills_top_k = skills_top_k
+        # When True, emit a `skills_loaded` custom event for the turn's retrieved
+        # skills so the chat surface can show a "skills loaded" chip (ADR 0052
+        # made skills user-visible on demand; this makes the implicit retrieval
+        # path visible too). Purely a UI signal — never affects the injection.
+        self._skills_announce = skills_announce
         # Lazily loaded on first before_model call; None = not yet loaded.
         # Refreshed after _PRIOR_SESSIONS_TTL_S so sessions persisted after boot
         # become visible (the cache is otherwise frozen for the process life).
@@ -209,6 +215,24 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         return block
 
+    def _announce_skills(self, skills: list["SkillRecord"]) -> None:
+        """Emit a ``skills_loaded`` custom event carrying the retrieved skills'
+        ``{name, description}`` for the chat UI's "skills loaded" chip.
+
+        Uses the sync ``dispatch_custom_event``; it surfaces in ``astream_events``
+        even though ``before_model`` runs in ``asyncio.to_thread`` (the run-tree
+        contextvars are copied into the worker). Best-effort — a dispatch failure
+        (e.g. no active run context, as in a unit test) is swallowed so retrieval
+        and the turn proceed unchanged.
+        """
+        try:
+            from langchain_core.callbacks import dispatch_custom_event
+
+            payload = {"skills": [{"name": s.name, "description": s.description} for s in skills]}
+            dispatch_custom_event("skills_loaded", payload)
+        except Exception as exc:  # noqa: BLE001 — UI signal must never break a turn
+            log.debug("[knowledge] skills_loaded dispatch skipped: %s", exc)
+
     # ---------------------------------------------------------------------------
     # Middleware hooks
     # ---------------------------------------------------------------------------
@@ -256,6 +280,11 @@ class KnowledgeMiddleware(AgentMiddleware):
                 skills_block = self._format_learned_skills(skills)
                 if skills_block:
                     parts.append(skills_block)
+                    # Surface what was retrieved as a `skills_loaded` custom event so
+                    # the chat UI can show a "skills loaded" chip. UI-only — gated,
+                    # best-effort, and must never break the turn.
+                    if self._skills_announce and skills:
+                        self._announce_skills(skills)
 
         if messages:
             # Find the last human message

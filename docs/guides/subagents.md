@@ -17,8 +17,8 @@ When *not* to use:
 
 The lead gets two delegation tools:
 
-- **`task(description, prompt, subagent_type, emit_skill)`** — one focused delegation. Unbounded output.
-- **`task_batch(tasks)`** — several *independent* delegations run **concurrently** (e.g. research three topics at once). Each `tasks` item is `{description, prompt, subagent_type?, emit_skill?}`. Results come back in input order; an individual task's failure is reported inline and doesn't abort the batch. Concurrency is capped by `subagents.max_concurrency` (default 4) and each result is truncated to `subagents.output_truncate` chars (default 6000) so a wide fan-out can't blow the parent context. Total latency is roughly the slowest task rather than the sum.
+- **`task(description, prompt, subagent_type)`** — one focused delegation. Unbounded output.
+- **`task_batch(tasks)`** — several *independent* delegations run **concurrently** (e.g. research three topics at once). Each `tasks` item is `{description, prompt, subagent_type?}`. Results come back in input order; an individual task's failure is reported inline and doesn't abort the batch. Concurrency is capped by `subagents.max_concurrency` (default 4) and each result is truncated to `subagents.output_truncate` chars (default 6000) so a wide fan-out can't blow the parent context. Total latency is roughly the slowest task rather than the sum.
 
 Prefer `task_batch` whenever the delegations don't depend on each other.
 

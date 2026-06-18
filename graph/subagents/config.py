@@ -39,11 +39,6 @@ class SubagentConfig:
     # the main model. Pin a subagent that needs heavy reasoning to the main
     # model even when aux_model routes the others to a cheaper alias.
     model: str = ""
-    # When False, skill-v1 artifact emission is suppressed even if the caller
-    # passes emit_skill=True to task(). Set to False for subagents whose
-    # workflows should not be captured as reusable skills (e.g. agents that
-    # handle sensitive data or that produce non-deterministic outputs).
-    allow_skill_emission: bool = True
 
 
 RESEARCHER_CONFIG = SubagentConfig(
@@ -330,8 +325,6 @@ pruned (forgot), with `#ids`, or that you did neither and why. Deliberation in
         "forget_memory",
     ],
     max_turns=30,
-    # dream writes memory directly; it is not a workflow worth re-capturing as a skill.
-    allow_skill_emission=False,
 )
 
 DISTILL_CONFIG = SubagentConfig(
@@ -401,9 +394,6 @@ proposed (with bead ids) + what you skipped and why. Deliberation in
         "beads_create",
     ],
     max_turns=30,
-    # distill explicitly authors skills via save_skill; it must NOT also auto-emit
-    # a skill from its own run (that would capture "running distill" as a skill).
-    allow_skill_emission=False,
 )
 
 

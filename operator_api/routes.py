@@ -19,7 +19,6 @@ class SubagentRunRequest(BaseModel):
     type: str = "researcher"
     description: str = ""
     prompt: str
-    emit_skill: bool = False
 
 
 class SubagentBatchRequest(BaseModel):

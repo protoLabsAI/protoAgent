@@ -22,7 +22,6 @@ def list_subagents(config: Any) -> list[dict[str, Any]]:
                 "default_tools": list(registry_def.tools),
                 "max_turns": int(getattr(override, "max_turns", registry_def.max_turns)),
                 "default_max_turns": int(registry_def.max_turns),
-                "allow_skill_emission": bool(registry_def.allow_skill_emission),
             }
         )
     return out
@@ -36,7 +35,6 @@ async def run_manual_subagent(
     description: str,
     prompt: str,
     subagent_type: str = "researcher",
-    emit_skill: bool = False,
     extra_tools: Any = None,
 ) -> str:
     """Run one manually launched subagent task.
@@ -61,7 +59,6 @@ async def run_manual_subagent(
         description=description,
         prompt=prompt,
         subagent_type=subagent_type,
-        emit_skill=emit_skill,
         extra_tools=extra_tools,
     )
 

@@ -90,6 +90,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
                 top_k=config.knowledge_top_k,
                 skills_index=_skills_index,
                 skills_top_k=config.skills_top_k,
+                skills_announce=config.skills_announce,
             )
         )
 
@@ -212,9 +213,7 @@ async def _run_subagent(
     description: str,
     prompt: str,
     subagent_type: str,
-    emit_skill: bool,
     truncate: int | None = None,
-    skills_index=None,
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -222,11 +221,6 @@ async def _run_subagent(
     ``truncate`` (chars) bounds the returned body so a wide fan-out can't blow
     the parent context; ``None`` means unbounded (single-task path).
     """
-    from datetime import datetime, timezone
-
-    from observability import tracing
-    from graph.extensions.skills import SkillV1Artifact, emit_skill_artifact
-
     sub_config = SUBAGENT_REGISTRY.get(subagent_type)
     if not sub_config:
         return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
@@ -271,15 +265,6 @@ async def _run_subagent(
 
         messages = result.get("messages", [])
 
-        # Extract tools actually invoked during the subagent run.
-        tools_used: list[str] = []
-        for msg in messages:
-            # AIMessage tool_calls: [{"name": ..., "args": ..., "id": ...}]
-            for tc in getattr(msg, "tool_calls", []) or []:
-                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-                if name and name not in tools_used:
-                    tools_used.append(name)
-
         body = None
         for msg in reversed(messages):
             if hasattr(msg, "content") and msg.content:
@@ -294,48 +279,7 @@ async def _run_subagent(
         if truncate is not None and len(body) > truncate:
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 
-        output_text = f"[{subagent_type} completed: {description}]\n\n{body}"
-
-        # Emit skill-v1 artifact when opted in and config permits.
-        if emit_skill and sub_config.allow_skill_emission:
-            if not tools_used:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "[skill] emit_skill=True but no tool usage metadata "
-                    "captured for subagent '%s'; skipping skill emission.",
-                    subagent_type,
-                )
-            else:
-                try:
-                    artifact = SkillV1Artifact(
-                        name=description,
-                        description=f"Captured workflow: {description}",
-                        prompt_template=prompt,
-                        tools_used=tools_used,
-                        created_at=datetime.now(timezone.utc),
-                        source_session_id=tracing.current_session_id(),
-                    )
-                    emit_skill_artifact(artifact)
-                    # Persist to the skill index here — same async context as
-                    # emission, so task_batch (which fans out into child tasks)
-                    # doesn't lose artifacts the way a ContextVar drain would.
-                    if skills_index is not None:
-                        try:
-                            skills_index.add_emitted_skill(artifact)
-                        except Exception as exc:
-                            import logging
-
-                            logging.getLogger(__name__).error("[skill] persisting emitted skill failed: %s", exc)
-                except Exception as exc:
-                    import logging
-
-                    logging.getLogger(__name__).error(
-                        "[skill] skill-v1 artifact construction failed: %s; skipping emission.",
-                        exc,
-                    )
-
-        return output_text
+        return f"[{subagent_type} completed: {description}]\n\n{body}"
     except Exception as e:
         return f"Error: Subagent '{subagent_type}' failed: {e}"
 
@@ -348,7 +292,6 @@ async def run_manual_subagent(
     description: str,
     prompt: str,
     subagent_type: str = "researcher",
-    emit_skill: bool = False,
     truncate: int | None = None,
     extra_tools=None,
 ) -> str:
@@ -390,7 +333,6 @@ async def run_manual_subagent(
         description=description,
         prompt=prompt,
         subagent_type=subagent_type,
-        emit_skill=emit_skill,
         truncate=truncate,
     )
 
@@ -432,7 +374,6 @@ async def run_manual_subagent_batch(
                 description=desc,
                 prompt=prm,
                 subagent_type=spec.get("subagent_type") or spec.get("type", "researcher"),
-                emit_skill=bool(spec.get("emit_skill", False)),
                 truncate=truncate,
                 extra_tools=extra_tools,
             )
@@ -447,7 +388,7 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills_index=None, background_mgr=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -484,7 +425,6 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
         description: str,
         prompt: str,
         subagent_type: _SubagentType = "researcher",
-        emit_skill: bool = False,
         run_in_background: bool = False,
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
@@ -500,10 +440,6 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
             prompt: Detailed instructions for the subagent
             subagent_type: Which subagent to use — one of the registered roster
                 shown in the system prompt (e.g. researcher, strategist, …)
-            emit_skill: When True and the subagent config permits it, capture
-                the workflow as a skill-v1 artifact on successful completion.
-                Defaults to False (opt-in). No artifact is emitted on failure
-                or when the subagent config has allow_skill_emission=False.
             run_in_background: Set True for long-running, independent work (deep
                 research, multi-step gathering) you don't need to block on. The
                 task runs detached as its own turn and returns IMMEDIATELY with a
@@ -548,9 +484,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                     description=description,
                     prompt=prompt,
                     subagent_type=subagent_type,
-                    emit_skill=emit_skill,
                     truncate=None,
-                    skills_index=skills_index,
                 )
             )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
@@ -585,9 +519,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 description=description,
                 prompt=prompt,
                 subagent_type=subagent_type,
-                emit_skill=emit_skill,
                 truncate=None,
-                skills_index=skills_index,
             )
         )
         delegations.register(session_id, tool_call_id, deleg, label=description)
@@ -621,7 +553,6 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                 - ``description`` (str, required): short summary of the task
                 - ``prompt`` (str, required): detailed instructions
                 - ``subagent_type`` (str, optional): defaults to "researcher"
-                - ``emit_skill`` (bool, optional): defaults to False
 
         Returns the results concatenated in the same order as ``tasks``, each
         prefixed with its 1-based index. Individual failures are reported
@@ -649,9 +580,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], skills
                     description=desc,
                     prompt=prm,
                     subagent_type=spec.get("subagent_type", "researcher"),
-                    emit_skill=bool(spec.get("emit_skill", False)),
                     truncate=truncate,
-                    skills_index=skills_index,
                 )
 
         results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
@@ -768,7 +697,6 @@ def create_agent_graph(
             _build_task_tools(
                 config,
                 all_tools,
-                skills_index=skills_index,
                 background_mgr=background_mgr,
             )
         )

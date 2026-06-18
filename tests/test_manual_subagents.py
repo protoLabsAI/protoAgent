@@ -32,7 +32,6 @@ async def test_run_manual_subagent_reuses_private_runner(monkeypatch) -> None:
         description="Check docs",
         prompt="Read the docs",
         subagent_type="researcher",
-        emit_skill=True,
         truncate=12,
     )
 
@@ -41,7 +40,6 @@ async def test_run_manual_subagent_reuses_private_runner(monkeypatch) -> None:
     assert calls[0]["description"] == "Check docs"
     assert calls[0]["prompt"] == "Read the docs"
     assert calls[0]["subagent_type"] == "researcher"
-    assert calls[0]["emit_skill"] is True
     assert calls[0]["truncate"] == 12
 
 

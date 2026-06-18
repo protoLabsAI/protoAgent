@@ -45,6 +45,31 @@
   word-break: break-word;
 }
 
+/* "Skills loaded" chip — the skills the agent auto-retrieved for a turn, shown
+   above the answer so the implicit retrieval path is visible. Subtle inset row;
+   hover a name for its description (title attr). */
+.chat-skills-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--pl-color-fg-muted);
+}
+.chat-skills-chip > svg {
+  flex: none;
+  opacity: 0.8;
+}
+.chat-skills-chip-label {
+  font-weight: 600;
+}
+.chat-skills-chip-item {
+  color: var(--pl-color-fg);
+  cursor: help;
+}
+
 /* Our only `role:"system"` chat messages are background-agent completion
    notifications (ADR 0050) — full markdown reports (a lede + tables/lists), not
    a one-line notice. The DS styles system messages as a terse CENTERED 100px

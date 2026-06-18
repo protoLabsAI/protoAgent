@@ -26,6 +26,7 @@ import type {
   ScheduledJob,
   SetupStatus,
   SettingsGroup,
+  SkillChip,
   SlashCommand,
   Playbook,
   Subagent,
@@ -364,6 +365,7 @@ const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
+const SKILLS_MIME = "application/vnd.protolabs.skills-v1+json";
 
 type RawPart = {
   kind?: string;
@@ -430,6 +432,17 @@ export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
 function reasoningFromParts(parts?: RawPart[]): string | null {
   const d = dataByMime(parts, REASONING_MIME) as { text?: string } | null;
   return d?.text || null;
+}
+
+/** Decode a skills-v1 DataPart → the skills the agent auto-retrieved for the turn,
+ *  or null if absent. Backs the "skills loaded" chip. */
+export function skillsFromParts(parts?: RawPart[]): SkillChip[] | null {
+  const d = dataByMime(parts, SKILLS_MIME) as { skills?: SkillChip[] } | null;
+  const skills = d?.skills;
+  if (!Array.isArray(skills) || skills.length === 0) return null;
+  return skills
+    .filter((s) => s && typeof s.name === "string" && s.name)
+    .map((s) => ({ name: s.name, description: s.description }));
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
@@ -791,7 +804,6 @@ export const api = {
     type: string;
     description: string;
     prompt: string;
-    emit_skill: boolean;
   }) {
     return request<{ ok: boolean; session_id: string; output: string }>("/api/subagents/run", {
       method: "POST",
@@ -806,7 +818,6 @@ export const api = {
       subagent_type?: string;
       description: string;
       prompt: string;
-      emit_skill: boolean;
     }>;
   }) {
     return request<{ ok: boolean; session_id: string; output: string }>("/api/subagents/batch", {
@@ -1011,6 +1022,7 @@ export const api = {
       onStatus?: (status: string) => void;
       onText?: (text: string, append: boolean) => void;
       onReasoning?: (delta: string) => void;
+      onSkills?: (skills: SkillChip[]) => void;
       onToolCall?: (evt: ToolEvent) => void;
       onComponent?: (spec: ComponentSpec) => void;
       onInputRequired?: (payload: HitlPayload) => void;
@@ -1070,7 +1082,11 @@ export const api = {
         const messageText = textFromParts(parts);
         const reasoning = reasoningFromParts(parts);
         if (reasoning) handlers.onReasoning?.(reasoning);
-        if (!reasoning) handlers.onStatus?.(messageText || state);
+        const skills = skillsFromParts(parts);
+        if (skills) handlers.onSkills?.(skills);
+        // A reasoning- or skills-only frame carries no status text; don't let it
+        // clobber the transient status line with the bare working state.
+        if (!reasoning && !skills) handlers.onStatus?.(messageText || state);
         const toolEvent = toolEventFromParts(parts);
         if (toolEvent) handlers.onToolCall?.(toolEvent);
         const component = componentFromParts(parts);

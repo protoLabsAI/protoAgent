@@ -243,24 +243,6 @@ class SkillsIndex:
         except sqlite3.Error as exc:
             log.error("[skills] failed to index skill %s: %s", name, exc)
 
-    def add_emitted_skill(self, artifact: object) -> None:
-        """Persist an agent-emitted skill, de-duped by name.
-
-        Replaces any prior ``emitted`` skill with the same name so repeated runs
-        of the same workflow refresh rather than accumulate. Disk skills (same
-        name) are left untouched — they're a separate, pinned source.
-        """
-        name = getattr(artifact, "name", "") or ""
-        if not name:
-            return
-        conn = self._open_conn()
-        try:
-            conn.execute("DELETE FROM skills_fts WHERE name = ? AND source = 'emitted'", (name,))
-            conn.commit()
-        except sqlite3.Error as exc:
-            log.error("[skills] failed to de-dupe emitted skill %s: %s", name, exc)
-        self.add_skill(artifact, source="emitted")
-
     def replace_disk_skills(self, artifacts: list[object]) -> None:
         """Reset the ``disk`` source to exactly *artifacts*, leaving ``emitted``
         skills intact. Used to (re)seed human-authored SKILL.md skills on boot
