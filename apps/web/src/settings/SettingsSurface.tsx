@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -61,6 +61,10 @@ const WORKSPACE_SECTIONS: Section[] = [
   { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
   { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
   { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
+  // The delegate registry (ADR 0025) is built-in core infrastructure — its config
+  // lives here alongside the agent's other call-out surfaces (Tools/MCP/Subagents),
+  // not under Plugins.
+  { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
   { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
   { id: "middleware", label: "Middleware", icon: Layers, render: () => <MiddlewarePanel /> },
   { id: "memory", label: "Memory", icon: Database, render: () => <SettingsCategoryPanel category="Memory" title="Memory" /> },
@@ -75,8 +79,9 @@ const WORKSPACE_SECTIONS: Section[] = [
 ];
 
 // ADR 0059 — per-plugin config now lives with each plugin in the Plugins panel
-// (Installed → Configure). This section points there + keeps the delegate registry
-// (which has its own richer UI, not generic settings fields).
+// (Installed → Configure). This section just points there. (The delegate registry is
+// built-in core infrastructure, so it has its own top-level Workspace ▸ Delegates
+// section rather than living under Plugins.)
 function PluginSettingsHome() {
   const setSurface = useUI((s) => s.setSurface);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
@@ -92,7 +97,6 @@ function PluginSettingsHome() {
         <Button variant="primary" type="button" onClick={openPlugins}>
           <Puzzle size={15} /> Open Plugins
         </Button>
-        <DelegatesSection />
       </div>
     </>
   );

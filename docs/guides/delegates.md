@@ -1,8 +1,8 @@
 # Delegates — the agents & endpoints your agent can talk to
 
-An **opt-in plugin** ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel))
+A **built-in registry** ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel))
 that gives the lead agent **one tool — `delegate_to(target, query)`** — over a
-unified registry of delegates it can hand work to:
+unified roster of delegates it can hand work to:
 
 | `type` | What it is | Dispatch |
 |---|---|---|
@@ -14,13 +14,14 @@ This unifies what used to be three separate things — `peer_consult` (a2a),
 `code_with` (acp), and "no way to ask another model" — into one hot-swappable
 roster.
 
-Manage delegates three ways: the **console panel** (Settings → Plugins →
+Manage delegates three ways: the **console panel** (Workspace settings ▸
 Delegates), a **REST API**, or **config** — all hot-swappable (changes apply on
 the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
 
 ## Manage in the console (panel)
 
-Open **Settings → Plugins → Delegates** (the registry is on by default). The panel:
+Open **Workspace settings ▸ Delegates** (a built-in — always on, alongside Tools,
+MCP, and Subagents). The panel:
 
 - **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
   marker, a **live health dot** (a background prober probes each delegate
@@ -36,8 +37,9 @@ the next turn.
 
 ## Declare delegates
 
-The registry is **enabled by default** — it does nothing until you declare a
-delegate, so just add entries (no plugin to turn on):
+The registry is a **built-in** — always on, can't be disabled, and managed in
+**Workspace settings ▸ Delegates** (no plugin to install or turn on). It does
+nothing until you declare a delegate, so just add entries:
 
 ```yaml
 # config/langgraph-config.yaml

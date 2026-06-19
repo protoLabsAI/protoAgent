@@ -27,6 +27,12 @@ class PluginManifest:
     # wrote/dropped in yourself). An operator can also enable by id via
     # ``plugins.enabled`` in config. Either path counts as consent.
     enabled: bool = False
+    # ``builtin: true`` marks a plugin as core runtime infrastructure (e.g. the
+    # delegate registry): it ALWAYS loads — ignoring both the enable gate and the
+    # ``plugins.disabled`` list — and is hidden from the Plugins management list,
+    # since it isn't an optional add-on the operator toggles. Its config lives in
+    # the core Workspace settings, not the Plugins panel.
+    builtin: bool = False
     requires_env: list[str] = field(default_factory=list)
     # Declarative, for transparency in the console — not yet enforced.
     capabilities: dict = field(default_factory=dict)
@@ -160,6 +166,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         version=str(data.get("version", "0.0.0")),
         description=str(data.get("description", "")),
         enabled=bool(data.get("enabled", False)),
+        builtin=bool(data.get("builtin", False)),
         requires_env=requires_env,
         capabilities=caps if isinstance(caps, dict) else {},
         entrypoint=str(data.get("entrypoint", "")).strip(),

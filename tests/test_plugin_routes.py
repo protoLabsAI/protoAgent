@@ -76,11 +76,21 @@ def test_disabling_a_view_plugin_recommends_restart(monkeypatch):
 
 
 def test_disabling_a_route_only_plugin_recommends_restart(monkeypatch):
-    # A plugin with no views but a contributed router (e.g. delegates) still leaves a
-    # stale route on disable → restart recommended.
-    _wire(monkeypatch, enabled=["delegates"], disabled=[], meta=[{"id": "delegates", "views": [], "routers": 1}])
-    body = _client().post("/api/plugins/delegates/enabled", json={"enabled": False}).json()
+    # A plugin with no views but a contributed router still leaves a stale route on
+    # disable → restart recommended.
+    _wire(monkeypatch, enabled=["routeplug"], disabled=[], meta=[{"id": "routeplug", "views": [], "routers": 1}])
+    body = _client().post("/api/plugins/routeplug/enabled", json={"enabled": False}).json()
     assert body["restart_recommended"] is True
+
+
+def test_disabling_a_builtin_plugin_is_rejected(monkeypatch):
+    # A builtin (core infrastructure, e.g. the delegate registry) always loads and can't
+    # be turned off — disabling it via the API is a 400, not a no-op config write.
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[{"id": "delegates", "views": [], "builtin": True}])
+    res = _client().post("/api/plugins/delegates/enabled", json={"enabled": False})
+    assert res.status_code == 400
+    # Enabling a builtin is harmless (it's already on) and not blocked.
+    assert _client().post("/api/plugins/delegates/enabled", json={"enabled": True}).status_code == 200
 
 
 def test_disabling_a_plain_plugin_does_not_recommend_restart(monkeypatch):

@@ -172,7 +172,10 @@ function LocalTab() {
     (schema.data?.groups ?? []).filter((g) => g.plugin_id).map((g) => g.plugin_id as string),
   );
 
-  const plugins = runtime.plugins ?? [];
+  // Built-ins (core runtime infrastructure like the delegate registry) aren't optional
+  // add-ons — they always load, can't be toggled, and are configured in Workspace
+  // settings — so they don't belong in the install/enable list.
+  const plugins = (runtime.plugins ?? []).filter((p) => !p.builtin);
   const byName = (a: Plugin, b: Plugin) => a.name.localeCompare(b.name);
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
   const disabled = plugins.filter((p) => !p.loaded).sort(byName);
