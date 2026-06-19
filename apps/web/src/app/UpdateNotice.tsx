@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import { Button } from "@protolabsai/ui/primitives";
+import { Dialog } from "@protolabsai/ui/overlays";
 import { api, isDesktopWebview } from "../lib/api";
+import { Markdown } from "../chat/LazyMarkdown";
 
 /**
  * In-app update notice for the desktop shell (Tauri). Periodically checks the signed
  * `latest.json`; when a newer build is published it surfaces an ambient pill — click it
- * for the **changelog** + a one-click "Update & Restart". User-driven (we notify; you
- * choose when to apply — no silent background install). Silent in dev / browser /
- * offline / when up to date. The updater work runs in the Rust shell (`updater_check`/
- * `updater_install`); this is the UX. Mirrors the orbis `UpdateNotice` pattern.
+ * for a **full modal** with the release **changelog rendered as markdown** + a one-click
+ * "Update & Restart". User-driven (we notify; you choose when to apply — no silent
+ * background install). Silent in dev / browser / offline / when up to date. The updater
+ * work runs in the Rust shell (`updater_check` / `updater_install`); this is the UX.
+ * Mirrors the orbis `UpdateNotice` pattern.
  */
 
 const FIRST_CHECK_MS = 10_000; // let the boot settle
@@ -62,8 +65,21 @@ export function UpdateNotice() {
     }
   };
 
-  if (!open) {
-    return (
+  const footer = (
+    <>
+      {phase !== "downloading" && (
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          Later
+        </Button>
+      )}
+      <Button variant="primary" size="sm" onClick={install} disabled={phase === "downloading"}>
+        {phase === "downloading" ? "Updating…" : phase === "error" ? "Retry" : "Update & Restart"}
+      </Button>
+    </>
+  );
+
+  return (
+    <>
       <button
         type="button"
         className="update-notice-pill"
@@ -73,52 +89,38 @@ export function UpdateNotice() {
         <span className="update-notice-dot" />
         Update · {update.version}
       </button>
-    );
-  }
 
-  return (
-    <div className="update-notice-panel" role="dialog" aria-label="Update available">
-      <div className="update-notice-head">
-        <span>
-          Update available <span className="update-notice-ver">{update.version}</span>
-        </span>
-        <button
-          type="button"
-          className="update-notice-x"
-          onClick={() => setOpen(false)}
-          aria-label="Dismiss"
-        >
-          ✕
-        </button>
-      </div>
-
-      {update.notes ? (
-        <div className="update-notice-notes">{update.notes}</div>
-      ) : (
-        <p className="update-notice-empty">A newer version is ready (you have {update.current}).</p>
-      )}
-
-      {phase === "downloading" && (
-        <div className="update-notice-progress">
-          <div className="update-notice-bar">
-            <div className="update-notice-fill" style={{ width: `${pct}%` }} />
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        width={680}
+        title={
+          <>
+            Update available <span className="update-notice-ver">{update.version}</span>
+            <span className="update-notice-cur"> · you have {update.current}</span>
+          </>
+        }
+        footer={footer}
+      >
+        {update.notes ? (
+          <div className="update-notice-notes markdown">
+            <Markdown>{update.notes}</Markdown>
           </div>
-          <div className="update-notice-pct">Downloading… {pct}%</div>
-        </div>
-      )}
-
-      {phase === "error" && error && <p className="update-notice-err">Update failed: {error}</p>}
-
-      <div className="update-notice-actions">
-        {phase !== "downloading" && (
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-            Later
-          </Button>
+        ) : (
+          <p className="update-notice-empty">A newer version is ready (you have {update.current}).</p>
         )}
-        <Button variant="primary" size="sm" onClick={install} disabled={phase === "downloading"}>
-          {phase === "downloading" ? "Updating…" : phase === "error" ? "Retry" : "Update & Restart"}
-        </Button>
-      </div>
-    </div>
+
+        {phase === "downloading" && (
+          <div className="update-notice-progress">
+            <div className="update-notice-bar">
+              <div className="update-notice-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <div className="update-notice-pct">Downloading… {pct}%</div>
+          </div>
+        )}
+
+        {phase === "error" && error && <p className="update-notice-err">Update failed: {error}</p>}
+      </Dialog>
+    </>
   );
 }

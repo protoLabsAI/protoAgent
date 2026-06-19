@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The desktop in-app update notice is now a full modal with a markdown-rendered
+  changelog.** The release notes render as readable markdown (headings, bullets, links) in
+  a centered dialog instead of a cramped plain-text corner panel.
+
 ## [0.52.0] - 2026-06-19
 
 ### Changed
