@@ -78,3 +78,14 @@ test("left panel shrinks to minLeftWidth, past the old maxRightWidth floor (prot
   // Reached ~minLeftWidth(200) — well under the old span−720 floor (~50%).
   expect(after).toBeLessThan(280);
 });
+
+test("the bottom-panel toggle sits with the layout buttons, gated until a surface is docked", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const toggleBottom = page.getByTestId("toggle-bottom");
+  // Present alongside the left/right layout toggles (the bottom-right cluster).
+  await expect(toggleBottom).toBeVisible();
+  await expect(page.getByTestId("toggle-left")).toBeVisible();
+  await expect(page.getByTestId("toggle-right")).toBeVisible();
+  // Disabled by default — nothing is docked at the bottom (railOrder.bottom is empty).
+  await expect(toggleBottom).toBeDisabled();
+});

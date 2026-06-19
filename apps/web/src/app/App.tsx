@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   Loader2,
   MessageSquare,
+  PanelBottom,
   PanelLeft,
   PanelRight,
   Plus,
@@ -922,11 +923,34 @@ export function App() {
         bottomContent={bottomActive ? renderSurface(bottomActive) : null}
         utilityBar={
           <UtilityBar
-            // Docs + GitHub moved into the header drawer (2026-06-18 IA pass).
+            // Bottom-left = widgets, bottom-right = layout (2026-06 IA pass). Docs +
+            // GitHub moved into the header drawer.
+            start={
+              <>
+                {/* Widgets — background subagents (ADR 0050 Phase 3): live pill + jobs
+                    dialog. The inbox widget lands here next. */}
+                <BackgroundJobs />
+              </>
+            }
             end={
               <>
-                {/* Background subagents (ADR 0050 Phase 3) — live pill + jobs dialog. */}
-                <BackgroundJobs />
+                <button
+                  type="button"
+                  className={`util-btn ${bottomCollapsed ? "is-off" : ""}`}
+                  onClick={() => setBottomCollapsed(!bottomCollapsed)}
+                  disabled={!bottomActive}
+                  title={
+                    bottomActive
+                      ? bottomCollapsed
+                        ? "Show bottom panel"
+                        : "Hide bottom panel"
+                      : "No bottom panel — move a surface to the bottom dock"
+                  }
+                  aria-label="Toggle bottom panel"
+                  data-testid="toggle-bottom"
+                >
+                  <PanelBottom size={14} />
+                </button>
                 <button
                   type="button"
                   className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
