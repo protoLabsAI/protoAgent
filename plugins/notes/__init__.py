@@ -181,7 +181,7 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 <style>
   /* Layout only — colors/typography come from plugin-kit.css's --pl-* tokens, which
      plugin-kit.js re-skins to the operator's live theme on the handshake. */
-  html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
+  html,body{margin:0;height:100%;background:var(--pl-color-bg-raised);color:var(--pl-color-fg);
     font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
   #wrap{display:flex;flex-direction:column;height:100%}
   #bar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;
@@ -248,7 +248,7 @@ _QUICK_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
   document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
 </script>
 <style>
-  html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
+  html,body{margin:0;height:100%;background:var(--pl-color-bg-raised);color:var(--pl-color-fg);
     font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}
   #wrap{display:flex;flex-direction:column;height:100%}
   #bar{padding:6px 10px;border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border);

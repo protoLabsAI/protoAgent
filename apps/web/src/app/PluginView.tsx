@@ -159,6 +159,27 @@ export function PluginView({ view }: { view: PluginViewType }) {
     };
   }, [src, pluginId]);
 
+  // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
+  // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
+  // style/data-theme). Re-post the FRESH curated theme to the mounted iframe so an embedded
+  // plugin view repaints WITHOUT a reload — its plugin-kit listens for `protoagent:theme`
+  // and re-skins the --pl-* tokens. `handleLoad` only covers the first paint; this covers
+  // every subsequent switch. (consoleTheme() reads the now-updated :root vars at fire time.)
+  useEffect(() => {
+    const onThemeChange = () => {
+      const win = frameRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        const origin = new URL(apiUrl(src), window.location.href).origin;
+        win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);
+      } catch {
+        /* cross-origin / detached — best effort */
+      }
+    };
+    window.addEventListener("protoagent:theme", onThemeChange);
+    return () => window.removeEventListener("protoagent:theme", onThemeChange);
+  }, [src]);
+
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
     setLoaded(true);
     const win = e.currentTarget.contentWindow;

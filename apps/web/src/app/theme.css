@@ -465,12 +465,17 @@
 }
 
 /* A tabbed surface renders the DS Tabs + the .panel card as siblings in the AppShell
-   column. Style the tab strip as the card's TOP edge and drop the panel's top
-   border/radius, so the two read as ONE full-height card — its top aligns with the
-   non-tabbed panels. (Responsive Tabs wrap the strip in .pl-tabs-wrap and collapse to
-   a dropdown on narrow containers — match both as the column's direct child.) */
+   column (or the bottom dock). Style the tab strip as the card's TOP edge and drop the
+   panel's top border/radius, so the two read as ONE full-height card — its top aligns
+   with the non-tabbed panels. (Responsive Tabs wrap the strip in .pl-tabs-wrap and
+   collapse to a dropdown on narrow containers — match both as the direct child.) The
+   bottom dock (`.pl-appshell__bottom`) is a different wrapper than the side columns, so
+   it must be matched explicitly or its tab strip falls through to the shell's dark
+   ground instead of the panel surface. */
 .pl-appshell__col > .pl-tabs,
-.pl-appshell__col > .pl-tabs-wrap {
+.pl-appshell__col > .pl-tabs-wrap,
+.pl-appshell__bottom > .pl-tabs,
+.pl-appshell__bottom > .pl-tabs-wrap {
   flex: 0 0 auto;
   padding: 8px 12px 0;
   border: 1px solid var(--border);
@@ -479,10 +484,30 @@
   background: var(--bg-panel);
 }
 .pl-appshell__col > .pl-tabs + .panel,
-.pl-appshell__col > .pl-tabs-wrap + .panel {
+.pl-appshell__col > .pl-tabs-wrap + .panel,
+.pl-appshell__bottom > .pl-tabs + .panel,
+.pl-appshell__bottom > .pl-tabs-wrap + .panel {
   border-top: none;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/* ── Interim DS-component surface overrides ──────────────────────────────────────
+   Two DS surfaces read too dark in our console. These are LOCAL interim overrides
+   (theme.css loads after @protolabsai/ui/styles.css, so same-specificity rules win)
+   pending DS-side fixes — drop them once those land.
+
+   Reasoning (chat): the DS uses --pl-color-bg-inset (#060608, BELOW the page), so the
+   block reads as a dark hole on the chat panel. Lift it to the subtle raised surface so
+   it reads as a distinct "thinking" block. See protoContent#273. */
+.pl-reasoning {
+  background: var(--pl-color-bg-subtle);
+}
+/* Select: the DS closed control uses --pl-color-bg-raised — the SAME color as the panel
+   it sits on, so it disappears. Lift to the subtle surface for contrast. (The OPEN native
+   <select> menu is OS-rendered and can't be themed from CSS — that's protoContent#274.) */
+.pl-select {
+  background: var(--pl-color-bg-subtle);
 }
 
 /* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The

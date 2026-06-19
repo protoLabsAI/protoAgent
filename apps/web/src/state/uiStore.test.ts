@@ -58,7 +58,8 @@ describe("migrateUiState", () => {
   // "activity" from every dock + the mobile quick-bar so it doesn't linger as a dead id.
   it("prunes 'activity' from the rails and quick-bar", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "activity", "schedule"], right: ["activity", "beads"], bottom: ["activity"] },
+      // "settings" present so the v9 re-add below is a no-op — this test is about activity.
+      railOrder: { left: ["chat", "activity", "schedule"], right: ["activity", "beads", "settings"], bottom: ["activity"] },
       quickBar: ["chat", "activity", "knowledge"],
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
     expect(out.railOrder.left).not.toContain("activity");
@@ -66,6 +67,31 @@ describe("migrateUiState", () => {
     expect(out.railOrder.bottom).not.toContain("activity");
     expect(out.railOrder.left).toEqual(["chat", "schedule"]);
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
+  });
+
+  // v9 (2026-06-18 IA pass): Workspace settings became a rail surface; re-add "settings"
+  // to a persisted layout that lacks it so existing users don't lose the Settings icon.
+  it("restores the 'settings' rail surface to a layout that lacks it", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "schedule"], right: ["beads", "goals", "plugins"], bottom: [] },
+    }) as { railOrder: { left: string[] } };
+    // No "plugins" on the left rail → appended to the end of it.
+    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
+  });
+
+  it("re-adds 'settings' right after 'plugins' on the left when present", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "schedule", "plugins", "knowledge"], right: ["beads"], bottom: [] },
+    }) as { railOrder: { left: string[] } };
+    expect(out.railOrder.left).toEqual(["chat", "schedule", "plugins", "settings", "knowledge"]);
+  });
+
+  it("keeps a user-placed 'settings' where it is", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "schedule"], right: ["settings", "beads"], bottom: [] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.right).toContain("settings");
+    expect(out.railOrder.left).not.toContain("settings");
   });
 
   // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a

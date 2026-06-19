@@ -167,6 +167,24 @@ export function migrateUiState(persisted: unknown): unknown {
       const noAct = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => x !== "activity") : []);
       rest.railOrder = { left: noAct(ro5.left), right: noAct(ro5.right), bottom: noAct(ro5.bottom) };
     }
+    // v9 (2026-06-18 IA pass): Workspace settings became a rail surface (id "settings").
+    // The default railOrder gained it, but `railSurfaces()` only renders ids already in a
+    // user's persisted railOrder and nothing re-adds a missing CORE surface — so anyone
+    // with a layout saved before the pass lost the Settings icon entirely (only the Global
+    // overlay in the header drawer remained). Re-add "settings" to the left rail (after
+    // "plugins" if present, else at the end) unless the user already keeps it on some dock.
+    // Mirrors the v7 schedule re-add.
+    const ro6 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro6) {
+      const has = (arr?: string[]) => Array.isArray(arr) && arr.includes("settings");
+      if (!has(ro6.left) && !has(ro6.right) && !has(ro6.bottom)) {
+        const left = Array.isArray(ro6.left) ? ro6.left.slice() : [];
+        const at = left.indexOf("plugins");
+        if (at >= 0) left.splice(at + 1, 0, "settings");
+        else left.push("settings");
+        rest.railOrder = { ...ro6, left };
+      }
+    }
     if (Array.isArray(rest.quickBar)) {
       rest.quickBar = (rest.quickBar as string[]).filter((x) => x !== "activity");
     }
@@ -275,7 +293,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 8, // …v6 +bottom dock · v7 Schedule→rail surface again · v8 Activity→utility widget
+      version: 9, // …v6 +bottom dock · v7 Schedule→rail surface again · v8 Activity→utility widget · v9 re-add Settings rail surface
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).

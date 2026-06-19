@@ -97,7 +97,6 @@ import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
-import { Logo } from "@protolabsai/ui/primitives";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
@@ -692,7 +691,7 @@ export function App() {
           gradient-filled to match the wordmark via stroke="url(#pl-brand-gradient)"
           (the def Splash auto-renders with `gradient`). */}
       <Splash
-        logo={<ProtoLabsIcon variant="outline" size={88} decorative gradientStroke />}
+        logo={<ProtoLabsIcon variant="outline" size={88} decorative gradientStroke tone="accent" />}
         word="protoLabs.studio"
         holdMs={2500}
         once="protoagent.introSeen"
@@ -729,7 +728,7 @@ export function App() {
         // for protoContent#203: DS BootGate should own role=status aria-live).
         <div role="status" aria-live="polite">
           <BootGate
-            logo={<ProtoLabsIcon variant="outline" size={56} decorative />}
+            logo={<ProtoLabsIcon variant="outline" size={56} decorative gradientStroke tone="accent" />}
             title={
               bootFailed
                 ? `${bootName} isn’t responding`
@@ -771,7 +770,7 @@ export function App() {
       <div className="app-topbar">
       <Header
         dragRegion
-        logo={<Logo src={`${import.meta.env.BASE_URL}protolabs-icon-outline.svg`} alt="" size={22} />}
+        logo={<ProtoLabsIcon variant="outline" tone="accent" size={22} decorative />}
         name={
           <FleetSwitcher
             fallbackName={brandName(runtime?.identity?.name)}

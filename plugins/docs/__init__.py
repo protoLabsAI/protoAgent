@@ -139,7 +139,7 @@ _VIEW_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
 <script>window.__base = location.pathname.split("/plugins/")[0];
 document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.css">');</script>
 <style>
-  *{box-sizing:border-box} html,body{margin:0;height:100%;color:var(--pl-color-fg);background:var(--pl-color-bg);font:14px/1.55 system-ui,-apple-system,sans-serif}
+  *{box-sizing:border-box} html,body{margin:0;height:100%;color:var(--pl-color-fg);background:var(--pl-color-bg-raised);font:14px/1.55 system-ui,-apple-system,sans-serif}
   #app{display:flex;height:100vh}
   #nav{width:280px;flex:none;border-right:1px solid var(--pl-color-border);overflow:auto;padding:8px}
   #reader{flex:1;overflow:auto;padding:16px 26px}
