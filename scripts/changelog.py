@@ -56,15 +56,36 @@ def _section(text: str, version: str) -> tuple[str | None, str]:
 
 
 def _titles(body: str) -> list[str]:
-    """Concise draft summaries: each top-level bullet's **bold lead** (or first clause)."""
+    """Concise draft summaries: each top-level bullet's **bold lead** (or first clause).
+
+    A bullet's continuation lines are folded in before extraction, so a bold lead that
+    wraps across lines (``- **A long lead\\n  that wraps.** rest``) is captured whole
+    instead of leaving a stray ``**`` (the v0.47/v0.53 marketing-changelog glitch).
+    """
     out: list[str] = []
-    for line in body.splitlines():
-        m = re.match(r"^- +(.*)$", line)  # top-level bullets only (skip nested/continuations)
-        if not m:
-            continue
-        bold = re.match(r"\*\*(.+?)\*\*", m.group(1))
-        title = bold.group(1) if bold else re.split(r"\s+[—-]\s+|\. ", m.group(1), 1)[0]
+    chunk: list[str] | None = None  # the current top-level bullet's lines
+
+    def flush() -> None:
+        if not chunk:
+            return
+        text = re.sub(r"\s+", " ", " ".join(chunk)).strip()
+        bold = re.match(r"\*\*(.+?)\*\*", text)
+        title = bold.group(1) if bold else re.split(r"\s+[—-]\s+|\. ", text, 1)[0]
         out.append(_strip_md(title))
+
+    for line in body.splitlines():
+        m = re.match(r"^- +(.*)$", line)  # a new TOP-LEVEL bullet (no leading indent)
+        if m:
+            flush()
+            chunk = [m.group(1)]
+        elif chunk is not None:
+            s = line.strip()
+            if not s or s.startswith("- ") or line.startswith("#"):
+                flush()  # blank / nested bullet / heading → the bullet (and its lead) ends
+                chunk = None
+            else:
+                chunk.append(s)  # an indented continuation line of the current bullet
+    flush()
     return out
 
 
