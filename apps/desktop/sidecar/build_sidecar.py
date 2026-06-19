@@ -48,6 +48,13 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # Plugins ▸ Discover shows "0 official plugins" (every entry is unreachable).
     ("config/plugin-catalog.json", "config"),
     ("config/soul-presets", "config/soul-presets"),
+    # The bundled first-party skills (config/skills/*/SKILL.md — release-notes,
+    # web-research). `_build_skills_index` (server/agent_init.py) seeds the skill
+    # index from REPO_ROOT/config/skills (→ _MEIPASS/config/skills when frozen),
+    # exactly like SOUL.md/soul-presets above. Without this entry the directory
+    # never lands in the bundle, so the frozen desktop app indexes 0 SKILL.md
+    # skills — the `/skill` library is silently empty.
+    ("config/skills", "config/skills"),
     ("static", "static"),
     # The DS plugin-kit (/_ds/plugin-kit.{css,js}) — the theme kit every plugin iframe
     # loads to match the console (operator_api/web.py serves it from
