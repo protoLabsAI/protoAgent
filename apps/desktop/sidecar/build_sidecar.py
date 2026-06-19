@@ -102,6 +102,9 @@ COLLECT_ALL = [
     # imported, so collect it explicitly. (An external Google Gmail/Calendar MCP
     # plugin re-invokes the frozen binary via the generic ``--mcp-plugin <id>`` shim.)
     "mcp",
+    # Markdown renderer for the bundled `docs` plugin's reader view — imported only by
+    # the path-loaded plugin, so the import-scan misses it; collect explicitly.
+    "markdown_it",
 ]
 
 # Google client libraries (ADR 0017) — bundled only when installed in the build

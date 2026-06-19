@@ -10,3 +10,7 @@ enabled: true
 capabilities:
   network: []
   filesystem: scoped   # read-only over the bundled docs/ tree
+views:
+  # A rail "Docs" reader (domain/section tree + markdown), and a ⌘K "Docs" palette morph
+  # into the same page in search-first mode (ADR 0026 / 0057).
+  - { id: docs, label: "Docs", icon: "BookOpen", placement: rail, path: "/plugins/docs/view", palette: { path: "/plugins/docs/view?mode=search" } }

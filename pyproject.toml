@@ -41,6 +41,8 @@ dependencies = [
   # Document ingestion engine (ADR 0021) — light pure-Python extractors:
   "pypdf>=4.0",                  # PDF → text
   "youtube-transcript-api>=1.0", # YouTube captions → text (1.x instance API)
+  # Markdown → HTML for the `docs` plugin's reader view (server-side render, offline).
+  "markdown-it-py>=3.0",
 ]
 
 [build-system]

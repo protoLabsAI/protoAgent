@@ -17,6 +17,14 @@ from pathlib import Path
 # Indexed/served sections. docs/dev (internal) + .vitepress (build) are intentionally out.
 SECTIONS: tuple[str, ...] = ("tutorials", "guides", "reference", "explanation", "adr")
 
+_SECTION_LABELS = {
+    "tutorials": "Tutorials",
+    "guides": "Guides",
+    "reference": "Reference",
+    "explanation": "Explanation",
+    "adr": "Architecture Decisions",
+}
+
 
 def docs_root() -> Path:
     """The `docs/` directory — repo root in dev/Docker, the bundle root when frozen."""
@@ -64,6 +72,23 @@ def doc_title(abs_path: Path) -> str:
     except OSError:
         pass
     return abs_path.stem
+
+
+def doc_tree(root: Path | None = None) -> list[dict]:
+    """Ordered sections → items (`{path, title}`) for the reader's nav. Section order
+    follows `SECTIONS` (the Diátaxis arc, then ADRs); items sorted by title."""
+    root = root or docs_root()
+    by_section: dict[str, list[dict]] = {s: [] for s in SECTIONS}
+    for rel, abs_path in iter_docs(root):
+        section = rel.split("/", 1)[0]
+        if section in by_section:
+            by_section[section].append({"path": rel, "title": doc_title(abs_path)})
+    out: list[dict] = []
+    for section in SECTIONS:
+        items = sorted(by_section[section], key=lambda x: x["title"].lower())
+        if items:
+            out.append({"id": section, "label": _SECTION_LABELS.get(section, section.title()), "items": items})
+    return out
 
 
 def doc_preview(content: str, limit: int = 240) -> str:

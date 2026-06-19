@@ -95,3 +95,40 @@ async def test_tools_over_the_real_docs() -> None:
 
     refused = await docs.docs_read.ainvoke({"path": "../../etc/passwd"})
     assert "No such doc" in refused
+
+
+def test_render_handles_tables() -> None:
+    docs = _load_docs()
+    html = docs.render_markdown("# T\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    assert "<h1>" in html and "<table>" in html and "<td>1</td>" in html
+
+
+def test_data_routes(tmp_path) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    docs = _load_docs()
+    app = FastAPI()
+    app.include_router(docs._build_data_router(), prefix="/api/plugins/docs")
+    c = TestClient(app)
+
+    tree = c.get("/api/plugins/docs/tree").json()["sections"]
+    assert {s["id"] for s in tree} >= {"guides", "reference"}  # real corpus
+
+    res = c.get("/api/plugins/docs/search", params={"q": "skills"}).json()["results"]
+    assert any(r["path"] == "guides/skills.md" for r in res)
+
+    doc = c.get("/api/plugins/docs/doc", params={"path": "guides/skills.md"}).json()
+    assert doc["path"] == "guides/skills.md" and "<h1>" in doc["html"]
+
+    # Out-of-corpus path → 404 (the read gate).
+    assert c.get("/api/plugins/docs/doc", params={"path": "../../etc/passwd"}).status_code == 404
+    assert c.get("/api/plugins/docs/doc", params={"path": "dev/secret.md"}).status_code == 404
+
+
+def test_view_is_four_rules_compliant() -> None:
+    html = _load_docs()._VIEW_HTML
+    assert "/_ds/plugin-kit.css" in html and "/_ds/plugin-kit.js" in html  # rule 4
+    assert 'location.pathname.split("/plugins/")[0]' in html  # rule 3 (slug-aware base)
+    assert 'apiFetch("/api/plugins/docs' in html  # rules 2+3 (gated data via authed fetch)
+    assert "https://" not in html.split("<style>")[0]  # no CDN in the head
