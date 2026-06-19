@@ -75,7 +75,7 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivitySurface } from "../activity/ActivitySurface";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import { InboxPanel } from "../inbox/InboxPanel";
+import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -263,7 +263,6 @@ export function App() {
     null | { title: string; message?: string; confirmLabel?: string; onConfirm: () => void }
   >(null);
   const [activityUnread, setActivityUnread] = useState(0);
-  const [inboxUnread, setInboxUnread] = useState(0);
   // Global settings overlay (the Global home) — store-driven so BOTH the header drawer
   // and command-palette deep-links (Fleet/Telemetry/Commons) can open it. The header
   // hamburger's app drawer itself is local (only App triggers it).
@@ -425,7 +424,6 @@ export function App() {
   const activityTabRef = useRef(activityTab);
   activityTabRef.current = activityTab;
   const viewingThread = () => surfaceRef.current === "activity" && activityTabRef.current === "thread";
-  const viewingInbox = () => surfaceRef.current === "activity" && activityTabRef.current === "inbox";
 
   useEffect(
     () =>
@@ -437,14 +435,6 @@ export function App() {
   useEffect(() => {
     if (viewingThread()) setActivityUnread(0);
   }, [surface, activityTab]);
-
-  useEffect(
-    () =>
-      onServerEvent("inbox.item", () => {
-        if (!viewingInbox()) setInboxUnread((n) => n + 1);
-      }),
-    [],
-  );
 
   // Goal completions surface as a toast (goal.achieved / goal.failed on the bus, ADR 0039) so a
   // plain operator notices a terminal goal without writing a plugin hook.
@@ -460,9 +450,6 @@ export function App() {
       }));
     return () => { offDone(); offFail(); };
   }, [toast]);
-  useEffect(() => {
-    if (viewingInbox()) setInboxUnread(0);
-  }, [surface, activityTab]);
 
   // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
   // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.
@@ -580,15 +567,8 @@ export function App() {
   function renderSurface(id: string): ReactNode {
     switch (id) {
       case "activity":
-        return (
-          <>
-            <Tabs responsive active={activityTab} onSelect={(t) => setActivityTab(t as ActivityTab)} items={[
-              { id: "thread", label: "Thread", icon: Activity },
-              { id: "inbox", label: "Inbox", icon: Inbox, badge: inboxUnread ? (<span data-testid="inbox-badge">{inboxUnread > 9 ? "9+" : inboxUnread}</span>) : null },
-            ].map(toTab)} />
-            {activityTab === "thread" ? <ActivitySurface onError={setError} /> : <InboxPanel />}
-          </>
-        );
+        // Inbox moved to a utility-bar widget (2026-06 IA pass); Activity is the thread.
+        return <ActivitySurface onError={setError} />;
       // Schedule is its own rail surface again (un-fold from #1075): cron triggers, but
       // timed work earns a top-level rail rather than a tab buried in Activity.
       case "schedule":
@@ -829,7 +809,7 @@ export function App() {
         className="app-shell-main"
         leftItems={railSurfaces("left").map((s) => ({
           ...s,
-          badge: s.id === "activity" ? activityUnread + inboxUnread : undefined,
+          badge: s.id === "activity" ? activityUnread : undefined,
           dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
         }))}
         rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
@@ -927,9 +907,10 @@ export function App() {
             // GitHub moved into the header drawer.
             start={
               <>
-                {/* Widgets — background subagents (ADR 0050 Phase 3): live pill + jobs
-                    dialog. The inbox widget lands here next. */}
+                {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) +
+                    the inbox — each a pill with a hover info popover + a click dialog. */}
                 <BackgroundJobs />
+                <InboxWidget />
               </>
             }
             end={
