@@ -93,6 +93,14 @@ export default defineConfig({
           ],
         },
         {
+          text: "Knowledge & memory",
+          collapsed: false,
+          items: [
+            { text: "Ingest documents & media", link: "/guides/ingestion" },
+            { text: "Tune the knowledge store (RAG)", link: "/guides/knowledge" },
+          ],
+        },
+        {
           text: "A2A, fleet & delegates",
           collapsed: false,
           items: [
@@ -119,6 +127,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
+            { text: "Command palette (⌘K)", link: "/guides/command-palette" },
             { text: "Run headless (API + A2A)", link: "/guides/headless" },
           ],
         },
@@ -168,6 +177,11 @@ export default defineConfig({
           collapsed: false,
           items: [{ text: "Starter tools", link: "/reference/starter-tools" }],
         },
+        {
+          text: "Console & UI",
+          collapsed: false,
+          items: [{ text: "Operator REST API", link: "/reference/operator-api" }],
+        },
       ],
 
       "/explanation/": [
@@ -178,6 +192,7 @@ export default defineConfig({
           items: [
             { text: "Architecture", link: "/explanation/architecture" },
             { text: "Output protocol", link: "/explanation/output-protocol" },
+            { text: "Mid-turn steering", link: "/explanation/steering" },
             { text: "LiteLLM gateway", link: "/explanation/litellm-gateway" },
           ],
         },

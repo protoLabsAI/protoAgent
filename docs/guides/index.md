@@ -33,6 +33,15 @@ Give the agent reusable, named capabilities and delegates.
 | [Configure subagents](/guides/subagents) | You want specialized delegates beyond the shipped `researcher` |
 | [Reusable workflows](/guides/workflows) | You want declarative multi-step recipes (`*.yaml`) the agent can run on demand |
 
+## Knowledge & memory
+
+Load content the agent can recall, and tune how it's retrieved.
+
+| Guide | When to read |
+|---|---|
+| [Ingest documents & media](/guides/ingestion) | You want to pull files, web pages, PDFs, or audio/video into the knowledge store |
+| [Tune the knowledge store (RAG)](/guides/knowledge) | You want to adjust hybrid retrieval — `top_k`, `vector_k`, `rrf_k`, `min_score`, embeddings |
+
 ## A2A, fleet & delegates
 
 Connect your agent to other agents and endpoints, and run many of them.
@@ -64,6 +73,7 @@ Surface the agent to people — the operator console, or no UI at all.
 | Guide | When to read |
 |---|---|
 | [Operator console (React/Tauri)](/guides/react-tauri-ui) | You want the multi-chat React console and to package it for desktop |
+| [Command palette (⌘K)](/guides/command-palette) | You want the fast keyboard path to jump between surfaces + inline chat |
 | [Run headless (API + A2A)](/guides/headless) | You want the agent as a service — REST + A2A — with no UI |
 
 ## Operate & deploy

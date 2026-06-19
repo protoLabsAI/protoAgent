@@ -8,6 +8,7 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 |---|---|
 | [Architecture](/explanation/architecture) | How do the A2A handler, LangGraph runtime, and LiteLLM gateway fit together? |
 | [Output protocol](/explanation/output-protocol) | Why `<scratch_pad>` / `<output>` instead of whatever the model emits? |
+| [Mid-turn steering](/explanation/steering) | How can I redirect the agent mid-turn without stopping and losing its work? |
 | [LiteLLM gateway](/explanation/litellm-gateway) | Why route every call through a gateway instead of the provider SDK? |
 
 ## Knowledge & memory
