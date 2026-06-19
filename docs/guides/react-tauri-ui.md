@@ -63,7 +63,7 @@ slash-command autocomplete (from `GET /api/chat/commands`) and renders assistant
 - **Live tool-call cards** — each tool the agent invokes streams in as a collapsible card
   (name, running→done/error, input/result), via the `tool-call-v1` DataPart (see
   [Extensions § tool-call-v1](/reference/extensions)).
-- **Skills chip** — a "📚 Skills" chip shows which skills were auto-retrieved for the turn
+- **Skills chip** — a "Skills" chip shows which skills were auto-retrieved for the turn
   ([Skills](/guides/skills)).
 - **Mid-turn steering** — send a message while a turn runs and it folds in at the next
   model call ([Mid-turn steering](/explanation/steering)).

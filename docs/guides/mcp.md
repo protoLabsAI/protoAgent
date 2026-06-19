@@ -57,14 +57,50 @@ other servers.
 
 ## Plugin-managed servers
 
-A **plugin** can contribute a managed MCP server (you never hand-edit
-`mcp.servers`) via `register_mcp_server(factory)` — `factory(config)` returns an
-`mcp.servers[]` entry, or `None` when the server shouldn't run (off / not yet
-connected), so the server comes and goes with config. A plugin entry whose `name`
-matches a configured server **replaces** it, and a plugin contributing a server
-**activates MCP even when `mcp.enabled` is off**. An OAuth-gated Gmail/Calendar
-integration (e.g. a Google external plugin, launched frozen via the `--mcp-plugin`
-shim) is the canonical worked example. See [Plugins](./plugins.md).
+A **plugin** can contribute a managed MCP server (you never hand-edit `mcp.servers`)
+via `register_mcp_server(factory)` — `factory(config)` returns an `mcp.servers[]` entry,
+or `None` when the server shouldn't run (off / not yet connected). The factory runs at
+**every graph build** with the live `LangGraphConfig`, so the server comes and goes with
+config. A plugin entry whose `name` matches a configured server **replaces** it, and a
+plugin contributing a server **activates MCP even when `mcp.enabled` is off**.
+
+### Worked example — wrap an external server, gated on config
+
+In the plugin's `__init__.py` (`register(registry)` is the contribution hook — see
+[Plugins](./plugins.md)):
+
+```python
+def register(registry):
+    def mcp_factory(config):
+        # registry.config is this plugin's resolved config section (ADR 0019).
+        token = registry.config.get("api_token")
+        if not token:
+            return None                       # not configured → server doesn't start
+        return {
+            "name": "acme",                   # same name as a user mcp.servers entry → replaces it
+            "transport": "stdio",             # or "streamable_http" / "sse"
+            "command": "npx",
+            "args": ["-y", "@acme/mcp-server"],
+            "env": {"ACME_TOKEN": token},
+        }
+
+    registry.register_mcp_server(mcp_factory)
+```
+
+Enable the plugin and set its `api_token` (Settings ▸ Plugins, or its config section +
+`secrets.yaml`); the `acme` tools appear (namespaced, allowlist-gated like any MCP server)
+on the next graph build and vanish when the token is cleared. The returned dict is the same
+`mcp.servers[]` entry shape as a hand-configured server (`command`/`args` + `env` for
+stdio; `url`/`headers` for http/sse).
+
+### A Python server inside the plugin (frozen apps)
+
+If the plugin *implements* the server itself in Python (rather than wrapping an external
+binary), it exposes an `mcp_main()` that runs the server, and the factory launches it as a
+subprocess. In a **frozen desktop build** there's no `python` on PATH, so the agent
+re-invokes its own binary with the generic **`--mcp-plugin <id>`** shim, which imports the
+plugin and calls its `mcp_main()`. The first-party OAuth-gated Google (Gmail/Calendar)
+plugin is the canonical example.
 
 ## Keeping tools out of context (allowlist + lazy connect)
 
