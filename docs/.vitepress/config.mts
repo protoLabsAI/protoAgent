@@ -56,6 +56,11 @@ export default defineConfig({
           items: [{ text: "Spin up your first agent", link: "/tutorials/first-agent" }],
         },
         {
+          text: "Skills, subagents & workflows",
+          collapsed: false,
+          items: [{ text: "Write your first skill", link: "/tutorials/first-skill" }],
+        },
+        {
           text: "Tools, MCP & plugins",
           collapsed: false,
           items: [{ text: "Write your first tool", link: "/tutorials/first-tool" }],

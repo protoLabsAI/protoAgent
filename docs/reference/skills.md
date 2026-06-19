@@ -70,7 +70,7 @@ The curator (`python -m graph.skills.curator`) decays + prunes non-`disk` skills
 | `enabled` | `true` | Load + retrieve skills at all |
 | `db_path` | `/sandbox/skills.db` | Index location (→ `~/.protoagent/skills.db` fallback) |
 | `top_k` | `5` | Max skills injected into the prompt per turn |
-| `announce` | `true` | Show the "📚 Skills loaded" chip in chat |
+| `announce` | `true` | Show the "Skills" chip (auto-retrieved skills) in chat |
 | `dir` | `""` | Override the writable skills root |
 | `scope` | `""` (→ `scoped`) | Tier: `scoped` (private) · `shared` (one commons) · `layered` (read commons ∪ private, write private) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)) |
 | `shared` | `false` | Back-compat boolean — `true` → `scope: shared` when `scope` is blank |

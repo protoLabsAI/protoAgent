@@ -16,18 +16,15 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 | Skills loaded chip / `skills.announce` | already in `docs/guides/skills.md` |
 | Operator-console rewrite (was the Gradio→React migration plan) | `docs/guides/react-tauri-ui.md` |
 | Skills reference (frontmatter/schema lookup) | `docs/reference/skills.md` |
+| "Write your first skill" tutorial | `docs/tutorials/first-skill.md` |
+| Managed-MCP-server worked example | `docs/guides/mcp.md` (§ Plugin-managed servers) |
 
 ## Remaining
 
-| # | Gap | Section | Domain | Notes |
-|---|---|---|---|---|
-| 1 | **Author a managed MCP server** | Guide | Tools, MCP & plugins | Already covered at a basic level in `guides/mcp.md` (§ Plugin-managed servers, `register_mcp_server`). Only needs a fuller worked example if demand appears — low priority. |
-| 2 | **First-skill / Langfuse tutorials** | Tutorial | Skills / Operate | Tutorials are thin (2). Candidates: "Write your first skill", "Set up Langfuse tracing". |
+_All audit gaps are filled._
 
-_(No outstanding stale-doc rewrites — `react-tauri-ui.md` was rewritten into a current
-operator-console guide.)_
-
-> Note: the console IA is mid-evolution (utility bar + bottom panel landed in #1176/#1178;
-> ADR 0056 "unified dockable view model" is Proposed). The console guide describes surfaces
-> by behavior, not fixed geometry, to stay durable — re-check the Layout section if the
-> dockable-view work lands.
+- Langfuse-tracing tutorial: **intentionally not written** — `guides/observability.md`
+  already covers it step-by-step; a tutorial would duplicate it.
+- The console guide's Layout section describes surfaces by behavior, not geometry (the IA is
+  mid-evolution — utility bar + bottom panel landed in #1176/#1178; ADR 0056 "dockable
+  views" is Proposed). Fine today; re-check that section if the dockable-view work lands.
