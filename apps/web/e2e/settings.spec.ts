@@ -47,6 +47,7 @@ test("Workspace settings live in the rail (no scope toggle)", async ({ page }) =
     "Tools",
     "MCP",
     "Subagents",
+    "Delegates",
     "Skills",
     "Middleware",
     "Memory",
