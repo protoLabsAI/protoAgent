@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-06-19
+
 ### Added
 - **Raycast-style global quick launcher (desktop).** A new system-wide hotkey (⌥Space)
   summons a frameless, always-on-top window from anywhere — even while protoAgent is hidden
