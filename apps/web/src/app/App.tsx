@@ -115,8 +115,11 @@ import { PluginsSurface } from "../plugins/PluginsSurface";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
-import { usePaletteRegistry } from "./usePaletteRegistry";
+import { applyNavIntent, usePaletteRegistry } from "./usePaletteRegistry";
+import type { NavIntent } from "./usePaletteRegistry";
 import { PaletteChat } from "./PaletteChat";
+import { CORE_SURFACES } from "./coreSurfaces";
+import { listen } from "../lib/desktop";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -454,22 +457,10 @@ export function App() {
     /Mac/i.test(navigator.userAgent);
 
   // ADR 0035 S3 — surface metadata + one renderer, so any surface mounts in either rail.
-  // Chat is excluded here: it mounts unconditionally in its rail's area (streaming continuity)
-  // and is pinned left (railOf.chat is never moved).
-  const CORE_SURFACES: { id: string; label: string; icon: ReactNode }[] = [
-    { id: "chat", label: "Chat", icon: <MessageSquare size={18} /> },
-    // Activity left the rail in the 2026-06 IA pass — it's a read-only utility-bar widget
-    // now (ActivityWidget, bottom-left widgets cluster).
-    { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
-    // "studio" (Workflows) is contributed via src/ext/workflows.tsx, gated on the
-    // workflows plugin (lean core) — no longer a hardcoded core surface.
-    { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
-    // "agent" folded into Settings ▸ Workspace (ADR 0048 S-C) — no longer a rail surface.
-    { id: "plugins", label: "Plugins", icon: <Puzzle size={18} /> },
-    { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
-    { id: "beads", label: "Beads", icon: <Boxes size={18} /> },
-    { id: "goals", label: "Goals", icon: <Target size={18} /> },
-  ];
+  // The core surface list lives in coreSurfaces.tsx, shared with the desktop launcher so
+  // both build their command lists from one source. Chat is excluded from rail placement
+  // here: it mounts unconditionally in its rail's area (streaming continuity) and is
+  // pinned left (railOf.chat is never moved).
   // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core AND plugin views are
   // first-class railOrder members — reconciled below — so all are reorderable/movable, including
   // Chat. Metadata resolves from core or the live plugin-view set; a freshly-appeared plugin not
@@ -547,6 +538,17 @@ export function App() {
   const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
   const [paletteOpen, setPaletteOpen] = useState(false);
   usePaletteHotkey(() => setPaletteOpen((o) => !o));
+  // Desktop launcher handoff (ADR 0057): the frameless ⌥Space launcher window can't
+  // mutate this window's store, so its navigation commands forward a serializable
+  // NavIntent over a Tauri event; the main window replays it here (the Rust shell has
+  // already brought this window to the front via `focus_main`).
+  useEffect(() => {
+    let off = () => {};
+    void listen<NavIntent>("palette:navigate", (intent) => applyNavIntent(intent)).then((fn) => {
+      off = fn;
+    });
+    return () => off();
+  }, []);
 
   function renderSurface(id: string): ReactNode {
     switch (id) {

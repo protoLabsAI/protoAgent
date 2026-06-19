@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Raycast-style global quick launcher (desktop).** A new system-wide hotkey (⌥Space)
+  summons a frameless, always-on-top window from anywhere — even while protoAgent is hidden
+  in the menu bar — that hosts just the ⌘K command palette: jump to any surface or plugin
+  view, run the deep-link actions, quick-chat with the agent, or open an inline plugin view.
+  Navigation commands hand off to the main console window, and the launcher dismisses on blur
+  or Escape (ADR 0057). `⌘⇧P` still toggles the full console window.
+
 ### Fixed
 - **Background agents widget no longer needs a page reload to appear.** The utility-bar pill
   mounts while a cold backend is still warming up (the desktop sidecar can take ~a minute),

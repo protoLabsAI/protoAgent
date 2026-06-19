@@ -4,8 +4,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { Launcher } from "./app/Launcher";
 import { AppCrash } from "./app/AppCrash";
 import { ErrorBoundary } from "./app/ErrorBoundary";
+import { isLauncherWindow } from "./lib/desktop";
 // ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) first, then
 // Tailwind + the shadcn→token bridge, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
@@ -18,7 +20,11 @@ import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
-void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
+
+// The desktop quick-launcher window (ADR 0057) boots the same bundle but renders ONLY the
+// command palette — no shell, no slug activation. Everything else is the full console.
+const launcher = isLauncherWindow();
+if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -27,9 +33,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         the providers themselves is caught too. */}
     <ErrorBoundary fallback={({ error }) => <AppCrash error={error} />}>
       <QueryClientProvider client={queryClient}>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
+        <ToastProvider>{launcher ? <Launcher /> : <App />}</ToastProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>,
