@@ -78,6 +78,10 @@ export type RuntimeStatus = {
     version?: string;
     enabled: boolean;
     loaded: boolean;
+    // Core runtime infrastructure (e.g. the delegate registry): always loaded, can't
+    // be disabled, and hidden from the Plugins management list (its config lives in the
+    // core Workspace settings, not the Plugins panel).
+    builtin?: boolean;
     tools: string[];
     skills: number;
     error?: string;

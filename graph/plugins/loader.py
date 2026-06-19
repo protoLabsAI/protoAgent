@@ -259,14 +259,21 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     seen_tool_names = set(core_tool_names or set())
 
     for manifest in discover_plugins(roots):
-        # plugins.disabled wins — turn off a bundled plugin (e.g. a first-party
-        # surface) without deleting it or editing core.
-        enabled = (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
+        # A builtin (core runtime infrastructure, e.g. the delegate registry) always
+        # loads — it ignores the enable gate AND the disabled list, so it can't be
+        # turned off. Otherwise plugins.disabled wins: turn off a bundled plugin (e.g.
+        # a first-party surface) without deleting it or editing core.
+        enabled = manifest.builtin or (
+            (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
+        )
         entry = {
             "id": manifest.id,
             "name": manifest.name,
             "version": manifest.version,
             "enabled": enabled,
+            # Built-in plugins are filtered out of the Plugins management list (they
+            # aren't optional add-ons) — the flag rides along in /api/runtime/status.
+            "builtin": manifest.builtin,
             "loaded": False,
             "tools": [],
             "skills": 0,

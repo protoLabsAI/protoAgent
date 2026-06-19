@@ -84,14 +84,16 @@ export function DelegatesSection() {
     onError: (e, d) => setProbes((m) => ({ ...m, [d.name]: { ok: false, error: errMsg(e) } })),
   });
 
-  // The delegates plugin isn't enabled (routes 404) — show a hint, not an error.
+  // The delegate registry is built-in, so this normally resolves. A 404 here means the
+  // registry route is unreachable (e.g. an older remote fleet agent) — show a hint, not
+  // an error.
   if (list.isError) {
     return (
       <section className="settings-group">
         <p className="settings-group-title">Delegates</p>
         <p className="setting-desc">
-          Enable the <code>delegates</code> plugin (<code>plugins: {"{ enabled: [delegates] }"}</code>) to
-          manage the agents and endpoints this agent can talk to.{" "}
+          Couldn't reach the delegate registry for this agent — manage the agents and
+          endpoints it can talk to once it's available.{" "}
           <HelpLink href={DELEGATES_GUIDE_URL}>Guide</HelpLink>
         </p>
       </section>

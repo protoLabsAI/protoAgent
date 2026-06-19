@@ -274,6 +274,14 @@ def register_plugin_routes(app) -> None:
         # Snapshot the plugin's pre-reload meta — on DISABLE the reload clears its views
         # from STATE.plugin_meta, so we must read "did it contribute a surface?" first.
         prev_meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+        # A builtin (core runtime infrastructure, e.g. the delegate registry) always
+        # loads regardless of plugins.disabled — refuse to disable it rather than write a
+        # config entry the loader silently ignores.
+        if not want and prev_meta and prev_meta.get("builtin"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{plugin_id!r} is a built-in plugin and can't be disabled",
+            )
         if want:
             enabled.append(plugin_id)
         else:

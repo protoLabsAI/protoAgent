@@ -75,6 +75,28 @@ def test_disabled_plugin_not_loaded(tmp_path, monkeypatch) -> None:
     assert res.meta[0]["id"] == "offplug" and res.meta[0]["enabled"] is False
 
 
+def test_builtin_plugin_always_loads_and_ignores_disabled(tmp_path, monkeypatch) -> None:
+    """A ``builtin: true`` plugin loads even without an enable flag AND even when it's
+    listed in plugins.disabled — it's core infrastructure, not a toggleable add-on.
+    The meta carries ``builtin: true`` so the console can hide it from the Plugins list."""
+    root = tmp_path / "plugins"
+    _make_plugin(root, "core", enabled=False, tool="core_tool", manifest_extra="builtin: true\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    # No enable flag, AND explicitly disabled — a builtin still loads.
+    res = load_plugins(_cfg(plugins_disabled=["core"]))
+    assert [t.name for t in res.tools] == ["core_tool"]
+    assert res.meta[0]["enabled"] is True
+    assert res.meta[0]["builtin"] is True
+
+
+def test_delegates_manifest_is_builtin() -> None:
+    """The bundled delegate registry ships as a non-disableable built-in."""
+    from pathlib import Path as _Path
+
+    m = load_manifest(_Path(__file__).resolve().parent.parent / "plugins" / "delegates")
+    assert m is not None and m.builtin is True
+
+
 def test_enabled_via_config(tmp_path, monkeypatch) -> None:
     root = tmp_path / "plugins"
     _make_plugin(root, "p", enabled=False, tool="p_tool")
