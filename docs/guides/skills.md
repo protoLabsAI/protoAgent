@@ -103,4 +103,6 @@ loaded.
   companion `/dream` consolidates memory). Both are schedulable (ADR 0054). The
   skill curator (`graph/skills/curator.py`) decays and prunes non-pinned skills;
   disk skills (your `SKILL.md` files) are pinned.
-- OS/binary gating fields are parsed but not yet enforced.
+- Only `name` / `description` / `tools` / `user_facing` / `slash` are read; any other
+  frontmatter keys are ignored. See the [Skills reference](/reference/skills) for the exact
+  field + config schema.

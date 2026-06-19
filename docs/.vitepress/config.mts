@@ -164,6 +164,11 @@ export default defineConfig({
           ],
         },
         {
+          text: "Skills, subagents & workflows",
+          collapsed: false,
+          items: [{ text: "Skills (SKILL.md)", link: "/reference/skills" }],
+        },
+        {
           text: "A2A, fleet & delegates",
           collapsed: false,
           items: [
