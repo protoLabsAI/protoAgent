@@ -78,7 +78,6 @@ def _operator_runtime_status():
         knowledge_store=STATE.knowledge_store,
         scheduler=STATE.scheduler,
         cache_warmer=STATE.cache_warmer,
-        goal_controller=STATE.goal_controller,
         skills_index=STATE.skills_index,
         mcp={
             "enabled": bool(getattr(STATE.graph_config, "mcp_enabled", False)) if STATE.graph_config else False,

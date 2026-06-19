@@ -15,7 +15,6 @@ def build_runtime_status(
     knowledge_store: Any = None,
     scheduler: Any = None,
     cache_warmer: Any = None,
-    goal_controller: Any = None,
     skills_index: Any = None,
     mcp: dict[str, Any] | None = None,
     plugins: list[dict[str, Any]] | None = None,
@@ -67,7 +66,6 @@ def build_runtime_status(
             "mcp": mcp_block,
             "plugins": plugins_block,
             "scheduler": {"enabled": False, "backend": "disabled"},
-            "goal": {"enabled": False, "controller_loaded": False},
             "cache_warmer": {"enabled": False, "loaded": False},
             "warnings": warnings_block,
             "instance_uid": instance_uid,
@@ -129,12 +127,6 @@ def build_runtime_status(
         "scheduler": {
             "enabled": bool(getattr(config, "scheduler_enabled", False)),
             "backend": getattr(scheduler, "name", "disabled") if scheduler else "disabled",
-        },
-        "goal": {
-            "enabled": bool(getattr(config, "goal_enabled", False)),
-            "controller_loaded": goal_controller is not None,
-            "max_iterations": getattr(config, "goal_max_iterations", None),
-            "no_progress_limit": getattr(config, "goal_no_progress_limit", None),
         },
         "cache_warmer": {
             "enabled": bool(getattr(config, "cache_warming_enabled", False)),

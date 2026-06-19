@@ -195,7 +195,10 @@ FIELDS: list[Field] = [
         options_source="models+acp",
     ),
     # ── Goal mode ────────────────────────────────────────────────────────────
-    Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode"),
+    # Goal mode is always on (config default True). The on/off toggle is hidden from
+    # the Settings UI; the field stays in FIELDS so existing configs round-trip and the
+    # YAML value (if any) is still honored. Tuning knobs below remain user-editable.
+    Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode", ui_hidden=True),
     Field("goal.max_iterations", "goal_max_iterations", "Max continuations", "number", "Goal mode", minimum=1),
     Field(
         "goal.eval_model",

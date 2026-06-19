@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, Database, HardDrive, Settings2, Sparkles, Tag } from "lucide-react";
+import { Bot, Database, HardDrive, Settings2, Tag } from "lucide-react";
 import { type ReactNode } from "react";
 
 import { brandName } from "../lib/brand";
@@ -8,7 +8,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 import { StagePanel } from "../app/ErrorBoundary";
 
 // Settings → Overview: the agent's read-only status at a glance (model, knowledge,
-// goal, on-disk store sizes). Telemetry is its own tab now. The editable
+// on-disk store sizes). Telemetry is its own tab now. The editable
 // bits (name, persona, middleware, tools) live under the Agent section.
 
 function fmtBytes(n: number | null | undefined): string {
@@ -58,7 +58,6 @@ function StatusBody() {
                   (runtime.knowledge.enabled ? "enabled" : "disabled")
             }
           />
-          <Metric icon={<Sparkles size={16} />} label="Goal mode" value={runtime.goal.enabled ? "on" : "off"} />
         </div>
         {runtime.storage ? (
           <>

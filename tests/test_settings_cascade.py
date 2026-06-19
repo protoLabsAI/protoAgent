@@ -129,18 +129,20 @@ def test_build_schema_reports_scope_and_source():
     cfg = LangGraphConfig()  # App defaults
     groups = build_schema(
         cfg,
-        agent_doc={"goal": {"enabled": False}},  # agent leaf sets an agent-scoped key
+        # goal.max_iterations is an agent-scoped knob (goal.enabled is ui_hidden now —
+        # goal mode is always on — so it no longer appears in build_schema output).
+        agent_doc={"goal": {"max_iterations": 5}},  # agent leaf sets an agent-scoped key
         host_doc={"model": {"name": "host-m"}},  # host layer sets a host-scoped key
     )
     by_key = {e["key"]: e for g in groups for e in g["fields"]}
 
     # scope reflects ADR 0047 §2.1
     assert by_key["model.name"]["scope"] == "host"
-    assert by_key["goal.enabled"]["scope"] == "agent"
+    assert by_key["goal.max_iterations"]["scope"] == "agent"
 
     # source = the layer the live value came from
     assert by_key["model.name"]["source"] == "host"  # inherited from Host
-    assert by_key["goal.enabled"]["source"] == "agent"  # set in the agent leaf
+    assert by_key["goal.max_iterations"]["source"] == "agent"  # set in the agent leaf
     assert by_key["compaction.enabled"]["source"] == "default"  # neither layer → App default
 
 
