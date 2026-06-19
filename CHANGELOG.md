@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The command palette (⌘K) is now command-driven.** The root list leads with **Agents**,
+  then **Plugins** (each plugin's views), then **Commands** — the built-in surfaces no longer
+  flood the top. An **Open…** command morphs into an `Open ▸` submorph (a searchable list) to
+  pick a surface, so the root stays a short list of actions rather than a wall of places. The
+  same structure backs the desktop ⌥Space launcher (ADR 0057).
+
 ## [0.55.1] - 2026-06-19
 
 ### Changed
