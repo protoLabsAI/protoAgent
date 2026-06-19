@@ -64,42 +64,89 @@ export function openView(id: string) {
   }
 }
 
+// ── Navigation handoff (desktop launcher, ADR 0057) ────────────────────────────────
+// Every palette navigation funnels through `navigate(intent)` so it has ONE chokepoint.
+// In the normal console window the intent applies to THIS window's store (the default).
+// In the frameless desktop launcher window the store is a separate JS context with no
+// shell — so the launcher swaps the sink (`setPaletteNavigator`) to forward the intent
+// to the main window over a Tauri event, which replays it there via `applyNavIntent`.
+
+/** A serializable description of "where the palette wants to go" — so it can cross the
+ *  window boundary as a plain event payload. */
+export type NavIntent =
+  | { kind: "view"; id: string }
+  | { kind: "plugins"; tab: "local" | "market" }
+  | { kind: "global"; section: "fleet" | "telemetry" | "commons" };
+
+/** Apply an intent to THIS window's UI store. The default navigator, and what the main
+ *  window calls when it receives a forwarded intent from the launcher. */
+export function applyNavIntent(intent: NavIntent) {
+  const ui = useUI.getState();
+  switch (intent.kind) {
+    case "view":
+      openView(intent.id);
+      break;
+    case "plugins":
+      ui.setSurface("plugins");
+      ui.setPluginsTab(intent.tab);
+      break;
+    case "global":
+      ui.openGlobalSettings(intent.section);
+      break;
+  }
+}
+
+let navigator: (intent: NavIntent) => void = applyNavIntent;
+
+/** Override where palette navigation goes (the launcher forwards to the main window).
+ *  Pass `null` to restore the default local apply. */
+export function setPaletteNavigator(fn: ((intent: NavIntent) => void) | null) {
+  navigator = fn ?? applyNavIntent;
+}
+
+/** The single entry point every nav command + deep-link runs through. */
+function navigate(intent: NavIntent) {
+  navigator(intent);
+}
+
 /** Deep-links into sub-tabbed surfaces. The sub-tab ids are the uiStore union types
  *  (the source of truth), so these can't drift into a 404 section. */
 function deepLinkCommands(): Command[] {
-  const ui = () => useUI.getState();
-  const link = (id: string, label: string, keywords: string[], go: () => void): Command => ({
+  // Each deep-link is expressed as a serializable NavIntent routed through `navigate()`,
+  // so it works identically in the console window (apply locally) and the desktop
+  // launcher (forward to the main window).
+  const link = (id: string, label: string, keywords: string[], intent: NavIntent): Command => ({
     id,
     label,
     group: "Jump to",
     keywords,
     run: (c) => {
-      go();
+      navigate(intent);
       c.close();
     },
   });
   return [
     // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
     // auto-registers as a "go to" nav command — so no Activity deep-links here.)
-    link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], () => {
-      ui().setSurface("plugins");
-      ui().setPluginsTab("market");
+    link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
+      kind: "plugins",
+      tab: "market",
     }),
     // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-    link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], () => {
-      ui().setSurface("plugins");
-      ui().setPluginsTab("local");
+    link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
+      kind: "plugins",
+      tab: "local",
     }),
     // Global settings (Fleet/Telemetry/Commons) is the header-drawer overlay now
     // (2026-06-18 IA pass) — open it deep-linked to the section.
-    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box", "global"], () => {
-      ui().openGlobalSettings("fleet");
+    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box", "global"], { kind: "global", section: "fleet" }),
+    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
+      kind: "global",
+      section: "telemetry",
     }),
-    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], () => {
-      ui().openGlobalSettings("telemetry");
-    }),
-    link("box:commons", "Settings: Shared Skills", ["commons", "shared", "skills", "box", "global"], () => {
-      ui().openGlobalSettings("commons");
+    link("box:commons", "Settings: Shared Skills", ["commons", "shared", "skills", "box", "global"], {
+      kind: "global",
+      section: "commons",
     }),
   ];
 }
@@ -154,10 +201,13 @@ export function usePaletteRegistry(
         icon: v.icon,
         group: GROUP[v.kind],
         keywords: ["go", "open", v.kind],
+        // Inline plugin views morph IN PLACE (also in the launcher window); a plain
+        // surface navigates — routed through `navigate()` so the launcher can hand it
+        // off to the main window instead of mutating its own (shell-less) store.
         run: inline
           ? (c) => c.enter(v.id)
           : (c) => {
-              openView(v.id);
+              navigate({ kind: "view", id: v.id });
               c.close();
             },
       };

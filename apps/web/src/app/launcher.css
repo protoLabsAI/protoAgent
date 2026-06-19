@@ -1,0 +1,24 @@
+/* The frameless desktop quick-launcher window (ADR 0057). The DS palette renders in its
+ * `fullscreen` presentation — the panel fills the window edge-to-edge (no border/radius/
+ * shadow) — so this window IS the palette. We just make the document fill the frame and
+ * paint the raised surface underneath so the open animation never flashes white. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--pl-color-bg-raised);
+}
+
+.launcher-root {
+  height: 100%;
+}
+
+/* The fullscreen palette portals its scrim to <body>; pin it to the frame so the panel
+ * stretches the full window height. */
+.launcher-root ~ .pl-cmdk-overlay,
+body > .pl-cmdk-overlay {
+  position: fixed;
+  inset: 0;
+}

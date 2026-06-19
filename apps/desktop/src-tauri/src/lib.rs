@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -132,6 +132,55 @@ fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
             _ => show_main_window(app),
         }
     }
+}
+
+// ── Raycast-style quick launcher ────────────────────────────────────────────
+// A second, frameless, always-on-top window that hosts ONLY the command palette
+// (the web boots into launcher mode off the injected `__PROTOAGENT_LAUNCHER__`).
+// Summoned by a global hotkey from anywhere, dismissed on blur / Escape; the
+// palette's navigation commands hand off to the main window (a `palette:navigate`
+// event the main webview listens for) and then hide the launcher.
+
+/// Re-center, reveal + focus the launcher, and tell its webview to reset the palette
+/// to root + refocus the search field (it stays mounted between summons).
+fn show_launcher<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("launcher") {
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+        // Global emit — the launcher webview listens; the main one ignores it.
+        let _ = app.emit("launcher:shown", ());
+    }
+}
+
+fn hide_launcher_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("launcher") {
+        let _ = window.hide();
+    }
+}
+
+fn toggle_launcher<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("launcher") {
+        match window.is_visible() {
+            Ok(true) => {
+                let _ = window.hide();
+            }
+            _ => show_launcher(app),
+        }
+    }
+}
+
+/// Hide the launcher — invoked by its webview on Escape / after a navigation handoff.
+#[tauri::command]
+fn hide_launcher<R: Runtime>(app: AppHandle<R>) {
+    hide_launcher_window(&app);
+}
+
+/// Bring the main console window to the front — invoked by the launcher webview when a
+/// navigation command hands a surface off to the main window.
+#[tauri::command]
+fn focus_main<R: Runtime>(app: AppHandle<R>) {
+    show_main_window(&app);
 }
 
 /// Check the GitHub Release updater manifest (latest.json) for a newer build;
@@ -366,7 +415,13 @@ async fn updater_install<R: Runtime>(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![chat_stream, updater_check, updater_install])
+        .invoke_handler(tauri::generate_handler![
+            chat_stream,
+            updater_check,
+            updater_install,
+            hide_launcher,
+            focus_main
+        ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: checks the latest.json manifest on GitHub Releases,
@@ -377,14 +432,27 @@ pub fn run() {
         // menu-bar window is hidden.
         .plugin(tauri_plugin_notification::init())
         .plugin(
+            // Two global, system-wide hotkeys (fire even when the app is unfocused or
+            // hidden in the menu bar):
+            //   ⌘⇧P    — toggle the full console window.
+            //   ⌥Space — summon the Raycast-style quick launcher (just the palette).
+            // ⌥Space is Raycast's familiar alt-default; to rebind, change `launcher_hotkey`
+            // here AND the comparison in the handler (e.g. SUPER|SHIFT + Space if you'd
+            // rather keep Option+Space free for the non-breaking space it normally types).
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcut(Shortcut::new(
-                    Some(Modifiers::SUPER | Modifiers::SHIFT),
-                    Code::KeyP,
-                ))
-                .expect("valid global shortcut")
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
+                .with_shortcuts([
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP),
+                    Shortcut::new(Some(Modifiers::ALT), Code::Space),
+                ])
+                .expect("valid global shortcuts")
+                .with_handler(|app, shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let launcher_hotkey = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+                    if shortcut == &launcher_hotkey {
+                        toggle_launcher(app);
+                    } else {
                         toggle_main_window(app);
                     }
                 })
@@ -435,6 +503,27 @@ pub fn run() {
             }
             win.build()?;
 
+            // The Raycast-style quick launcher: a second, frameless, always-on-top
+            // window hosting ONLY the command palette (the web boots into launcher mode
+            // off `__PROTOAGENT_LAUNCHER__`). Created HIDDEN and reused — the ⌥Space
+            // global shortcut reveals/centers it; it hides on blur (see on_window_event)
+            // or Escape. Same fixed-port API base as the main window.
+            let launcher_init = format!(
+                "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\"; \
+                 window.__PROTOAGENT_LAUNCHER__ = true;"
+            );
+            WebviewWindowBuilder::new(app, "launcher", WebviewUrl::default())
+                .title("protoAgent — Quick Command")
+                .inner_size(720.0, 480.0)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .center()
+                .visible(false)
+                .initialization_script(&launcher_init)
+                .build()?;
+
             // Menu-bar-only: build the tray, and only drop the dock icon
             // (Accessory) if it succeeds — so a tray failure leaves us reachable
             // in the dock rather than with no way to surface the window. Closing
@@ -455,11 +544,19 @@ pub fn run() {
             // native check (see the tray handler) as a manual fallback.
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            // Closing the main window hides the UI (the app + sidecar live on in the menu
+            // bar); the tray's Quit is the real exit.
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            // Raycast behavior: the launcher dismisses the moment it loses focus (click
+            // away, or a navigation command focusing the main window).
+            WindowEvent::Focused(false) if window.label() == "launcher" => {
+                let _ = window.hide();
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
