@@ -1,6 +1,6 @@
 import "./schedule.css";
 
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Dialog } from "@protolabsai/ui/overlays";
 import {
@@ -111,19 +111,26 @@ function ScheduleModal({
           <div className="schedule-repeat">
             <label className="field">
               <span>Frequency</span>
-              <Select value={freq} onChange={(e) => setFreq(e.target.value as RepeatFreq)} data-testid="schedule-freq">
-                <option value="hourly">Every hour</option>
-                <option value="daily">Every day</option>
-                <option value="weekdays">Every weekday (Mon–Fri)</option>
-                <option value="weekly">Every week</option>
-              </Select>
+              <DropdownSelect
+                id="schedule-freq"
+                value={freq}
+                onValueChange={(v) => setFreq(v as RepeatFreq)}
+                options={[
+                  { value: "hourly", label: "Every hour" },
+                  { value: "daily", label: "Every day" },
+                  { value: "weekdays", label: "Every weekday (Mon–Fri)" },
+                  { value: "weekly", label: "Every week" },
+                ]}
+              />
             </label>
             {freq === "weekly" && (
               <label className="field">
                 <span>Day</span>
-                <Select value={dow} onChange={(e) => setDow(Number(e.target.value))}>
-                  {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                </Select>
+                <DropdownSelect
+                  value={String(dow)}
+                  onValueChange={(v) => setDow(Number(v))}
+                  options={WEEKDAYS.map((d, i) => ({ value: String(i), label: d }))}
+                />
               </label>
             )}
             <label className="field">
@@ -144,10 +151,12 @@ function ScheduleModal({
         {mode !== "once" && (
           <label className="field">
             <span>Timezone</span>
-            <Select value={tz} onChange={(e) => setTz(e.target.value)} data-testid="schedule-tz">
-              <option value="">UTC (default)</option>
-              {tzOptions.map((z) => <option key={z} value={z}>{z}</option>)}
-            </Select>
+            <DropdownSelect
+              id="schedule-tz"
+              value={tz}
+              onValueChange={(v) => setTz(v)}
+              options={[{ value: "", label: "UTC (default)" }, ...tzOptions.map((z) => ({ value: z, label: z }))]}
+            />
           </label>
         )}
 

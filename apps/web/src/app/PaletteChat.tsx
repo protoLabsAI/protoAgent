@@ -182,7 +182,7 @@ export function PaletteChat({ agentName }: { agentName: string }) {
                   ))}
                 </div>
               ) : null}
-              {m.reasoning ? <Reasoning streaming={isStreaming && !m.content}>{m.reasoning}</Reasoning> : null}
+              {m.reasoning ? <Reasoning surface="subtle" streaming={isStreaming && !m.content}>{m.reasoning}</Reasoning> : null}
               {m.toolCalls && m.toolCalls.length ? <ToolCalls calls={m.toolCalls} /> : null}
               {m.content ? (
                 <Markdown>{m.content}</Markdown>

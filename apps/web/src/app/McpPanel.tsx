@@ -1,4 +1,4 @@
-import { Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -93,11 +93,16 @@ function AddServerForm({ onDone }: { onDone: (msg: string) => void }) {
         <>
           <div className="mcp-add-row">
             <Input className="playbook-search" placeholder="name (e.g. echo)" value={name} onChange={(e) => setName(e.target.value)} />
-            <Select className="playbook-search" value={transport} onChange={(e) => setTransport(e.target.value as Transport)}>
-              <option value="stdio">stdio</option>
-              <option value="http">http</option>
-              <option value="sse">sse</option>
-            </Select>
+            <DropdownSelect
+              className="playbook-search"
+              value={transport}
+              onValueChange={(v) => setTransport(v as Transport)}
+              options={[
+                { value: "stdio", label: "stdio" },
+                { value: "http", label: "http" },
+                { value: "sse", label: "sse" },
+              ]}
+            />
           </div>
           {transport === "stdio" ? (
             <div className="mcp-add-row">

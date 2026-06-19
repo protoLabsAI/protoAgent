@@ -1,4 +1,4 @@
-import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { Loader2, Plus, Save, Trash2, X } from "lucide-react";
 
@@ -147,13 +147,11 @@ export function WorkflowBuilder({
                 placeholder="step id"
                 onChange={(e) => setStep(i, { id: e.target.value })}
               />
-              <Select value={step.subagent} onChange={(e) => setStep(i, { subagent: e.target.value })}>
-                {(subagents.length ? subagents : [fallback]).map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </Select>
+              <DropdownSelect
+                value={step.subagent}
+                onValueChange={(v) => setStep(i, { subagent: v })}
+                options={(subagents.length ? subagents : [fallback]).map((s) => ({ value: s, label: s }))}
+              />
               {steps.length > 1 && (
                 <Button icon variant="ghost" type="button" onClick={() => removeStep(i)} title="Remove step">
                   <Trash2 size={14} />

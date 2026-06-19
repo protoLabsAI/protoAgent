@@ -41,6 +41,9 @@ test("Add opens a type picker and a schema-driven form", async ({ page }) => {
   // The coding-agent preset picker (from the canonical /api/acp-agents catalog) fills
   // Command + Args when an agent is chosen.
   await expect(panel.locator("#acp-preset")).toBeVisible();
-  await panel.locator("#acp-preset").selectOption("claude");
+  // DropdownSelect (#274): open the trigger, then pick the portaled menu item (rendered at
+  // document.body, so it's page-scoped, not inside `panel`).
+  await panel.locator("#acp-preset").click();
+  await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
   await expect(panel.locator("#del-command")).toHaveValue("npx");
 });

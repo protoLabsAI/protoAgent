@@ -1016,7 +1016,7 @@ function ChatSessionSlot({
               {message.reasoning ? (
                 // Collapsible "thinking" — open while the model is still reasoning
                 // (no answer text yet), auto-collapses once the answer starts.
-                <Reasoning streaming={message.status === "streaming" && !message.content}>
+                <Reasoning surface="subtle" streaming={message.status === "streaming" && !message.content}>
                   {message.reasoning}
                 </Reasoning>
               ) : null}

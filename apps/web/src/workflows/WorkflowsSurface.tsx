@@ -1,6 +1,6 @@
 import "./workflows.css";
 
-import { Input, Select } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   useMutation,
@@ -120,13 +120,11 @@ function WorkflowsBody() {
             ) : (
               <label className="field">
                 <span>Recipe</span>
-                <Select value={selectedName} onChange={(event) => selectRecipe(event.target.value)}>
-                  {workflows.map((w) => (
-                    <option key={w.name} value={w.name}>
-                      {w.name}
-                    </option>
-                  ))}
-                </Select>
+                <DropdownSelect
+                  value={selectedName}
+                  onValueChange={(v) => selectRecipe(v)}
+                  options={workflows.map((w) => ({ value: w.name, label: w.name }))}
+                />
               </label>
             )}
 

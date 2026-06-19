@@ -1,5 +1,5 @@
 import "./hitl.css";
-import { Checkbox, Input, Select, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useState } from "react";
 
@@ -59,16 +59,12 @@ function Field({
   let control;
   if (Array.isArray(schema.enum)) {
     control = (
-      <Select value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
-        <option value="" disabled>
-          Select…
-        </option>
-        {schema.enum.map((opt) => (
-          <option key={String(opt)} value={String(opt)}>
-            {String(opt)}
-          </option>
-        ))}
-      </Select>
+      <DropdownSelect
+        value={String(value ?? "")}
+        onValueChange={(v) => onChange(v)}
+        placeholder="Select…"
+        options={schema.enum.map((opt) => ({ value: String(opt), label: String(opt) }))}
+      />
     );
   } else if (schema.type === "number" || schema.type === "integer") {
     control = (

@@ -1,7 +1,7 @@
 import "./settings.css";
 
 import { Alert } from "@protolabsai/ui/data";
-import { Combobox, Input, Select, Switch, Textarea } from "@protolabsai/ui/forms";
+import { Combobox, DropdownSelect, Input, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Loader2, RotateCcw, Save } from "lucide-react";
@@ -430,9 +430,13 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
   }
   if (field.type === "select" && field.options.length) {
     return (
-      <Select id={id} className="setting-input" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
-        {field.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-      </Select>
+      <DropdownSelect
+        id={id}
+        className="setting-input"
+        value={String(value ?? "")}
+        onValueChange={(v) => onChange(v)}
+        options={field.options.map((opt) => ({ value: opt, label: opt }))}
+      />
     );
   }
   // A string_list backed by gateway options (e.g. routing.fallback_models)

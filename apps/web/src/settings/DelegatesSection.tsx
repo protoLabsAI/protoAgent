@@ -1,7 +1,7 @@
 import "./settings.css";
 import "./delegates.css";
 
-import { Input, RadioCard, RadioCardGroup, Select, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 
 import { StatusDot } from "@protolabsai/ui/data";
@@ -257,21 +257,19 @@ function DelegateForm({
       {type === "acp" && (acpAgents.data?.agents?.length ?? 0) > 0 ? (
         <label className="field">
           <span>Coding agent</span>
-          <Select
+          <DropdownSelect
             id="acp-preset"
             value={preset}
-            onChange={(e) => {
-              const id = e.target.value;
+            onValueChange={(id) => {
               setPreset(id);
               const a = acpAgents.data?.agents.find((x) => x.id === id);
               if (a) setVals((m) => ({ ...m, command: a.command, args: a.args.join(" ") }));
             }}
-          >
-            <option value="">Custom / pick a preset…</option>
-            {acpAgents.data?.agents.map((a) => (
-              <option key={a.id} value={a.id}>{a.label}</option>
-            ))}
-          </Select>
+            options={[
+              { value: "", label: "Custom / pick a preset…" },
+              ...(acpAgents.data?.agents.map((a) => ({ value: a.id, label: a.label })) ?? []),
+            ]}
+          />
           <small className="delegate-field-help">
             Pre-fills the launch fields below for a known coding agent. Claude Code needs the
             adapter (<code>npm i -g @agentclientprotocol/claude-agent-acp</code>).
@@ -320,9 +318,12 @@ function DelegateField({
   let control: React.ReactNode;
   if (field.kind === "select" && field.options.length) {
     control = (
-      <Select {...common}>
-        {field.options.map((o) => <option key={o} value={o}>{o || "(none)"}</option>)}
-      </Select>
+      <DropdownSelect
+        id={`del-${field.key}`}
+        value={value}
+        onValueChange={onChange}
+        options={field.options.map((o) => ({ value: o, label: o || "(none)" }))}
+      />
     );
   } else if (field.kind === "textarea") {
     control = <Textarea rows={3} placeholder={field.placeholder} {...common} />;

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Field, FormField, Input, RadioCard, RadioCardGroup, Select, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import {
@@ -498,14 +498,11 @@ export function SetupWizard({
                     </>
                   }
                 >
-                  <Select
+                  <DropdownSelect
                     value={state.acpAgent}
-                    onChange={(event) => update({ acpAgent: event.target.value })}
-                  >
-                    {acpAgentList.map((a) => (
-                      <option key={a.id} value={a.id}>{a.label}</option>
-                    ))}
-                  </Select>
+                    onValueChange={(v) => update({ acpAgent: v })}
+                    options={acpAgentList.map((a) => ({ value: a.id, label: a.label }))}
+                  />
                 </FormField>
               ) : (
                 <>

@@ -1,4 +1,4 @@
-import { Input, Select } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
   QueryErrorResetBoundary,
@@ -115,27 +115,29 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           Add
         </Button>
         <div className="issue-create-meta">
-          <Select
+          <DropdownSelect
             value={draft.type}
-            onChange={(event) => setDraft((d) => ({ ...d, type: event.target.value }))}
+            onValueChange={(v) => setDraft((d) => ({ ...d, type: v }))}
             aria-label="Issue type"
-          >
-            <option value="task">task</option>
-            <option value="bug">bug</option>
-            <option value="feature">feature</option>
-            <option value="chore">chore</option>
-          </Select>
-          <Select
-            value={draft.priority}
-            onChange={(event) => setDraft((d) => ({ ...d, priority: Number(event.target.value) }))}
+            options={[
+              { value: "task", label: "task" },
+              { value: "bug", label: "bug" },
+              { value: "feature", label: "feature" },
+              { value: "chore", label: "chore" },
+            ]}
+          />
+          <DropdownSelect
+            value={String(draft.priority)}
+            onValueChange={(v) => setDraft((d) => ({ ...d, priority: Number(v) }))}
             aria-label="Issue priority"
-          >
-            <option value={0}>P0</option>
-            <option value={1}>P1</option>
-            <option value={2}>P2</option>
-            <option value={3}>P3</option>
-            <option value={4}>P4</option>
-          </Select>
+            options={[
+              { value: "0", label: "P0" },
+              { value: "1", label: "P1" },
+              { value: "2", label: "P2" },
+              { value: "3", label: "P3" },
+              { value: "4", label: "P4" },
+            ]}
+          />
           <Input
             value={draft.description}
             onChange={(event) => setDraft((d) => ({ ...d, description: event.target.value }))}

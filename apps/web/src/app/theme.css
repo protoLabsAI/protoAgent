@@ -492,24 +492,6 @@
   border-top-right-radius: 0;
 }
 
-/* ── Interim DS-component surface overrides ──────────────────────────────────────
-   Two DS surfaces read too dark in our console. These are LOCAL interim overrides
-   (theme.css loads after @protolabsai/ui/styles.css, so same-specificity rules win)
-   pending DS-side fixes — drop them once those land.
-
-   Reasoning (chat): the DS uses --pl-color-bg-inset (#060608, BELOW the page), so the
-   block reads as a dark hole on the chat panel. Lift it to the subtle raised surface so
-   it reads as a distinct "thinking" block. See protoContent#273. */
-.pl-reasoning {
-  background: var(--pl-color-bg-subtle);
-}
-/* Select: the DS closed control uses --pl-color-bg-raised — the SAME color as the panel
-   it sits on, so it disappears. Lift to the subtle surface for contrast. (The OPEN native
-   <select> menu is OS-rendered and can't be themed from CSS — that's protoContent#274.) */
-.pl-select {
-  background: var(--pl-color-bg-subtle);
-}
-
 /* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The
    sub-nav is its own auto row so it doesn't land in the 1fr content row and
    overlap the fields. */

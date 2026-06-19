@@ -26,7 +26,9 @@ test("repeat presets build cron with a plain-English preview", async ({ page }) 
   await expect(preview).toContainText("every day at");
   await expect(preview.locator("code")).toContainText("0 9 * * *");
   // switch to weekdays
-  await page.getByTestId("schedule-freq").selectOption("weekdays");
+  // DropdownSelect (#274): open the trigger, then pick the portaled menu item.
+  await page.locator("#schedule-freq").click();
+  await page.getByRole("menuitemradio", { name: "Every weekday" }).click();
   await expect(preview).toContainText("every weekday at");
   await expect(preview.locator("code")).toContainText("* * 1-5");
 });
