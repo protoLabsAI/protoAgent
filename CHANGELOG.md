@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.60.0] - 2026-06-19
 
+### Added
+- **The app side drawer now has a Changelog link.** A *Changelog* entry joins Docs/GitHub in the
+  drawer's Links section and opens the marketing-site changelog
+  (`agent.protolabs.studio/changelog`) in a new tab. (#1220)
+
+### Changed
+- **Goal mode is always on.** Its on/off controls are removed from the operator console — the
+  Overview "Goal mode" metric, the "Enable goal mode" Settings toggle (now `ui_hidden`), and the
+  `goal` block in the `/api/runtime/status` response. The config field stays (default on) so
+  existing configs round-trip; the `set_goal` tool, goal controller, and `/api/goals*` endpoints
+  are unchanged, and the tuning knobs (max continuations, verifier model) remain editable. (#1222)
+
+### Fixed
+- **The frozen desktop app now bundles `config/skills`.** The PyInstaller sidecar shipped every
+  read-only config default *except* `config/skills`, so the skill index had nothing to seed from
+  at `_MEIPASS/config/skills` in the packaged desktop build. It's now included alongside SOUL.md
+  and the other bundled config. (#1221)
+
 ## [0.59.0] - 2026-06-19
 
 ## [0.58.0] - 2026-06-19
