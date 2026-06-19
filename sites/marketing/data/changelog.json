@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.55.0",
+    "date": "2026-06-19",
+    "changes": [
+      "Chat can dock at the bottom panel.",
+      "The chat \"still streaming\" pulse now shows on the right rail and bottom dock."
+    ]
+  },
+  {
     "version": "v0.54.0",
     "date": "2026-06-19",
     "changes": [
