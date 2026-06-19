@@ -19,7 +19,7 @@ test("conversation survives navigating away and back (surface stays mounted)", a
 
   // Leave the Chat tab → the chat surface is hidden but still mounted in the DOM
   // (not unmounted), so its state + any in-flight stream are preserved.
-  await rail(page, "Activity");
+  await rail(page, "Schedule");
   await expect(page.locator(".chat-stage")).toHaveCount(1); // still in the DOM
   await expect(page.locator(".chat-stage")).not.toBeVisible(); // just hidden
   await expect(page.locator(".pl-message--user")).toHaveCount(1); // message not lost
@@ -44,7 +44,7 @@ test("tool-call cards survive navigating away and back", async ({ page }) => {
   await expect(card.locator(".pl-toolcard__name")).toHaveText("web_search");
 
   // Leave and return — the tool card must still be there (not torn down).
-  await rail(page, "Activity");
+  await rail(page, "Schedule");
   await expect(page.locator(".pl-toolcard")).toHaveCount(1); // still in the DOM while away
   await rail(page, "Chat");
   await expect(page.locator(".pl-toolcard").first().locator(".pl-toolcard__name")).toHaveText("web_search");

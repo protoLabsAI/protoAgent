@@ -47,16 +47,15 @@
   background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
 }
 
-.activity-composer {
-  display: flex;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.activity-composer textarea {
-  flex: 1;
-  resize: none;
+/* Read-only since the 2026-06 IA pass — the reply composer is gone (Activity is a
+   utility-bar widget now). A load failure surfaces as a strip above the feed. */
+.activity-error {
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--danger, #e5484d);
+  border-radius: var(--radius);
+  color: var(--danger, #e5484d);
+  font-size: 13px;
 }
 
 /* Activity provenance feed (ADR 0022) ------------------------------------- */

@@ -73,7 +73,7 @@ import { TenantGuard } from "./TenantGuard";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
 import { Button } from "@protolabsai/ui/primitives";
 
-import { ActivitySurface } from "../activity/ActivitySurface";
+import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
@@ -86,7 +86,6 @@ import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
-  type ActivityTab,
   type PluginsTab,
   type RightPanel,
   type Surface,
@@ -234,8 +233,6 @@ export function App() {
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
   const setFleetStartNew = useUI((s) => s.setFleetStartNew);
-  const activityTab = useUI((s) => s.activityTab);
-  const setActivityTab = useUI((s) => s.setActivityTab);
   const rightPanel = useUI((s) => s.rightPanel);
   const setRightPanel = useUI((s) => s.setRightPanel);
   const rightCollapsed = useUI((s) => s.rightCollapsed);
@@ -263,7 +260,6 @@ export function App() {
   const [confirmState, setConfirmState] = useState<
     null | { title: string; message?: string; confirmLabel?: string; onConfirm: () => void }
   >(null);
-  const [activityUnread, setActivityUnread] = useState(0);
   // Global settings overlay (the Global home) — store-driven so BOTH the header drawer
   // and command-palette deep-links (Fleet/Telemetry/Commons) can open it. The header
   // hamburger's app drawer itself is local (only App triggers it).
@@ -420,25 +416,8 @@ export function App() {
   // state for the "live" indicator. Surfaces subscribe to named events.
   useEffect(() => onConnectionChange(setLive), []);
 
-  // Unread badges (Activity rail + its Inbox sub-tab): count agent-initiated
-  // messages / inbound items that arrive while the operator isn't looking at
-  // the matching view. Refs so the event handlers read the live view.
-  const surfaceRef = useRef(surface);
-  surfaceRef.current = surface;
-  const activityTabRef = useRef(activityTab);
-  activityTabRef.current = activityTab;
-  const viewingThread = () => surfaceRef.current === "activity" && activityTabRef.current === "thread";
-
-  useEffect(
-    () =>
-      onServerEvent("activity.message", () => {
-        if (!viewingThread()) setActivityUnread((n) => n + 1);
-      }),
-    [],
-  );
-  useEffect(() => {
-    if (viewingThread()) setActivityUnread(0);
-  }, [surface, activityTab]);
+  // Activity unread now lives on the ActivityWidget (the utility-bar widget tracks its own
+  // `activity.message` count, clearing it when its dialog opens) — no rail badge to drive.
 
   // Goal completions surface as a toast (goal.achieved / goal.failed on the bus, ADR 0039) so a
   // plain operator notices a terminal goal without writing a plugin hook.
@@ -479,7 +458,8 @@ export function App() {
   // and is pinned left (railOf.chat is never moved).
   const CORE_SURFACES: { id: string; label: string; icon: ReactNode }[] = [
     { id: "chat", label: "Chat", icon: <MessageSquare size={18} /> },
-    { id: "activity", label: "Activity", icon: <Activity size={18} /> },
+    // Activity left the rail in the 2026-06 IA pass — it's a read-only utility-bar widget
+    // now (ActivityWidget, bottom-left widgets cluster).
     { id: "schedule", label: "Schedule", icon: <CalendarClock size={18} /> },
     // "studio" (Workflows) is contributed via src/ext/workflows.tsx, gated on the
     // workflows plugin (lean core) — no longer a hardcoded core surface.
@@ -570,9 +550,6 @@ export function App() {
 
   function renderSurface(id: string): ReactNode {
     switch (id) {
-      case "activity":
-        // Inbox moved to a utility-bar widget (2026-06 IA pass); Activity is the thread.
-        return <ActivitySurface onError={setError} />;
       // Schedule is its own rail surface again (un-fold from #1075): cron triggers, but
       // timed work earns a top-level rail rather than a tab buried in Activity.
       case "schedule":
@@ -813,7 +790,6 @@ export function App() {
         className="app-shell-main"
         leftItems={railSurfaces("left").map((s) => ({
           ...s,
-          badge: s.id === "activity" ? activityUnread : undefined,
           dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
         }))}
         rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
@@ -911,10 +887,12 @@ export function App() {
             // GitHub moved into the header drawer.
             start={
               <>
-                {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) +
-                    the inbox — each a pill with a hover info popover + a click dialog. */}
+                {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3), the
+                    inbox, and the read-only Activity feed — each a pill with a hover info
+                    popover + a click dialog. */}
                 <BackgroundJobs />
                 <InboxWidget />
+                <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens
                     the plugin's iframe in a dialog, with hover info. Reuses PluginView. */}
                 {utilityWidgetViews.map((v) => (

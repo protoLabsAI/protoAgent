@@ -36,12 +36,13 @@ describe("migrateUiState", () => {
   });
 
   // v7: "schedule" is a top-level rail surface again (un-fold from #1075). A persisted
-  // layout that lost it (it was pruned/folded) gets it re-injected after "activity".
+  // layout that lost it (it was pruned/folded) gets it re-injected where "activity" was —
+  // then v8 prunes "activity" itself, leaving "schedule" in its place.
   it("restores the 'schedule' rail surface to a layout that lacks it", () => {
     const out = migrateUiState({
       railOrder: { left: ["chat", "activity", "settings"], right: ["beads", "goals"] },
     }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "activity", "schedule", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
   });
 
   // …but if the user keeps "schedule" on some dock already, don't duplicate it.
@@ -51,6 +52,20 @@ describe("migrateUiState", () => {
     }) as { railOrder: { left: string[]; right: string[] } };
     expect(out.railOrder.right).toContain("schedule");
     expect(out.railOrder.left).not.toContain("schedule");
+  });
+
+  // v8 (2026-06 IA pass): Activity moved off the rail to a utility-bar widget. Prune
+  // "activity" from every dock + the mobile quick-bar so it doesn't linger as a dead id.
+  it("prunes 'activity' from the rails and quick-bar", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "activity", "schedule"], right: ["activity", "beads"], bottom: ["activity"] },
+      quickBar: ["chat", "activity", "knowledge"],
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
+    expect(out.railOrder.left).not.toContain("activity");
+    expect(out.railOrder.right).not.toContain("activity");
+    expect(out.railOrder.bottom).not.toContain("activity");
+    expect(out.railOrder.left).toEqual(["chat", "schedule"]);
+    expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
   // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a

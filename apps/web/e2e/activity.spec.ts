@@ -1,19 +1,21 @@
 import { expect, test } from "@playwright/test";
 
-// The Activity provenance feed (ADR 0022): a timeline of agent-initiated turns,
-// each tagged with what triggered it. Loads entries from GET /api/activity,
-// shows an unread badge while off-surface, and appends pushed events live.
+// Activity is a read-only utility-bar widget (2026-06 IA pass): a bottom-left pill with an
+// unread badge that opens the provenance feed (ADR 0022) in a dialog. The feed loads from
+// GET /api/activity and appends pushed `activity.message` events live while the dialog is open.
 
-test("feed shows entries with provenance + live append", async ({ page }) => {
+test("widget badge → dialog feed with provenance + live append", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Pushed activity messages arrive while we're on Chat → the rail badge shows.
-  await expect(page.locator(".pl-count--rail")).toBeVisible();
+  // Pushed activity messages arrive while the dialog is closed → the widget's unread badge shows.
+  await expect(page.getByTestId("activity-badge")).toBeVisible();
 
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
-
+  // Click the widget pill → the read-only feed opens in a dialog (and the badge clears).
+  await page.getByTestId("activity-widget").click();
   const feed = page.getByTestId("activity-surface");
+  await expect(feed).toBeVisible();
+  await expect(page.getByTestId("activity-badge")).toHaveCount(0);
+
   // Entry text + its provenance badges (origin + trigger) render.
   await expect(feed.getByText("3 PRs merged overnight, CI green.")).toBeVisible();
   await expect(feed.getByText("scheduled").first()).toBeVisible(); // origin badge
@@ -21,17 +23,9 @@ test("feed shows entries with provenance + live append", async ({ page }) => {
   await expect(feed.getByText("Build failed on main — investigating.")).toBeVisible();
   await expect(feed.getByText("inbox").first()).toBeVisible(); // inbox origin badge
 
-  // A pushed event appends live while the surface is open.
+  // A pushed event appends live while the dialog is open.
   await expect(feed.getByText("live activity ping").first()).toBeVisible();
-});
 
-test("replying clears the composer (the answer returns as a feed entry)", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
-
-  const composer = page.locator(".activity-composer textarea");
-  await composer.fill("ping from operator");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  // The feed shows agent outputs (not an echo of your reply); send clears the box.
-  await expect(composer).toHaveValue("");
+  // Read-only since the IA pass — there is no reply composer.
+  await expect(page.locator(".activity-composer")).toHaveCount(0);
 });
