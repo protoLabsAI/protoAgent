@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The in-app ⌘K palette no longer inherits the desktop launcher's frosted styling.** The
+  launcher window's CSS (transparent scrim, translucent backdrop-blur card, large shadow) is
+  bundled globally, so it leaked onto the main console's command palette; it's now scoped to
+  the launcher window.
+- **Plugin entries in the palette dropped their "open here" hint.** It collided with the new
+  `Open…` command (and the shared "open" keyword surfaced every plugin when you typed "open").
+
 ## [0.56.0] - 2026-06-19
 
 ### Changed

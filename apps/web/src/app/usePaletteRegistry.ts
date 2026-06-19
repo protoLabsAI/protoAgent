@@ -223,10 +223,12 @@ export function usePaletteRegistry(
       return {
         id: `nav:${v.id}`,
         label: v.title,
-        hint: inline ? "open here" : "go to",
+        // No "open" verb/keyword here — `Open…` is its own command now and would collide.
+        // An inline plugin morphs in place (no hint); a rail view navigates ("go to").
+        hint: inline ? undefined : "go to",
         icon: v.icon,
         group: "Plugins",
-        keywords: ["plugin", "open", v.kind],
+        keywords: ["plugin", v.kind],
         run: inline
           ? (c) => c.enter(v.id)
           : (c) => {

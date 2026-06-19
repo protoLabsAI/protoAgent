@@ -23,7 +23,10 @@ watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin i
 
 // The desktop quick-launcher window (ADR 0057) boots the same bundle but renders ONLY the
 // command palette — no shell, no slug activation. Everything else is the full console.
+// The `is-launcher` class scopes launcher.css (its `.pl-cmdk-*` overrides are global in the
+// bundle, so without this they'd leak onto the in-app ⌘K palette in the main window).
 const launcher = isLauncherWindow();
+if (launcher) document.documentElement.classList.add("is-launcher");
 if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

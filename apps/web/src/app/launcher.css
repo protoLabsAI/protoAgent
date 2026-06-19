@@ -1,23 +1,27 @@
 /* The frameless desktop quick-launcher window (ADR 0057). The window is transparent +
- * shadowless (see lib.rs), so this stylesheet — loaded ONLY in the launcher window — paints
- * nothing on the frame and instead floats the DS palette as a rounded, frosted card with
- * see-through margins, Raycast-style. The palette renders in its `overlay` presentation. */
-html,
-body,
-#root {
+ * shadowless (see lib.rs), so this stylesheet floats the DS palette as a rounded, frosted
+ * card with see-through margins, Raycast-style. The palette renders in its `overlay`
+ * presentation.
+ *
+ * EVERYTHING here is scoped under `.is-launcher` (set on <html> only in the launcher
+ * window, see main.tsx). Vite bundles imported CSS GLOBALLY — without this scope these
+ * `.pl-cmdk-*` overrides would leak onto the in-app ⌘K palette in the main console window. */
+html.is-launcher,
+.is-launcher body,
+.is-launcher #root {
   height: 100%;
   margin: 0;
   overflow: hidden;
   background: transparent; /* let the transparent window show the desktop behind */
 }
 
-.launcher-root {
+.is-launcher .launcher-root {
   height: 100%;
 }
 
 /* The portaled scrim fills the window. Drop its dim (so the margins are truly see-through)
  * and center the card vertically instead of the DS top-anchor. */
-.pl-cmdk-overlay {
+.is-launcher .pl-cmdk-overlay {
   background: transparent !important;
   align-items: center !important;
   padding: var(--pl-space-4) !important;
@@ -26,7 +30,7 @@ body,
 /* The floating card: the DS panel already carries the radius + border; layer on a
  * translucent surface + backdrop blur so the desktop shows through slightly. The opaque
  * `background` is a fallback for WebKit without color-mix (degrades to solid, still rounded). */
-.pl-cmdk__panel {
+.is-launcher .pl-cmdk__panel {
   background: var(--pl-color-bg-raised);
   background: color-mix(in srgb, var(--pl-color-bg-raised) 82%, transparent);
   -webkit-backdrop-filter: blur(24px) saturate(1.4);
