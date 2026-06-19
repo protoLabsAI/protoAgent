@@ -45,9 +45,22 @@ tools: [web_search, fetch_url]   # optional, advisory
 | `name` | ✅ | Unique, lowercase-with-hyphens. |
 | `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
 | `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the skill is retrieved for a turn, these are surfaced to the agent as `<relevant_tools>` so it knows which of its (already-bound) tools this skill relies on — a relevance hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
+| `user_facing` | — | `true` makes the skill directly invokable as a `/<slash>` command in the chat composer (ADR 0052). Off by default. |
+| `slash` | — | The trigger token for a `user_facing` skill (whitespace-free); blank → slug of `name`. e.g. `slash: web-research` → `/web-research`. |
 
 The markdown **body** is the skill's instructions — freeform; write whatever
 helps the agent perform the task.
+
+## Run a skill on demand (`/slash`)
+
+By default a skill fires only when retrieval matches it. Mark a skill
+`user_facing: true` (ADR 0052) and it *also* shows up as a `/<slash>` command in
+the composer's slash menu. Invoking `/<slash> [input]` **rewrites the turn** to
+inject the skill's procedure as a directive and runs it on the normal lead-agent
+turn (full toolset, history intact) — it doesn't spawn a detached worker.
+Precedence on a shared token: `goal` > workflow > subagent > skill. The shipped
+`web-research` skill is user-facing as `/web-research`, and `release-notes` as
+`/release-notes`.
 
 ## Where skills live
 
@@ -85,8 +98,9 @@ loaded.
 
 - Skills are *retrieved by relevance* (BM25 over name/description/body), so a
   precise, trigger-oriented `description` matters most.
-- The agent can also **author its own** skills: the `/distill` subagent turns a
-  proven workflow into a new `SKILL.md` (same `disk` source, indexed and retrieved
-  exactly like the ones you write). The skill curator (`graph/skills/curator.py`)
-  decays and prunes non-pinned skills; disk skills are pinned.
+- The agent can also **author its own** skills: the `/distill` subagent looks back
+  over recent work and turns a proven, repeated workflow into a new skill (its
+  companion `/dream` consolidates memory). Both are schedulable (ADR 0054). The
+  skill curator (`graph/skills/curator.py`) decays and prunes non-pinned skills;
+  disk skills (your `SKILL.md` files) are pinned.
 - OS/binary gating fields are parsed but not yet enforced.

@@ -64,9 +64,9 @@ backend; redesigning the LangGraph core. The marketplace is explicitly the
 | Capability | Today | Shape |
 |---|---|---|
 | **Tools** | `tools/lg_tools.py::get_all_tools(knowledge_store, scheduler)` | Static list; backend-bound subsets (`MEMORY_TOOL_NAMES`, `SCHEDULER_TOOL_NAMES`). No dynamic registration. |
-| **Subagents** | `graph/subagents/config.py::SUBAGENT_REGISTRY` | Static `SubagentConfig` dataclasses (name, prompt, tool allowlist, `disallowed_tools`, `max_turns`, `allow_skill_emission`). |
+| **Subagents** | `graph/subagents/config.py::SUBAGENT_REGISTRY` | Static `SubagentConfig` dataclasses (name, prompt, tool allowlist, `disallowed_tools`, `max_turns`). |
 | **Hooks / lifecycle** | `graph/agent.py::_build_middleware()` | Config-gated list of langchain `AgentMiddleware` (PromptCache, Knowledge, Audit, Memory, Ingest, Enforcement, Summarization, ModelFallback, MessageCapture). |
-| **Skills (auto)** | `graph/extensions/skills.py` + `graph/skills/` (FTS5 index + curator) | **Agent self-authors** skill-v1 "recipes" via `task(emit_skill=True)`, indexed for retrieval. The hard half of procedural memory already exists. |
+| **Skills** | `graph/skills/` (FTS5 index + curator) + `graph/extensions/skills.py` | Human-authored `SKILL.md` skills, plus agent self-authoring via `/distill`; retrieved into each turn and curated. |
 | **Personas** | `config/soul-presets/*.md` | Markdown SOUL presets; no frontmatter / discovery metadata. |
 | **Tool gating** | `EnforcementMiddleware` (`enforcement_disallowed_tools`, rate limits) | Deny-list + per-tool rate limit. Allowlist is per-subagent. |
 | **Extension convention** | A2A `DataPart` + `mimeType` (`cost-v1`, `worldstate-delta-v1`, `skill-v1`) | Established pattern for typed, routed payloads. |

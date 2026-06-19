@@ -1,8 +1,13 @@
 # React + Tauri UI Migration
 
-This is the implementation plan for replacing the Gradio UI with a React
-operator console, then wrapping it in a Tauri desktop app once the web surface
-is stable.
+::: warning Historical migration plan
+This page is the original plan for replacing the Gradio UI with the React console
++ Tauri desktop app. **That migration has shipped** — Gradio is removed, the
+console is the only/default UI (`/` → `/app`), and the desktop app is released.
+Sections below that say "keep Gradio for now" / "Gradio retirement" are historical.
+A current operator-console how-to is a tracked follow-up (see `docs/dev/docs-gaps.md`);
+the still-useful parts here are the REST endpoint map and the source patterns.
+:::
 
 ## Source Patterns To Adopt
 

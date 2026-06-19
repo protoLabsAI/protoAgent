@@ -43,61 +43,71 @@ export default defineConfig({
       { text: "Explanation", link: "/explanation/" },
     ],
 
+    // Each Diátaxis section's sidebar is grouped by the SAME domain taxonomy
+    // (Getting started → Agent core → Skills → Knowledge → A2A/fleet → Tools/plugins
+    // → Console → Operate → Forks), so "where does X live" reads the same everywhere.
+    // A section only lists the domains it actually has pages for.
     sidebar: {
       "/tutorials/": [
+        { text: "Tutorials", items: [{ text: "Overview", link: "/tutorials/" }] },
         {
-          text: "Tutorials",
-          items: [
-            { text: "Overview", link: "/tutorials/" },
-            { text: "Spin up your first agent", link: "/tutorials/first-agent" },
-            { text: "Write your first tool", link: "/tutorials/first-tool" },
-          ],
+          text: "Getting started",
+          collapsed: false,
+          items: [{ text: "Spin up your first agent", link: "/tutorials/first-agent" }],
+        },
+        {
+          text: "Tools, MCP & plugins",
+          collapsed: false,
+          items: [{ text: "Write your first tool", link: "/tutorials/first-tool" }],
         },
       ],
 
       "/guides/": [
+        { text: "How-To Guides", items: [{ text: "Overview", link: "/guides/" }] },
         {
-          text: "How-To Guides",
-          items: [{ text: "Overview", link: "/guides/" }],
-        },
-        {
-          text: "Set up & deploy",
+          text: "Getting started",
           collapsed: false,
           items: [
+            { text: "Fork the template (fast path)", link: "/guides/fork-the-template" },
             { text: "Customize & deploy", link: "/guides/customize-and-deploy" },
-            { text: "Fork checklist (fast path)", link: "/guides/fork-the-template" },
-            { text: "Deploy via GHCR", link: "/guides/deploy" },
-            { text: "Releasing", link: "/guides/releasing" },
           ],
         },
         {
-          text: "Agent capabilities",
+          text: "Agent core & runtime",
           collapsed: false,
           items: [
-            { text: "Add a custom skill (A2A card)", link: "/guides/add-a-skill" },
-            { text: "Skills (SKILL.md)", link: "/guides/skills" },
-            { text: "Configure subagents", link: "/guides/subagents" },
-            { text: "Reusable workflows", link: "/guides/workflows" },
             { text: "Goal mode", link: "/guides/goal-mode" },
             { text: "Schedule future work", link: "/guides/scheduler" },
+            { text: "Middleware", link: "/guides/middleware" },
+            { text: "Run on a coding agent (ACP runtime)", link: "/guides/acp-runtime" },
           ],
         },
         {
-          text: "Tools & coding agents",
+          text: "Skills, subagents & workflows",
+          collapsed: false,
+          items: [
+            { text: "Skills (SKILL.md)", link: "/guides/skills" },
+            { text: "Add a custom skill (A2A card)", link: "/guides/add-a-skill" },
+            { text: "Configure subagents", link: "/guides/subagents" },
+            { text: "Reusable workflows", link: "/guides/workflows" },
+          ],
+        },
+        {
+          text: "A2A, fleet & delegates",
+          collapsed: false,
+          items: [
+            { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
+            { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
+            { text: "Fleet (many agents on one host)", link: "/guides/fleet" },
+            { text: "Portfolio (one PM across boards)", link: "/guides/portfolio" },
+          ],
+        },
+        {
+          text: "Tools, MCP & plugins",
           collapsed: false,
           items: [
             { text: "Connect MCP servers", link: "/guides/mcp" },
-            { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
-            { text: "Run on a coding agent (ACP runtime)", link: "/guides/acp-runtime" },
-            { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
-          ],
-        },
-        {
-          text: "Plugins & channels",
-          collapsed: false,
-          items: [
             { text: "Plugins", link: "/guides/plugins" },
-            { text: "Middleware", link: "/guides/middleware" },
             { text: "Building a plugin view", link: "/guides/building-react-plugin-views" },
             { text: "Build a communication plugin", link: "/guides/communication-plugins" },
             { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
@@ -105,11 +115,19 @@ export default defineConfig({
           ],
         },
         {
-          text: "Run & operate",
+          text: "Console & UI",
+          collapsed: false,
+          items: [
+            { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
+            { text: "Run headless (API + A2A)", link: "/guides/headless" },
+          ],
+        },
+        {
+          text: "Operate & deploy",
           collapsed: true,
           items: [
-            { text: "Run headless (API + A2A)", link: "/guides/headless" },
-            { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
+            { text: "Deploy via GHCR", link: "/guides/deploy" },
+            { text: "Releasing", link: "/guides/releasing" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },
             { text: "Wire Langfuse + Prometheus", link: "/guides/observability" },
@@ -126,45 +144,68 @@ export default defineConfig({
         },
       ],
 
-      "/how-to/": [
+      "/reference/": [
+        { text: "Reference", items: [{ text: "Overview", link: "/reference/" }] },
         {
-          text: "How-To",
+          text: "Agent core & runtime",
+          collapsed: false,
           items: [
-            { text: "Build a plugin view", link: "/how-to/build-a-plugin-view" },
+            { text: "Configuration", link: "/reference/configuration" },
+            { text: "Environment variables", link: "/reference/environment-variables" },
           ],
         },
-      ],
-
-      "/reference/": [
         {
-          text: "Reference",
+          text: "A2A, fleet & delegates",
+          collapsed: false,
           items: [
-            { text: "Overview", link: "/reference/" },
             { text: "A2A endpoints", link: "/reference/a2a-endpoints" },
             { text: "Agent card", link: "/reference/agent-card" },
-            { text: "Starter tools", link: "/reference/starter-tools" },
-            { text: "Environment variables", link: "/reference/environment-variables" },
-            { text: "Configuration", link: "/reference/configuration" },
             { text: "Extensions", link: "/reference/extensions" },
           ],
+        },
+        {
+          text: "Tools, MCP & plugins",
+          collapsed: false,
+          items: [{ text: "Starter tools", link: "/reference/starter-tools" }],
         },
       ],
 
       "/explanation/": [
+        { text: "Explanation", items: [{ text: "Overview", link: "/explanation/" }] },
         {
-          text: "Explanation",
+          text: "Agent core & runtime",
+          collapsed: false,
           items: [
-            { text: "Overview", link: "/explanation/" },
             { text: "Architecture", link: "/explanation/architecture" },
-            { text: "Security & trust model", link: "/explanation/security-and-trust" },
-            { text: "Memory & knowledge store", link: "/explanation/memory-and-knowledge" },
-            { text: "A2A protocol", link: "/explanation/a2a-protocol" },
-            { text: "Cost & trace propagation", link: "/explanation/cost-and-trace" },
-            { text: "Tuning & cost", link: "/explanation/tuning-and-cost" },
             { text: "Output protocol", link: "/explanation/output-protocol" },
             { text: "LiteLLM gateway", link: "/explanation/litellm-gateway" },
-            { text: "Architecture decisions (ADRs)", link: "/adr/" },
           ],
+        },
+        {
+          text: "Knowledge & memory",
+          collapsed: false,
+          items: [{ text: "Memory & knowledge store", link: "/explanation/memory-and-knowledge" }],
+        },
+        {
+          text: "A2A, fleet & delegates",
+          collapsed: false,
+          items: [
+            { text: "A2A protocol", link: "/explanation/a2a-protocol" },
+            { text: "Cost & trace propagation", link: "/explanation/cost-and-trace" },
+          ],
+        },
+        {
+          text: "Operate & deploy",
+          collapsed: false,
+          items: [
+            { text: "Security & trust model", link: "/explanation/security-and-trust" },
+            { text: "Tuning & cost", link: "/explanation/tuning-and-cost" },
+          ],
+        },
+        {
+          text: "Architecture decisions",
+          collapsed: false,
+          items: [{ text: "ADRs", link: "/adr/" }],
         },
       ],
     },

@@ -1,8 +1,9 @@
 # Fleet — many agents on one host
 
 Run several named agents on one machine, each fully **isolated**, each runnable in the
-**background**, each built from a reusable **archetype** — and (soon) switchable in place
-from **one console**. The fleet is a handful of composable primitives:
+**background**, each built from a reusable **archetype** — and switchable in place from
+**one console** (slug-routed, per-agent layout/theme). The fleet is a handful of composable
+primitives:
 
 | Primitive | What it is | ADR |
 |---|---|---|
@@ -11,7 +12,7 @@ from **one console**. The fleet is a handful of composable primitives:
 | **Archetype** | a bundle presented as a starter *agent type* (or the built-in **Basic**) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
-| **Unified console** *(coming)* | one console that hot-swaps between running agents | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 
 ## Quick start
 

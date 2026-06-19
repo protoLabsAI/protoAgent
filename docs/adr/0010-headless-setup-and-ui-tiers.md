@@ -51,7 +51,7 @@ without a UI, or (b) run a lean stack without the console + gradio.
 
 | Tier | Gradio (`/`) | React console (`/app`, `/static`) | API + A2A + `/metrics` | For |
 |---|---|---|---|---|
-| `full` | ✅ | ✅ | ✅ | local dev / `python server.py` (default) |
+| `full` | ✅ | ✅ | ✅ | local dev / `python -m server` (default) |
 | `console` | ✕ | ✅ | ✅ | desktop sidecar (React is the UI) — today's `--headless` |
 | `none` | ✕ | ✕ | ✅ | **headless servers / Roxy — the lighter stack** |
 
@@ -59,13 +59,13 @@ without a UI, or (b) run a lean stack without the console + gradio.
   mounts — pure API + A2A + `/metrics`.
 - `--headless` / `PROTOAGENT_HEADLESS` is kept as a **deprecated alias for
   `--ui console`** (back-compatible; logs a deprecation note).
-- Default stays `full` for `python server.py` so local dev is unchanged.
+- Default stays `full` for `python -m server` so local dev is unchanged.
 
 ### 2.2 Headless setup (no wizard)
 
 Two ways to satisfy the `.setup-complete` gate without a UI:
 
-1. **`python server.py --setup`** — one-shot: `ensure_live_config()`, validate
+1. **`python -m server --setup`** — one-shot: `ensure_live_config()`, validate
    the live config, then `mark_setup_complete()` and exit. Idempotent; the
    explicit operator/CI path.
 2. **Boot-time auto-complete** — when setup isn't complete but the config
