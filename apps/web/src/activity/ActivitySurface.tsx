@@ -1,8 +1,7 @@
 import "./activity.css";
 
-import { Textarea } from "@protolabsai/ui/forms";
-import { Button, Empty } from "@protolabsai/ui/primitives";
-import { Clock, Inbox, Loader2, MessageSquare, Send, Users, Webhook, Zap } from "lucide-react";
+import { Empty } from "@protolabsai/ui/primitives";
+import { Clock, Inbox, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -14,13 +13,11 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { onServerEvent } from "../lib/events";
 import type { ActivityEntry } from "../lib/types";
 
-// The Activity provenance feed (ADR 0022): a timeline of agent-initiated turns,
-// each tagged with what triggered it (scheduled job / webhook / inbox / sister
-// agent / your reply). Loads from GET /api/activity, appends live via the
-// `activity.message` push event, and lets the operator reply into the
-// `system:activity` thread — the reply's answer arrives as a new feed entry.
-
-const ACTIVITY = "system:activity";
+// The Activity provenance feed (ADR 0022): a READ-ONLY timeline of agent-initiated
+// turns, each tagged with what triggered it (scheduled job / webhook / inbox /
+// sister agent). Loads from GET /api/activity and appends live via the
+// `activity.message` push event. Read-only since the 2026-06 IA pass — Activity is a
+// utility-bar widget now (ActivityWidget), not a rail surface you reply into.
 
 // origin → badge (icon + label). "" / unknown falls back to a generic agent turn.
 const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
@@ -46,12 +43,11 @@ function Badge({ entry }: { entry: ActivityEntry }) {
   );
 }
 
-export function ActivitySurface({ onError }: { onError: (message: string) => void }) {
+export function ActivitySurface() {
   // Held newest-first (as the API returns), rendered oldest-first.
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   async function load() {
@@ -59,8 +55,9 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
     try {
       const r = await api.activity();
       setEntries(r.entries || []);
+      setError(null);
     } catch (e) {
-      onError(errMsg(e));
+      setError(errMsg(e));
     } finally {
       setLoading(false);
     }
@@ -96,21 +93,6 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [entries]);
 
-  async function send() {
-    const text = draft.trim();
-    if (!text || sending) return;
-    setSending(true);
-    setDraft("");
-    try {
-      // Reply into the Activity thread; the answer returns as a feed entry.
-      await api.streamChat(text, ACTIVITY, {});
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setSending(false);
-    }
-  }
-
   const chronological = [...entries].reverse();
 
   return (
@@ -122,6 +104,11 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
       />
 
       <div className="stage-body activity-body">
+        {error ? (
+          <div className="activity-error" role="alert">
+            {error}
+          </div>
+        ) : null}
         <div className="activity-feed" ref={scrollRef}>
           {chronological.length === 0 && !loading ? (
             <Empty
@@ -139,31 +126,6 @@ export function ActivitySurface({ onError }: { onError: (message: string) => voi
             </div>
           ))}
         </div>
-
-        <form
-          className="activity-composer"
-          onSubmit={(ev) => {
-            ev.preventDefault();
-            void send();
-          }}
-        >
-          <Textarea
-            value={draft}
-            onChange={(ev) => setDraft(ev.target.value)}
-            placeholder="Reply in the activity thread…"
-            rows={2}
-            onKeyDown={(ev) => {
-              if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey) {
-                ev.preventDefault();
-                void send();
-              }
-            }}
-          />
-          <Button variant="primary" type="submit" disabled={sending || !draft.trim()}>
-            {sending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-            Send
-          </Button>
-        </form>
       </div>
     </section>
   );

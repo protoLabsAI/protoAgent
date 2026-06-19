@@ -47,10 +47,6 @@ export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<vi
 // "market" = Discover. (Keys kept for persisted-state compat; the old "download"
 // tab is gone — a stale persisted value falls back to Installed.)
 export type PluginsTab = "local" | "market";
-// Activity = the trigger/event surface: what happened (thread) + inbound (inbox).
-// "schedule" was briefly folded in here (#1075) but is its own top-level rail surface
-// again — cron is a trigger, but timed work earns its own rail.
-export type ActivityTab = "thread" | "inbox";
 // Settings IA (ADR 0048): scope is the primary axis — two homes, each with its own
 // section sub-nav. `settingsScope` picks the home; `settingsSection` the active
 // section within it (a free string so each home owns its own section ids).
@@ -72,7 +68,6 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
-  activityTab: ActivityTab;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
   rightWidth: number;
@@ -104,7 +99,6 @@ type UIState = {
   setSettingsScope: (s: SettingsScope) => void;
   setSettingsSection: (s: string) => void;
   setFleetStartNew: (b: boolean) => void;
-  setActivityTab: (t: ActivityTab) => void;
   setRightCollapsed: (b: boolean) => void;
   setLeftCollapsed: (b: boolean) => void;
   setRightWidth: (w: number) => void;
@@ -164,6 +158,18 @@ export function migrateUiState(persisted: unknown): unknown {
         rest.railOrder = { ...ro4, left };
       }
     }
+    // v8 (2026-06 IA pass): Activity is no longer a rail surface — it moved to a
+    // read-only utility-bar widget (the bottom-left widgets cluster). Prune "activity"
+    // from every dock + the mobile quick-bar so it doesn't linger as a dead rail id.
+    // (Runs AFTER the v7 schedule re-add, which anchors on "activity" before it's gone.)
+    const ro5 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro5) {
+      const noAct = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => x !== "activity") : []);
+      rest.railOrder = { left: noAct(ro5.left), right: noAct(ro5.right), bottom: noAct(ro5.bottom) };
+    }
+    if (Array.isArray(rest.quickBar)) {
+      rest.quickBar = (rest.quickBar as string[]).filter((x) => x !== "activity");
+    }
     return rest;
   }
   return persisted;
@@ -182,7 +188,6 @@ export const useUI = create<UIState>()(
       globalSettingsSection: undefined,
       openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
       closeGlobalSettings: () => set({ globalSettingsOpen: false }),
-      activityTab: "thread",
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
@@ -190,7 +195,7 @@ export const useUI = create<UIState>()(
       bottomHeight: 240,
       bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "activity", "schedule", "studio", "knowledge", "plugins", "settings"],
+        left: ["chat", "schedule", "studio", "knowledge", "plugins", "settings"],
         right: ["beads", "goals"],
         bottom: [],
       },
@@ -219,7 +224,7 @@ export const useUI = create<UIState>()(
       setRailOrder: (railOrder) => set({ railOrder }),
       mobileActive: "chat",
       setMobileActive: (mobileActive) => set({ mobileActive }),
-      quickBar: ["chat", "activity", "knowledge", "plugins"],
+      quickBar: ["chat", "knowledge", "plugins"],
       toggleQuickBar: (id) =>
         set((s) => {
           if (s.quickBar.includes(id)) return { quickBar: s.quickBar.filter((x) => x !== id) };
@@ -244,7 +249,6 @@ export const useUI = create<UIState>()(
       setSettingsScope: (settingsScope) => set({ settingsScope }),
       setSettingsSection: (settingsSection) => set({ settingsSection }),
       setFleetStartNew: (fleetStartNew) => set({ fleetStartNew }),
-      setActivityTab: (activityTab) => set({ activityTab }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
       // The DS AppShell is a CONTROLLED width: during a divider drag it streams transient
@@ -271,7 +275,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 7, // …v5 Schedule→Activity tab (#1075) · v6 +bottom dock · v7 Schedule→rail surface again
+      version: 8, // …v6 +bottom dock · v7 Schedule→rail surface again · v8 Activity→utility widget
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).
