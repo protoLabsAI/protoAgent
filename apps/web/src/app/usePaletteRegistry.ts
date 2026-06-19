@@ -1,21 +1,19 @@
 // ADR 0057 — the command-palette adapter. Feeds the DS palette registry from the
-// console's existing sources: every resolvable View becomes a "go to" command via
-// `useUI().setSurface(id)`, plus deep-link actions into sub-tabbed surfaces.
+// console's existing sources, organized to be command-driven rather than a flat list of
+// places. The root view reads top-to-bottom as: Agents (chat) → Plugins (each plugin's
+// views) → Commands. The built-in surfaces are NOT dumped at the root — an `Open…` command
+// morphs into an `Open ▸` submorph (a self-contained command list) so you don't see every
+// surface until you ask for one. Deep-link actions ride in the Commands group too.
 //
-// Step 3a (inline plugin views): a plugin view that opts in (`views[].palette:
-// "inline"`) is registered as a DS `pluginView()` — its command morphs the palette
-// body into the plugin's own iframe (themed/authed via the same handshake) instead
-// of navigating to its rail. (Plugin-declared `commands:` + dispatch are step 3b.)
+// Inline plugin views (a plugin view that opts in via `views[].palette: "inline"`) are
+// registered as DS `pluginView()`s — their command morphs the palette body into the
+// plugin's own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
-import { createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
-import type { Command, PaletteRegistry, PaletteSource, PaletteView } from "@protolabsai/ui/command-palette";
+import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
+import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
-import type { View, ViewKind } from "../lib/viewRegistry";
-
-const SURFACES: PaletteSource = { id: "surfaces", label: "Surfaces" };
-const ACTIONS: PaletteSource = { id: "actions", label: "Actions" };
-const AGENTS: PaletteSource = { id: "agents", label: "Agents" };
+import type { View } from "../lib/viewRegistry";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -24,13 +22,6 @@ export type PaletteChatConfig = {
   name: string;
   icon?: ReactNode;
   view: PaletteView;
-};
-
-const GROUP: Record<ViewKind, string> = {
-  surface: "Surfaces",
-  session: "Sessions",
-  plugin: "Plugins",
-  ext: "Surfaces",
 };
 
 /** A plugin view opted into inline morphing (`views[].palette: "inline"`). Carries
@@ -118,7 +109,7 @@ function deepLinkCommands(): Command[] {
   const link = (id: string, label: string, keywords: string[], intent: NavIntent): Command => ({
     id,
     label,
-    group: "Jump to",
+    group: "Commands",
     keywords,
     run: (c) => {
       navigate(intent);
@@ -162,14 +153,30 @@ export function usePaletteRegistry(
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
 
+  // Built-in surfaces (core + fork/ext) live behind `Open ▸`; plugin views are their own
+  // root section. A `session` view (none today) would ride with the built-ins.
+  const surfaceViews = views.filter((v) => v.kind !== "plugin");
+  const pluginViewsList = views.filter((v) => v.kind === "plugin");
+
   // Signatures key the re-register effects on the *content* (the array identity
   // changes every render; the ids/urls don't).
   const navSig = views.map((v) => `${v.id} ${v.title}`).join("|");
   const inlineSig = inlineViews.map((v) => `${v.id} ${v.url} ${v.title}`).join("|");
 
-  // Views: inline plugin morph targets + the chat view. (View order doesn't affect the
-  // command-list order.)
+  // Views the palette can morph into: inline plugin iframes, the chat view, and the
+  // `Open ▸` submorph (a self-contained command list of the built-in surfaces, so the root
+  // stays a short command list — you don't see every surface until you enter Open).
   useEffect(() => {
+    const openSurfaceCommands: Command[] = surfaceViews.map((v) => ({
+      id: `open:${v.id}`,
+      label: v.title,
+      icon: v.icon,
+      keywords: ["open", "go", "surface", v.kind],
+      run: (c) => {
+        navigate({ kind: "view", id: v.id });
+        c.close();
+      },
+    }));
     const vs: PaletteView[] = inlineViews.map((v) =>
       pluginView({
         id: v.id,
@@ -182,28 +189,44 @@ export function usePaletteRegistry(
       }),
     );
     if (chat) vs.push(chat.view);
-    if (vs.length === 0) return;
+    vs.push({
+      ...commandsView({ commands: openSurfaceCommands, placeholder: "Open a surface…" }),
+      id: "open",
+      title: "Open",
+    });
     return registry.registerViews(vs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inlineSig, chat, registry]);
+  }, [navSig, inlineSig, chat, registry]);
 
-  // Commands, registered TOGETHER in a fixed order so SURFACES stay at the TOP of the
-  // list even when the nav set re-registers as plugins load (re-registering a command
-  // group re-appends it to the end — so registering them separately would sink the nav
-  // group below deep-links/chat). Order: surfaces → deep-links → chat.
+  // Root commands, registered in DISPLAY order (the list renders groups in registration
+  // order). Agents → Plugins → Commands. Re-registered atomically when the view set
+  // changes (plugins load), so the order never drifts.
   useEffect(() => {
-    const nav: Command[] = views.map((v) => {
+    const offChat = chat
+      ? registry.registerCommands([
+          {
+            id: "chat",
+            label: `Chat with ${chat.name}`,
+            hint: "ask the agent",
+            icon: chat.icon,
+            group: "Agents",
+            keywords: ["chat", "ask", "talk", "agent"],
+            run: (c) => c.enter("chat"),
+          },
+        ])
+      : undefined;
+    // Each plugin's views: inline ones morph IN PLACE (also in the launcher window); a
+    // rail view navigates — routed through `navigate()` so the launcher hands it off to
+    // the main window instead of mutating its own (shell-less) store.
+    const pluginCommands: Command[] = pluginViewsList.map((v) => {
       const inline = inlineIds.has(v.id);
       return {
         id: `nav:${v.id}`,
         label: v.title,
         hint: inline ? "open here" : "go to",
         icon: v.icon,
-        group: GROUP[v.kind],
-        keywords: ["go", "open", v.kind],
-        // Inline plugin views morph IN PLACE (also in the launcher window); a plain
-        // surface navigates — routed through `navigate()` so the launcher can hand it
-        // off to the main window instead of mutating its own (shell-less) store.
+        group: "Plugins",
+        keywords: ["plugin", "open", v.kind],
         run: inline
           ? (c) => c.enter(v.id)
           : (c) => {
@@ -212,28 +235,21 @@ export function usePaletteRegistry(
             },
       };
     });
-    const offNav = registry.registerCommands(nav, { source: SURFACES });
-    const offLinks = registry.registerCommands(deepLinkCommands(), { source: ACTIONS });
-    const offChat = chat
-      ? registry.registerCommands(
-          [
-            {
-              id: "chat",
-              label: `Chat with ${chat.name}`,
-              hint: "ask the agent",
-              icon: chat.icon,
-              group: "Agents",
-              keywords: ["chat", "ask", "talk", "agent"],
-              run: (c) => c.enter("chat"),
-            },
-          ],
-          { source: AGENTS },
-        )
-      : undefined;
+    const offPlugins = pluginCommands.length ? registry.registerCommands(pluginCommands) : undefined;
+    // Commands group: `Open ▸` (morphs to the built-in surfaces) + the deep-link actions.
+    const openCommand: Command = {
+      id: "open",
+      label: "Open…",
+      hint: "surface",
+      group: "Commands",
+      keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
+      run: (c) => c.enter("open"),
+    };
+    const offCommands = registry.registerCommands([openCommand, ...deepLinkCommands()]);
     return () => {
-      offNav();
-      offLinks();
       offChat?.();
+      offPlugins?.();
+      offCommands();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSig, inlineSig, chat, registry]);
