@@ -10,8 +10,7 @@ import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
-import { RefreshButton } from "../app/ui-kit";
-import { PanelHeader } from "@protolabsai/ui/navigation";
+import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { onServerEvent } from "../lib/events";
 import { inboxQuery, queryKeys } from "../lib/queries";
@@ -52,15 +51,10 @@ function InboxBody({
     onMutate: (id) => onDismiss(id),
   });
 
-  return (
-    <>
-      <PanelHeader
-        compact
-        title="Inbox"
-        kicker={`${items.length} pending`}
-        actions={<RefreshButton onClick={() => void refetch()} busy={isFetching} />}
-      />
+  // The reload lives in the dialog header (UtilityWidget) — no second panel header here.
+  useUtilityHeaderReload(refetch, isFetching);
 
+  return (
       <div className="inbox-list">
         {items.length === 0 ? (
           <Empty
@@ -92,7 +86,6 @@ function InboxBody({
           </div>
         ))}
       </div>
-    </>
   );
 }
 
@@ -101,7 +94,7 @@ export function InboxPanel() {
   // the live-event refetch cycle (the inner body remounts on re-suspend).
   const [dismissed, setDismissed] = useState<Set<number>>(() => new Set());
   return (
-    <StagePanel label="inbox" variant="side" className="inbox-panel">
+    <StagePanel label="inbox" variant="side" className="inbox-panel util-dialog-fill">
       <InboxBody
         dismissed={dismissed}
         onDismiss={(id) => setDismissed((s) => new Set(s).add(id))}

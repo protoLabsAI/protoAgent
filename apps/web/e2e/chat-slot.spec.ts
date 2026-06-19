@@ -54,7 +54,7 @@ test("a slot claimant stays mounted across surface switches (#613 contract)", as
 
   // Switch away — a NORMAL plugin view would unmount (plugin-views.spec asserts
   // count 0); the slot claimant must stay in the DOM, merely hidden.
-  await page.locator(".pl-rail").getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Knowledge", exact: true }).click();
   await expect(slotFrame).toHaveCount(1);
   await expect(slotFrame).toBeHidden();
 

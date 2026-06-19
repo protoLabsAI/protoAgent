@@ -6,8 +6,13 @@ import { expect, test } from "@playwright/test";
 
 async function openScheduleModal(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  // Schedule is a top-level rail surface again.
-  await page.locator(".pl-rail").getByRole("button", { name: "Schedule", exact: true }).click();
+  // Schedule folded into the Work hub (2026-06): the right-rail Work surface, Schedule tab.
+  // Work is the default-active right panel; in the narrow panel the DS responsive Tabs
+  // collapse the role="tab" strip into a native <select.pl-tabs__select>.
+  const workBtn = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
+  const cls = (await workBtn.getAttribute("class")) ?? "";
+  if (!cls.includes("--active")) await workBtn.click();
+  await page.locator(".pl-tabs__select").first().selectOption("schedule");
   await page.getByTestId("schedule-new").click();
   await expect(page.getByTestId("schedule-modal")).toBeVisible();
 }

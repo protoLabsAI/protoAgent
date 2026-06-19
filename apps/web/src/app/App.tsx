@@ -18,7 +18,6 @@ import {
   PanelRight,
   Plus,
   Puzzle,
-  Store,
   Save,
   Settings2,
   Sparkles,
@@ -86,7 +85,6 @@ import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
 import {
   useUI,
-  type PluginsTab,
   type RightPanel,
   type Surface,
 } from "../state/uiStore";
@@ -101,16 +99,12 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
-import { Tabs } from "@protolabsai/ui/navigation";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StatusPill } from "./StatusPill";
-import { GoalsPanel } from "./GoalsPanel";
-import { BeadsPanel } from "./BeadsPanel";
-import { SchedulePanel } from "../schedule/SchedulePanel";
-import { PluginsSurface } from "../plugins/PluginsSurface";
+import { WorkPanel } from "./WorkPanel";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
@@ -216,14 +210,6 @@ function useLocalStorageState(key: string, fallback: string) {
   return [value, setValue] as const;
 }
 
-// Adapt the app's sub-tab shape (Lucide icon *component* + optional badge) to the
-// DS `Tabs` `TabItem` (icon as a rendered ReactNode) — so call sites keep passing
-// `icon: SomeLucideIcon` while the strip renders through @protolabsai/ui.
-function toTab(t: { id: string; label: string; icon?: LucideIcon; badge?: ReactNode }) {
-  const Icon = t.icon;
-  return { id: t.id, label: t.label, icon: Icon ? <Icon size={15} /> : undefined, badge: t.badge };
-}
-
 export function App() {
   // Navigation/layout state lives in the persisted UI store (ADR 0035 D5) — a refresh
   // restores the active surface, sub-tabs, and right-panel width/collapse.
@@ -232,8 +218,6 @@ export function App() {
   // Background-streaming indicator for the Chat rail (narrow selector → only
   // re-renders when the boolean flips, not per token).
   const chatStreaming = useAnyChatStreaming();
-  const pluginsTab = useUI((s) => s.pluginsTab);
-  const setPluginsTab = useUI((s) => s.setPluginsTab);
   const setFleetStartNew = useUI((s) => s.setFleetStartNew);
   const rightPanel = useUI((s) => s.rightPanel);
   const setRightPanel = useUI((s) => s.setRightPanel);
@@ -551,23 +535,10 @@ export function App() {
 
   function renderSurface(id: string): ReactNode {
     switch (id) {
-      // Schedule is its own rail surface again (un-fold from #1075): cron triggers, but
-      // timed work earns a top-level rail rather than a tab buried in Activity.
-      case "schedule":
-        return <SchedulePanel />;
-      // The Agent surface folded into Settings ▸ Workspace (ADR 0048 S-C). Its tabs
-      // (Identity/Settings/Tools/MCP/Subagents/Skills/Middleware) are now Workspace
-      // sections in SettingsSurface.
-      case "plugins":
-        return (
-          <>
-            <Tabs responsive active={pluginsTab} onSelect={(t) => setPluginsTab(t as PluginsTab)} items={[
-              { id: "local", label: "Installed", icon: Boxes },
-              { id: "market", label: "Discover", icon: Store },
-            ].map(toTab)} />
-            <PluginsSurface tab={pluginsTab} />
-          </>
-        );
+      // The Work hub (2026-06) folds Goals + Tasks(Beads) + Schedule into one right-rail
+      // surface (Overview + tabs). It owns those three panels now — no standalone surfaces.
+      case "work":
+        return <WorkPanel confirm={setConfirmState} />;
       // Knowledge is the searchable Store; its Memory settings folded into
       // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
@@ -578,11 +549,6 @@ export function App() {
         return <SettingsSurface only="workspace" />;
       // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
-      case "beads":
-        return <BeadsPanel confirm={setConfirmState} />;
-      case "goals":
-        return <GoalsPanel />;
-      // "schedule" folded into the Activity surface as a 3rd tab (#1075) — no rail surface.
       default: {
         // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
         // Skip a requiresPlugin surface when its plugin is off (e.g. a stale saved order).

@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-// Console Plugins section — install a plugin from a git URL in the dedicated
-// Plugins rail section; the installed list round-trips install → uninstall.
+// Console Plugins manager (Settings ▸ Plugins, 2026-06) — install a plugin from a git
+// URL; the installed list round-trips install → uninstall.
 
 async function openPluginsPanel(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
   // Install-from-URL is the advanced action under Installed (ADR 0059 D4) — expand it.
   await page.getByRole("button", { name: "Install from a git URL" }).click();
   await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();

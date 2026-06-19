@@ -1,0 +1,83 @@
+/* Work hub Overview (2026-06) — three roll-up cards (Goals · Tasks · Next runs) that each
+   click through to their tab. The Goals/Tasks/Schedule tabs reuse the standalone panels, so
+   they bring their own styles; this is only the Overview dashboard. */
+.work-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.work-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.work-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.work-card-head:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.03));
+}
+.work-card-title {
+  font-weight: 600;
+}
+.work-card-count {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.work-card-hint {
+  color: var(--fg-muted);
+}
+.work-card-go {
+  color: var(--fg-muted);
+  flex: none;
+}
+
+.work-card-body {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.work-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.work-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-row-meta {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.work-card-empty {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
