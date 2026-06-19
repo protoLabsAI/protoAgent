@@ -22,3 +22,9 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | Page | Contents |
 |---|---|
 | [Starter tools](/reference/starter-tools) | Shipped LangChain tools and their signatures |
+
+## Console & UI
+
+| Page | Contents |
+|---|---|
+| [Operator REST API](/reference/operator-api) | The console's `/api/*` control-plane endpoints, grouped by area |
