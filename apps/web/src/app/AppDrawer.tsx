@@ -81,7 +81,7 @@ export function AppDrawer({
             <p className="app-drawer-label">Settings</p>
             <button type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal())}>
               <span className="app-drawer-ico"><Settings2 size={16} /></span>
-              Global settings
+              Settings
             </button>
             <button type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal("telemetry"))}>
               <span className="app-drawer-ico"><BarChart3 size={16} /></span>

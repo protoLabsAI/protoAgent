@@ -67,7 +67,7 @@ export function openView(id: string) {
 export type NavIntent =
   | { kind: "view"; id: string }
   | { kind: "plugins"; tab: "local" | "market" }
-  | { kind: "global"; section: "fleet" | "telemetry" | "commons" };
+  | { kind: "global"; section?: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -78,11 +78,10 @@ export function applyNavIntent(intent: NavIntent) {
       openView(intent.id);
       break;
     case "plugins":
-      // Plugins is a Settings section now (2026-06), not a standalone rail surface —
-      // open Settings ▸ Plugins (the rail Settings surface is Workspace-only) on the tab.
+      // Plugins is a Settings section; Settings is the dialog now (2026-06). Open it on the
+      // Plugins section with the right inner tab (Installed/Discover).
       ui.setPluginsTab(intent.tab);
-      ui.setSettingsSection("plugins");
-      ui.setSurface("settings");
+      ui.openGlobalSettings("plugins");
       break;
     case "global":
       ui.openGlobalSettings(intent.section);
@@ -131,9 +130,10 @@ function deepLinkCommands(): Command[] {
       kind: "plugins",
       tab: "local",
     }),
-    // Global settings (Fleet/Telemetry/Commons) is the header-drawer overlay now
-    // (2026-06-18 IA pass) — open it deep-linked to the section.
-    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box", "global"], { kind: "global", section: "fleet" }),
+    // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
+    // the drawer, or these ⌘K commands. A bare "Settings" command + Box-section deep-links.
+    link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" }),
+    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" }),
     link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
       kind: "global",
       section: "telemetry",
