@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.54.0",
+    "date": "2026-06-19",
+    "changes": [
+      "Raycast-style global quick launcher (desktop).",
+      "Background agents widget no longer needs a page reload to appear."
+    ]
+  },
+  {
     "version": "v0.53.0",
     "date": "2026-06-19",
     "changes": [
