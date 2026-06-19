@@ -1717,6 +1717,10 @@ textarea {
 .plugin-view-body { position: relative; flex: 1; min-height: 0; }
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--bg); display: block; }
 .plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--fg-muted); font-size: 13px; }
+/* A plugin view hosted in a utility-widget DIALOG (vs the stage): give it a fixed height
+   so the iframe has room to fill (the stage normally supplies that via its flex column). */
+.plugin-widget-dialog { display: flex; flex-direction: column; height: 70vh; min-height: 0; }
+.plugin-widget-dialog > .plugin-view { flex: 1; min-height: 0; }
 
 /* Plugins panel (ADR 0027, .plugin-install-* / .plugin-list / .plugin-row-main / -title /
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint

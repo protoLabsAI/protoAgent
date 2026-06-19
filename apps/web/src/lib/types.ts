@@ -109,6 +109,11 @@ export type PluginView = {
   // editor) vs the full rail panel — so a plugin can ship separate panel/palette views.
   // Passes through `_parse_views` verbatim (it keeps the whole view dict) — manifest-only.
   palette?: "inline" | { path?: string };
+  // Render this view as a UTILITY-BAR WIDGET (2026-06 IA pass): a bottom-left pill that
+  // shows a hover info popover and opens the view's iframe in a DIALOG on click, instead of
+  // adding a rail surface. `true` uses the label as the hover info; `{ info }` sets custom
+  // hover text. Like `palette`, it rides through `_parse_views` verbatim — manifest-only.
+  utility?: boolean | { info?: string };
   // Owning plugin's load state, stamped on by App so the view host can surface a real,
   // actionable error (loaded=false ⇒ the view route isn't serving — missing env / bad
   // deps / mount race; `pluginError` is the loader's exact diagnostic) instead of a

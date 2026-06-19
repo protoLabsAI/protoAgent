@@ -114,3 +114,21 @@ test("a plugin view with placement:right becomes a right-sidebar panel", async (
   await expect(frame).toBeVisible();
   await expect(frame).toHaveAttribute("src", /\/plugins\/boardy\/scratch/);
 });
+
+test("a plugin view with utility:{...} is a bottom-left widget (hover info + click dialog)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // It's a pill in the bottom-left widgets cluster — NOT a left-rail surface.
+  const pill = page.getByTestId("util-widget-snap");
+  await expect(pill).toBeVisible();
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Boardy Snapshot" })).toHaveCount(0);
+
+  // The hover info popover carries the manifest's `utility.info`.
+  await expect(page.locator(".pl-tip-wrap", { has: pill }).getByRole("tooltip")).toContainText("A quick board snapshot");
+
+  // Click → the plugin opens in a dialog hosting its iframe at the declared path.
+  await pill.click();
+  const dialog = page.getByRole("dialog", { name: "Boardy Snapshot" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".plugin-view-frame")).toHaveAttribute("src", /\/plugins\/boardy\/snap/);
+});

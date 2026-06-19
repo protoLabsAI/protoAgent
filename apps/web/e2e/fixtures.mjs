@@ -54,6 +54,8 @@ export const RUNTIME_STATUS = {
         { id: "stats", label: "Stats", icon: "BarChart3", path: "/plugins/boardy/stats" },
         // A right-rail panel (ADR 0026 placement:"right") — sits with Notes/Beads/Goals.
         { id: "scratch", label: "Scratch", icon: "FileText", path: "/plugins/boardy/scratch", placement: "right" },
+        // A utility-bar widget (2026-06 IA pass): a bottom-left pill → dialog, with hover info.
+        { id: "snap", label: "Boardy Snapshot", icon: "Gauge", path: "/plugins/boardy/snap", utility: { info: "A quick board snapshot" } },
       ],
     },
   ],

@@ -93,6 +93,7 @@ import {
 } from "../state/uiStore";
 import { api, apiUrl, authToken, is401 } from "../lib/api";
 import { PluginView, consoleTheme } from "./PluginView";
+import { UtilityWidget } from "./UtilityWidget";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
 import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
@@ -170,14 +171,14 @@ function lazyLucideIcon(key: string): IconComp {
   }
   return comp;
 }
-function pluginViewIcon(name?: string): ReactNode {
-  if (!name) return <Puzzle size={18} />;
+function pluginViewIcon(name?: string, size = 18): ReactNode {
+  if (!name) return <Puzzle size={size} />;
   const Curated = PLUGIN_VIEW_ICONS[name];
-  if (Curated) return <Curated size={18} />;
+  if (Curated) return <Curated size={size} />;
   const Lazy = lazyLucideIcon(toPascalCase(name));
   return (
-    <Suspense fallback={<Puzzle size={18} />}>
-      <Lazy size={18} />
+    <Suspense fallback={<Puzzle size={size} />}>
+      <Lazy size={size} />
     </Suspense>
   );
 }
@@ -321,7 +322,10 @@ export function App() {
   // renders under the core "chat" rail id, so it's excluded from the dynamic rail
   // list below. First enabled claimant wins (deterministic: plugin load order).
   const chatSlotView = allDeclaredViews.find((v) => v.slot === "chat");
-  const allPluginViews = allDeclaredViews.filter((v) => v.slot !== "chat");
+  // A view with `utility` is a bottom-left utility-bar widget (a pill → dialog), NOT a rail
+  // surface — so it's excluded from the rail list, like the chat-slot claimant.
+  const utilityWidgetViews = allDeclaredViews.filter((v) => v.utility);
+  const allPluginViews = allDeclaredViews.filter((v) => v.slot !== "chat" && !v.utility);
   // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
   const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
 
@@ -911,6 +915,23 @@ export function App() {
                     the inbox — each a pill with a hover info popover + a click dialog. */}
                 <BackgroundJobs />
                 <InboxWidget />
+                {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens
+                    the plugin's iframe in a dialog, with hover info. Reuses PluginView. */}
+                {utilityWidgetViews.map((v) => (
+                  <UtilityWidget
+                    key={v.key}
+                    testId={`util-widget-${v.id}`}
+                    icon={pluginViewIcon(v.icon, 14)}
+                    label={v.label}
+                    info={typeof v.utility === "object" && v.utility?.info ? v.utility.info : `Open ${v.label}`}
+                    dialogTitle={v.label}
+                    dialogWidth="min(900px, 96vw)"
+                  >
+                    <div className="plugin-widget-dialog">
+                      <PluginView view={v} />
+                    </div>
+                  </UtilityWidget>
+                ))}
               </>
             }
             end={
