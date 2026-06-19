@@ -59,11 +59,12 @@ test("Work → Tasks tab lists beads issues (query-backed)", async ({ page }) =>
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
 
-test("workspace settings: identity lands, then tools and MCP sections", async ({ page }) => {
-  // The agent makeup folded into Settings ▸ Workspace (ADR 0048 S-C); the rail
-  // Settings surface is Workspace-direct now (Global moved to the header drawer).
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible(); // landing section
+test("settings dialog: Identity, then Tools and MCP sections", async ({ page }) => {
+  // Settings is the consolidated dialog now (2026-06), opened from the utility-bar pill
+  // (no longer a rail surface). Navigate the Agent group's Identity / Tools / MCP sections.
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Identity", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
   await expect(page.getByTestId("identity-name")).toBeVisible();
 
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Tools", exact: true }).click();
@@ -74,8 +75,8 @@ test("workspace settings: identity lands, then tools and MCP sections", async ({
 });
 
 test("plugins section: Installed / Discover (config + advanced install folded in)", async ({ page }) => {
-  // Plugins is a Settings section now (2026-06), not a standalone rail surface.
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  // Plugins is a Settings dialog section now (2026-06), opened from the utility-bar pill.
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
 
   // Two sections only now (ADR 0059 D4) — no separate "Install URL" tab.

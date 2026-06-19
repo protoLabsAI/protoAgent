@@ -78,7 +78,6 @@ import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
 import { useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
-import { SettingsSurface } from "../settings/SettingsSurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
@@ -543,11 +542,9 @@ export function App() {
       // Settings ▸ Workspace ▸ Memory (ADR 0048 S-C).
       case "knowledge":
         return <KnowledgeStore onError={setError} />;
-      case "settings":
-        // The rail Settings surface is Workspace-only now (2026-06-18 IA pass) — no
-        // scope toggle. Global settings live in the header drawer's overlay instead.
-        return <SettingsSurface only="workspace" />;
-      // Notes is now the first-party `notes` plugin (ADR 0034 S4) — rendered via the default
+      // Settings is no longer a rail surface (2026-06 consolidation) — it's a utility-bar
+      // pill opening the settings dialog (SettingsOverlay). Notes is the first-party `notes`
+      // plugin (ADR 0034 S4) — rendered via the default
       // plugin-view case below, not a native surface.
       default: {
         // Fork-contributed surface (src/ext seam, ADR 0038 D3) — rendered in-process.
@@ -887,6 +884,19 @@ export function App() {
             // GitHub moved into the header drawer.
             start={
               <>
+                {/* Settings (far left, 2026-06 consolidation) — opens the one settings dialog
+                    (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer + ⌘K
+                    deep-links can open it too via the store flag (openGlobalSettings). */}
+                <button
+                  type="button"
+                  className="util-btn"
+                  aria-label="Settings"
+                  title="Settings"
+                  data-testid="settings-widget"
+                  onClick={() => openGlobalSettings()}
+                >
+                  <Settings2 size={14} />
+                </button>
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3), the
                     inbox, and the read-only Activity feed — each a pill with a hover info
                     popover + a click dialog. */}

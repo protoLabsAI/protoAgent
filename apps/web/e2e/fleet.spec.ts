@@ -19,10 +19,10 @@ test.beforeEach(async ({ page }, testInfo) => {
 });
 
 async function openFleet(page) {
-  // Fleet lives under the Global settings overlay now, opened from the header
-  // hamburger → app drawer → Global settings (folded in from the old Box rail surface).
+  // Fleet lives in the Box group of the consolidated settings dialog (host console), opened
+  // from the header hamburger → app drawer → Settings (folded in from the old Box rail surface).
   await page.getByTestId("header-menu").click();
-  await page.getByTestId("app-drawer").getByRole("button", { name: "Global settings", exact: true }).click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true }).click();
 }
 
@@ -31,7 +31,7 @@ async function openAgents(page) {
   await openFleet(page);
 }
 
-// Fleet lives in the Global settings overlay (a modal) now, so its backdrop intercepts
+// Fleet lives in the consolidated settings dialog (a modal) now, so its backdrop intercepts
 // the topbar switcher — close it before interacting with the top bar.
 async function closeOverlay(page) {
   await page.locator(".settings-overlay .pl-dialog__close").click();
@@ -170,8 +170,10 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   await expect(page).toHaveURL(/\/app\/agent\/remy-re01\//);
   await expect(page.getByTestId("fleet-switcher")).toContainText("remy");
 
-  // Unregister from the fleet manager (the remote agent itself is untouched).
-  await openFleet(page);
+  // Unregister from the fleet manager (the remote agent itself is untouched). Fleet is a
+  // host-console-only Box section now (2026-06 settings consolidation), so return to the host
+  // console first — the member window we navigated into doesn't carry the Box group.
+  await openAgents(page);
   await page.locator(".fleet-row", { hasText: "remy" })
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);

@@ -12,7 +12,7 @@ import type { ReactNode } from "react";
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
-import { agentHref, api } from "../lib/api";
+import { agentHref, api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
@@ -152,8 +152,30 @@ export function SettingsCategory({
     return labels;
   }, [groups, dirty]);
 
+  // Which layer a Save lands in (ADR 0047). On the HOST console a host-scoped field sets the
+  // box default (host layer) while an agent-scoped field is the host agent's own (agent leaf)
+  // — so split the write by scope. On a fleet member everything overrides into that agent's
+  // leaf. (`hostLayer` is the legacy host-defaults panel, kept for embedded/plugin callers.)
+  const onHost = isHostConsole();
   const save = useMutation({
-    mutationFn: () => api.saveSettings(dirty, hostLayer ? "host" : "agent"),
+    mutationFn: async () => {
+      if (hostLayer) return api.saveSettings(dirty, "host");
+      if (!onHost) return api.saveSettings(dirty, "agent");
+      const scopeOf = (k: string) =>
+        groups.flatMap((g) => g.fields).find((f) => f.key === k)?.scope ?? "agent";
+      const hostU: Record<string, unknown> = {};
+      const agentU: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(dirty)) (scopeOf(k) === "host" ? hostU : agentU)[k] = v;
+      const rs = await Promise.all([
+        ...(Object.keys(hostU).length ? [api.saveSettings(hostU, "host")] : []),
+        ...(Object.keys(agentU).length ? [api.saveSettings(agentU, "agent")] : []),
+      ]);
+      return {
+        ok: rs.every((r) => r.ok),
+        messages: rs.flatMap((r) => r.messages),
+        restart_required: rs.flatMap((r) => r.restart_required),
+      };
+    },
     onMutate: () => setStatus("saving…"),
     onSuccess: (r) => {
       if (!r.ok) { setStatus(`save failed: ${r.messages.join(" · ")}`); return; }
@@ -221,6 +243,7 @@ export function SettingsCategory({
           dirty={field.key in dirty}
           value={field.key in dirty ? dirty[field.key] : field.value}
           showInheritance={!hostLayer}
+          onHost={onHost}
           onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
           onReset={() => reset.mutate([field.key])}
           resetting={reset.isPending}
@@ -341,8 +364,15 @@ export function SettingsCategory({
 //   source=="default"                 → inherited from default (App dataclass)
 //   source=="agent" && scope=="host"  → overridden here (offer reset-to-inherited)
 //   source=="agent" && scope=="agent" → a plain agent setting (no badge)
-function inheritance(field: SettingsField): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
-  if (field.source === "host") return { label: "inherited from Global", status: "neutral", overridden: false };
+function inheritance(field: SettingsField, onHost: boolean): { label: string; status: "neutral" | "info" | "warning"; overridden: boolean } | null {
+  if (onHost) {
+    // On the host console you ARE the box: a host-scoped field is the shared default every
+    // agent inherits (not "inherited from" anything); agent-scoped fields are the host's own.
+    if (field.scope === "host") return { label: "box default", status: "info", overridden: false };
+    return null;
+  }
+  // A fleet member (non-host): the ADR 0047 inheritance view.
+  if (field.source === "host") return { label: "inherited from host", status: "neutral", overridden: false };
   if (field.source === "default") return { label: "inherited from default", status: "neutral", overridden: false };
   if (field.source === "agent" && field.scope === "host") return { label: "overridden here", status: "warning", overridden: true };
   return null; // source=="agent" && scope=="agent" — just an agent setting.
@@ -354,6 +384,7 @@ function SettingRow({
   dirty,
   onChange,
   showInheritance = true,
+  onHost = false,
   onReset,
   resetting = false,
 }: {
@@ -362,10 +393,11 @@ function SettingRow({
   dirty: boolean;
   onChange: (value: unknown) => void;
   showInheritance?: boolean;
+  onHost?: boolean;
   onReset?: () => void;
   resetting?: boolean;
 }) {
-  const inherit = showInheritance ? inheritance(field) : null;
+  const inherit = showInheritance ? inheritance(field, onHost) : null;
   return (
     <div className={`setting-row${dirty ? " dirty" : ""}`} data-key={field.key}>
       <div className="setting-meta">
@@ -391,8 +423,8 @@ function SettingRow({
         ) : null}
         {/* Editing a still-inherited box-shared field in the Workspace view writes a
             per-agent leaf override (not the box default) — make that effect explicit. */}
-        {showInheritance && dirty && field.scope === "host" && field.source !== "agent" ? (
-          <p className="setting-override-note">Saving overrides the Global default for this agent only.</p>
+        {showInheritance && !onHost && dirty && field.scope === "host" && field.source !== "agent" ? (
+          <p className="setting-override-note">Saving overrides the box default for this agent only.</p>
         ) : null}
       </div>
       <div className="setting-control">

@@ -2,7 +2,7 @@
 // desktop quick-launcher (ADR 0057) build their command lists from the SAME source —
 // add a core surface here and it shows up in both the rail and ⌘K / the launcher.
 import type { ReactNode } from "react";
-import { BookMarked, LayoutDashboard, MessageSquare, Settings2 } from "lucide-react";
+import { BookMarked, LayoutDashboard, MessageSquare } from "lucide-react";
 
 export type CoreSurface = { id: string; label: string; icon: ReactNode };
 
@@ -15,5 +15,6 @@ export const CORE_SURFACES: CoreSurface[] = [
   // widget; "agent" folded into Settings ▸ Workspace; "plugins" into Settings ▸ Plugins.
   { id: "work", label: "Work", icon: <LayoutDashboard size={18} /> },
   { id: "knowledge", label: "Knowledge", icon: <BookMarked size={18} /> },
-  { id: "settings", label: "Settings", icon: <Settings2 size={18} /> },
+  // Settings moved off the rail into a utility-bar pill (2026-06 consolidation) → the
+  // settings dialog. It's still a valid ⌘K "go to" via the global deep-links.
 ];

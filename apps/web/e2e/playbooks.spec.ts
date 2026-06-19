@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 
 test("Agent → Skills lists pinned + learned skills and supports search", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
 
   const surface = page.getByTestId("playbooks-surface");
@@ -36,7 +36,7 @@ test("Agent → Skills lists pinned + learned skills and supports search", async
 
 test("the + button opens the New skill DIALOG, not an inline panel form", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -60,7 +60,7 @@ test("the + button opens the New skill DIALOG, not an inline panel form", async 
 
 test("layered skills show tier badges and promote a private skill to the commons", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();
@@ -80,7 +80,7 @@ test("layered skills show tier badges and promote a private skill to the commons
 
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
   const surface = page.getByTestId("playbooks-surface");
   await expect(surface).toBeVisible();

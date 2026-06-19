@@ -5,14 +5,15 @@ import { expect, test } from "@playwright/test";
 // two-home one-stop-shop is also openable as an overlay from the topbar.
 
 // The header hamburger opens the app drawer (2026-06-18 IA pass): global actions
-// (Global settings, Telemetry) + the Docs/GitHub links. "Global settings" opens the
-// Global-only overlay — Workspace settings live in the rail surface, not here.
-test("the header hamburger opens the app drawer → Global settings overlay", async ({ page }) => {
+// (Settings, Telemetry) + the Docs/GitHub links. "Settings" opens the one consolidated
+// settings dialog (the same dialog the utility-bar pill opens — Global is no longer a
+// separate home).
+test("the header hamburger opens the app drawer → Settings dialog", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
   const drawer = page.getByTestId("app-drawer");
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByRole("button", { name: "Global settings", exact: true })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "Docs" })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "GitHub" })).toBeVisible();
@@ -22,10 +23,10 @@ test("the header hamburger opens the app drawer → Global settings overlay", as
   await expect(built).toBeVisible();
   await expect(built).toHaveAttribute("href", "https://protolabs.studio");
 
-  await drawer.getByRole("button", { name: "Global settings", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Global settings" });
+  await drawer.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  // Global-only — no scope toggle inside (the two-home toggle is gone).
+  // One consolidated surface — no scope toggle inside (the two-home toggle is gone).
   await expect(dialog.locator(".pl-tabs--segmented")).toHaveCount(0);
 });
 

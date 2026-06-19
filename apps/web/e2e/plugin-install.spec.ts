@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 
 async function openPluginsPanel(page) {
   await page.goto("/app/", { waitUntil: "load" });
-  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
   // Install-from-URL is the advanced action under Installed (ADR 0059 D4) — expand it.
   await page.getByRole("button", { name: "Install from a git URL" }).click();

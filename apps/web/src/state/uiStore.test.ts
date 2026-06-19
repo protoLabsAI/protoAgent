@@ -28,9 +28,9 @@ describe("migrateUiState", () => {
   // persisted railOrder rather than leaving a dead rail id with no surface metadata.
   it("prunes the obsolete 'box' rail surface", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "knowledge", "box", "settings"], right: ["work"] },
+      railOrder: { left: ["chat", "knowledge", "box"], right: ["work"] },
     }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
     expect(out.railOrder.left).not.toContain("box");
     expect(out.railOrder.right).toEqual(["work"]);
   });
@@ -53,50 +53,41 @@ describe("migrateUiState", () => {
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
-  // v9 (2026-06-18 IA pass): Workspace settings became a rail surface; re-add "settings"
-  // to a persisted layout that lacks it so existing users don't lose the Settings icon.
-  it("restores the 'settings' rail surface to a layout that lacks it", () => {
-    const out = migrateUiState({
-      railOrder: { left: ["chat", "knowledge"], right: ["work"], bottom: [] },
-    }) as { railOrder: { left: string[] } };
-    // No "plugins" anchor on the left rail → settings appended to the end of it.
-    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
-  });
-
-  it("re-adds 'settings' where 'plugins' was, then v10 prunes 'plugins'", () => {
-    const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "plugins", "knowledge"], right: ["beads"], bottom: [] },
-    }) as { railOrder: { left: string[] } };
-    // v9 inserts settings after the (legacy) plugins anchor; v10 removes plugins, v11 schedule.
-    expect(out.railOrder.left).toEqual(["chat", "settings", "knowledge"]);
-  });
+  // (v9 "re-add settings to the rail" is gone: Settings moved to a utility-bar pill in v12,
+  // which prunes the "settings" rail id — re-adding it would be undone. See the v12 test.)
 
   // v10 (2026-06): the Plugins manager moved into Settings ▸ Plugins. Prune "plugins" from
   // every dock + the quick-bar so it doesn't linger as a dead rail id.
   it("prunes 'plugins' from the rails and quick-bar", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "plugins", "settings"], right: ["plugins", "beads"], bottom: ["plugins"] },
+      railOrder: { left: ["chat", "plugins", "knowledge"], right: ["plugins", "work"], bottom: ["plugins"] },
       quickBar: ["chat", "plugins", "knowledge"],
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
     expect(out.railOrder.left).not.toContain("plugins");
     expect(out.railOrder.right).not.toContain("plugins");
     expect(out.railOrder.bottom).not.toContain("plugins");
-    expect(out.railOrder.left).toEqual(["chat", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
-  it("keeps a user-placed 'settings' where it is", () => {
+  // v12 (2026-06): Settings moved off the rail into a utility-bar pill. Prune "settings" from
+  // every dock + the quick-bar so it doesn't linger as a dead rail id.
+  it("prunes 'settings' from the rails and quick-bar", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "knowledge"], right: ["settings", "work"], bottom: [] },
-    }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.right).toContain("settings");
+      railOrder: { left: ["chat", "settings", "knowledge"], right: ["settings", "work"], bottom: ["settings"] },
+      quickBar: ["chat", "settings", "knowledge"],
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
     expect(out.railOrder.left).not.toContain("settings");
+    expect(out.railOrder.right).not.toContain("settings");
+    expect(out.railOrder.bottom).not.toContain("settings");
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
+    expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
   // v11 (2026-06): Beads + Goals + Schedule folded into the unified "work" hub.
   it("folds beads/goals/schedule into the 'work' hub", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "knowledge", "settings"], right: ["beads", "goals"], bottom: [] },
+      railOrder: { left: ["chat", "schedule", "knowledge"], right: ["beads", "goals"], bottom: [] },
       rightPanel: "beads",
       quickBar: ["chat", "beads", "knowledge"],
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; rightPanel: string; quickBar: string[] };
@@ -105,7 +96,7 @@ describe("migrateUiState", () => {
       expect(out.railOrder.right).not.toContain(id);
       expect(out.quickBar).not.toContain(id);
     }
-    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
     expect(out.railOrder.right).toEqual(["work"]);
     expect(out.rightPanel).toBe("work");
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
@@ -124,10 +115,10 @@ describe("migrateUiState", () => {
   it("adds the bottom dock to a pre-v6 railOrder", () => {
     // (schedule already present so the v7 inject is a no-op — keep this test on the dock)
     const out = migrateUiState({
-      railOrder: { left: ["chat", "knowledge", "settings"], right: ["work"] },
+      railOrder: { left: ["chat", "knowledge"], right: ["work"] },
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] } };
     expect(out.railOrder.bottom).toEqual([]);
-    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
   });
 
   it("does not mutate the input object", () => {

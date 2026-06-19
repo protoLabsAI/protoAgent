@@ -1,9 +1,9 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
-import { PanelHeader, SideNav, Tabs } from "@protolabsai/ui/navigation";
-import { Button } from "@protolabsai/ui/primitives";
+import { SideNav, Tabs } from "@protolabsai/ui/navigation";
+import { Alert } from "@protolabsai/ui/data";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
 import { McpPanel } from "../app/McpPanel";
@@ -14,48 +14,30 @@ import { isHostConsole } from "../lib/api";
 import { PluginsSurface } from "../plugins/PluginsSurface";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
-import { useUI, type SettingsScope } from "../state/uiStore";
+import { useUI } from "../state/uiStore";
 import { CommonsPanel } from "./CommonsPanel";
 import { DelegatesSection } from "./DelegatesSection";
 import { FleetSurface } from "./FleetSurface";
 import { OverviewPanel } from "./OverviewPanel";
-import { HostConfigLocked, HostDefaultsPanel, SettingsCategoryPanel } from "./SettingsCategory";
+import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
-// Settings IA (ADR 0048 + PR4) — scope is the primary axis. TWO homes, each with its
-// own section sub-nav:
+// Settings IA (ADR 0047/0048 — consolidated 2026-06). There is ONE settings surface: the
+// focused agent's settings. "Global" is no longer a separate home — it's simply this surface
+// when your focused agent is the host (host-scoped fields are the box defaults every agent
+// inherits). The sidenav splits into two labeled groups:
 //
-//   🖥 Global       — box-shared: the host cascade (Overview + Configuration, ADR 0047)
-//                     PLUS the box-level ops — Fleet, Telemetry, Commons (folded back in
-//                     from the old standalone Box rail surface). Set once, every agent
-//                     inherits; per-agent overrides win.
-//   🧩 Workspace    — the focused agent: everything that defines it.
+//   Agent — everything that defines the focused agent. Host-scoped fields here carry an
+//           inheritance badge (ADR 0047): on a fleet member, "inherited from host" + override;
+//           on the host console, "box default" (you're setting what others inherit).
+//   Box   — box-wide ops (Fleet · Telemetry · Shared Skills). Host-console only.
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
-type Home = { id: SettingsScope; label: string; icon: LucideIcon; sections: Section[] };
 
-// Global = box-shared: the host cascade (Overview + the host-scoped Configuration
-// fields, ADR 0047) + the box-level ops Fleet / Telemetry / Commons (folded in here
-// from the former standalone "Box" rail surface). Host config is gated to the host
-// console; a workspace console sees a read-only pointer instead (ADR 0047 §7.7).
-const HOST_SECTIONS: Section[] = [
-  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
-  // The host-scoped FIELDS (model gateway · routing · caching · org + the commons
-  // location) in ONE panel, saving to the box's host-config.yaml (ADR 0047).
-  { id: "config", label: "Configuration", icon: HardDrive, render: () => (isHostConsole() ? <HostDefaultsPanel title="Configuration" /> : <HostConfigLocked />) },
-  // Box-level operations (formerly the standalone Box rail surface).
-  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-  { id: "commons", label: "Shared Skills", icon: Library, render: () => <CommonsPanel /> },
-];
-
-// The Workspace home (ADR 0048 §3.2) — the focused agent, everything that defines it:
-// the makeup panels (Identity/Tools/MCP/Subagents/Skills/Middleware) folded in from the
-// old Agent rail surface + Theme, plus the agent-scoped field settings (Agent/Memory/
-// System/Plugins categories). Host-scoped fields that appear here (e.g. model.name)
-// keep their ADR 0047 "inherited from Host" badge + override. The agent-scoped field
-// panel is "Model & Routing" (not a generic "Settings" item nested under Settings).
-const WORKSPACE_SECTIONS: Section[] = [
+// The focused agent's makeup + field settings. Host-scoped fields (model gateway · routing ·
+// caching · org · telemetry/fleet runtime) appear inline in Model & Routing / Memory / System
+// with their ADR 0047 inheritance badge.
+const AGENT_SECTIONS: Section[] = [
   { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
   // id stays "settings" for persisted-section compat; the label is the un-nested name.
   { id: "settings", label: "Model & Routing", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Model & Routing" /> },
@@ -63,9 +45,6 @@ const WORKSPACE_SECTIONS: Section[] = [
   { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
   { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
   { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
-  // The delegate registry (ADR 0025) is built-in core infrastructure — its config
-  // lives here alongside the agent's other call-out surfaces (Tools/MCP/Subagents),
-  // not under Plugins.
   { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
   { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
   { id: "middleware", label: "Middleware", icon: Layers, render: () => <MiddlewarePanel /> },
@@ -74,10 +53,19 @@ const WORKSPACE_SECTIONS: Section[] = [
   { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
 ];
 
+// Box-wide operations (host console only) — the former Global ▸ Fleet/Telemetry/Shared Skills.
+// The old Global ▸ Configuration section is GONE: host-scoped FIELDS are edited inline in the
+// Agent group (on the host they write the host layer; elsewhere they override per-agent).
+const BOX_SECTIONS: Section[] = [
+  { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
+  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
+  { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
+  { id: "commons", label: "Shared Skills", icon: Library, render: () => <CommonsPanel /> },
+];
+
 // The Plugins manager (install · enable · configure, plus the Discover directory) lives
-// HERE in Settings ▸ Plugins — folded in from the former standalone rail surface (2026-06).
-// Per-plugin config is inline per row (ADR 0059); the delegate registry is built-in core
-// infrastructure with its own Workspace ▸ Delegates section.
+// in Settings ▸ Plugins. Per-plugin config is inline per row (ADR 0059); the delegate
+// registry is built-in core infrastructure with its own Delegates section.
 function PluginSettingsHome() {
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
@@ -97,71 +85,38 @@ function PluginSettingsHome() {
   );
 }
 
-export const SETTINGS_HOMES: Home[] = [
-  { id: "host", label: "Global", icon: HardDrive, sections: HOST_SECTIONS },
-  { id: "workspace", label: "Workspace", icon: Boxes, sections: WORKSPACE_SECTIONS },
-];
-
-// `only` renders a single scope's sections WITHOUT the Global/Workspace toggle —
-// Workspace lives in the rail surface, Global in the header-drawer's overlay
-// (separated per the 2026-06-18 IA pass). The Global overlay keeps its own section
-// in local state (seeded by `initialSection`) so it never fights the rail's persisted
-// workspace section. Bare `<SettingsSurface />` keeps the legacy two-home toggle.
-export function SettingsSurface({ only, initialSection }: { only?: SettingsScope; initialSection?: string } = {}) {
-  const persistedScope = useUI((s) => s.settingsScope);
+// One consolidated settings surface. `only` is accepted but ignored (legacy callers) — there
+// is a single home now; the Box group is gated to the host console. `initialSection`
+// deep-links a section (the overlay / a ⌘K command).
+export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
+  const onHost = isHostConsole();
   const persistedSection = useUI((s) => s.settingsSection);
-  const setScope = useUI((s) => s.setSettingsScope);
-  const setPersistedSection = useUI((s) => s.setSettingsSection);
+  const setSection = useUI((s) => s.setSettingsSection);
 
-  const scope: SettingsScope = only ?? persistedScope;
-  const home = SETTINGS_HOMES.find((h) => h.id === scope) ?? SETTINGS_HOMES[0];
+  // Deep-link: select the requested section once when opened on one (overlay / palette).
+  useEffect(() => {
+    if (initialSection) setSection(initialSection);
+  }, [initialSection, setSection]);
 
-  // The Global overlay (only="host") tracks its section locally; the rail (workspace
-  // or the legacy toggle) uses the persisted store.
-  const overlay = only === "host";
-  const [localSection, setLocalSection] = useState(initialSection ?? home.sections[0].id);
-  const section = overlay ? localSection : persistedSection;
-  const setSection = overlay ? setLocalSection : setPersistedSection;
-  const active = home.sections.find((s) => s.id === section) ?? home.sections[0];
+  const sections = onHost ? [...AGENT_SECTIONS, ...BOX_SECTIONS] : AGENT_SECTIONS;
+  const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
+  const toItem = (s: Section) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> });
+  const groups = [
+    { label: "Agent", items: AGENT_SECTIONS.map(toItem) },
+    ...(onHost ? [{ label: "Box", items: BOX_SECTIONS.map(toItem) }] : []),
+  ];
 
-  // Switching home lands on its first section unless the current section id also
-  // exists in the new home (it usually won't — the homes don't share section ids).
-  function selectHome(next: SettingsScope) {
-    const h = SETTINGS_HOMES.find((x) => x.id === next) ?? SETTINGS_HOMES[0];
-    setScope(next);
-    if (!h.sections.some((s) => s.id === section)) setSection(h.sections[0].id);
-  }
-
-  // Two-column settings shell: the DS SideNav rail (scope toggle pinned in its header
-  // slot + the sections down the side, ADR 0048) + the active section's panel filling
-  // the rest. Adopted from the interim hand-rolled rail once SideNav shipped in
-  // @protolabsai/ui 0.30.0 (protoContent#225 → #227). We deliberately DON'T pass
-  // `responsive`: its collapse-to-<select> fires at wrap ≤ 15rem, but our compact
-  // in-rail settings column sits below that, so it would render as a dropdown instead
-  // of the vertical nav — the opposite of the ask. The rail stays vertical in both the
-  // overlay and the stage; the narrow case is the separate mobile shell (ADR 0035 S4).
   return (
     <div className="settings-shell">
-      <SideNav
-        ariaLabel="Settings sections"
-        active={active.id}
-        onSelect={(t) => setSection(t)}
-        items={home.sections.map((s) => ({ id: s.id, label: s.label, icon: <s.icon size={15} /> }))}
-        // Scope toggle pinned atop the rail — only for the legacy two-home surface.
-        // A scoped surface (`only`) shows just its own sections, no toggle.
-        header={
-          only ? undefined : (
-            <Tabs
-              variant="segmented"
-              ariaLabel="Settings scope"
-              active={scope}
-              onSelect={(t) => selectHome(t as SettingsScope)}
-              items={SETTINGS_HOMES.map((h) => ({ id: h.id, label: h.label }))}
-            />
-          )
-        }
-      />
-      <div className="settings-content">{active.render()}</div>
+      <SideNav ariaLabel="Settings sections" groups={groups} active={active.id} onSelect={(id) => setSection(id)} />
+      <div className="settings-content">
+        <Alert status="info" className="settings-inheritance-banner">
+          {onHost
+            ? "Editing the host — these are the box defaults every agent inherits, unless an agent overrides them."
+            : "Editing this agent — it inherits the box defaults from the host; changes here override for this agent only."}
+        </Alert>
+        {active.render()}
+      </div>
     </div>
   );
 }

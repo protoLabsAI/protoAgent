@@ -206,9 +206,16 @@ export function migrateUiState(persisted: unknown): unknown {
       rest.railOrder = { left, right, bottom };
     }
     if (rest.rightPanel === "beads" || rest.rightPanel === "goals") rest.rightPanel = "work";
+    // v12 (2026-06): Settings moved off the rail into a utility-bar pill (the settings
+    // dialog). Prune "settings" from every dock + the quick-bar — it's no longer a surface.
+    const ro9 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro9) {
+      const noSettings = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => x !== "settings") : []);
+      rest.railOrder = { left: noSettings(ro9.left), right: noSettings(ro9.right), bottom: noSettings(ro9.bottom) };
+    }
     if (Array.isArray(rest.quickBar)) {
       rest.quickBar = (rest.quickBar as string[]).filter(
-        (x) => x !== "activity" && x !== "plugins" && !FOLDED.has(x),
+        (x) => x !== "activity" && x !== "plugins" && x !== "settings" && !FOLDED.has(x),
       );
     }
     return rest;
@@ -236,7 +243,7 @@ export const useUI = create<UIState>()(
       bottomHeight: 240,
       bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "studio", "knowledge", "settings"],
+        left: ["chat", "studio", "knowledge"],
         right: ["work"],
         bottom: [],
       },
@@ -316,7 +323,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 11, // …v9 re-add Settings · v10 Plugins→Settings section · v11 Beads+Goals+Schedule→Work hub (prune ids, add work)
+      version: 12, // …v10 Plugins→Settings section · v11 Beads+Goals+Schedule→Work hub · v12 Settings→utility pill (prune rail id)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).
