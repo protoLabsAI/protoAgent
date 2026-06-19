@@ -103,6 +103,24 @@ def test_scaffold_prepends_when_absent_and_is_idempotent(tmp_path, monkeypatch):
     assert json.loads(mj.read_text(encoding="utf-8")) == entries
 
 
+def test_scaffold_omits_empty_release(tmp_path, monkeypatch):
+    """A release whose section has no bullets is omitted from the marketing changelog
+    (no bare version+date entry) rather than scaffolded empty."""
+    import json
+
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text("# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2026-03-03\n\n", encoding="utf-8")
+    mj = tmp_path / "changelog.json"
+    mj.write_text(json.dumps([{"version": "v0.1.0", "date": "2026-01-01", "changes": ["x"]}]), encoding="utf-8")
+    monkeypatch.setattr(changelog, "CHANGELOG", cl)
+    monkeypatch.setattr(changelog, "MARKETING_JSON", mj)
+
+    assert changelog.scaffold("0.3.0") is False  # empty section → skipped
+    assert [e["version"] for e in json.loads(mj.read_text(encoding="utf-8"))] == ["v0.1.0"]
+    # …and an empty release absent from the json is NOT flagged as missing.
+    assert changelog.missing_versions() == []
+
+
 def test_no_released_version_is_missing_from_marketing_changelog():
     """Staleness guard (the original 'stuck at 0.21' bug): every dated CHANGELOG.md
     version must have a marketing changelog.json entry."""

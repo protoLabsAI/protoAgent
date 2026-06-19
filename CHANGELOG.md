@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.51.0] - 2026-06-18
 
+### Added
+- **"Skills loaded" chip in chat.** The console shows which skills the agent auto-retrieved for a turn (hover a name for its description); toggle with `skills.announce`.
+- **Author/edit skills in a modal dialog** in the console (instead of the in-panel form), plus a version badge + "built by protoLabs.studio" footer in the app drawer.
+
+### Removed
+- **Dropped the never-used `emit_skill` capture path.** The agent self-authors skills via `/distill`; the dead skill-v1 emission machinery is gone.
+
+### Fixed
+- **Desktop sidecar bundles `config/plugin-catalog.json`** so the plugin Discover directory works in the frozen app.
+
 ## [0.50.0] - 2026-06-18
 
 ### Added
@@ -30,9 +40,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.49.1] - 2026-06-18
 
+### Fixed
+- **Background-job dialog shows the full result**, not the truncated live preview.
+
 ## [0.49.0] - 2026-06-18
 
+### Added
+- **Native command-palette chat** recovered, a **`/effort` reasoning control** for chat turns, and a **Schedule rail** in the console.
+
 ## [0.48.0] - 2026-06-18
+
+### Added
+- **Command palette (⌘K).** Jump to any surface plus core actions, with chat and inline plugin views living inside the palette (ADR 0057).
+- **Unified plugin manager.** Collapsed to **Discover** (an in-app official-plugin directory served from the host catalog) + **Installed** (per-plugin config folded into the rows, manifest-driven Test + guide link) — ADR 0059.
+- **Always-on hamburger menu** replaces the header status-light / theme / settings cluster.
+
+### Changed
+- **Discord is no longer bundled** — it installs as a runtime external plugin in the frozen desktop app (ADR 0058).
+
+### Fixed
+- **Plugin git refs are validated before fetch**, and the dev server proxies `/_ds` so plugin-kit loads in plugin iframes.
+
+### Docs
+- **ADRs 0057 / 0058 / 0059** — command palette, runtime plugin install in the frozen app, and the unified plugin manager.
 
 ## [0.47.0] - 2026-06-18
 
@@ -55,11 +85,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.46.0] - 2026-06-17
 
+### Added
+- **In-app update notice with the changelog** in the desktop app — shows what changed instead of a generic prompt.
+
 ## [0.45.0] - 2026-06-17
+
+### Added
+- **Real chat streaming in the desktop app** — token-by-token output + tool cards over Tauri-relayed SSE.
+
+### Fixed
+- **Desktop in-app updater no longer 404s** — a release is marked "Latest" only once `latest.json` is published.
 
 ## [0.44.0] - 2026-06-17
 
+### Fixed
+- **Desktop updater public key now matches the signing key**, so in-app updates verify and install.
+
 ## [0.43.0] - 2026-06-17
+
+### Added
+- **Portfolio plugin (ADR 0055).** One PM agent dispatches work to, and tracks, several team-agents' project boards across repos over A2A — `portfolio_rollup` (bounded cross-board view), `portfolio_diff`/`portfolio_watch` (board deltas), and `portfolio_link`/`portfolio_plan` (cross-board dependency graph). Shipped as a standalone plugin.
+- **Mid-turn steering.** Send a message while a turn is running and the agent folds it in at the next model call instead of stopping — with a ✕ to cancel a queued steer, and a Tier-2 control to cancel a single running subagent delegation.
+- **Drag-to-reorder chat session tabs.**
+
+### Changed
+- **Setup wizard + forms rebuilt on the design system** (FormField / RadioCard, token cleanup).
+- **Instance-scoped agents resolve their installed-plugin config correctly**, and idle ACP coding-agent runtimes are evicted from the runtime pool.
+
+### Docs
+- **ADR 0056** — unified dockable-view model (tabs ↔ rails).
 
 ## [0.42.0] - 2026-06-17
 
