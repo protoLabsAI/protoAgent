@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.51.1] - 2026-06-19
 
+### Added
+- **Utility bar in the console.** A compact bar with quick widgets on the left and layout
+  controls on the right, plus a toggleable bottom panel. The **inbox** is now a utility-bar
+  widget (on a reusable `UtilityWidget` primitive), and **plugins can contribute their own
+  widgets** (a `utility:` manifest flag → an iframe dialog).
+
 ### Docs
 - **Documentation overhaul.** Every Diátaxis section (Tutorials / Guides / Reference /
   Explanation) is now grouped by one consistent domain taxonomy in the sidebar and
