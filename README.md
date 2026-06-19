@@ -218,9 +218,11 @@ The included GitHub Actions pipeline is optional but opinionated.
 - **On every merge to `main`** → `docker-publish.yml` builds and
   pushes `ghcr.io/protolabsai/<image>:latest` + `sha-<short>`.
   Watchtower (or similar) can poll `latest` for auto-deploy.
-- **When a non-release PR merges** → `prepare-release.yml` opens a
-  "chore: release vX.Y.Z" bump PR, auto-merges it, and pushes a
-  semver tag.
+- **To cut a release** → run `prepare-release.yml` manually
+  (`workflow_dispatch`, gated on the `RELEASE_ENABLED` repo var, with a
+  patch/minor/major bump input). It opens a "chore: release vX.Y.Z" bump
+  PR, auto-merges it, and pushes a semver tag. Releases are on-demand, not
+  per-merge.
 - **When a semver tag lands** → `release.yml` builds and pushes
   the stable semver Docker tags, creates a GitHub release with
   filtered notes, and posts a Discord embed via the shared
