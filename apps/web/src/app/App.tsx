@@ -459,8 +459,8 @@ export function App() {
   // ADR 0035 S3 — surface metadata + one renderer, so any surface mounts in either rail.
   // The core surface list lives in coreSurfaces.tsx, shared with the desktop launcher so
   // both build their command lists from one source. Chat is excluded from rail placement
-  // here: it mounts unconditionally in its rail's area (streaming continuity) and is
-  // pinned left (railOf.chat is never moved).
+  // here: it mounts unconditionally in its dock's area (streaming continuity) and is
+  // movable across all three docks (left/right/bottom) like any other surface.
   // Surfaces for a rail side, in the user's order (railOrder, ADR 0036). Core AND plugin views are
   // first-class railOrder members — reconciled below — so all are reorderable/movable, including
   // Chat. Metadata resolves from core or the live plugin-view set; a freshly-appeared plugin not
@@ -622,8 +622,25 @@ export function App() {
   // Bottom dock active surface (mirror left/right) — clamp to a member of the bottom dock.
   const bottomMembers = railSurfaces("bottom").map((s) => s.id);
   const bottomActive = bottomMembers.includes(bottomPanel) ? bottomPanel : (bottomMembers[0] ?? "");
-  // Chat mounts unconditionally on whichever side it's on (streaming continuity, #613).
-  const chatRail: "left" | "right" = railOrder.right.includes("chat") ? "right" : "left";
+  // Chat mounts unconditionally on whichever dock holds it (streaming continuity, #613) —
+  // left, right, OR the bottom dock. Its slot stays mounted while another surface swaps in
+  // on the same dock, so an in-flight stream survives a surface switch on any rail.
+  const chatRail: "left" | "right" | "bottom" =
+    railOrder.right.includes("chat")
+      ? "right"
+      : railOrder.bottom.includes("chat")
+        ? "bottom"
+        : "left";
+  // Background-stream pulse on the chat rail icon (#613 dot, ADR 0039): show it while a turn
+  // streams and chat ISN'T the visible surface on its dock — collapse-aware, any rail. (The
+  // old check keyed off the left-only `surface`, so it never pulsed for chat on right/bottom.)
+  const chatVisible =
+    chatRail === "left"
+      ? leftActive === "chat" && !leftCollapsed
+      : chatRail === "right"
+        ? rightActive === "chat" && !rightCollapsed
+        : bottomActive === "chat" && !bottomCollapsed;
+  const chatDot = chatStreaming && !chatVisible;
 
   // Notification dots (ADR 0039): a bus event under `<pluginId>.*` lights that plugin's rail
   // icon until its surface is opened. Subscribe once; refs avoid resubscribing each render.
@@ -792,10 +809,16 @@ export function App() {
         className="app-shell-main"
         leftItems={railSurfaces("left").map((s) => ({
           ...s,
-          dot: s.id === "chat" ? chatStreaming && surface !== "chat" : pluginDots[s.id] || undefined,
+          dot: s.id === "chat" ? chatDot : pluginDots[s.id] || undefined,
         }))}
-        rightItems={railSurfaces("right").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
-        bottomItems={railSurfaces("bottom").map((s) => ({ ...s, dot: pluginDots[s.id] || undefined }))}
+        rightItems={railSurfaces("right").map((s) => ({
+          ...s,
+          dot: s.id === "chat" ? chatDot : pluginDots[s.id] || undefined,
+        }))}
+        bottomItems={railSurfaces("bottom").map((s) => ({
+          ...s,
+          dot: s.id === "chat" ? chatDot : pluginDots[s.id] || undefined,
+        }))}
         activeLeft={leftCollapsed ? "" : leftActive}
         activeRight={rightCollapsed ? "" : rightActive}
         activeBottom={bottomCollapsed ? "" : bottomActive}
@@ -815,14 +838,9 @@ export function App() {
         }}
         onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
         onRailReorder={(next) => {
-          // Chat is the streaming slot (#613), never the bottom dock — if a drag landed it
-          // there, bounce it back to the SIDE rail it came from (its pre-drag side), not
-          // always the left.
-          if (next.bottom.includes("chat")) {
-            const back = railOrder.right.includes("chat") ? "right" : "left";
-            next = { ...next, bottom: next.bottom.filter((x) => x !== "chat") };
-            if (!next[back].includes("chat")) next = { ...next, [back]: [...next[back], "chat"] };
-          }
+          // Chat can dock anywhere now — left, right, or the bottom dock. Its slot mounts
+          // unconditionally on whichever dock holds it (bottomContent mirrors the side rails),
+          // so streaming survives a surface switch on any rail. No bounce-back guard needed.
           setRailOrder(next);
         }}
         rightWidth={rightWidth}
@@ -882,7 +900,22 @@ export function App() {
             {rightActive !== "chat" ? renderSurface(rightActive) : null}
           </>
         }
-        bottomContent={bottomActive ? renderSurface(bottomActive) : null}
+        bottomContent={
+          <>
+            {/* Chat on the bottom dock mounts the same way it does on a side rail: the slot
+                is always present (hidden when not active) so a switch to another bottom
+                surface — or back — never tears down an in-flight stream (#613). */}
+            {chatRail === "bottom" ? (
+              <ChatSlot
+                onError={setError}
+                active={bottomActive === "chat"}
+                pluginView={chatSlotView}
+                enabledPluginIds={enabledPluginIds}
+              />
+            ) : null}
+            {bottomActive && bottomActive !== "chat" ? renderSurface(bottomActive) : null}
+          </>
+        }
         utilityBar={
           <UtilityBar
             // Bottom-left = widgets, bottom-right = layout (2026-06 IA pass). Docs +

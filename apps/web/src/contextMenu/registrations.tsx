@@ -5,8 +5,8 @@ import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
 
 // First customer (ADR 0036 D6 / ADR 0035 D2): right-click a rail icon → reorder it within its
-// rail (Move up/down) and move it to the other rail (append to the bottom). Chat is pinned to the
-// left rail (no move-across); plugin views follow their manifest placement (no items yet).
+// rail (Move up/down) and move it to another dock (append to the end). Chat is movable across all
+// three docks like any other surface; plugin views follow their manifest placement (no items yet).
 registerContextMenu({
   type: "rail-surface",
   items: (ctx: { id: string; side: "left" | "right" | "bottom" }): MenuEntry[] => {
@@ -29,9 +29,9 @@ registerContextMenu({
       { side: "right", label: "Move to right rail" },
       { side: "bottom", label: "Move to bottom dock" },
     ];
-    // Any surface — core, plugin, or chat — reorders within its rail and moves across. (Moving
-    // chat across rails remounts it: a brief blip on an in-flight stream; a deliberate action.)
-    // Chat is excluded from the bottom dock — it's the streaming slot, not a bottom-panel surface.
+    // Any surface — core, plugin, or chat — reorders within its dock and moves across, including
+    // chat to the bottom dock (its slot mounts unconditionally there too). Moving chat across docks
+    // remounts it: a brief blip on an in-flight stream; a deliberate action.
     return [
       {
         id: "move-up",
@@ -49,7 +49,6 @@ registerContextMenu({
       },
       { id: "rail-div", divider: true },
       ...DOCKS.filter((d) => d.side !== ctx.side)
-        .filter((d) => !(d.side === "bottom" && ctx.id === "chat"))
         .map((d): MenuEntry => ({
           id: `move-${d.side}`,
           label: d.label,
