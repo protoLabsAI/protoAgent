@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.55.1",
+    "date": "2026-06-19",
+    "changes": [
+      "The desktop quick launcher (⌥Space) is now a frosted, rounded floating panel."
+    ]
+  },
+  {
     "version": "v0.55.0",
     "date": "2026-06-19",
     "changes": [
