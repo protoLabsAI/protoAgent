@@ -78,21 +78,23 @@ def _vtuple(v: str) -> tuple[int, ...]:
 
 
 def missing_versions() -> list[str]:
-    """Released versions inside the curated range with no changelog.json entry.
+    """Released versions inside the curated range with content but no changelog.json entry.
 
     The marketing changelog only goes back to a curated floor (~v0.16), so we don't
     demand ancient history — we catch a *forgotten new release* (the original
     'stuck at 0.21' bug): any version at or above the oldest curated entry that's
-    missing.
+    missing. An **empty** release (no ``[Unreleased]`` bullets → an empty section) is
+    intentionally omitted from /changelog, so it's not flagged as missing.
     """
     have = {e["version"] for e in json.loads(MARKETING_JSON.read_text(encoding="utf-8"))}
     if not have:
         return []
     floor = min(_vtuple(v) for v in have)
+    text = CHANGELOG.read_text(encoding="utf-8")
     return [
         f"v{v}"
-        for v in dated_versions(CHANGELOG.read_text(encoding="utf-8"))
-        if _vtuple(v) >= floor and f"v{v}" not in have
+        for v in dated_versions(text)
+        if _vtuple(v) >= floor and f"v{v}" not in have and _titles(_section(text, v)[1])
     ]
 
 
@@ -107,7 +109,13 @@ def scaffold(version: str) -> bool:
     date, body = _section(CHANGELOG.read_text(encoding="utf-8"), version)
     if date is None:
         raise ValueError(f"no '## [{version}]' section in CHANGELOG.md")
-    entries.insert(0, {"version": vtag, "date": date, "changes": _titles(body)})
+    changes = _titles(body)
+    if not changes:
+        # Empty release (the PRs added no `[Unreleased]` bullets) → omit it from the
+        # marketing changelog rather than emit a bare version+date line. Add a bullet
+        # under `[Unreleased]` in your PR for the release to appear on /changelog.
+        return False
+    entries.insert(0, {"version": vtag, "date": date, "changes": changes})
     MARKETING_JSON.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return True
 

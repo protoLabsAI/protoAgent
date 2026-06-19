@@ -2,7 +2,12 @@
   {
     "version": "v0.51.0",
     "date": "2026-06-18",
-    "changes": []
+    "changes": [
+      "\"Skills loaded\" chip in chat.",
+      "Author/edit skills in a modal dialog",
+      "Dropped the never-used emit_skill capture path.",
+      "Desktop sidecar bundles config/plugin-catalog.json"
+    ]
   },
   {
     "version": "v0.50.0",
@@ -14,44 +19,69 @@
   {
     "version": "v0.49.1",
     "date": "2026-06-18",
-    "changes": []
+    "changes": [
+      "Background-job dialog shows the full result"
+    ]
   },
   {
     "version": "v0.49.0",
     "date": "2026-06-18",
-    "changes": []
+    "changes": [
+      "Native command-palette chat"
+    ]
   },
   {
     "version": "v0.48.0",
     "date": "2026-06-18",
-    "changes": []
+    "changes": [
+      "Command palette (⌘K).",
+      "Unified plugin manager.",
+      "Always-on hamburger menu",
+      "Discord is no longer bundled",
+      "Plugin git refs are validated before fetch",
+      "ADRs 0057 / 0058 / 0059"
+    ]
   },
   {
     "version": "v0.47.0",
     "date": "2026-06-18",
     "changes": [
-      "**Google (Gmail + Calendar) and Slack are no longer bundled"
+      "Google (Gmail + Calendar) and Slack are no longer bundled — they move to standalone external plugins."
     ]
   },
   {
     "version": "v0.46.0",
     "date": "2026-06-17",
-    "changes": []
+    "changes": [
+      "In-app update notice with the changelog"
+    ]
   },
   {
     "version": "v0.45.0",
     "date": "2026-06-17",
-    "changes": []
+    "changes": [
+      "Real chat streaming in the desktop app",
+      "Desktop in-app updater no longer 404s"
+    ]
   },
   {
     "version": "v0.44.0",
     "date": "2026-06-17",
-    "changes": []
+    "changes": [
+      "Desktop updater public key now matches the signing key"
+    ]
   },
   {
     "version": "v0.43.0",
     "date": "2026-06-17",
-    "changes": []
+    "changes": [
+      "Portfolio plugin.",
+      "Mid-turn steering.",
+      "Drag-to-reorder chat session tabs.",
+      "Setup wizard + forms rebuilt on the design system",
+      "Instance-scoped agents resolve their installed-plugin config correctly",
+      "ADR 0056"
+    ]
   },
   {
     "version": "v0.42.0",

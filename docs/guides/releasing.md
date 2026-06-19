@@ -86,6 +86,11 @@ We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
 - The rolled changelog is committed **inside the release PR**, so it goes
   through the same `main` ruleset (PR + checks) as any change — nothing is
   pushed to `main` directly.
+- **The marketing `/changelog`** (`sites/marketing/data/changelog.json`) is
+  scaffolded from each release's section by `changelog.py scaffold`. A release
+  whose PRs added **no** `[Unreleased]` bullets has an empty section, so it's
+  **omitted** from the marketing changelog rather than shown as a bare
+  version+date line — add a bullet in your PR for the release to appear.
 
 ## Branch protection
 
