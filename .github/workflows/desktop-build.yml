@@ -138,6 +138,19 @@ jobs:
           mv "$CONF.tmp" "$CONF"
           echo "tauri.conf.json version -> $V"
 
+      - name: Stage the DS plugin-kit + install web deps
+        shell: bash
+        # The frozen sidecar serves /_ds/plugin-kit.{css,js} — the theme kit every plugin
+        # iframe loads to match the console — from apps/web/dist/_ds. The web build emits
+        # it there, but that runs LATER (tauri's beforeBuildCommand), so the sidecar would
+        # freeze WITHOUT it and plugin views (Notes, …) render with no design system on
+        # desktop. Generate it now (into public/_ds) so build_sidecar can bundle it. The
+        # root install also wires the @protoagent/web workspace for the tauri build below.
+        run: |
+          npm ci
+          node apps/web/scripts/copy-plugin-kit.mjs
+          ls -la apps/web/public/_ds/
+
       - name: Build server sidecar (PyInstaller)
         shell: bash
         # Freezes `server` into binaries/protoagent-server-<triple> — the
@@ -164,13 +177,11 @@ jobs:
           if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
           python scripts/live_smoke.py --bin "${BIN}" --timeout 180
 
-      - name: Install web + desktop deps
+      - name: Install desktop CLI deps
         shell: bash
-        # Root install wires the @protoagent/web workspace (tauri's
-        # beforeBuildCommand builds it); desktop install brings the tauri CLI.
-        run: |
-          npm ci
-          ( cd apps/desktop && npm install )
+        # Root deps were already installed in the plugin-kit step above (which wires the
+        # @protoagent/web workspace for tauri's beforeBuildCommand); this brings the tauri CLI.
+        run: ( cd apps/desktop && npm install )
 
       - name: Build + sign the app
         id: build
