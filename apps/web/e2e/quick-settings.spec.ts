@@ -20,6 +20,8 @@ test("the header hamburger opens the app drawer → Settings dialog", async ({ p
   await expect(changelog).toBeVisible();
   await expect(changelog).toHaveAttribute("href", "https://agent.protolabs.studio/changelog/");
   await expect(changelog).toHaveAttribute("target", "_blank");
+  // External link — assert rel guards against tabnabbing (security regression guard).
+  await expect(changelog).toHaveAttribute("rel", "noreferrer");
   await expect(drawer.getByRole("link", { name: "GitHub" })).toBeVisible();
   // Footer: version badge + protoLabs.studio branding link.
   await expect(drawer.getByText("v9.9.9", { exact: true })).toBeVisible();
