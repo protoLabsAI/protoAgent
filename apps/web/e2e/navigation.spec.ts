@@ -24,24 +24,37 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
-test("schedule is a top-level rail surface that lists scheduled jobs", async ({ page }) => {
-  await page.locator(".pl-rail").getByRole("button", { name: "Schedule", exact: true }).click();
+// The Work hub (2026-06) consolidates the former Beads / Goals / Schedule rail surfaces
+// into one right-rail "Work" surface with Overview · Goals · Tasks · Schedule tabs.
+// Work is the default-active right panel, so it's already open — clicking its rail icon
+// when active would TOGGLE it closed, so only click when it's not the active surface.
+// In the narrow right panel the DS responsive Tabs collapse the role="tab" strip into a
+// native <select.pl-tabs__select>; pick the tab through it.
+const TAB_VALUE: Record<string, string> = { Overview: "overview", Goals: "goals", Tasks: "tasks", Schedule: "schedule" };
+async function openWorkTab(page, tab: string) {
+  const workBtn = page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true });
+  const cls = (await workBtn.getAttribute("class")) ?? "";
+  if (!cls.includes("--active")) await workBtn.click();
+  await page.locator(".pl-tabs__select").first().selectOption(TAB_VALUE[tab]);
+}
+
+test("Work → Schedule tab lists scheduled jobs", async ({ page }) => {
+  await openWorkTab(page, "Schedule");
   await expect(page.getByRole("heading", { name: "Schedule" })).toBeVisible();
   await expect(page.getByText("Summarize overnight activity")).toBeVisible();
 });
 
-test("goals tab in the right sidebar lists active goals", async ({ page }) => {
-  // Goals moved out of Studio into the right sidebar (Notes / Beads / Goals).
-  await page.getByRole("button", { name: "Goals", exact: true }).click();
+test("Work → Goals tab lists active goals", async ({ page }) => {
+  // Goals folded into the Work hub's Goals tab (still renders the GoalsPanel verbatim).
+  await openWorkTab(page, "Goals");
   await expect(page.getByRole("heading", { name: "Goals" })).toBeVisible();
   await expect(page.getByText("All tests pass")).toBeVisible();
 });
 
-test("beads tab in the right sidebar lists issues (query-backed)", async ({ page }) => {
-  // Beads (TanStack Query / Suspense, ADR 0013) is the default-active right panel, and clicking an
-  // already-open panel now toggles it closed — so switch to Goals first, then back to Beads.
-  await page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true }).click();
-  await page.locator(".pl-rail--right").getByRole("button", { name: "Beads", exact: true }).click();
+test("Work → Tasks tab lists beads issues (query-backed)", async ({ page }) => {
+  // The tab is labeled "Tasks" but the panel content is still Beads (TanStack Query /
+  // Suspense, ADR 0013) — folded into the Work hub.
+  await openWorkTab(page, "Tasks");
   await expect(page.getByRole("heading", { name: "Beads" })).toBeVisible();
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
@@ -61,7 +74,9 @@ test("workspace settings: identity lands, then tools and MCP sections", async ({
 });
 
 test("plugins section: Installed / Discover (config + advanced install folded in)", async ({ page }) => {
-  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
+  // Plugins is a Settings section now (2026-06), not a standalone rail surface.
+  await page.locator(".pl-rail").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
 
   // Two sections only now (ADR 0059 D4) — no separate "Install URL" tab.
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Install URL", exact: true })).toHaveCount(0);
@@ -93,15 +108,16 @@ test("plugins section: Installed / Discover (config + advanced install folded in
 test("UI state persists across reload (ADR 0035 S1 — Zustand persist)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Move off the defaults: a left surface (Plugins) + a non-default right-panel tab (Goals — Beads
-  // is the default, and clicking the default-active one would toggle it closed).
-  await page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true }).click();
-  await page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true }).click();
+  // Move the left surface off its default (Chat) to Knowledge. Work is the default-active
+  // right panel (don't click it — that would toggle the panel closed). Both the moved-left
+  // surface and the open Work right panel should survive a reload via the persisted store.
+  await page.locator(".pl-rail").getByRole("button", { name: "Knowledge", exact: true }).click();
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true })).toHaveClass(/--active/);
 
-  // Reload — the persisted store restores both, instead of snapping back to Chat/Notes.
+  // Reload — the persisted store restores both, instead of snapping back to Chat.
   await page.reload({ waitUntil: "load" });
-  await expect(page.locator(".pl-rail").getByRole("button", { name: "Plugins", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Goals", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Knowledge", exact: true })).toHaveClass(/--active/);
+  await expect(page.locator(".pl-rail--right").getByRole("button", { name: "Work", exact: true })).toHaveClass(/--active/);
 });
 
 
@@ -110,18 +126,18 @@ test("right-click a rail surface opens a context menu that moves it (ADR 0036)",
   const rightRail = page.locator(".pl-rail--right");
   const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
 
-  // Beads starts on the right rail.
-  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
+  // Work starts on the right rail.
+  await expect(rightRail.getByRole("button", { name: "Work", exact: true })).toBeVisible();
 
   // Right-click it → the context menu opens with the move item.
-  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
+  await rightRail.getByRole("button", { name: "Work", exact: true }).click({ button: "right" });
   const menu = page.locator(".pl-menu");
   await expect(menu).toBeVisible();
   await menu.getByText("Move to left rail").click();
 
-  // Beads moved to the left rail (store-backed → persists, but checking the move is enough here).
-  await expect(leftRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
-  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toHaveCount(0);
+  // Work moved to the left rail (store-backed → persists, but checking the move is enough here).
+  await expect(leftRail.getByRole("button", { name: "Work", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Work", exact: true })).toHaveCount(0);
 });
 
 test("Chat is movable too — right-click → move to the right rail (ADR 0036)", async ({ page }) => {
@@ -145,14 +161,15 @@ test("right-click → Move to bottom dock docks the surface at the bottom", asyn
   // The bottom rail exists as an (empty) drop target, but nothing is docked there by default.
   await expect(bottomRail.getByRole("button")).toHaveCount(0);
 
-  // Move Beads (right rail) → bottom dock.
-  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
+  // Move Work (right rail) → bottom dock.
+  await rightRail.getByRole("button", { name: "Work", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Move to bottom dock").click();
 
-  // Beads now lives in the (icon-only) bottom rail, off the right rail, and its panel opens.
-  await expect(bottomRail.getByRole("button", { name: "Beads", exact: true })).toBeVisible();
-  await expect(rightRail.getByRole("button", { name: "Beads", exact: true })).toHaveCount(0);
-  await expect(page.locator(".pl-appshell__bottom").getByRole("heading", { name: "Beads" })).toBeVisible();
+  // Work now lives in the (icon-only) bottom rail, off the right rail, and its panel opens.
+  await expect(bottomRail.getByRole("button", { name: "Work", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Work", exact: true })).toHaveCount(0);
+  // Its panel renders — the Work hub's Tabs strip is present in the bottom dock.
+  await expect(page.locator(".pl-appshell__bottom .pl-tabs").getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
 });
 
 test("mobile shell: bottom quick-bar + unified header drawer (ADR 0035 S4)", async ({ page }) => {
@@ -173,6 +190,6 @@ test("mobile shell: bottom quick-bar + unified header drawer (ADR 0035 S4)", asy
   await page.getByTestId("header-menu").click();
   const drawer = page.getByTestId("app-drawer");
   await expect(drawer).toBeVisible();
-  await drawer.getByRole("button", { name: "Beads", exact: true }).click();
+  await drawer.getByRole("button", { name: "Work", exact: true }).click();
   await expect(drawer).toHaveCount(0); // picking a surface closes the drawer
 });

@@ -185,8 +185,31 @@ export function migrateUiState(persisted: unknown): unknown {
         rest.railOrder = { ...ro6, left };
       }
     }
+    // v10 (2026-06): the Plugins manager moved off the rail into Settings ▸ Plugins (it's a
+    // settings section now, not a surface). Prune "plugins" from every dock + the quick-bar.
+    const ro7 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro7) {
+      const noPlug = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => x !== "plugins") : []);
+      rest.railOrder = { left: noPlug(ro7.left), right: noPlug(ro7.right), bottom: noPlug(ro7.bottom) };
+    }
+    // v11 (2026-06): Beads + Goals + Schedule folded into the unified "work" hub. Prune the
+    // three old ids from every dock + the quick-bar; add "work" to the right rail if the
+    // layout has none of them placed; retarget a default-active right panel that pointed at one.
+    const FOLDED = new Set(["beads", "goals", "schedule"]);
+    const ro8 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
+    if (ro8) {
+      const drop = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => !FOLDED.has(x)) : []);
+      const left = drop(ro8.left);
+      let right = drop(ro8.right);
+      const bottom = drop(ro8.bottom);
+      if (![...left, ...right, ...bottom].includes("work")) right = [...right, "work"];
+      rest.railOrder = { left, right, bottom };
+    }
+    if (rest.rightPanel === "beads" || rest.rightPanel === "goals") rest.rightPanel = "work";
     if (Array.isArray(rest.quickBar)) {
-      rest.quickBar = (rest.quickBar as string[]).filter((x) => x !== "activity");
+      rest.quickBar = (rest.quickBar as string[]).filter(
+        (x) => x !== "activity" && x !== "plugins" && !FOLDED.has(x),
+      );
     }
     return rest;
   }
@@ -197,7 +220,7 @@ export const useUI = create<UIState>()(
   persist(
     (set) => ({
       surface: "chat",
-      rightPanel: "beads",
+      rightPanel: "work",
       pluginsTab: "local",
       settingsScope: "host" as SettingsScope,
       settingsSection: "overview",
@@ -213,8 +236,8 @@ export const useUI = create<UIState>()(
       bottomHeight: 240,
       bottomCollapsed: false,
       railOrder: {
-        left: ["chat", "schedule", "studio", "knowledge", "plugins", "settings"],
-        right: ["beads", "goals"],
+        left: ["chat", "studio", "knowledge", "settings"],
+        right: ["work"],
         bottom: [],
       },
       moveSurface: (id, side) =>
@@ -293,7 +316,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 9, // …v6 +bottom dock · v7 Schedule→rail surface again · v8 Activity→utility widget · v9 re-add Settings rail surface
+      version: 11, // …v9 re-add Settings · v10 Plugins→Settings section · v11 Beads+Goals+Schedule→Work hub (prune ids, add work)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).

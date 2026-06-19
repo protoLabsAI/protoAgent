@@ -44,6 +44,7 @@ test("Workspace settings live in the rail (no scope toggle)", async ({ page }) =
   expect(await page.locator(".pl-sidenav").locator("button").allTextContents()).toEqual([
     "Identity",
     "Model & Routing",
+    "Plugins",
     "Tools",
     "MCP",
     "Subagents",
@@ -53,7 +54,6 @@ test("Workspace settings live in the rail (no scope toggle)", async ({ page }) =
     "Memory",
     "System",
     "Theme",
-    "Plugins",
   ]);
   await section(page, "System");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();

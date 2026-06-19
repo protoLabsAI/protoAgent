@@ -28,44 +28,28 @@ describe("migrateUiState", () => {
   // persisted railOrder rather than leaving a dead rail id with no surface metadata.
   it("prunes the obsolete 'box' rail surface", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "plugins", "box", "settings"], right: ["beads"] },
+      railOrder: { left: ["chat", "knowledge", "box", "settings"], right: ["work"] },
     }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "schedule", "plugins", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
     expect(out.railOrder.left).not.toContain("box");
-    expect(out.railOrder.right).toEqual(["beads"]);
+    expect(out.railOrder.right).toEqual(["work"]);
   });
 
-  // v7: "schedule" is a top-level rail surface again (un-fold from #1075). A persisted
-  // layout that lost it (it was pruned/folded) gets it re-injected where "activity" was —
-  // then v8 prunes "activity" itself, leaving "schedule" in its place.
-  it("restores the 'schedule' rail surface to a layout that lacks it", () => {
-    const out = migrateUiState({
-      railOrder: { left: ["chat", "activity", "settings"], right: ["beads", "goals"] },
-    }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
-  });
-
-  // …but if the user keeps "schedule" on some dock already, don't duplicate it.
-  it("keeps a user-placed 'schedule' where it is", () => {
-    const out = migrateUiState({
-      railOrder: { left: ["chat", "activity", "settings"], right: ["beads", "goals", "schedule"] },
-    }) as { railOrder: { left: string[]; right: string[] } };
-    expect(out.railOrder.right).toContain("schedule");
-    expect(out.railOrder.left).not.toContain("schedule");
-  });
+  // (The v7 "restore schedule" behavior is gone: schedule folded into the Work hub in v11,
+  // which prunes it — so re-adding it would be undone. Covered by the v11 fold test below.)
 
   // v8 (2026-06 IA pass): Activity moved off the rail to a utility-bar widget. Prune
   // "activity" from every dock + the mobile quick-bar so it doesn't linger as a dead id.
   it("prunes 'activity' from the rails and quick-bar", () => {
     const out = migrateUiState({
-      // "settings" present so the v9 re-add below is a no-op — this test is about activity.
-      railOrder: { left: ["chat", "activity", "schedule"], right: ["activity", "beads", "settings"], bottom: ["activity"] },
+      // "settings"/"work" present so the v9/v11 add steps are no-ops — this test is about activity.
+      railOrder: { left: ["chat", "activity", "knowledge"], right: ["activity", "work", "settings"], bottom: ["activity"] },
       quickBar: ["chat", "activity", "knowledge"],
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
     expect(out.railOrder.left).not.toContain("activity");
     expect(out.railOrder.right).not.toContain("activity");
     expect(out.railOrder.bottom).not.toContain("activity");
-    expect(out.railOrder.left).toEqual(["chat", "schedule"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge"]);
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
@@ -73,25 +57,66 @@ describe("migrateUiState", () => {
   // to a persisted layout that lacks it so existing users don't lose the Settings icon.
   it("restores the 'settings' rail surface to a layout that lacks it", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule"], right: ["beads", "goals", "plugins"], bottom: [] },
+      railOrder: { left: ["chat", "knowledge"], right: ["work"], bottom: [] },
     }) as { railOrder: { left: string[] } };
-    // No "plugins" on the left rail → appended to the end of it.
-    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
+    // No "plugins" anchor on the left rail → settings appended to the end of it.
+    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
   });
 
-  it("re-adds 'settings' right after 'plugins' on the left when present", () => {
+  it("re-adds 'settings' where 'plugins' was, then v10 prunes 'plugins'", () => {
     const out = migrateUiState({
       railOrder: { left: ["chat", "schedule", "plugins", "knowledge"], right: ["beads"], bottom: [] },
     }) as { railOrder: { left: string[] } };
-    expect(out.railOrder.left).toEqual(["chat", "schedule", "plugins", "settings", "knowledge"]);
+    // v9 inserts settings after the (legacy) plugins anchor; v10 removes plugins, v11 schedule.
+    expect(out.railOrder.left).toEqual(["chat", "settings", "knowledge"]);
+  });
+
+  // v10 (2026-06): the Plugins manager moved into Settings ▸ Plugins. Prune "plugins" from
+  // every dock + the quick-bar so it doesn't linger as a dead rail id.
+  it("prunes 'plugins' from the rails and quick-bar", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "schedule", "plugins", "settings"], right: ["plugins", "beads"], bottom: ["plugins"] },
+      quickBar: ["chat", "plugins", "knowledge"],
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; quickBar: string[] };
+    expect(out.railOrder.left).not.toContain("plugins");
+    expect(out.railOrder.right).not.toContain("plugins");
+    expect(out.railOrder.bottom).not.toContain("plugins");
+    expect(out.railOrder.left).toEqual(["chat", "settings"]);
+    expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
   it("keeps a user-placed 'settings' where it is", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule"], right: ["settings", "beads"], bottom: [] },
+      railOrder: { left: ["chat", "knowledge"], right: ["settings", "work"], bottom: [] },
     }) as { railOrder: { left: string[]; right: string[] } };
     expect(out.railOrder.right).toContain("settings");
     expect(out.railOrder.left).not.toContain("settings");
+  });
+
+  // v11 (2026-06): Beads + Goals + Schedule folded into the unified "work" hub.
+  it("folds beads/goals/schedule into the 'work' hub", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "schedule", "knowledge", "settings"], right: ["beads", "goals"], bottom: [] },
+      rightPanel: "beads",
+      quickBar: ["chat", "beads", "knowledge"],
+    }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; rightPanel: string; quickBar: string[] };
+    for (const id of ["beads", "goals", "schedule"]) {
+      expect(out.railOrder.left).not.toContain(id);
+      expect(out.railOrder.right).not.toContain(id);
+      expect(out.quickBar).not.toContain(id);
+    }
+    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
+    expect(out.railOrder.right).toEqual(["work"]);
+    expect(out.rightPanel).toBe("work");
+    expect(out.quickBar).toEqual(["chat", "knowledge"]);
+  });
+
+  it("keeps a user-placed 'work' and doesn't duplicate it", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "work"], right: ["settings"], bottom: [] },
+    }) as { railOrder: { left: string[]; right: string[] } };
+    expect(out.railOrder.left.filter((x) => x === "work")).toHaveLength(1);
+    expect(out.railOrder.right).not.toContain("work");
   });
 
   // v5→v6 (bottom dock): railOrder gains a `bottom` dock; add the empty array to a
@@ -99,10 +124,10 @@ describe("migrateUiState", () => {
   it("adds the bottom dock to a pre-v6 railOrder", () => {
     // (schedule already present so the v7 inject is a no-op — keep this test on the dock)
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "settings"], right: ["beads"] },
+      railOrder: { left: ["chat", "knowledge", "settings"], right: ["work"] },
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] } };
     expect(out.railOrder.bottom).toEqual([]);
-    expect(out.railOrder.left).toEqual(["chat", "schedule", "settings"]);
+    expect(out.railOrder.left).toEqual(["chat", "knowledge", "settings"]);
   });
 
   it("does not mutate the input object", () => {

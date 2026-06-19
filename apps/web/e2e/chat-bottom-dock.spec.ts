@@ -11,8 +11,8 @@ test("chat docks at the bottom and survives a bottom-dock surface switch", async
   const leftRail = page.locator(".pl-rail:not(.pl-rail--right):not(.pl-rail--bottom)");
   const bottomRail = page.locator(".pl-rail--bottom");
 
-  // Put a second surface AND chat on the bottom dock, so the dock can switch between them.
-  await rightRail.getByRole("button", { name: "Beads", exact: true }).click({ button: "right" });
+  // Put a second surface (Work) AND chat on the bottom dock, so the dock can switch between them.
+  await rightRail.getByRole("button", { name: "Work", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Move to bottom dock").click();
   await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Move to bottom dock").click();
@@ -28,8 +28,8 @@ test("chat docks at the bottom and survives a bottom-dock surface switch", async
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user")).toHaveText(/remember this message/);
 
-  // Switch the bottom dock to Beads → chat hides but stays mounted (slot, not torn down).
-  await bottomRail.getByRole("button", { name: "Beads", exact: true }).click();
+  // Switch the bottom dock to Work → chat hides but stays mounted (slot, not torn down).
+  await bottomRail.getByRole("button", { name: "Work", exact: true }).click();
   await expect(page.locator(".chat-stage")).toHaveCount(1); // still in the DOM
   await expect(page.locator(".chat-stage")).not.toBeVisible(); // just hidden
 

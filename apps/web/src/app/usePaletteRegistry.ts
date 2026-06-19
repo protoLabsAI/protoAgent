@@ -78,8 +78,11 @@ export function applyNavIntent(intent: NavIntent) {
       openView(intent.id);
       break;
     case "plugins":
-      ui.setSurface("plugins");
+      // Plugins is a Settings section now (2026-06), not a standalone rail surface —
+      // open Settings ▸ Plugins (the rail Settings surface is Workspace-only) on the tab.
       ui.setPluginsTab(intent.tab);
+      ui.setSettingsSection("plugins");
+      ui.setSurface("settings");
       break;
     case "global":
       ui.openGlobalSettings(intent.section);

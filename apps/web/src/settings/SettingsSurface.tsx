@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, HardDrive, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -11,6 +11,7 @@ import { MiddlewarePanel } from "../app/MiddlewarePanel";
 import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
 import { isHostConsole } from "../lib/api";
+import { PluginsSurface } from "../plugins/PluginsSurface";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useUI, type SettingsScope } from "../state/uiStore";
@@ -58,6 +59,7 @@ const WORKSPACE_SECTIONS: Section[] = [
   { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
   // id stays "settings" for persisted-section compat; the label is the un-nested name.
   { id: "settings", label: "Model & Routing", icon: Settings2, render: () => <SettingsCategoryPanel category="Agent" title="Model & Routing" /> },
+  { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
   { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
   { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
   { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
@@ -70,34 +72,27 @@ const WORKSPACE_SECTIONS: Section[] = [
   { id: "memory", label: "Memory", icon: Database, render: () => <SettingsCategoryPanel category="Memory" title="Memory" /> },
   { id: "system", label: "System", icon: Settings2, render: () => <SettingsCategoryPanel category="System" title="System" /> },
   { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
-  {
-    id: "plugins",
-    label: "Plugins",
-    icon: Puzzle,
-    render: () => <PluginSettingsHome />,
-  },
 ];
 
-// ADR 0059 — per-plugin config now lives with each plugin in the Plugins panel
-// (Installed → Configure). This section just points there. (The delegate registry is
-// built-in core infrastructure, so it has its own top-level Workspace ▸ Delegates
-// section rather than living under Plugins.)
+// The Plugins manager (install · enable · configure, plus the Discover directory) lives
+// HERE in Settings ▸ Plugins — folded in from the former standalone rail surface (2026-06).
+// Per-plugin config is inline per row (ADR 0059); the delegate registry is built-in core
+// infrastructure with its own Workspace ▸ Delegates section.
 function PluginSettingsHome() {
-  const setSurface = useUI((s) => s.setSurface);
+  const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
-  const openPlugins = () => { setPluginsTab("local"); setSurface("plugins"); };
   return (
     <>
-      <PanelHeader title="Plugins" kicker="manage + configure in the Plugins panel" />
-      <div className="stage-body">
-        <p className="muted" style={{ marginTop: 0 }}>
-          Browse, install, enable, and <strong>configure</strong> plugins in the dedicated Plugins panel —
-          each installed plugin's settings now live with it (Installed → <strong>Configure</strong>).
-        </p>
-        <Button variant="primary" type="button" onClick={openPlugins}>
-          <Puzzle size={15} /> Open Plugins
-        </Button>
-      </div>
+      <Tabs
+        responsive
+        active={pluginsTab}
+        onSelect={(t) => setPluginsTab(t as "local" | "market")}
+        items={[
+          { id: "local", label: "Installed", icon: <Boxes size={15} /> },
+          { id: "market", label: "Discover", icon: <Store size={15} /> },
+        ]}
+      />
+      <PluginsSurface tab={pluginsTab} />
     </>
   );
 }

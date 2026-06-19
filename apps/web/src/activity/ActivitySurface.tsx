@@ -3,13 +3,12 @@ import "./activity.css";
 import { Empty } from "@protolabsai/ui/primitives";
 import { Clock, Inbox, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
-import { RefreshButton } from "../app/ui-kit";
+import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
-import { PanelHeader } from "@protolabsai/ui/navigation";
 import { onServerEvent } from "../lib/events";
 import type { ActivityEntry } from "../lib/types";
 
@@ -50,7 +49,7 @@ export function ActivitySurface() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await api.activity();
@@ -61,10 +60,13 @@ export function ActivitySurface() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
+
+  // The reload lives in the dialog header (UtilityWidget) — no second panel header here.
+  useUtilityHeaderReload(load, loading);
 
   // Live append: every completed Activity turn pushes `activity.message` with
   // the assistant text + provenance. Prepend (newest-first store order).
@@ -96,20 +98,13 @@ export function ActivitySurface() {
   const chronological = [...entries].reverse();
 
   return (
-    <section className="panel stage-panel" data-testid="activity-surface">
-      <PanelHeader
-        title="Activity"
-        kicker="what the agent did on its own — and why"
-        actions={<RefreshButton onClick={() => void load()} busy={loading} />}
-      />
-
-      <div className="stage-body activity-body">
-        {error ? (
-          <div className="activity-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-        <div className="activity-feed" ref={scrollRef}>
+    <div className="activity-body util-dialog-fill" data-testid="activity-surface">
+      {error ? (
+        <div className="activity-error" role="alert">
+          {error}
+        </div>
+      ) : null}
+      <div className="activity-feed" ref={scrollRef}>
           {chronological.length === 0 && !loading ? (
             <Empty
               className="activity-empty"
@@ -125,8 +120,7 @@ export function ActivitySurface() {
               </div>
             </div>
           ))}
-        </div>
       </div>
-    </section>
+    </div>
   );
 }

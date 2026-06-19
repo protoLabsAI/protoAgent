@@ -119,6 +119,30 @@
   color: var(--accent, #7c8cff);
 }
 
+/* Utility-widget dialog (2026-06): the body registers its reload into the dialog header
+   (UtilityWidget) and drops its own panel header, so the body fills the dialog — no double
+   header. `util-dialog-title` lays the title + the registered reload in the dialog header;
+   `util-dialog-fill` strips the inner card chrome and gives the body a usable height. */
+.util-dialog-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.util-dialog-actions {
+  display: inline-flex;
+  align-items: center;
+  margin: -6px 0; /* keep the icon button from inflating the header row */
+}
+.util-dialog-fill {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: min(60vh, 560px);
+}
+
 /* Background subagents (ADR 0050 Phase 3) — UtilityBar pill + jobs dialog. */
 .bg-jobs-pill {
   position: relative;
