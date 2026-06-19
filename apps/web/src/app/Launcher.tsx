@@ -123,7 +123,10 @@ export function Launcher() {
           if (!next) void invoke("hide_launcher"); // Escape / click-away → hide the window
         }}
         registry={registry}
-        presentation="fullscreen"
+        // `overlay` floats the palette as a rounded card (vs `fullscreen`'s edge-to-edge
+        // fill); launcher.css makes the surrounding scrim transparent so the window's
+        // see-through margins + the frosted card read as a Raycast-style panel.
+        presentation="overlay"
       />
     </div>
   );
