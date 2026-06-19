@@ -103,6 +103,19 @@ def test_scaffold_prepends_when_absent_and_is_idempotent(tmp_path, monkeypatch):
     assert json.loads(mj.read_text(encoding="utf-8")) == entries
 
 
+def test_titles_fold_a_bold_lead_that_wraps_lines():
+    """A `**bold**` lead spanning two lines is captured whole (the v0.47/v0.53 glitch),
+    and a same-line lead still works."""
+    body = (
+        "### Added\n"
+        "- **A long bold lead that wraps\n"
+        "  onto a second line.** then the rest of the bullet.\n"
+        "- **Single line.** detail here\n"
+        "  with a continuation that's ignored.\n"
+    )
+    assert changelog._titles(body) == ["A long bold lead that wraps onto a second line.", "Single line."]
+
+
 def test_scaffold_omits_empty_release(tmp_path, monkeypatch):
     """A release whose section has no bullets is omitted from the marketing changelog
     (no bare version+date entry) rather than scaffolded empty."""
