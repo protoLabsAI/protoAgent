@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.1] - 2026-06-19
+
 ### Fixed
 - **The in-app ⌘K palette no longer inherits the desktop launcher's frosted styling.** The
   launcher window's CSS (transparent scrim, translucent backdrop-blur card, large shadow) is

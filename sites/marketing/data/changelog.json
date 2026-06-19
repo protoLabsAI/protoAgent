@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.56.1",
+    "date": "2026-06-19",
+    "changes": [
+      "The in-app ⌘K palette no longer inherits the desktop launcher's frosted styling.",
+      "Plugin entries in the palette dropped their \"open here\" hint."
+    ]
+  },
+  {
     "version": "v0.56.0",
     "date": "2026-06-19",
     "changes": [
