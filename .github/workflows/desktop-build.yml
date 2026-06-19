@@ -19,12 +19,12 @@ name: Desktop Build
 # updater bundles, and the updater-manifest fan-in job composes latest.json
 # (the manifest the in-app updater polls) onto the release — uploaded last.
 #
-# Fires on MINOR/MAJOR semver tags (a `.0` patch component) alongside release.yml's
-# Docker build, and on manual dispatch. PATCH tags (vX.Y.Z, Z>0) are skipped — a
-# patch is a server/Docker fix and rebuilding the 10×-billed macOS leg per patch is
-# the bulk of CI cost; dispatch this workflow manually with the tag for a patch that
-# genuinely needs a desktop rebuild. Dispatch macOS builds are unsigned unless the
-# full signing secret set is present; Linux/Windows are always unsigned. See
+# Fires on EVERY semver tag push (patch included) alongside release.yml's Docker build,
+# and on manual dispatch. Patches used to be skipped to save CI minutes, but this repo is
+# public so GitHub-hosted runners (incl. the 10×/2× macOS/Windows legs) are free +
+# unlimited — so every release, patch or minor, ships fresh desktop binaries and an
+# updated latest.json (no more hand-attaching a patch's binaries). macOS builds are signed
+# only when the full Apple secret set is present; Linux/Windows are always unsigned. See
 # ADR 0010 (UI tiers / desktop).
 
 on:
@@ -47,16 +47,12 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.target }}
-    # Skip PATCH releases: desktop legs (esp. GitHub-hosted macOS at 10× billing)
-    # rebuild on every tag, but a patch is almost always a server/Docker fix — the
-    # in-app updater can wait for the next minor. Build only on a `.0` tag
-    # (minor/major), or any manual dispatch (the escape hatch for a patch that DOES
-    # need a desktop rebuild — dispatch this workflow with the tag). Patch releases
-    # still ship Docker + the GitHub release via release.yml; they just carry no new
-    # desktop binaries, and latest.json keeps pointing at the last minor's build.
-    if: >-
-      github.repository == 'protoLabsAI/protoAgent'
-      && (github.event_name == 'workflow_dispatch' || endsWith(github.ref_name, '.0'))
+    # Build on every semver tag push (patch included) + any manual dispatch. The old
+    # patch-skip was a CI-cost guard; it's unnecessary on a public repo where GH-hosted
+    # runners are free, and it meant patch desktop fixes never reached users (their
+    # binaries weren't attached and latest.json kept pointing at the last minor). The
+    # repo guard keeps forks from running the matrix.
+    if: github.repository == 'protoLabsAI/protoAgent'
     # Per-leg runner, overridable by repo variable so the expensive macOS/Windows
     # legs can move off GitHub-hosted runners (10×/2× billing multipliers) onto
     # Namespace profiles WITHOUT editing this file — the moment the org provisions
@@ -362,12 +358,12 @@ jobs:
   updater-manifest:
     name: updater manifest (latest.json)
     needs: build
-    # `needs: build` already skips this when the matrix is skipped (patch tag), but
-    # mirror the `.0` guard so the intent is explicit and a dispatch run (no release
-    # to attach to) doesn't try to compose a manifest.
+    # Runs on every tag push (patch included) so the in-app updater's latest.json is
+    # refreshed for every release. Gated to `push` so a manual dispatch (which builds
+    # artifacts, with no release to attach to) doesn't try to compose a manifest;
+    # `needs: build` ties it to a successful matrix.
     if: >-
       github.event_name == 'push' && github.repository == 'protoLabsAI/protoAgent'
-      && endsWith(github.ref_name, '.0')
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
