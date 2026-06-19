@@ -79,12 +79,8 @@ function deepLinkCommands(): Command[] {
     },
   });
   return [
-    link("act:inbox", "Activity: Inbox", ["activity", "inbox"], () => {
-      ui().setSurface("activity");
-      ui().setActivityTab("inbox");
-    }),
-    // (Schedule is a top-level rail surface again — it auto-registers as a "go to"
-    // nav command, so no Activity deep-link here.)
+    // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
+    // auto-registers as a "go to" nav command — so no Activity deep-links here.)
     link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], () => {
       ui().setSurface("plugins");
       ui().setPluginsTab("market");
