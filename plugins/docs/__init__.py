@@ -16,7 +16,7 @@ import logging
 
 from langchain_core.tools import tool
 
-from .corpus import doc_tree, read_doc
+from .corpus import grouped_tree, read_doc
 from .docs_index import DocsIndex
 from .render import render_markdown
 
@@ -99,7 +99,7 @@ def _build_data_router():
 
     @router.get("/tree")
     async def _tree() -> dict:
-        return {"sections": doc_tree()}
+        return {"sections": grouped_tree()}
 
     @router.get("/search")
     async def _search(q: str = "") -> dict:
@@ -145,7 +145,8 @@ document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.cs
   #reader{flex:1;overflow:auto;padding:16px 26px}
   .q{width:100%;padding:6px 8px;border:1px solid var(--pl-color-border);border-radius:6px;background:var(--pl-color-bg-inset);color:inherit;margin-bottom:8px;font:inherit}
   .sec{font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.6;margin:12px 4px 4px}
-  .item{display:block;padding:3px 8px;border-radius:4px;cursor:pointer;color:inherit;text-decoration:none;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .grp{font-weight:600;font-size:12px;opacity:.8;margin:7px 4px 2px}
+  .item{display:block;padding:3px 8px 3px 14px;border-radius:4px;cursor:pointer;color:inherit;text-decoration:none;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item:hover,.item.active{background:var(--pl-color-bg-inset)}
   .res{padding:6px 8px;border-radius:6px;cursor:pointer} .res:hover{background:var(--pl-color-bg-inset)}
   .res .t{font-weight:600} .res .p{font-size:12px;opacity:.65}
@@ -177,7 +178,10 @@ async function openDoc(path){
   [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
 }
 function renderTree(sections){
-  $list.innerHTML = sections.map(s=>'<div class="sec">'+esc(s.label)+'</div>'+s.items.map(it=>'<a class="item" data-path="'+esc(it.path)+'" title="'+esc(it.path)+'">'+esc(it.title)+'</a>').join("")).join("") || '<div class="empty">No docs.</div>';
+  const item=it=>'<a class="item" data-path="'+esc(it.path)+'" title="'+esc(it.path)+'">'+esc(it.title)+'</a>';
+  $list.innerHTML = sections.map(s=>'<div class="sec">'+esc(s.label)+'</div>'+
+    s.groups.map(g=>(g.label?'<div class="grp">'+esc(g.label)+'</div>':'')+g.items.map(item).join("")).join("")
+  ).join("") || '<div class="empty">No docs.</div>';
   [...$list.querySelectorAll(".item")].forEach(a=>a.onclick=()=>openDoc(a.dataset.path));
 }
 function renderResults(rows){

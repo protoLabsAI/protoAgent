@@ -114,6 +114,10 @@ def test_data_routes(tmp_path) -> None:
 
     tree = c.get("/api/plugins/docs/tree").json()["sections"]
     assert {s["id"] for s in tree} >= {"guides", "reference"}  # real corpus
+    # Domain-grouped (mirrors the site sidebar): guides has the Skills domain group.
+    guides = next(s for s in tree if s["id"] == "guides")
+    assert any(g["label"] == "Skills, subagents & workflows" for g in guides["groups"])
+    assert any(it["path"] == "guides/skills.md" for g in guides["groups"] for it in g["items"])
 
     res = c.get("/api/plugins/docs/search", params={"q": "skills"}).json()["results"]
     assert any(r["path"] == "guides/skills.md" for r in res)
@@ -124,6 +128,33 @@ def test_data_routes(tmp_path) -> None:
     # Out-of-corpus path → 404 (the read gate).
     assert c.get("/api/plugins/docs/doc", params={"path": "../../etc/passwd"}).status_code == 404
     assert c.get("/api/plugins/docs/doc", params={"path": "dev/secret.md"}).status_code == 404
+
+
+def test_nav_json_in_sync_with_sidebar() -> None:
+    """The committed nav.json must match what the generator produces from the live sidebar
+    (run `python scripts/gen_docs_nav.py` after editing docs/.vitepress/config.mts)."""
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location("gen_docs_nav_under_test", Path("scripts/gen_docs_nav.py"))
+    gen = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(gen)
+    committed = json.loads(Path("plugins/docs/nav.json").read_text(encoding="utf-8"))
+    assert gen.build_nav() == committed, "nav.json is stale — run `python scripts/gen_docs_nav.py`"
+
+
+def test_grouped_tree_falls_back_to_sections(tmp_path) -> None:
+    """With docs whose paths aren't in nav.json, the tree degrades to flat (unlabeled)
+    section groups rather than going empty."""
+    _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    (tmp_path / "guides").mkdir()
+    (tmp_path / "guides" / "zzz-not-in-nav.md").write_text("# Local only\n\nbody\n", encoding="utf-8")
+    tree = corpus.grouped_tree(root=tmp_path)
+    guides = next(s for s in tree if s["id"] == "guides")
+    assert guides["groups"][0]["label"] == ""  # fallback group has no domain label
+    assert guides["groups"][0]["items"][0]["path"] == "guides/zzz-not-in-nav.md"
 
 
 def test_view_is_four_rules_compliant() -> None:
