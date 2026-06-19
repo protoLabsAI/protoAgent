@@ -26,9 +26,10 @@ type Draft = {
   body: string;
   tools: string;
   userFacing: boolean;
+  userOnly: boolean;
   slash: string;
 };
-const EMPTY_DRAFT: Draft = { name: "", description: "", body: "", tools: "", userFacing: false, slash: "" };
+const EMPTY_DRAFT: Draft = { name: "", description: "", body: "", tools: "", userFacing: false, userOnly: false, slash: "" };
 
 function SkillForm({
   draft,
@@ -81,7 +82,8 @@ function SkillForm({
           <input
             type="checkbox"
             checked={draft.userFacing}
-            onChange={(e) => setDraft({ ...draft, userFacing: e.target.checked })}
+            // Unchecking the slash trigger also clears "user only" (it requires a slash).
+            onChange={(e) => setDraft({ ...draft, userFacing: e.target.checked, userOnly: e.target.checked && draft.userOnly })}
             aria-label="invokable as a slash command"
           />
           Invokable as a <code>/slash</code> command
@@ -97,6 +99,19 @@ function SkillForm({
           />
         ) : null}
       </div>
+      {draft.userFacing ? (
+        <div className="knowledge-chunk-form-row">
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={draft.userOnly}
+              onChange={(e) => setDraft({ ...draft, userOnly: e.target.checked })}
+              aria-label="hide from the agent — operator slash command only"
+            />
+            Hide from the agent — operator <code>/slash</code> command only
+          </label>
+        </div>
+      ) : null}
       <div className="knowledge-chunk-form-row">
         <Button type="button" variant="primary" size="sm" disabled={saving || incomplete} onClick={onSave}>
           {saveLabel}
@@ -216,6 +231,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
         body: s.prompt_template || "",
         tools: (s.tools_used || []).join(", "),
         userFacing: !!s.user_facing,
+        userOnly: !!s.user_only,
         slash: s.slash || "",
       });
       setEditingId(p.id);
@@ -242,7 +258,8 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
           .split(",")
           .map((t) => t.trim())
           .filter(Boolean),
-        user_facing: draft.userFacing,
+        user_facing: draft.userFacing || draft.userOnly,
+        user_only: draft.userOnly,
         slash: draft.slash.trim(),
       };
       const r = editingId !== null ? await api.updatePlaybook(editingId, payload) : await api.createPlaybook(payload);
@@ -362,6 +379,11 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
                         {p.user_facing ? (
                           <span title={`Invokable as /${p.slash || p.name}`}>
                             <Badge status="neutral">/{p.slash || p.name}</Badge>
+                          </span>
+                        ) : null}
+                        {p.user_only ? (
+                          <span title="Hidden from the agent — an operator /slash command only">
+                            <Badge status="warning">user-only</Badge>
                           </span>
                         ) : null}
                         <strong>{p.name}</strong>

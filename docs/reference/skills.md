@@ -16,6 +16,7 @@ key is **ignored** (no OS/binary/license gating is parsed or enforced).
 | `description` | string | ✅ | The retrieval **trigger signal** (BM25 over name/description/body). Truncated at **1024 chars**. Write it "pushy" — say plainly *when* to use the skill. |
 | `tools` (or `metadata.tools`) | list[string] | — | Advisory tool names the skill relies on. Surfaced to the model as `<relevant_tools>` when retrieved — a hint, not a gate ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)). |
 | `user_facing` | bool | — | `true` → the skill is invokable as a `/<slash>` chat command ([ADR 0052](/adr/0052-user-facing-skills-slash-commands)). Default `false`. Truthy spellings: `true` / `1` / `yes` / `on`. |
+| `user_only` | bool | — | `true` → an **operator-only** skill: it's a `/<slash>` command, but it is **withheld from the agent's retrieval** (`load_skills`) — the agent never auto-loads it into `<learned_skills>`. **Implies `user_facing`.** Default `false`. Use it for procedures you want to run on demand without the agent reaching for them on its own. |
 | `slash` | string | — | The `/<token>` trigger for a `user_facing` skill (whitespace-free). Blank → slugified `name` (lowercased, non-alphanumerics → hyphens). |
 
 The markdown **body** is the skill's procedure — freeform instructions, used verbatim as

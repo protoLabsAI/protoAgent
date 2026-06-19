@@ -158,6 +158,7 @@ def register_knowledge_routes(app) -> None:
                 tools=_as_str_list(body.get("tools") or body.get("tools_used")),
                 user_facing=bool(body.get("user_facing", False)),
                 slash=str(body.get("slash", "")).strip(),
+                user_only=bool(body.get("user_only", False)),
             )
             idx.add_skill(artifact, source="disk")
         except Exception as exc:  # noqa: BLE001
@@ -215,6 +216,7 @@ def register_knowledge_routes(app) -> None:
                 tools=_as_str_list(body.get("tools") or body.get("tools_used")),
                 user_facing=bool(body.get("user_facing", cur.get("user_facing", False))),
                 slash=str(body.get("slash", cur.get("slash", "") or "")).strip(),
+                user_only=bool(body.get("user_only", cur.get("user_only", False))),
             )
             idx.delete_skill(skill_id)
             if new_slug != old_slug:

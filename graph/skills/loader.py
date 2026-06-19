@@ -77,6 +77,11 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
     # token make the skill invokable as `/<slash>` in chat. Accept a few truthy spellings.
     user_facing = str(meta.get("user_facing", "")).strip().lower() in ("true", "1", "yes", "on")
     slash = str(meta.get("slash", "")).strip()
+    # User-ONLY (2026-06): a `/<slash>` command withheld from the agent's retrieval. It
+    # implies user_facing (the slash is the only way to use it).
+    user_only = str(meta.get("user_only", "")).strip().lower() in ("true", "1", "yes", "on")
+    if user_only:
+        user_facing = True
 
     return SkillV1Artifact(
         name=name,
@@ -86,6 +91,7 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
         source_session_id=f"skill-md:{path.parent.name}",
         user_facing=user_facing,
         slash=slash,
+        user_only=user_only,
     )
 
 

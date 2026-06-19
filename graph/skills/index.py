@@ -38,7 +38,8 @@ def _build_match_query(query: str) -> str:
 # v3: added `source` ('disk' = human-authored SKILL.md, re-seeded each boot;
 #     'emitted' = agent-authored via task(), persisted + curator-managed).
 # v4: added user_facing + slash (ADR 0052 — `/<slash>` chat commands).
-_SCHEMA_VERSION = 4
+# v5: added user_only (2026-06) — a user_facing skill withheld from agent retrieval.
+_SCHEMA_VERSION = 5
 
 # Columns indexed by FTS5 (order matters for sqlite_master check)
 _FTS_CONTENT_COLUMNS = (
@@ -151,7 +152,8 @@ class SkillsIndex:
                 last_used UNINDEXED,
                 source UNINDEXED,
                 user_facing UNINDEXED,
-                slash UNINDEXED
+                slash UNINDEXED,
+                user_only UNINDEXED
             );
 
             CREATE TABLE _skills_meta (
@@ -160,7 +162,7 @@ class SkillsIndex:
             );
 
             INSERT INTO _skills_meta (key, version)
-            VALUES ('schema_version', 4);
+            VALUES ('schema_version', 5);
         """)
         conn.commit()
         log.info("[skills] schema created at %s", self._db_path)
@@ -214,6 +216,8 @@ class SkillsIndex:
         slash = getattr(artifact, "slash", "") or ""
         if user_facing == "1" and not slash and hasattr(artifact, "slash_token"):
             slash = artifact.slash_token()
+        # User-only (v5): withheld from load_skills (agent retrieval) but still a /slash.
+        user_only = "1" if getattr(artifact, "user_only", False) else "0"
 
         conn = self._open_conn()
         try:
@@ -222,8 +226,8 @@ class SkillsIndex:
                 INSERT INTO skills_fts
                     (name, description, prompt_template, tools_used,
                      source_session_id, created_at, confidence, last_used, source,
-                     user_facing, slash)
-                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?, ?)
+                     user_facing, slash, user_only)
+                VALUES (?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -236,6 +240,7 @@ class SkillsIndex:
                     source,
                     user_facing,
                     slash,
+                    user_only,
                 ),
             )
             conn.commit()
@@ -291,6 +296,7 @@ class SkillsIndex:
                        bm25(skills_fts) AS score
                 FROM skills_fts
                 WHERE skills_fts MATCH ?
+                  AND user_only = '0'
                 ORDER BY score
                 LIMIT ?
                 """,
@@ -322,7 +328,7 @@ class SkillsIndex:
             cur = conn.execute(
                 """
                 SELECT rowid AS id, name, description, prompt_template, tools_used,
-                       created_at, confidence, last_used, source, user_facing, slash
+                       created_at, confidence, last_used, source, user_facing, slash, user_only
                 FROM skills_fts
                 """
             )
@@ -348,6 +354,7 @@ class SkillsIndex:
             "source": (row["source"] if "source" in keys else "emitted") or "emitted",
             "user_facing": (row["user_facing"] if "user_facing" in keys else "0") == "1",
             "slash": (row["slash"] if "slash" in keys else "") or "",
+            "user_only": (row["user_only"] if "user_only" in keys else "0") == "1",
         }
 
     def user_facing_skills(self) -> list[dict]:
@@ -359,7 +366,7 @@ class SkillsIndex:
             cur = conn.execute(
                 """
                 SELECT rowid AS id, name, description, prompt_template, tools_used,
-                       created_at, confidence, last_used, source, user_facing, slash
+                       created_at, confidence, last_used, source, user_facing, slash, user_only
                 FROM skills_fts
                 WHERE user_facing = '1'
                 """

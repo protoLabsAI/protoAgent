@@ -64,6 +64,33 @@ def test_create_writes_skill_md_and_indexes(monkeypatch, tmp_path):
     assert detail["prompt_template"].startswith("1. gather PRs")
 
 
+def test_create_user_only_skill_is_slash_but_not_agent_retrievable(monkeypatch, tmp_path):
+    c, idx, root = _client(monkeypatch, tmp_path)
+    r = c.post(
+        "/api/playbooks",
+        json={
+            "name": "Ops Runbook",
+            "description": "deploy and rollback the service",
+            "prompt_template": "1. deploy\n2. verify\n3. rollback",
+            "user_only": True,
+            "slash": "ops",
+        },
+    )
+    assert r.status_code == 200
+    skill = r.json()["skill"]
+    assert skill["user_only"] is True
+    assert skill["user_facing"] is True  # user_only implies user_facing
+    # SKILL.md persisted the flag.
+    md = (root / "ops-runbook" / "SKILL.md").read_text()
+    assert "user_only: true" in md and "user_facing: true" in md
+    # The agent never retrieves it; the /slash list does expose it.
+    assert "Ops Runbook" not in [s.name for s in idx.load_skills("deploy rollback service", k=10)]
+    assert "Ops Runbook" in [s["name"] for s in idx.user_facing_skills()]
+    # The editor round-trips the flag.
+    detail = c.get(f"/api/playbooks/{skill['id']}").json()["skill"]
+    assert detail["user_only"] is True
+
+
 def test_create_requires_fields(monkeypatch, tmp_path):
     c, _idx, _root = _client(monkeypatch, tmp_path)
     assert c.post("/api/playbooks", json={"name": "x", "description": "y"}).status_code == 400

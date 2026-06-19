@@ -43,6 +43,10 @@ class SkillV1Artifact:
     # deliberately-authored skills become directly invokable.
     user_facing: bool = False
     slash: str = ""
+    # User-ONLY skills (2026-06): user_facing AND withheld from the agent's retrieval
+    # (`load_skills`) — a `/<slash>` command the operator can run, but the agent never
+    # pulls into context. Implies user_facing.
+    user_only: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:

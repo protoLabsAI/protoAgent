@@ -559,6 +559,8 @@ export type Playbook = {
   origin?: "user" | "learned" | "bundled" | "commons";
   editable?: boolean;
   user_facing?: boolean;
+  // User-only (2026-06): a `/<slash>` command withheld from the agent's retrieval.
+  user_only?: boolean;
   slash?: string;
   // Full procedure body — present only on the single-skill detail (GET
   // /api/playbooks/:id); the list payload omits it to stay light.

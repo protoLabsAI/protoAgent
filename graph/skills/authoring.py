@@ -41,15 +41,19 @@ def skill_md_text(
     tools: list[str] | None = None,
     user_facing: bool = False,
     slash: str = "",
+    user_only: bool = False,
 ) -> str:
     """Render a ``SKILL.md`` document: YAML frontmatter + markdown body."""
     meta: dict[str, object] = {"name": name.strip(), "description": description.strip()}
     if tools:
         meta["tools"] = [str(t).strip() for t in tools if str(t).strip()]
-    if user_facing:
+    # user_only implies user_facing — the /slash is the only way to use it.
+    if user_facing or user_only:
         meta["user_facing"] = True
         if slash.strip():
             meta["slash"] = slash.strip()
+    if user_only:
+        meta["user_only"] = True
     frontmatter = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
@@ -73,6 +77,7 @@ def write_skill(
     tools: list[str] | None = None,
     user_facing: bool = False,
     slash: str = "",
+    user_only: bool = False,
 ):
     """Write ``<root>/<slug>/SKILL.md`` for *name* and return its parsed artifact.
 
@@ -82,7 +87,10 @@ def write_skill(
 
     path = skill_path(root, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, skill_md_text(name, description, body, tools=tools, user_facing=user_facing, slash=slash))
+    atomic_write(
+        path,
+        skill_md_text(name, description, body, tools=tools, user_facing=user_facing, slash=slash, user_only=user_only),
+    )
     artifact = parse_skill_md(path)
     if artifact is None:
         # Shouldn't happen — we just wrote valid frontmatter — but never hand back None.

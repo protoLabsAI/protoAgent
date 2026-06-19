@@ -50,6 +50,12 @@ test("the + button opens the New skill DIALOG, not an inline panel form", async 
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("skill name")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Create skill" })).toBeVisible();
+
+  // The "user only" (hide from the agent) toggle appears only once it's a /slash command.
+  const userOnly = dialog.getByLabel(/hide from the agent/i);
+  await expect(userOnly).toHaveCount(0);
+  await dialog.getByLabel("invokable as a slash command").check();
+  await expect(userOnly).toBeVisible();
 });
 
 test("layered skills show tier badges and promote a private skill to the commons", async ({ page }) => {

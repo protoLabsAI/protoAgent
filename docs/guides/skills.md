@@ -46,6 +46,7 @@ tools: [web_search, fetch_url]   # optional, advisory
 | `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
 | `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the skill is retrieved for a turn, these are surfaced to the agent as `<relevant_tools>` so it knows which of its (already-bound) tools this skill relies on — a relevance hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
 | `user_facing` | — | `true` makes the skill directly invokable as a `/<slash>` command in the chat composer (ADR 0052). Off by default. |
+| `user_only` | — | `true` makes it an **operator-only** skill: a `/<slash>` command the agent **never auto-loads** into context. Implies `user_facing`. Off by default. |
 | `slash` | — | The trigger token for a `user_facing` skill (whitespace-free); blank → slug of `name`. e.g. `slash: web-research` → `/web-research`. |
 
 The markdown **body** is the skill's instructions — freeform; write whatever
@@ -61,6 +62,30 @@ turn (full toolset, history intact) — it doesn't spawn a detached worker.
 Precedence on a shared token: `goal` > workflow > subagent > skill. The shipped
 `web-research` skill is user-facing as `/web-research`, and `release-notes` as
 `/release-notes`.
+
+### Operator-only skills (`user_only`)
+
+Some procedures should be **yours to invoke, not something the agent reaches for
+on its own** — a deploy/rollback runbook, a destructive cleanup, a manual override,
+a "do exactly this" command you'd rather the model not improvise around.
+
+Set `user_only: true` (it implies `user_facing: true`):
+
+```yaml
+---
+name: Deploy
+description: Deploy + verify the service, then roll back on failure
+user_only: true        # → /deploy works, but the agent never auto-loads it
+slash: deploy
+---
+1. …procedure…
+```
+
+The skill is **excluded from the agent's retrieval** (`load_skills`) — it never
+lands in the `<learned_skills>` context block, so the agent won't pull it in on a
+hunch — but it stays a `/<slash>` command you can run on demand. In the Skills
+panel a **`user-only`** badge marks which skills the agent can't auto-load. Toggle
+it in the editor with **"Hide from the agent — operator `/slash` command only."**
 
 ## Where skills live
 

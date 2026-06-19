@@ -40,6 +40,9 @@ class _FakeArtifact:
     tools_used: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source_session_id: str = ""
+    user_facing: bool = False
+    slash: str = ""
+    user_only: bool = False
 
 
 def _make_artifact(
@@ -663,3 +666,29 @@ def test_user_facing_slash_falls_back_to_slug(index):
     index.add_skill(uf, source="disk")
     ufs = index.user_facing_skills()
     assert ufs and ufs[0]["slash"] == "big-task"
+
+
+def test_user_only_skill_is_withheld_from_agent_retrieval_but_still_a_slash(index):
+    """A user_only skill (v5): the agent never retrieves it (load_skills), but it's a
+    user_facing /slash command."""
+    # A normal retrievable skill + a user-only one, both matching "deploy".
+    index.add_skill(
+        _FakeArtifact(name="Deploy guide", description="how to deploy the app",
+                      prompt_template="deploy steps", source_session_id="s1"),
+        source="disk",
+    )
+    index.add_skill(
+        _FakeArtifact(name="Deploy now", description="deploy the app immediately",
+                      prompt_template="run deploy", user_facing=True, user_only=True,
+                      slash="deploy", source_session_id="s2"),
+        source="disk",
+    )
+    # Agent retrieval (load_skills) sees the normal skill, NOT the user-only one.
+    names = [r.name for r in index.load_skills("deploy", k=10)]
+    assert "Deploy guide" in names
+    assert "Deploy now" not in names
+    # But the user-only skill IS exposed as a /slash command + carries the flag.
+    ufs = {s["name"]: s for s in index.user_facing_skills()}
+    assert "Deploy now" in ufs
+    assert ufs["Deploy now"]["slash"] == "deploy"
+    assert ufs["Deploy now"]["user_only"] is True
