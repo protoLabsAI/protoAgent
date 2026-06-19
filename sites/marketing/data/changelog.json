@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.53.0",
+    "date": "2026-06-19",
+    "changes": [
+      "Docs plugin — read and ask about protoAgent's own docs",
+      "user_only skills",
+      "Desktop update notice is now a full modal with a markdown changelog.",
+      "Plugin views are themed in the desktop app"
+    ]
+  },
+  {
     "version": "v0.52.0",
     "date": "2026-06-19",
     "changes": [
