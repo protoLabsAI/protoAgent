@@ -220,9 +220,11 @@ The included GitHub Actions pipeline is optional but opinionated.
   Watchtower (or similar) can poll `latest` for auto-deploy.
 - **To cut a release** → run `prepare-release.yml` manually
   (`workflow_dispatch`, gated on the `RELEASE_ENABLED` repo var, with a
-  patch/minor/major bump input). It opens a "chore: release vX.Y.Z" bump
-  PR, auto-merges it, and pushes a semver tag. Releases are on-demand, not
-  per-merge.
+  patch/minor/major bump input). It **only opens** a "chore: release vX.Y.Z"
+  bump PR (fleet policy: it does **not** auto-merge or tag). Merge that PR
+  through the normal CI/review gate, then push the tag yourself
+  (`git tag -a vX.Y.Z -m … && git push origin vX.Y.Z`) — the tag push is what
+  triggers `release.yml`. Releases are on-demand, not per-merge.
 - **When a semver tag lands** → `release.yml` builds and pushes
   the stable semver Docker tags, creates a GitHub release with
   filtered notes, and posts a Discord embed via the shared
