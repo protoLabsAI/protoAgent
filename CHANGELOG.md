@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Docs plugin — the agent can answer questions about protoAgent's own docs** (first-party,
+  on by default). A keyword FTS index over the bundled docs + `docs_search` / `docs_read`
+  tools + a skill (search → read → cite). Self-contained and offline — no embeddings, no
+  knowledge-store coupling. A console Docs reader view + ⌘K doc search follow.
+
 ### Changed
 - **The desktop in-app update notice is now a full modal with a markdown-rendered
   changelog.** The release notes render as readable markdown (headings, bullets, links) in

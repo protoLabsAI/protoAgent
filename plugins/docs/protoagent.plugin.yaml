@@ -1,0 +1,12 @@
+id: docs
+name: Docs
+version: 0.1.0
+description: >-
+  Answer questions about protoAgent from its own documentation. Ships a keyword
+  index over the bundled docs + `docs_search` / `docs_read` agent tools + a skill
+  that teaches search → read → cite. A console Docs reader view and ⌘K search
+  come next. First-party, on by default; disable via `plugins.disabled: [docs]`.
+enabled: true
+capabilities:
+  network: []
+  filesystem: scoped   # read-only over the bundled docs/ tree

@@ -54,6 +54,14 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # the frozen app finds them under _MEIPASS/plugins (the loader's bundle root).
     # Externals (Discord, Google, …) install at runtime into the live dir (ADR 0058).
     ("plugins", "plugins"),
+    # The published docs corpus — the `docs` plugin reads it (`docs/` beside the bundled
+    # `plugins/` under _MEIPASS) to power docs_search/docs_read + the Docs view. Only the
+    # Diátaxis sections + ADRs; `docs/dev` (internal) and `.vitepress` (build) are excluded.
+    ("docs/tutorials", "docs/tutorials"),
+    ("docs/guides", "docs/guides"),
+    ("docs/reference", "docs/reference"),
+    ("docs/explanation", "docs/explanation"),
+    ("docs/adr", "docs/adr"),
 ]
 
 # Packages PyInstaller's static analysis under-collects (dynamic imports +
