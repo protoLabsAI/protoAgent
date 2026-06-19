@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-06-19
+
 ### Changed
 - **The command palette (⌘K) is now command-driven.** The root list leads with **Agents**,
   then **Plugins** (each plugin's views), then **Commands** — the built-in surfaces no longer

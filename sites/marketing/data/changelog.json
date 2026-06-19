@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.56.0",
+    "date": "2026-06-19",
+    "changes": [
+      "The command palette (⌘K) is now command-driven."
+    ]
+  },
+  {
     "version": "v0.55.1",
     "date": "2026-06-19",
     "changes": [
