@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.60.0",
+    "date": "2026-06-19",
+    "changes": [
+      "The app side drawer now has a Changelog link.",
+      "Goal mode is always on.",
+      "The frozen desktop app now bundles config/skills."
+    ]
+  },
+  {
     "version": "v0.56.1",
     "date": "2026-06-19",
     "changes": [
