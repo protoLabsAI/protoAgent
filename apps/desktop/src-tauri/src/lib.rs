@@ -516,6 +516,12 @@ pub fn run() {
                 .title("protoAgent — Quick Command")
                 .inner_size(720.0, 480.0)
                 .decorations(false)
+                // Transparent + shadowless so the web shell can float a rounded, frosted
+                // palette card with see-through margins (the window itself paints nothing;
+                // the panel's CSS owns the radius + shadow). macOS needs the paired
+                // `macOSPrivateApi` config flag + the `macos-private-api` cargo feature.
+                .transparent(true)
+                .shadow(false)
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .resizable(false)
