@@ -39,11 +39,6 @@ export type RuntimeStatus = {
     enabled: boolean;
     backend: string;
   };
-  goal: {
-    enabled: boolean;
-    controller_loaded: boolean;
-    max_iterations?: number | null;
-  };
   cache_warmer: {
     enabled: boolean;
     loaded: boolean;

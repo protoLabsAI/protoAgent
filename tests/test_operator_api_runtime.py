@@ -31,7 +31,6 @@ def test_runtime_status_redacts_secret_values() -> None:
         knowledge_store=_Store(),
         scheduler=_Scheduler(),
         cache_warmer=object(),
-        goal_controller=object(),
     )
 
     assert status["model"]["name"] == "protolabs/reasoning"
