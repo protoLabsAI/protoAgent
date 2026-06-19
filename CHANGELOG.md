@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.55.0] - 2026-06-19
 
+### Added
+- **Chat can dock at the bottom panel.** Drag it there, or right-click the Chat rail icon →
+  *Move to bottom dock* — previously chat was confined to the left/right rails. Its slot mounts
+  unconditionally on the bottom dock the same way it does on a side rail, so an in-flight turn
+  keeps streaming when you switch the bottom dock to another surface and back (#613). (Collapsing
+  the dock still tears the stream down — same as collapsing a side rail; the conversation itself
+  is restored from the session store.)
+
+### Fixed
+- **The chat "still streaming" pulse now shows on the right rail and bottom dock.** The rail
+  icon's background-stream dot was computed off the left rail only, so it never lit when chat
+  lived on the right rail (or the new bottom dock). It's now derived on whichever dock holds chat.
+
 ## [0.54.0] - 2026-06-19
 
 ### Added
@@ -22,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   view, run the deep-link actions, quick-chat with the agent, or open an inline plugin view.
   Navigation commands hand off to the main console window, and the launcher dismisses on blur
   or Escape (ADR 0057). `⌘⇧P` still toggles the full console window.
+
+### Changed
+- **Activity is a read-only utility-bar widget, off the left rail.** The provenance feed —
+  what the agent did on its own, and why — moved from a rail surface into the bottom-left
+  widgets cluster, alongside the inbox and background jobs: a pill with an unread badge that
+  opens the feed in a dialog. The reply composer is gone; Activity is a read-only event log now.
 
 ### Fixed
 - **Background agents widget no longer needs a page reload to appear.** The utility-bar pill
