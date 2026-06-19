@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.52.0",
+    "date": "2026-06-19",
+    "changes": [
+      "Desktop app catches up to v0.51.x."
+    ]
+  },
+  {
     "version": "v0.51.1",
     "date": "2026-06-19",
     "changes": [

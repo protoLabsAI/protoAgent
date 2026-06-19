@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-06-19
+
+### Changed
+- **Desktop app catches up to v0.51.x.** A minor bump so the desktop build runs: the
+  console **utility bar** (widgets + bottom panel) and the documentation overhaul now ship
+  in the signed macOS / Windows / Linux binaries + in-app updater. No new runtime changes
+  beyond v0.51.1.
+
 ## [0.51.1] - 2026-06-19
 
 ### Added
