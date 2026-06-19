@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Background agents widget no longer needs a page reload to appear.** The utility-bar pill
+  mounts while a cold backend is still warming up (the desktop sidecar can take ~a minute),
+  so its one-shot startup fetch could fail before the engine was up and the pill stayed
+  hidden until a manual reload. It now re-checks whenever the event bus (re)connects — the
+  pill appears as soon as the engine is reachable, and also refreshes after a server restart.
+
 ## [0.53.0] - 2026-06-19
 
 ### Added

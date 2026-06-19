@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
-import { onTopic } from "../lib/events";
+import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
 import { applyProgress, byRecency, fmtElapsed, nowIso, type ProgressTool } from "./background-jobs";
 
@@ -41,9 +41,20 @@ export function BackgroundJobs() {
       });
   }, []);
 
-  // Hydrate on mount.
+  // Hydrate on mount, then again whenever the event bus (re)connects. The reconnect
+  // refetch is what makes the pill appear WITHOUT a manual reload when the backend wasn't
+  // reachable at first paint: the shell (and this widget) mounts immediately while a cold
+  // sidecar is still warming up — the BootGate splash only overlays it — so the one-shot
+  // mount fetch can fail (connection refused) before the engine is up, and nothing else
+  // re-fetches the *existence* of the feature. `onConnectionChange` fires the current state
+  // immediately and on every transition; we refetch on each connect (also refreshing after
+  // a server restart). The plain mount call covers token-gated setups where the SSE bus
+  // can't authenticate but plain HTTP can.
   useEffect(() => {
     hydrate();
+    return onConnectionChange((c) => {
+      if (c) hydrate();
+    });
   }, [hydrate]);
 
   // Live updates off the event bus.
