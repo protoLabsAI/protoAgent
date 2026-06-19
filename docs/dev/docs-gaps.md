@@ -14,6 +14,7 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 | Mid-turn steering | `docs/explanation/steering.md` |
 | Operator REST API reference | `docs/reference/operator-api.md` |
 | Skills loaded chip / `skills.announce` | already in `docs/guides/skills.md` |
+| Operator-console rewrite (was the Gradio→React migration plan) | `docs/guides/react-tauri-ui.md` |
 
 ## Remaining
 
@@ -23,8 +24,10 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 | 2 | **Skills reference** (frontmatter/schema lookup) | Reference | Skills, subagents & workflows | Skills domain has guides + explanation but no Reference page. |
 | 3 | **First-skill / Langfuse tutorials** | Tutorial | Skills / Operate | Tutorials are thin (2). Candidates: "Write your first skill", "Set up Langfuse tracing". |
 
-## Stale doc needing a rewrite (not just a banner)
+_(No outstanding stale-doc rewrites — `react-tauri-ui.md` was rewritten into a current
+operator-console guide.)_
 
-| # | Doc | Issue |
-|---|---|---|
-| A | `docs/guides/react-tauri-ui.md` | Titled "Migration"; it's the original Gradio→React plan. Banner added; still wants a rewrite into a current **operator-console how-to** (the new [Operator REST API](/reference/operator-api) reference now covers the endpoint map, so the rewrite can focus on console usage). |
+> Note: the console IA is mid-evolution (utility bar + bottom panel landed in #1176/#1178;
+> ADR 0056 "unified dockable view model" is Proposed). The console guide describes surfaces
+> by behavior, not fixed geometry, to stay durable — re-check the Layout section if the
+> dockable-view work lands.
