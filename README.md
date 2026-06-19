@@ -33,18 +33,18 @@ rename / release-pipeline wiring.
 
 | Concern | Where it lives | What it does |
 |---|---|---|
-| A2A server | `server/a2a.py`, `a2a_executor.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
+| A2A server | `server/a2a.py`, `a2a_impl/executor.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
 | Agent runtime | `graph/agent.py`, `server/` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
 | LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
 | Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
-| Delegate to other agents | `plugins/delegates/`, `plugins/coding_agent/` | **`delegate_to`** routes a sub-task to another agent or endpoint over **a2a / openai / acp** — managed + hot-swappable from the console (Settings → Integrations), with a health prober. The **acp** type spawns a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol. See [Delegates](./docs/guides/delegates.md), [Spawn CLI coding agents](./docs/guides/coding-agents.md), ADR [0024](./docs/adr/0024-spawn-cli-coding-agents-acp.md) / [0025](./docs/adr/0025-unified-delegate-registry-and-panel.md) |
-| Starter tools | `tools/lg_tools.py` | Default-on set: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 2 HITL (`ask_human`, `request_user_input`) + 4 notes + 4 memory + 3 scheduler + 4 beads + inbox/peer (conditional). GitHub read tools are the opt-in `github` plugin. Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
-| Knowledge store | `knowledge/store.py` | sqlite + FTS5 (LIKE fallback). One `chunks` table for operator notes, daily-log entries, and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
-| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, auto-retrieved), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`python -m server plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Discord** (`plugins/discord`) and **Telegram** (`plugins/telegram`) integrations ship this way — disable with `plugins.disabled`; others (e.g. **Google** Gmail/Calendar, **Slack**) install from their own repos. See [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Plugin console views](./docs/guides/plugin-views.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
+| Delegate to other agents | `plugins/delegates/`, `plugins/coding_agent/` | **`delegate_to`** routes a sub-task to another agent or endpoint over **a2a / openai / acp** — a **built-in** registry, managed + hot-swappable from the console (**Workspace settings ▸ Delegates**), with a health prober. The **acp** type spawns a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol. See [Delegates](./docs/guides/delegates.md), [Spawn CLI coding agents](./docs/guides/coding-agents.md), ADR [0024](./docs/adr/0024-spawn-cli-coding-agents-acp.md) / [0025](./docs/adr/0025-unified-delegate-registry-and-panel.md) |
+| Starter tools | `tools/lg_tools.py` | Default-on set: 4 keyless general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`) + 2 HITL (`ask_human`, `request_user_input`) + 4 memory + 3 scheduler + 4 beads + inbox/peer (conditional). Note tools come from the on-by-default `notes` plugin; GitHub read tools are the opt-in `github` plugin. Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
+| Knowledge store | `knowledge/store.py`, `knowledge/hybrid_store.py`, `ingestion/` | sqlite + FTS5 keyword search by default; an optional **hybrid** store adds embeddings + RRF fusion, and the **ingestion pipeline** pulls in txt/md/html/pdf/web/YouTube/audio/video sources. One `chunks` table for operator notes and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
+| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, auto-retrieved), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`python -m server plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Telegram** (`plugins/telegram`) integration ships bundled; **Discord**, **Slack**, and **Google** Gmail/Calendar install as external plugins from their own repos. See [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Plugin console views](./docs/guides/plugin-views.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
 | Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by either a bundled sqlite scheduler or a Workstacean adapter (env-selected). Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
 | Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
-| Tracing | `tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
-| Observability | `metrics.py`, `audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
+| Tracing | `observability/tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
+| Observability | `observability/metrics.py`, `observability/audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
 | Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
 | UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
 | Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
@@ -139,20 +139,23 @@ python -m server plugin uninstall your-plugin --purge                # removes c
 
 **Browse the directory → [agent.protolabs.studio/plugins](https://agent.protolabs.studio/plugins)**
 
-First-party plugins ship in `plugins/` (off by default — enable via `plugins.enabled`):
+First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes` and `docs`
+are on by default, and the rest are opt-in (enable via `plugins.enabled`):
 
 | Plugin | Adds | What it does |
 | --- | --- | --- |
+| [`delegates`](./plugins/delegates/) | tool · settings | **Built-in** — `delegate_to` over a2a / openai / acp, managed in Workspace ▸ Delegates |
+| [`notes`](./plugins/notes/) | tools · view | **On by default** — one shared markdown note the agent and operator both read/write |
+| [`docs`](./plugins/docs/) | tools · view · skill | **On by default** — offline search over protoAgent's own docs |
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
-| [`delegates`](./plugins/delegates/) | tool · settings | Hot-swappable registry of agents/endpoints (`delegate_to` over a2a / openai / acp) |
-| [`coding_agent`](./plugins/coding_agent/) | tool | Spawn a CLI coding agent (protoCLI, Claude Code, Codex, Gemini) over ACP |
-| [`discord`](./plugins/discord/) | surface · tool | Run the agent as a Discord bot — inbound DMs + outbound posting |
+| [`workflows`](./plugins/workflows/) | tools | Declarative multi-step subagent workflows (DAG recipes) |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
+| [`github`](./plugins/github/) | tools | Read-only GitHub tools over the `gh` CLI |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
 
-Integrations like **Slack** (Socket Mode `ChatAdapter`) and **Google** Gmail/Calendar
-(managed MCP server with in-app OAuth) install as **external plugins** from their own
-repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
+Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`) and **Google**
+Gmail/Calendar (managed MCP server with in-app OAuth) install as **external plugins** from
+their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
 
 **Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
 small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,
@@ -196,7 +199,7 @@ The A2A handler supports both token shapes the spec permits:
 Both produce `Authorization: Bearer shared-secret` on outgoing
 webhooks. If your fork is getting 401s on callbacks, check which
 shape the consumer is sending before changing anything —
-the dual-token parser in `a2a_auth.py` reads both and the
+the dual-token parser in `a2a_impl/auth.py` reads both and the
 test suite covers both.
 
 ## Observability
@@ -222,9 +225,11 @@ The included GitHub Actions pipeline is optional but opinionated.
   the stable semver Docker tags, creates a GitHub release with
   filtered notes, and posts a Discord embed via the shared
   [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action.
-- **On every PR + push** → `checks.yml` runs `pytest` and
-  `verify-workspace-config` (the fleet `.beads`/`.automaker`/owned-runner
-  standard), so drift is caught in CI rather than mid-run.
+- **On every PR + push** → `checks.yml` runs the gates: ruff + import
+  contracts, `pytest`, an A2A live smoke, a web E2E smoke (vitest +
+  Playwright), gitleaks, and `verify-workspace-config` (the fleet
+  `.beads`/`.automaker`/owned-runner standard), so drift is caught in CI
+  rather than mid-run.
 
 All workflows run on the org-owned `namespace-profile-protolabs-linux`
 runner. The three release workflows (`docker-publish`, `prepare-release`,
