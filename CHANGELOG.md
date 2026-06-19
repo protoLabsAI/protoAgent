@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.1] - 2026-06-19
+
+### Docs
+- **Documentation overhaul.** Every Diátaxis section (Tutorials / Guides / Reference /
+  Explanation) is now grouped by one consistent domain taxonomy in the sidebar and
+  indexes, and the gaps are filled — guides for **ingestion** and **RAG tuning**, the
+  **command palette (⌘K)**, **mid-turn steering**, an **Operator REST API** reference, a
+  **Skills** reference, a "write your first skill" tutorial, a managed-MCP-server example,
+  and a rewritten **operator-console** guide.
+
+### Changed
+- **The marketing changelog no longer shows empty releases.** Backfilled the recent empty
+  entries, and the release tooling now omits a release that ships no notes instead of
+  rendering a bare version + date.
+
 ## [0.51.0] - 2026-06-18
 
 ### Added

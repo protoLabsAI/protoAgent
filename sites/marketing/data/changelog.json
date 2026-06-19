@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.51.1",
+    "date": "2026-06-19",
+    "changes": [
+      "Documentation overhaul.",
+      "The marketing changelog no longer shows empty releases."
+    ]
+  },
+  {
     "version": "v0.51.0",
     "date": "2026-06-18",
     "changes": [
