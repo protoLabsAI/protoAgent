@@ -11,17 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-06-19
+
 ### Added
 - **Docs plugin — read and ask about protoAgent's own docs** (first-party, on by default).
   A keyword FTS index over the bundled docs + `docs_search` / `docs_read` tools + a skill
   (search → read → cite) so the agent answers from the docs; plus a console **Docs** reader
   view (a Diátaxis→domain tree mirroring the docs site + server-rendered markdown) and a ⌘K
   **Docs** search. Self-contained and offline — no embeddings, no knowledge-store coupling.
+- **`user_only` skills** — mark a skill so it's *only* a `/<slash>` command and is never
+  auto-retrieved into context, for deliberate run-on-demand procedures.
 
 ### Changed
-- **The desktop in-app update notice is now a full modal with a markdown-rendered
-  changelog.** The release notes render as readable markdown (headings, bullets, links) in
-  a centered dialog instead of a cramped plain-text corner panel.
+- **Desktop update notice is now a full modal with a markdown changelog.** The release
+  notes render as readable markdown (headings, bullets, links) in a centered dialog instead
+  of a cramped plain-text corner panel.
+
+### Fixed
+- **Plugin views are themed in the desktop app** — the frozen sidecar now serves
+  `/_ds/plugin-kit.{css,js}`, so plugin iframes (Notes, Docs) pick up the design system
+  instead of rendering unstyled.
 
 ## [0.52.0] - 2026-06-19
 
