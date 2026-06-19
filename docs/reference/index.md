@@ -9,6 +9,12 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | [Configuration](/reference/configuration) | `config/langgraph-config.yaml` schema |
 | [Environment variables](/reference/environment-variables) | Every env knob |
 
+## Skills, subagents & workflows
+
+| Page | Contents |
+|---|---|
+| [Skills (SKILL.md)](/reference/skills) | Frontmatter fields, source tags, the `skills:` config block |
+
 ## A2A, fleet & delegates
 
 | Page | Contents |

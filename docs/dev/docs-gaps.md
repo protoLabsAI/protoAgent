@@ -15,14 +15,14 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 | Operator REST API reference | `docs/reference/operator-api.md` |
 | Skills loaded chip / `skills.announce` | already in `docs/guides/skills.md` |
 | Operator-console rewrite (was the Gradio→React migration plan) | `docs/guides/react-tauri-ui.md` |
+| Skills reference (frontmatter/schema lookup) | `docs/reference/skills.md` |
 
 ## Remaining
 
 | # | Gap | Section | Domain | Notes |
 |---|---|---|---|---|
 | 1 | **Author a managed MCP server** | Guide | Tools, MCP & plugins | Already covered at a basic level in `guides/mcp.md` (§ Plugin-managed servers, `register_mcp_server`). Only needs a fuller worked example if demand appears — low priority. |
-| 2 | **Skills reference** (frontmatter/schema lookup) | Reference | Skills, subagents & workflows | Skills domain has guides + explanation but no Reference page. |
-| 3 | **First-skill / Langfuse tutorials** | Tutorial | Skills / Operate | Tutorials are thin (2). Candidates: "Write your first skill", "Set up Langfuse tracing". |
+| 2 | **First-skill / Langfuse tutorials** | Tutorial | Skills / Operate | Tutorials are thin (2). Candidates: "Write your first skill", "Set up Langfuse tracing". |
 
 _(No outstanding stale-doc rewrites — `react-tauri-ui.md` was rewritten into a current
 operator-console guide.)_
