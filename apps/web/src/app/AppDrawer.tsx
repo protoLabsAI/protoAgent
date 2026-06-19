@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { BarChart3, BookOpen, Github, Settings2, X } from "lucide-react";
+import { BarChart3, BookOpen, Github, ScrollText, Settings2, X } from "lucide-react";
 
 import { Button } from "@protolabsai/ui/primitives";
 
@@ -11,7 +11,7 @@ type SurfaceItem = { id: string; label: string; icon: ReactNode };
 /**
  * The app menu drawer — a right-side sheet opened by the header hamburger (2026-06-18
  * IA pass). One drawer for both modes: on desktop it holds the box-level/global actions
- * (Global settings, Telemetry) + the GitHub/Docs links; on mobile it ALSO lists the
+ * (Global settings, Telemetry) + the Docs/Changelog/GitHub links; on mobile it ALSO lists the
  * surfaces (it's the mobile "more"). Workspace settings stay in the rail surface, not here.
  */
 export function AppDrawer({
@@ -100,6 +100,16 @@ export function AppDrawer({
             >
               <span className="app-drawer-ico"><BookOpen size={16} /></span>
               Docs
+            </a>
+            <a
+              className="app-drawer-item"
+              href="https://agent.protolabs.studio/changelog/"
+              target="_blank"
+              rel="noreferrer"
+              onClick={onClose}
+            >
+              <span className="app-drawer-ico"><ScrollText size={16} /></span>
+              Changelog
             </a>
             <a
               className="app-drawer-item"

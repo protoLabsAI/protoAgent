@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 // two-home one-stop-shop is also openable as an overlay from the topbar.
 
 // The header hamburger opens the app drawer (2026-06-18 IA pass): global actions
-// (Settings, Telemetry) + the Docs/GitHub links. "Settings" opens the one consolidated
+// (Settings, Telemetry) + the Docs/Changelog/GitHub links. "Settings" opens the one consolidated
 // settings dialog (the same dialog the utility-bar pill opens — Global is no longer a
 // separate home).
 test("the header hamburger opens the app drawer → Settings dialog", async ({ page }) => {
@@ -16,6 +16,12 @@ test("the header hamburger opens the app drawer → Settings dialog", async ({ p
   await expect(drawer.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Telemetry", exact: true })).toBeVisible();
   await expect(drawer.getByRole("link", { name: "Docs" })).toBeVisible();
+  const changelog = drawer.getByRole("link", { name: "Changelog" });
+  await expect(changelog).toBeVisible();
+  await expect(changelog).toHaveAttribute("href", "https://agent.protolabs.studio/changelog/");
+  await expect(changelog).toHaveAttribute("target", "_blank");
+  // External link — assert rel guards against tabnabbing (security regression guard).
+  await expect(changelog).toHaveAttribute("rel", "noreferrer");
   await expect(drawer.getByRole("link", { name: "GitHub" })).toBeVisible();
   // Footer: version badge + protoLabs.studio branding link.
   await expect(drawer.getByText("v9.9.9", { exact: true })).toBeVisible();
