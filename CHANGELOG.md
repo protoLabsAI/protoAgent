@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-06-19
+
 ### Changed
 - **The desktop quick launcher (⌥Space) is now a frosted, rounded floating panel.** The
   launcher window is transparent + shadowless and the palette renders as a translucent,
