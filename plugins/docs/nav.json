@@ -565,6 +565,10 @@
           "title": "0059 — Unified plugin manager: in-app directory (Discover) + folded config (Installed)"
         },
         {
+          "path": "adr/0060-skill-progressive-disclosure.md",
+          "title": "0060 — Skills: progressive disclosure (always-on index + load on demand)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

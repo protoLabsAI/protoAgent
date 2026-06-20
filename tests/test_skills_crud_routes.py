@@ -83,8 +83,8 @@ def test_create_user_only_skill_is_slash_but_not_agent_retrievable(monkeypatch, 
     # SKILL.md persisted the flag.
     md = (root / "ops-runbook" / "SKILL.md").read_text()
     assert "user_only: true" in md and "user_facing: true" in md
-    # The agent never retrieves it; the /slash list does expose it.
-    assert "Ops Runbook" not in [s.name for s in idx.load_skills("deploy rollback service", k=10)]
+    # The agent's always-on index never lists it; the /slash list does expose it.
+    assert "Ops Runbook" not in [s["name"] for s in idx.skill_summaries()]
     assert "Ops Runbook" in [s["name"] for s in idx.user_facing_skills()]
     # The editor round-trips the flag.
     detail = c.get(f"/api/playbooks/{skill['id']}").json()["skill"]

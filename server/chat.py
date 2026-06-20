@@ -310,7 +310,6 @@ async def _run_turn_stream(
     reasoned_len = 0  # chars of scratch_pad reasoning already emitted (live thinking)
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
-    last_skill_names: tuple[str, ...] = ()  # skills already surfaced this turn (de-dup)
     async for event in STATE.graph.astream_events(
         graph_input,
         config=config,
@@ -318,18 +317,10 @@ async def _run_turn_stream(
     ):
         kind = event.get("event", "")
         name = event.get("name", "")
-        if kind == "on_custom_event" and name == "skills_loaded":
-            # KnowledgeMiddleware retrieved skills for a model call — surface them as
-            # a `skills` frame so the console can show a "skills loaded" chip. The
-            # middleware runs before EVERY model call, so a tool loop re-emits the
-            # same set; only forward when the set changes (usually once per turn).
-            data = event.get("data", {}) or {}
-            loaded = data.get("skills", []) or []
-            names = tuple(s.get("name", "") for s in loaded if s.get("name"))
-            if names and names != last_skill_names:
-                last_skill_names = names
-                yield ("skills", data)
-        elif kind == "on_chat_model_start":
+        # Skills are no longer auto-retrieved per turn (ADR 0060 — progressive
+        # disclosure); the model loads one on demand via the `load_skill` tool,
+        # which surfaces as an ordinary tool card. No `skills_loaded` event to forward.
+        if kind == "on_chat_model_start":
             # Stamp the per-call start so on_chat_model_end can measure latency.
             rid = event.get("run_id")
             if rid:

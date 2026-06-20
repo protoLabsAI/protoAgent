@@ -364,13 +364,13 @@ The bundled store is hybrid by default — FTS5 keyword search fused with vector
 
 ## `skills`
 
-Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) format — a folder with YAML frontmatter (`name` + `description`) and a markdown body. Loaded from disk into an FTS5 index on boot and retrieved + injected (`<learned_skills>`) at inference by `KnowledgeMiddleware`.
+Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) format — a folder with YAML frontmatter (`name` + `description`) and a markdown body. Loaded from disk into an FTS5 index on boot; `KnowledgeMiddleware` lists the index (name + summary) as an always-on `<available_skills>` block and the agent loads a skill's full body on demand via `load_skill` ([progressive disclosure, ADR 0060](../adr/0060-skill-progressive-disclosure.md)).
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Load `SKILL.md` skills and activate skill retrieval. |
+| `enabled` | `true` | Load `SKILL.md` skills and list the `<available_skills>` index. |
 | `db_path` | `/sandbox/skills.db` | FTS5 index path. Falls back to `~/.protoagent/skills.db` when the configured path isn't writable. |
-| `top_k` | `5` | Max skills injected per turn (ranked by BM25 relevance to the message). |
+| `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (the rest stay reachable via `list_skills`; any one's body loads on demand via `load_skill`). |
 | `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` honors `PROTOAGENT_CONFIG_DIR`). |
 
 Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.

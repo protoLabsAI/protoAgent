@@ -16,6 +16,7 @@ from tools.lg_tools import (
     _build_curation_tools,
     _build_memory_tools,
     get_all_tools,
+    load_skill,
 )
 
 
@@ -29,6 +30,12 @@ def _by_name(tools):
 def test_curation_tools_present_and_subagents_registered():
     names = {t.name for t in get_all_tools(knowledge_store=None, scheduler=None)}
     assert {"recent_activity", "list_skills", "save_skill"} <= names
+    # load_skill is a lead-agent tool (the on-demand half of progressive disclosure,
+    # ADR 0060) — present in the full set and always-on under deferral.
+    assert "load_skill" in names
+    from tools.lg_tools import DEFERRED_BASE_TOOL_NAMES
+
+    assert "load_skill" in DEFERRED_BASE_TOOL_NAMES
 
     from graph.subagents.config import SUBAGENT_REGISTRY
 
@@ -154,6 +161,44 @@ def test_save_skill_requires_name_and_description(tmp_path, monkeypatch):
     save_skill = _by_name(_build_curation_tools())["save_skill"]
     assert "name is required" in save_skill.invoke({"name": "  ", "description": "d", "body": "b"})
     assert "description is required" in save_skill.invoke({"name": "n", "description": "", "body": "b"})
+
+
+# ── load_skill (on-demand body lookup, ADR 0060) ──────────────────────────────
+
+
+def test_load_skill_returns_full_procedure(tmp_path, monkeypatch):
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    save_skill = _by_name(_build_curation_tools())["save_skill"]
+    save_skill.invoke(
+        {
+            "name": "Nightly ore run",
+            "description": "Buy ore at A, sell at B",
+            "body": "1. check spread\n2. buy\n3. sell",
+            "tools": ["calculator"],
+        }
+    )
+
+    out = load_skill.invoke({"name": "Nightly ore run"})
+    assert "## Procedure" in out
+    assert "1. check spread" in out  # the full body, loaded on demand
+    assert "calculator" in out  # relevant tools surfaced
+
+
+def test_load_skill_unknown_name_lists_available(tmp_path, monkeypatch):
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    _by_name(_build_curation_tools())["save_skill"].invoke(
+        {"name": "Real skill", "description": "d", "body": "b"}
+    )
+    out = load_skill.invoke({"name": "typo-skill"})
+    assert "No skill named" in out
+    assert "Real skill" in out  # recovers by offering the discoverable set
+
+
+def test_load_skill_no_index(monkeypatch):
+    monkeypatch.setattr(STATE, "skills_index", None)
+    assert "not available" in load_skill.invoke({"name": "anything"})
 
 
 # ── forget_memory + memory_list id surfacing (dream's prune half) ──────────────

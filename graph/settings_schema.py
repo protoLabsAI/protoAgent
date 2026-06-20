@@ -380,7 +380,7 @@ FIELDS: list[Field] = [
         "length inlined — so a big document never gets dumped into the turn.",
         minimum=1,
     ),
-    Field("skills.top_k", "skills_top_k", "Skill recall top-k", "number", "Knowledge", minimum=1),
+    Field("skills.top_k", "skills_top_k", "Skills listed in context", "number", "Knowledge", minimum=1),
     Field(
         "checkpoint.db_path",
         "checkpoint_db_path",

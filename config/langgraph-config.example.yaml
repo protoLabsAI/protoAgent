@@ -111,15 +111,15 @@ memory:
   max_tokens: 2000
 
 # Skill index — SQLite FTS5 store for learned skill-v1 artifacts.
-# Skills emitted by task() are indexed here and injected into the system
-# prompt as a <learned_skills> block at inference time.
+# Skills (emitted by task() or authored as SKILL.md) are indexed here and listed
+# in the system prompt as an always-on <available_skills> index (name + summary);
+# the agent loads any one's full procedure on demand via load_skill (progressive
+# disclosure, ADR 0060).
 skills:
   db_path: /sandbox/skills.db
+  # Max skills listed in the always-on <available_skills> index each turn (the rest
+  # stay reachable via list_skills; any one's body loads on demand via load_skill).
   top_k: 5
-  max_tokens: 2000
-  # Show a "Skills: …" chip in chat naming the skills the agent auto-retrieved for
-  # a turn (hover a name for its description). Set false for silent retrieval.
-  announce: true
   # Tier (ADR 0041 slice 3): scope = scoped (private) | shared (one commons for all)
   # | layered (read commons ∪ private, write private, promote to commons). Blank →
   # derived from `shared` below. `python -m server skills promote <name>` lifts a

@@ -6,26 +6,24 @@ top-k results to the state's `context` field.
 Also loads prior session summaries from disk and injects them as a
 <prior_sessions> block at the start of each session's context.
 
-Retrieves relevant learned skills from the SkillsIndex and injects
-them as a <learned_skills> block alongside <prior_sessions>.
+Injects the always-on skill index — the {name, description} of every
+discoverable skill — as an <available_skills> block so the model knows what
+it can do and loads a skill's full procedure on demand via ``load_skill``
+(progressive disclosure, ADR 0060).
 """
 
 import logging
 from typing import TYPE_CHECKING
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 
 if TYPE_CHECKING:
-    from graph.skills.index import SkillRecord, SkillsIndex
+    from graph.skills.index import SkillsIndex
 
 
 log = logging.getLogger(__name__)
-
-# Token budget for the <learned_skills> block (chars // 4 approximation)
-_SKILLS_MAX_TOKENS = 2000
-_SKILLS_CONTEXT_CHARS = 2000  # chars of recent context to include in query
 
 # How long the <prior_sessions> block is cached before a disk reload. Bounds
 # both staleness (sessions persisted after boot become visible within the TTL,
@@ -63,18 +61,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         top_k: int = 5,
         skills_index: "SkillsIndex | None" = None,
         skills_top_k: int = 5,
-        skills_announce: bool = True,
     ):
         super().__init__()
         self._store = knowledge_store
         self._top_k = top_k
         self._skills_index = skills_index
+        # Max skills listed in the always-on <available_skills> index (the rest
+        # are reachable via list_skills). The model loads any one's full body on
+        # demand via load_skill — so this caps the per-turn "table of contents",
+        # not what's usable.
         self._skills_top_k = skills_top_k
-        # When True, emit a `skills_loaded` custom event for the turn's retrieved
-        # skills so the chat surface can show a "skills loaded" chip (ADR 0052
-        # made skills user-visible on demand; this makes the implicit retrieval
-        # path visible too). Purely a UI signal — never affects the injection.
-        self._skills_announce = skills_announce
         # Lazily loaded on first before_model call; None = not yet loaded.
         # Refreshed after _PRIOR_SESSIONS_TTL_S so sessions persisted after boot
         # become visible (the cache is otherwise frozen for the process life).
@@ -105,133 +101,45 @@ class KnowledgeMiddleware(AgentMiddleware):
         return load_prior_sessions(memory_path or MEMORY_PATH, max_sessions, max_tokens)
 
     # ---------------------------------------------------------------------------
-    # Skill retrieval
+    # Skill index (progressive disclosure — ADR 0060)
     # ---------------------------------------------------------------------------
 
-    def load_skills(self, query: str, k: int | None = None) -> list["SkillRecord"]:
-        """Retrieve top-k relevant skills from the SkillsIndex.
+    def _skill_index_block(self) -> str:
+        """Build the always-on ``<available_skills>`` index.
 
-        Searches the FTS5 index using *query* and returns ranked results.
-        Returns an empty list when no index is configured or there are no
-        matches — callers must handle the empty case gracefully.
-
-        Args:
-            query: Combined user message + recent context (up to 2K chars).
-            k:     Max results; defaults to self._skills_top_k.
+        Lists the ``{name, description}`` (and ``/slash`` when user-facing) of up
+        to ``self._skills_top_k`` discoverable skills, most-recently-used first —
+        the cheap "table of contents" the model scans every turn. It calls
+        ``load_skill(name)`` to pull a skill's full procedure only when it decides
+        one is relevant, so nothing is matched against the conversation here (the
+        old BM25 retrieval guessed relevance from the agent's own recent output
+        and mis-loaded skills every turn — ADR 0060). Returns an empty string when
+        no index is configured or it holds no discoverable skills; never raises.
         """
         if self._skills_index is None:
-            return []
-        if not query or not query.strip():
-            return []
-        k = k if k is not None else self._skills_top_k
+            return ""
         try:
-            return self._skills_index.load_skills(query, k=k)
-        except Exception as exc:  # pragma: no cover
-            log.warning("[knowledge] skills retrieval error: %s", exc)
-            return []
-
-    def _build_skills_query(self, messages: list) -> str:
-        """Build a query string from the last human message + recent context.
-
-        Constructs query = last human message + last _SKILLS_CONTEXT_CHARS
-        chars of recent AI/human message content, capped at 2K chars total.
-        """
-        last_human = ""
-        context_parts: list[str] = []
-
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                if not last_human:
-                    last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
-                else:
-                    content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                    context_parts.append(content)
-            elif isinstance(msg, AIMessage):
-                content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                context_parts.append(content)
-
-        recent_context = " ".join(reversed(context_parts))
-        if recent_context:
-            recent_context = recent_context[-_SKILLS_CONTEXT_CHARS:]
-
-        query = (last_human + " " + recent_context).strip()
-        return query[:_SKILLS_CONTEXT_CHARS]
-
-    def _format_learned_skills(self, skills: list["SkillRecord"]) -> str:
-        """Format retrieved skills as a <learned_skills> XML block.
-
-        Enforces a token budget of _SKILLS_MAX_TOKENS (chars // 4 approximation).
-        Iteratively removes lowest-relevance skills (highest score, least negative
-        BM25 value) then truncates descriptions if still over budget.
-
-        Returns an empty string when *skills* is empty.
-        """
-        if not skills:
+            summaries = self._skills_index.skill_summaries(limit=self._skills_top_k)
+            total = self._skills_index.discoverable_count()
+        except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
+            log.warning("[knowledge] skill index error: %s", exc)
+            return ""
+        if not summaries:
             return ""
 
-        def _count_tokens(text: str) -> int:
-            return max(1, len(text) // 4)
-
-        def _format_skill(s: "SkillRecord") -> str:
-            # Truncate prompt_template to 500 chars to keep block concise
-            pt = s.prompt_template[:500] if s.prompt_template else ""
-            # Surface the skill's declared tools so the model knows which of its
-            # (already-bound) tools this skill relies on — a relevance hint, not
-            # a gate. See ADR 0005 (tool pollution / progressive disclosure).
-            tools = getattr(s, "tools_used", ()) or ()
-            tools_line = f"    <relevant_tools>{', '.join(tools)}</relevant_tools>\n" if tools else ""
-            return (
-                f'  <skill name="{s.name}">\n'
-                f"    <description>{s.description}</description>\n"
-                f"{tools_line}"
-                f"    <prompt_template>{pt}</prompt_template>\n"
-                f"  </skill>"
-            )
-
-        # Sort by score ascending (most relevant first, BM25 scores are negative)
-        sorted_skills = sorted(skills, key=lambda s: s.score)
-
-        formatted = [_format_skill(s) for s in sorted_skills]
-
-        # Enforce token budget: remove lowest-relevance skills first (end of list)
-        while formatted:
-            block = "<learned_skills>\n" + "\n".join(formatted) + "\n</learned_skills>"
-            if _count_tokens(block) <= _SKILLS_MAX_TOKENS:
-                break
-            formatted.pop()
-            if formatted:
-                log.debug("[knowledge] skills token budget exceeded — removed lowest-relevance skill")
-
-        if not formatted:
-            return ""
-
-        # If still over budget after removing all but one, truncate descriptions
-        block = "<learned_skills>\n" + "\n".join(formatted) + "\n</learned_skills>"
-        if _count_tokens(block) > _SKILLS_MAX_TOKENS:
-            # Hard truncate the block to fit
-            max_chars = _SKILLS_MAX_TOKENS * 4
-            block = block[:max_chars]
-            log.warning("[knowledge] skills block hard-truncated to fit token budget")
-
-        return block
-
-    def _announce_skills(self, skills: list["SkillRecord"]) -> None:
-        """Emit a ``skills_loaded`` custom event carrying the retrieved skills'
-        ``{name, description}`` for the chat UI's "skills loaded" chip.
-
-        Uses the sync ``dispatch_custom_event``; it surfaces in ``astream_events``
-        even though ``before_model`` runs in ``asyncio.to_thread`` (the run-tree
-        contextvars are copied into the worker). Best-effort — a dispatch failure
-        (e.g. no active run context, as in a unit test) is swallowed so retrieval
-        and the turn proceed unchanged.
-        """
-        try:
-            from langchain_core.callbacks import dispatch_custom_event
-
-            payload = {"skills": [{"name": s.name, "description": s.description} for s in skills]}
-            dispatch_custom_event("skills_loaded", payload)
-        except Exception as exc:  # noqa: BLE001 — UI signal must never break a turn
-            log.debug("[knowledge] skills_loaded dispatch skipped: %s", exc)
+        lines = [
+            "<available_skills>",
+            "  <!-- Learned procedures you can use. Each is a name + one-line summary; "
+            "call load_skill(name) to read the full steps before following one. Don't guess its contents. -->",
+        ]
+        for s in summaries:
+            slash = (s.get("slash") or "").strip()
+            slash_attr = f' slash="/{slash}"' if slash else ""
+            lines.append(f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>')
+        if total > len(summaries):
+            lines.append(f"  <!-- +{total - len(summaries)} more — call list_skills to see them all. -->")
+        lines.append("</available_skills>")
+        return "\n".join(lines)
 
     # ---------------------------------------------------------------------------
     # Middleware hooks
@@ -243,8 +151,8 @@ class KnowledgeMiddleware(AgentMiddleware):
         Also prepends prior session summaries on the first call so the
         agent has cross-session continuity from the very first LLM turn.
 
-        Retrieves relevant learned skills from the SkillsIndex (when
-        configured) and injects them as a <learned_skills> block.
+        Injects the always-on skill index (when a SkillsIndex is configured)
+        as an <available_skills> block (ADR 0060).
         """
         parts: list[str] = []
 
@@ -272,19 +180,12 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         messages = state.get("messages", [])
 
-        # Inject learned skills from SkillsIndex when available
-        if self._skills_index is not None and messages:
-            skills_query = self._build_skills_query(messages)
-            if skills_query:
-                skills = self.load_skills(skills_query)
-                skills_block = self._format_learned_skills(skills)
-                if skills_block:
-                    parts.append(skills_block)
-                    # Surface what was retrieved as a `skills_loaded` custom event so
-                    # the chat UI can show a "skills loaded" chip. UI-only — gated,
-                    # best-effort, and must never break the turn.
-                    if self._skills_announce and skills:
-                        self._announce_skills(skills)
+        # Always-on skill index (progressive disclosure, ADR 0060): the
+        # {name, description} of available skills, independent of the
+        # conversation. The model pulls a full procedure on demand via load_skill.
+        skill_block = self._skill_index_block()
+        if skill_block:
+            parts.append(skill_block)
 
         if messages:
             # Find the last human message

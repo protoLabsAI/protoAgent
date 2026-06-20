@@ -1,15 +1,13 @@
 """Unit and integration tests for graph/skills/index.py.
 
-Covers:
+Covers (progressive disclosure, ADR 0060):
 - FTS5 database initialization (idempotent schema creation)
 - add_skill() indexing
-- load_skills() FTS5 retrieval and BM25 ranking
-- Empty DB / empty query graceful handling
-- Token budget enforcement in format_learned_skills
+- skill_summaries() / discoverable_count() / get_skill() — the always-on index +
+  on-demand body lookup that replaced per-turn BM25 retrieval
+- Empty DB / absent skill graceful handling
 - Schema migration: backup + recreate on version mismatch
-- KnowledgeMiddleware.load_skills() integration
-- KnowledgeMiddleware._format_learned_skills() formatting
-- <learned_skills> block in before_model output
+- <available_skills> block in KnowledgeMiddleware.before_model output
 """
 
 from __future__ import annotations
@@ -21,9 +19,9 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
-from graph.skills.index import SkillRecord, SkillsIndex
+from graph.skills.index import SkillsIndex
 from graph.middleware.knowledge import KnowledgeMiddleware
 
 
@@ -124,7 +122,7 @@ def test_initialize_db_idempotent(tmp_db) -> None:
     idx1.add_skill(_make_artifact())
 
     idx2 = SkillsIndex(db_path=tmp_db)
-    results = idx2.load_skills("web search research")
+    results = idx2.skill_summaries()
     assert len(results) == 1, "Existing rows must survive re-initialization"
 
 
@@ -145,17 +143,16 @@ def test_schema_meta_table_exists(tmp_db) -> None:
 
 
 def test_add_skill_inserts_row(index) -> None:
-    """add_skill() must insert a row that can be retrieved."""
+    """add_skill() must insert a row that appears in the index."""
     index.add_skill(_make_artifact(name="my-skill", description="does something useful"))
-    results = index.load_skills("useful something")
-    assert any(r.name == "my-skill" for r in results)
+    results = index.skill_summaries()
+    assert any(r["name"] == "my-skill" for r in results)
 
 
 def test_add_skill_empty_name_skipped(index) -> None:
     """add_skill() must silently skip artifacts with empty names."""
     index.add_skill(_make_artifact(name=""))
-    results = index.load_skills("research")
-    assert results == []
+    assert index.skill_summaries() == []
 
 
 def test_add_skill_tools_stored_as_space_separated(index, tmp_db) -> None:
@@ -171,68 +168,48 @@ def test_add_skill_tools_stored_as_space_separated(index, tmp_db) -> None:
     conn.close()
 
 
-# ── SkillsIndex: load_skills ──────────────────────────────────────────────────
+# ── SkillsIndex: skill_summaries / discoverable_count / get_skill (ADR 0060) ───
 
 
-def test_load_skills_empty_db(index) -> None:
-    """load_skills() must return an empty list on an empty database."""
-    results = index.load_skills("web research")
-    assert results == []
+def test_skill_summaries_empty_db(index) -> None:
+    """skill_summaries() must return an empty list on an empty database."""
+    assert index.skill_summaries() == []
+    assert index.discoverable_count() == 0
 
 
-def test_load_skills_empty_query(populated_index) -> None:
-    """load_skills() must return an empty list for empty/whitespace query."""
-    assert populated_index.load_skills("") == []
-    assert populated_index.load_skills("   ") == []
+def test_skill_summaries_lists_name_description_slash(populated_index) -> None:
+    """The index is the lightweight {name, description, slash} of every skill —
+    not the full body (that's get_skill)."""
+    rows = populated_index.skill_summaries()
+    assert len(rows) == 3
+    r = next(r for r in rows if r["name"] == "web-research")
+    assert r["description"] == "Research a topic using web search tools"
+    assert set(r) == {"name", "description", "slash"}
+    assert "prompt_template" not in r  # body is loaded on demand, not listed
 
 
-def test_load_skills_returns_skill_records(populated_index) -> None:
-    """load_skills() must return SkillRecord named tuples."""
-    results = populated_index.load_skills("web search research")
-    assert len(results) > 0
-    r = results[0]
-    assert isinstance(r, SkillRecord)
-    assert isinstance(r.name, str)
-    assert isinstance(r.description, str)
-    assert isinstance(r.prompt_template, str)
-    assert isinstance(r.score, float)
+def test_skill_summaries_limit(populated_index) -> None:
+    """skill_summaries(limit=) caps the index (the per-turn 'table of contents')."""
+    assert len(populated_index.skill_summaries(limit=2)) == 2
+    assert len(populated_index.skill_summaries()) == 3  # None = all
 
 
-def test_load_skills_returns_tools_used(populated_index) -> None:
-    """load_skills() surfaces the skill's declared tools (ADR 0005) so the
-    middleware can hint which tools a retrieved skill relies on."""
-    results = populated_index.load_skills("web search research")
-    top = next(r for r in results if r.name == "web-research")
-    assert top.tools_used == ("web_search", "fetch_url")
+def test_discoverable_count_counts_all_discoverable(populated_index) -> None:
+    assert populated_index.discoverable_count() == 3
 
 
-def test_retrieval_ranking(populated_index) -> None:
-    """FTS5 must rank the most relevant skill first for a specific query."""
-    results = populated_index.load_skills("mathematical calculation expression")
-    assert len(results) > 0
-    assert results[0].name == "calculator-math", f"Expected 'calculator-math' first, got: {[r.name for r in results]}"
+def test_get_skill_returns_full_body(populated_index) -> None:
+    """get_skill() returns the full procedure (prompt_template + tools) on demand."""
+    rec = populated_index.get_skill("web-research")
+    assert rec is not None
+    assert rec["prompt_template"] == "Search the web for: {query}"
+    assert rec["tools_used"] == ["web_search", "fetch_url"]
 
 
-def test_load_skills_top_k_limit(populated_index) -> None:
-    """load_skills() must respect the k limit."""
-    results = populated_index.load_skills("search web calculator time", k=2)
-    assert len(results) <= 2
-
-
-def test_load_skills_scores_ordered(populated_index) -> None:
-    """Results must be ordered best-first (ascending BM25 score)."""
-    results = populated_index.load_skills("search web research")
-    scores = [r.score for r in results]
-    assert scores == sorted(scores), "BM25 scores must be sorted ascending (best-first)"
-
-
-def test_load_skills_no_match_returns_empty(populated_index) -> None:
-    """load_skills() must return an empty list when FTS finds no matches."""
-    # A query using FTS5 special syntax that matches nothing
-    results = populated_index.load_skills("zzz_no_match_xyz_abc_impossible_token")
-    # This may return empty or have no results
-    # Either way, must not raise
-    assert isinstance(results, list)
+def test_get_skill_absent_returns_none(populated_index) -> None:
+    assert populated_index.get_skill("no-such-skill") is None
+    assert populated_index.get_skill("") is None
+    assert populated_index.get_skill("   ") is None
 
 
 # ── SkillsIndex: rebuild_index ────────────────────────────────────────────────
@@ -247,14 +224,10 @@ def test_rebuild_index_clears_and_reindexes(index) -> None:
     ]
     index.rebuild_index(new_artifacts)
 
-    # Old skill should not appear
-    old_results = index.load_skills("old skill")
-    assert not any(r.name == "old-skill" for r in old_results)
-
-    # New skills should appear
-    new_results = index.load_skills("brand new skill")
-    names = {r.name for r in new_results}
-    assert "new-skill-1" in names or "new-skill-2" in names
+    # Old skill should not appear; new ones should.
+    names = {r["name"] for r in index.skill_summaries()}
+    assert "old-skill" not in names
+    assert {"new-skill-1", "new-skill-2"} <= names
 
 
 # ── Schema migration ──────────────────────────────────────────────────────────
@@ -266,8 +239,7 @@ def test_migration_empty_fork(tmp_db) -> None:
     assert os.path.exists(tmp_db)
     # Must be usable immediately
     idx.add_skill(_make_artifact())
-    results = idx.load_skills("web research")
-    assert len(results) == 1
+    assert len(idx.skill_summaries()) == 1
 
 
 def test_migration_version_mismatch_creates_backup(tmp_db) -> None:
@@ -288,8 +260,7 @@ def test_migration_version_mismatch_creates_backup(tmp_db) -> None:
 
     # New DB should be functional
     idx.add_skill(_make_artifact())
-    results = idx.load_skills("web research")
-    assert len(results) == 1
+    assert len(idx.skill_summaries()) == 1
 
 
 def test_migration_compatible_schema_no_backup(tmp_db) -> None:
@@ -301,7 +272,7 @@ def test_migration_compatible_schema_no_backup(tmp_db) -> None:
     assert not os.path.exists(bak_path), "No backup should be created for compatible schema"
 
 
-# ── Token budget enforcement ──────────────────────────────────────────────────
+# ── KnowledgeMiddleware: <available_skills> injection (ADR 0060) ──────────────
 
 
 def _make_knowledge_middleware_no_store() -> KnowledgeMiddleware:
@@ -311,263 +282,107 @@ def _make_knowledge_middleware_no_store() -> KnowledgeMiddleware:
     return KnowledgeMiddleware(knowledge_store=store)
 
 
-def test_format_learned_skills_empty_returns_empty() -> None:
-    """_format_learned_skills() must return empty string for empty input."""
-    km = _make_knowledge_middleware_no_store()
-    result = km._format_learned_skills([])
-    assert result == ""
-
-
-def test_format_learned_skills_basic_formatting() -> None:
-    """_format_learned_skills() must produce a valid <learned_skills> block."""
-    km = _make_knowledge_middleware_no_store()
-    skills = [
-        SkillRecord(
-            name="web-research",
-            description="Research the web",
-            prompt_template="Search for {topic}",
-            score=-1.5,
-        )
-    ]
-    block = km._format_learned_skills(skills)
-    assert "<learned_skills>" in block
-    assert "</learned_skills>" in block
-    assert 'name="web-research"' in block
-    assert "Research the web" in block
-    assert "Search for {topic}" in block
-
-
-def test_format_learned_skills_surfaces_relevant_tools() -> None:
-    """A skill's declared tools are emitted as <relevant_tools> (ADR 0005)."""
-    km = _make_knowledge_middleware_no_store()
-    block = km._format_learned_skills(
-        [
-            SkillRecord(
-                name="web-research",
-                description="Research the web",
-                prompt_template="Search for {topic}",
-                score=-1.5,
-                tools_used=("web_search", "fetch_url"),
-            )
-        ]
-    )
-    assert "<relevant_tools>web_search, fetch_url</relevant_tools>" in block
-
-
-def test_format_learned_skills_omits_tools_when_none() -> None:
-    """No declared tools → no <relevant_tools> line (back-compat)."""
-    km = _make_knowledge_middleware_no_store()
-    block = km._format_learned_skills(
-        [
-            SkillRecord(
-                name="bare",
-                description="No tools declared",
-                prompt_template="do {thing}",
-                score=-1.0,
-            )
-        ]
-    )
-    assert "<relevant_tools>" not in block
-
-
-def test_token_budget_enforcement() -> None:
-    """_format_learned_skills() must remove low-relevance skills to fit budget."""
-    km = _make_knowledge_middleware_no_store()
-    # Create many skills with large descriptions to exceed budget
-    skills = [
-        SkillRecord(
-            name=f"skill-{i}",
-            description="x" * 500,  # large description
-            prompt_template="y" * 500,  # large template
-            score=float(-i),  # skill-0 is best (most negative)
-        )
-        for i in range(20)
-    ]
-    block = km._format_learned_skills(skills)
-    # Block must not exceed 2000 tokens (~8000 chars)
-    token_count = len(block) // 4
-    assert token_count <= 2000, f"Block exceeds 2000 token budget: {token_count} tokens"
-    # Must still contain at least the best skill
-    assert "skill-19" in block or len(block) > 0  # best skill retained
-
-
-def test_token_budget_best_skill_retained() -> None:
-    """After truncation, the most relevant skill (best score) should be retained."""
-    km = _make_knowledge_middleware_no_store()
-    skills = [
-        SkillRecord(name="best-skill", description="best " * 10, prompt_template="pt", score=-10.0),
-        SkillRecord(name="worst-skill", description="worst " * 400, prompt_template="pt " * 400, score=-0.1),
-    ]
-    block = km._format_learned_skills(skills)
-    assert "best-skill" in block
-
-
-# ── KnowledgeMiddleware: load_skills integration ──────────────────────────────
-
-
-def test_km_load_skills_no_index_returns_empty() -> None:
-    """load_skills() must return [] when no skills_index is configured."""
-    km = _make_knowledge_middleware_no_store()
-    assert km._skills_index is None
-    results = km.load_skills("any query")
-    assert results == []
-
-
-def test_km_load_skills_with_index(tmp_db) -> None:
-    """load_skills() must delegate to SkillsIndex when configured."""
-    idx = SkillsIndex(db_path=tmp_db)
-    idx.add_skill(
-        _make_artifact(
-            name="test-skill",
-            description="A test skill for unit testing",
-        )
-    )
-
+def _skills_km(idx) -> KnowledgeMiddleware:
     store = MagicMock()
     store.search.return_value = []
     km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
-
-    results = km.load_skills("test skill unit")
-    assert any(r.name == "test-skill" for r in results)
-
-
-def test_km_load_skills_empty_query_returns_empty(tmp_db) -> None:
-    """load_skills() with empty query must return [] without querying index."""
-    idx = SkillsIndex(db_path=tmp_db)
-    store = MagicMock()
-    store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
-
-    assert km.load_skills("") == []
-    assert km.load_skills("   ") == []
+    km._prior_sessions_cache = ""  # skip session loading
+    return km
 
 
-# ── KnowledgeMiddleware: before_model with skills injection ───────────────────
+def test_skill_index_block_empty_no_index() -> None:
+    """No configured index → empty block (and before_model never adds it)."""
+    km = _make_knowledge_middleware_no_store()
+    assert km._skill_index_block() == ""
 
 
-def test_before_model_injects_learned_skills(tmp_db) -> None:
-    """before_model() must include <learned_skills> block when index has results."""
+def test_before_model_injects_available_skills(tmp_db) -> None:
+    """before_model() lists the index as an <available_skills> block — name +
+    description, NOT the full body (that's load_skill's job)."""
     idx = SkillsIndex(db_path=tmp_db)
     idx.add_skill(
         _make_artifact(
             name="web-research",
             description="Research topics using web search",
+            prompt_template="SECRET-PROCEDURE-BODY",
         )
     )
+    km = _skills_km(idx)
 
-    store = MagicMock()
-    store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
-    km._prior_sessions_cache = ""  # skip session loading
+    # The query is irrelevant — the index is the same every turn (progressive disclosure).
+    result = km.before_model({"messages": [HumanMessage(content="anything at all")]}, runtime=None)
 
-    state = {"messages": [HumanMessage(content="research web search topics")]}
-    result = km.before_model(state, runtime=None)
-
-    assert result is not None
-    assert "context" in result
-    assert "<learned_skills>" in result["context"]
-    assert "web-research" in result["context"]
+    assert result is not None and "context" in result
+    ctx = result["context"]
+    assert "<available_skills>" in ctx
+    assert "web-research" in ctx
+    assert "Research topics using web search" in ctx
+    assert "SECRET-PROCEDURE-BODY" not in ctx  # body is loaded on demand, not injected
 
 
-def test_before_model_announces_loaded_skills(tmp_db, monkeypatch) -> None:
-    """before_model() emits a `skills_loaded` custom event (name + description) for
-    the retrieved skills when skills_announce is on — the chat chip's signal."""
-    import langchain_core.callbacks as lc_callbacks
-
+def test_before_model_index_independent_of_query(tmp_db) -> None:
+    """The same skills appear regardless of the user message — the old BM25 path
+    guessed relevance from the conversation and mis-fired; the index does not."""
     idx = SkillsIndex(db_path=tmp_db)
     idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
+    km = _skills_km(idx)
 
-    captured: list = []
-    monkeypatch.setattr(lc_callbacks, "dispatch_custom_event", lambda name, data: captured.append((name, data)))
+    a = km.before_model({"messages": [HumanMessage(content="completely unrelated zebra")]}, runtime=None)
+    assert "web-research" in a["context"]
 
+
+def test_before_model_truncates_and_hints_more(tmp_db) -> None:
+    """With more skills than skills_top_k, the block caps the list and hints at the rest."""
+    idx = SkillsIndex(db_path=tmp_db)
+    for i in range(5):
+        idx.add_skill(_make_artifact(name=f"skill-{i}", description=f"does thing {i}"))
     store = MagicMock()
     store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_announce=True)
+    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_top_k=2)
     km._prior_sessions_cache = ""
 
-    km.before_model({"messages": [HumanMessage(content="research web search topics")]}, runtime=None)
-
-    assert captured, "no skills_loaded event dispatched"
-    name, data = captured[0]
-    assert name == "skills_loaded"
-    skills = data["skills"]
-    assert any(s["name"] == "web-research" and s["description"] for s in skills)
+    ctx = km.before_model({"messages": [HumanMessage(content="hi")]}, runtime=None)["context"]
+    assert ctx.count("<skill ") == 2
+    assert "+3 more" in ctx
 
 
-def test_before_model_does_not_announce_when_disabled(tmp_db, monkeypatch) -> None:
-    """skills_announce=False suppresses the chip event but still injects the block."""
-    import langchain_core.callbacks as lc_callbacks
+def test_before_model_user_facing_skill_shows_slash(tmp_db) -> None:
+    """A user-facing skill surfaces its /slash in the index."""
+    import types
 
     idx = SkillsIndex(db_path=tmp_db)
-    idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
+    idx.add_skill(
+        types.SimpleNamespace(
+            name="web-research",
+            description="Research on the web.",
+            prompt_template="plan, search, cite",
+            tools_used=["web_search"],
+            created_at=datetime.now(timezone.utc),
+            source_session_id="s",
+            user_facing=True,
+            slash="research",
+        ),
+        source="disk",
+    )
+    ctx = _skills_km(idx).before_model({"messages": [HumanMessage(content="x")]}, runtime=None)["context"]
+    assert 'slash="/research"' in ctx
 
-    captured: list = []
-    monkeypatch.setattr(lc_callbacks, "dispatch_custom_event", lambda name, data: captured.append((name, data)))
 
-    store = MagicMock()
-    store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_announce=False)
-    km._prior_sessions_cache = ""
-
-    result = km.before_model({"messages": [HumanMessage(content="research web search topics")]}, runtime=None)
-
-    assert captured == []
-    assert "<learned_skills>" in result["context"]  # injection unaffected by the gate
-
-
-def test_before_model_no_skills_no_learned_block(tmp_db) -> None:
-    """before_model() must omit <learned_skills> block when index is empty."""
-    idx = SkillsIndex(db_path=tmp_db)  # empty index
-
-    store = MagicMock()
-    store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx)
-    km._prior_sessions_cache = ""
-
-    state = {"messages": [HumanMessage(content="some query")]}
-    result = km.before_model(state, runtime=None)
-
-    # With empty store and empty index, result should be None or no learned_skills
+def test_before_model_no_skills_no_block(tmp_db) -> None:
+    """before_model() must omit the block when the index is empty."""
+    km = _skills_km(SkillsIndex(db_path=tmp_db))  # empty index
+    result = km.before_model({"messages": [HumanMessage(content="some query")]}, runtime=None)
     if result is not None:
-        assert "<learned_skills>" not in result.get("context", "")
+        assert "<available_skills>" not in result.get("context", "")
 
 
 def test_before_model_no_skills_index_configured() -> None:
     """before_model() must not crash when skills_index is None."""
-    store = MagicMock()
-    store.search.return_value = []
-    km = KnowledgeMiddleware(knowledge_store=store)  # no skills_index
+    km = _make_knowledge_middleware_no_store()  # no skills_index
     km._prior_sessions_cache = ""
-
-    state = {"messages": [HumanMessage(content="test query")]}
-    # Must not raise
-    result = km.before_model(state, runtime=None)
+    result = km.before_model({"messages": [HumanMessage(content="test query")]}, runtime=None)
     if result is not None:
-        assert "<learned_skills>" not in result.get("context", "")
-
-
-# ── build_skills_query ────────────────────────────────────────────────────────
-
-
-def test_build_skills_query_uses_last_human_message() -> None:
-    """_build_skills_query() must include the last human message text."""
-    km = _make_knowledge_middleware_no_store()
-    messages = [
-        HumanMessage(content="hello"),
-        AIMessage(content="how can I help?"),
-        HumanMessage(content="research machine learning"),
-    ]
-    query = km._build_skills_query(messages)
-    assert "research machine learning" in query
-
-
-def test_build_skills_query_caps_at_context_chars() -> None:
-    """_build_skills_query() must cap the query at 2000 chars."""
-    km = _make_knowledge_middleware_no_store()
-    long_content = "x" * 5000
-    messages = [HumanMessage(content=long_content)]
-    query = km._build_skills_query(messages)
-    assert len(query) <= 2000
+        assert "<available_skills>" not in result.get("context", "")
 
 
 # ── Curation surface (v2 schema: confidence + last_used) ──────────────────────
@@ -668,10 +483,10 @@ def test_user_facing_slash_falls_back_to_slug(index):
     assert ufs and ufs[0]["slash"] == "big-task"
 
 
-def test_user_only_skill_is_withheld_from_agent_retrieval_but_still_a_slash(index):
-    """A user_only skill (v5): the agent never retrieves it (load_skills), but it's a
-    user_facing /slash command."""
-    # A normal retrievable skill + a user-only one, both matching "deploy".
+def test_user_only_skill_is_withheld_from_agent_index_but_still_a_slash(index):
+    """A user_only skill (v5): withheld from the agent's <available_skills> index
+    (skill_summaries), but still a user_facing /slash command."""
+    # A normal discoverable skill + a user-only one.
     index.add_skill(
         _FakeArtifact(name="Deploy guide", description="how to deploy the app",
                       prompt_template="deploy steps", source_session_id="s1"),
@@ -683,10 +498,13 @@ def test_user_only_skill_is_withheld_from_agent_retrieval_but_still_a_slash(inde
                       slash="deploy", source_session_id="s2"),
         source="disk",
     )
-    # Agent retrieval (load_skills) sees the normal skill, NOT the user-only one.
-    names = [r.name for r in index.load_skills("deploy", k=10)]
+    # The always-on index (skill_summaries) shows the normal skill, NOT the user-only one.
+    names = [r["name"] for r in index.skill_summaries()]
     assert "Deploy guide" in names
     assert "Deploy now" not in names
+    assert index.discoverable_count() == 1
+    # ...but get_skill still resolves it (so a /slash invocation can load its body).
+    assert index.get_skill("Deploy now") is not None
     # But the user-only skill IS exposed as a /slash command + carries the flag.
     ufs = {s["name"]: s for s in index.user_facing_skills()}
     assert "Deploy now" in ufs

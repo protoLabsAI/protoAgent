@@ -392,51 +392,6 @@ async def test_tool_events_surface_as_tool_call_dataparts():
 
 
 @pytest.mark.asyncio
-async def test_skills_frame_surfaces_as_skills_datapart():
-    """A ('skills', {...}) frame becomes a skills-v1 DataPart on a working status
-    frame — the wire payload behind the chat 'skills loaded' chip."""
-    import json
-
-    from a2a_impl.executor import SKILLS_MIME
-
-    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        yield ("skills", {"skills": [{"name": "web-research", "description": "research the web"}]})
-        yield ("done", "ok")
-
-    app = _build_app(stream)
-    skills_payloads = []
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
-        async with c.stream(
-            "POST",
-            "/a2a",
-            headers=A2A_HEADERS,
-            json={
-                "jsonrpc": "2.0",
-                "id": "s",
-                "method": "SendStreamingMessage",
-                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
-            },
-        ) as resp:
-            assert resp.status_code == 200
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                frame = json.loads(line[5:].strip())
-                status = frame.get("result", {}).get("statusUpdate", {}).get("status", {})
-                msg = status.get("message")
-                if not msg:
-                    continue
-                for part in msg.get("parts", []):
-                    mime, data = pa.read_data(part)
-                    if mime == SKILLS_MIME:
-                        skills_payloads.append(data)
-
-    assert skills_payloads, "no skills-v1 DataPart observed on the working frames"
-    names = [s["name"] for s in skills_payloads[0]["skills"]]
-    assert "web-research" in names
-
-
-@pytest.mark.asyncio
 async def test_errored_tool_end_surfaces_phase_failed():
     """A tool_end flagged error → a phase=\"failed\" tool-call DataPart (the card
     renders the X), carrying the error text. A declined run_command takes this path."""

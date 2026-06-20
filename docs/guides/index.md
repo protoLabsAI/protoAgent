@@ -28,7 +28,7 @@ Give the agent reusable, named capabilities and delegates.
 
 | Guide | When to read |
 |---|---|
-| [Skills (`SKILL.md`)](/guides/skills) | You want to drop in reusable, auto-retrieved skill instructions in the AgentSkills `SKILL.md` format |
+| [Skills (`SKILL.md`)](/guides/skills) | You want to drop in reusable, load-on-demand skill instructions in the AgentSkills `SKILL.md` format |
 | [Add a custom skill (A2A card)](/guides/add-a-skill) | You want A2A callers to dispatch a named capability — a *card* skill, distinct from the `SKILL.md` skills above |
 | [Configure subagents](/guides/subagents) | You want specialized delegates beyond the shipped `researcher` |
 | [Reusable workflows](/guides/workflows) | You want declarative multi-step recipes (`*.yaml`) the agent can run on demand |

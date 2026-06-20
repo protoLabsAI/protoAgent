@@ -52,9 +52,10 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
    it adopts *your* agent's identity instead of its built-in "I'm Codex/Claude" default. (Ask it
    "who are you?" — it answers as your agent.) The session runs in a dedicated, instance-scoped
    workspace, not your repo, so it never touches your project's own `AGENTS.md`.
-2. **Context** — each turn carries only the per-turn delta (retrieved knowledge / skills) + your
-   message. ACP sessions are stateful, so the agent keeps history — we don't resend the world each
-   turn, which keeps the agent's own prompt caching intact.
+2. **Context** — each turn carries only the per-turn delta (retrieved knowledge + the always-on
+   `<available_skills>` index; the brain loads a skill's full body on demand via the `load_skill`
+   operator tool, ADR 0060) + your message. ACP sessions are stateful, so the agent keeps history —
+   we don't resend the world each turn, which keeps the agent's own prompt caching intact.
 3. **Tools** — protoAgent's operator tools are published as an MCP server (see
    [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server)) and **mounted into
    the ACP session** (`session/new` `mcpServers`). The coding agent calls `beads_create`,

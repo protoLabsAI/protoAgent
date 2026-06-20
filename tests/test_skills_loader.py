@@ -1,11 +1,11 @@
-"""Tests for the SKILL.md loader and the (now-activated) skill retrieval path.
+"""Tests for the SKILL.md loader and the always-on skill index (ADR 0060).
 
 Covers:
 - parse_skill_md: valid, missing frontmatter, missing required fields,
   oversized description, invalid YAML.
 - bundle/live name override (live wins).
-- seed_skills_index → SkillsIndex.load_skills round-trip.
-- KnowledgeMiddleware now carries a skills_index and injects <learned_skills>.
+- seed_skills_index → SkillsIndex.skill_summaries round-trip.
+- KnowledgeMiddleware carries a skills_index and injects <available_skills>.
 """
 
 from __future__ import annotations
@@ -103,8 +103,9 @@ def test_seed_and_retrieve_round_trip(tmp_path: Path) -> None:
     count = seed_skills_index(index, [root])
     assert count == 1
 
-    hits = index.load_skills("research the web", k=5)
-    assert any(h.name == "web-research" for h in hits)
+    hits = index.skill_summaries()
+    assert any(h["name"] == "web-research" for h in hits)
+    assert index.get_skill("web-research")["prompt_template"].startswith("Plan, search")
 
 
 def test_middleware_carries_skills_index_when_enabled(tmp_path: Path) -> None:
@@ -120,7 +121,7 @@ def test_middleware_carries_skills_index_when_enabled(tmp_path: Path) -> None:
     assert km._skills_index is index
 
 
-def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
+def test_before_model_injects_available_skills(tmp_path: Path) -> None:
     from langchain_core.messages import HumanMessage
 
     from graph.middleware.knowledge import KnowledgeMiddleware
@@ -140,7 +141,7 @@ def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
     state = {"messages": [HumanMessage(content="please research the web for me")]}
     out = mw.before_model(state, runtime=None)
     assert out is not None
-    assert "<learned_skills>" in out["context"]
+    assert "<available_skills>" in out["context"]
     assert "web-research" in out["context"]
 
 
