@@ -59,9 +59,9 @@ Skills live in a SQLite/FTS5 index (`skills.db`). Each row carries a `source`:
 |---|---|---|
 | `disk` | `SKILL.md` files + console CRUD (re-seeded each boot) | **pinned** — never decayed/pruned |
 | `distilled` | the `/distill` subagent (`save_skill`) | yes (curator) |
-| `promoted` | `python -m server skills promote <name>` → the commons (layered tier) | yes (curator) |
+| `promoted` | `python -m server skills promote <name>` → the **commons** | **no** — the curator writes the private tier only, so promoted skills never auto-decay. Remove one with `python -m server skills forget <name>`. |
 
-The curator (`python -m graph.skills.curator`) decays + prunes non-`disk` skills; see the
+The curator (`python -m graph.skills.curator`) decays + prunes non-`disk` **private** skills; see the
 [Skills guide](/guides/skills).
 
 ## Configuration (`skills:` block)
@@ -72,8 +72,12 @@ The curator (`python -m graph.skills.curator`) decays + prunes non-`disk` skills
 | `db_path` | `/sandbox/skills.db` | Index location (→ `~/.protoagent/skills.db` fallback) |
 | `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (rest via `list_skills`; bodies via `load_skill`) |
 | `dir` | `""` | Override the writable skills root |
-| `scope` | `""` (→ `scoped`) | Tier: `scoped` (private) · `shared` (one commons) · `layered` (read commons ∪ private, write private) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)) |
+| `scope` | `""` (→ `scoped`) | Tier: `scoped` (private, **default**) · `shared` (one commons) · `layered` (read commons ∪ private, write private, `promote` to lift) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)). Sharing is opt-in — a fresh agent keeps its learned skills private. |
 | `shared` | `false` | Back-compat boolean — `true` → `scope: shared` when `scope` is blank |
 
-The shared-tier commons base dir is `commons.path` (blank → `~/.protoagent/commons`).
+The shared-tier **commons** base dir is `commons.path` (blank → `~/.protoagent/commons`). The commons
+is **host-level and un-scoped** — every agent on the host reads the same `commons.path` regardless of
+`instance.id`, so isolate two co-located fleets by giving each a distinct `commons.path`. Boot logs
+the active tier + path (`[skills] tier=… into …`). Curate the commons by hand —
+`skills promote`/`forget` (it's curator-immutable; see the source table above).
 `GET /api/runtime/status` reports `skills.count`.

@@ -180,3 +180,29 @@ isolation: enable/config/secrets stay per-workspace.)
 
 Slices 1–2 deliver the whole user-visible story (shared skills + named, isolated, bundle-installable
 agents); 3–4 deepen it.
+
+## As-built notes (2026-06)
+
+Where the implementation diverges from the plan above — recorded so the *why* survives:
+
+- **Skills ship `scoped` by default, not `shared`.** Slice 1 above planned "skills → shared", but
+  the shipped default is **`scoped`** (`skills.shared: false`, blank `skills.scope` → `scoped`;
+  `graph/config.py`, derived in `server/agent_init.py:_build_skills_index`). Deliberate: a fresh
+  agent should not auto-publish everything it learns into a host-wide commons that co-located agents
+  read. Sharing is **opt-in** — set `skills.scope: shared` (whole library is the commons) or
+  `layered` (read commons ∪ private, write private, `promote` to lift). This is the safe default;
+  the "canonical commons" in the store table is the *opt-in* target, not the out-of-box state.
+- **Only skills are tiered — shared *knowledge* (slice 3) is unbuilt.** There is no
+  `knowledge.scope`/commons; the knowledge store is always scoped. Promoting curated/reference
+  knowledge into a commons remains future work (tracked separately).
+- **The commons is host-level and un-scoped.** A `shared`/`layered` skills DB resolves to
+  `commons.path` (default `~/.protoagent/commons/skills.db`), bypassing `scope_leaf`, so **every
+  agent on the host reads the same commons regardless of `instance.id`**. To run two *isolated*
+  fleets on one host, give each a distinct `commons.path`. Boot logs the active tier + path
+  (`[skills] tier=… into …`) so this is visible.
+- **The commons is curator-immutable; curate it with the CLI.** The curator (decay/dedupe/prune)
+  writes the **private** tier only, so a promoted skill never auto-decays. Manage the commons by
+  hand: `python -m server skills promote <name>` lifts a private skill in (an **upsert** —
+  re-promoting refreshes, never duplicates; it surfaces a write failure instead of silently
+  swallowing an unwritable commons), and `python -m server skills forget <name>` removes one (the
+  inverse). `ls` prints the commons path. Automated commons GC is future work.
