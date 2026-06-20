@@ -1,11 +1,11 @@
-"""Parse helpers in tools.peer_tools (shared by the delegates a2a adapter).
+"""Parse helpers in tools.a2a_parse (shared by the delegates a2a adapter).
 
 The peer_consult/peer_list tools were retired (delegate_to over the registry,
 ADR 0025); these two helpers stay because the a2a adapter reuses them to read a
 reply off an A2A 1.0 SendMessage/GetTask result.
 """
 
-from tools.peer_tools import _extract_text, _is_terminal
+from tools.a2a_parse import _extract_text, _is_terminal
 
 
 def test_extract_text_unwraps_a2a_1_0_task_envelope():

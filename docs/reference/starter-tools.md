@@ -5,7 +5,6 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
 - Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a structured multi-step form) — pause the turn (A2A `input-required`) for the operator and resume with their answer (lead-agent only).
 - One **render tool** — `show_component` — emits a structured component (table, key-value, timeline, …) that the console renders inline in chat ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)), instead of formatting it as prose.
-- Four **notes tools** — `notes_list`, `notes_read`, `notes_write`, `notes_revert` — bridge the operator console's Notes panel tabs to the agent (one agent-global notebook), gated per-tab by the operator's Agent-read/write toggles; writes are versioned (undoable) and surface live in the panel.
 - Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
 - Four **beads tools** — `beads_create`, `beads_list`, `beads_update`, `beads_close` — the agent's in-process planning board, bridged to the console Beads panel. Bound when a beads store is present (default in `server/agent_init.py`).
@@ -13,11 +12,17 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - One **goal tool** — `set_goal` — sets a standing, plugin-verified goal for the session ([ADR 0028](/adr/0028-plugin-goal-verifiers); goal mode is **always on**). See [Goal mode](/guides/goal-mode).
 - Three **curation tools** — `recent_activity`, `list_skills`, `save_skill` — let the agent review what it's recently done and manage its own skill library; they also back the scheduled `/dream` (memory consolidation) and `/distill` (workflow→skill) passes ([ADR 0054](/adr/0054-dream-distill-curation-subagents)).
 - The **`search_tools`** meta-tool — added only when deferred-tool disclosure is on ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)); the agent calls it to load tools that aren't in the per-call base set.
-- **GitHub read tools** (`github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff`) — **moved to the opt-in `github` plugin** (`plugins/github/`); not in the default set. Enable with `plugins: { enabled: [github] }`. Over the `gh` CLI (auth via `GITHUB_TOKEN`/`GH_TOKEN`, else gh's ambient login); each needs an explicit `repo`.
-- **Peer-consult tools** (`peer_list` / `peer_consult`) — added only when at least one `PEER_<HANDLE>_URL` is set (A2A federation). **Deprecated** — prefer `delegate_to` (below).
-- **Delegation tools** (plugins) — enable the **delegates** plugin for `delegate_to(target, query)`, which routes a sub-task to another agent or endpoint over **a2a / openai / acp**, managed + hot-swappable from the console (ADR 0025; supersedes `peer_consult`). An **`acp`** delegate drives a CLI coding agent (proto/Claude/Codex/Gemini) over ACP (ADR 0024; the old `code_with` tool was removed in favour of this). See [Delegates](/guides/delegates) + [CLI coding agents over ACP](/guides/coding-agents).
 
-`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None, goal_enabled=...)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; `set_goal` rides `goal_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`; to **add** tools, ship a [plugin](/guides/plugins) (`register_tools`) — editing `get_all_tools` is the legacy core-edit path that conflicts on re-sync.
+`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None, goal_enabled=False)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; `set_goal` rides `goal_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`.
+
+## Plugin-provided tools (not in `get_all_tools`)
+
+Everything else the agent can call comes from a [plugin](/guides/plugins) (`register_tools`), not the core registry — to **add** tools, ship a plugin (editing `get_all_tools` is the legacy core-edit path that conflicts on re-sync). First-party plugins ship some out of the box:
+
+- **`notes`** (on by default) — `read_note` / `write_note` / `append_note` over one shared, agent-global markdown notebook (ADR 0034); also the Notes console panel.
+- **`docs`** (on by default) — `docs_search` / `docs_read` over protoAgent's own documentation.
+- **`delegates`** (built-in) — `delegate_to(target, query)` routes a sub-task to another agent/endpoint over **a2a / openai / acp**, managed + hot-swappable from the console ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)). An **`acp`** delegate drives a CLI coding agent (proto/Claude/Codex/Gemini) over ACP ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)). This single tool **replaced** the retired `peer_consult` / `peer_list` (env-var A2A federation) and `code_with`. See [Delegates](/guides/delegates) + [CLI coding agents over ACP](/guides/coding-agents).
+- **`github`** (opt-in — `plugins.enabled: [github]`) — read tools (`github_get_pr`, `github_get_issue`, `github_list_issues`, `github_get_commit_diff`) over the `gh` CLI (auth via `GITHUB_TOKEN`/`GH_TOKEN`, else gh's ambient login); each needs an explicit `repo`.
 
 ## `current_time`
 
@@ -241,65 +246,6 @@ only when an `InboxStore` is configured. `priority_floor` selects the tiers:
 `now`-priority items have already fired an Activity turn; `next`/`later` wait for
 this call so the agent decides when to surface them. Returns the items one per
 line, or `"Inbox empty."`.
-
-## `notes_list` / `notes_read` / `notes_write`
-
-Read and write the **operator console's Notes panel** tabs — the human-curated
-notes the operator keeps in the UI, distinct from the agent's private
-`memory_*` store. Each tab carries `agentRead` / `agentWrite` permission
-toggles in the panel; these tools **honor them per tab**:
-
-```python
-@tool
-async def notes_list() -> str                                 # tabs + read/write flags
-async def notes_read(tab: str = "") -> str                    # agent-readable tabs only
-async def notes_write(tab: str, content: str, mode: str = "append") -> str
-async def notes_revert(tab: str, steps: int = 1) -> str       # undo recent writes
-```
-
-- `notes_read` returns only tabs with **Agent read** on (a named tab with it off
-  reports "not shared", never the content); blank `tab` returns every readable tab.
-- `notes_write` only writes tabs with **Agent write** on, to an existing tab
-  (`append` or `replace`), updates the tab's word/char counts, and **snapshots
-  the prior content** (last 10 versions) so a write can be undone.
-- `notes_revert` rolls a tab back `steps` versions from that history (the Notes
-  panel also has an **Undo** button that does the same client-side).
-- Writes land **live** in the Notes panel (it polls + adopts newer versions
-  without clobbering unsaved edits).
-- Notes are **agent-global**: one persistent, instance-scoped notebook the
-  agent and the console's Notes panel share (not per-project). It lives at
-  `$NOTES_PATH` (default `/sandbox/notes/workspace.json`, falling back to
-  `~/.protoagent/notes/workspace.json`) — the same shape as the beads store.
-
-These bridge the Notes panel's permission toggles to the agent — without them,
-"what's on my Todo tab?" never reaches the notes (the agent would only see its
-`memory_*` store).
-
-## `discord_send` / `discord_read` / `discord_react`
-
-**Provided by the external `discord` plugin** (`protoLabsAI/discord-plugin`, ADR
-0018/0019/0058 — install from Settings ▸ Plugins ▸ Discover), not by `get_all_tools`
-— the outbound (REST) half of the Discord surface ([ADR 0015](/adr/0015-discord-ingress-surface)).
-Raw Discord REST **v10** over `httpx` (no `discord.py`). The plugin registers them
-only when a token is set (`discord.bot_token` in Settings or `DISCORD_BOT_TOKEN`);
-uninstalling/disabling the plugin removes the surface **and** these tools. A direct
-call without a token degrades to a readable error.
-
-```python
-@tool
-async def discord_send(channel_id: str, content: str) -> str     # markdown; auto-splits at 2000 chars
-async def discord_read(channel_id: str, limit: int = 20) -> str  # newest first, 1–100
-async def discord_react(channel_id: str, message_id: str, emoji: str) -> str
-```
-
-- `channel_id` is required per call — there's no default-channel env var; the
-  persona/operator names the channel. `discord_send` chunks long messages at line
-  boundaries; `discord_read` clamps `limit` to Discord's 1–100; rate limits (429)
-  are surfaced with the `retry_after`.
-- This is the stateless request/response half. The persistent **inbound gateway**
-  (DMs + @-mentions, burst debounce, reactions, threads, return-address capture)
-  is a separate native surface — see [ADR 0015](/adr/0015-discord-ingress-surface).
-- Set up the bot token + Message Content Intent before use (Developer Portal).
 
 ## Adding your own
 

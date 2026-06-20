@@ -7,7 +7,7 @@ into a ``Delegate``, and how to ``dispatch`` a query to it. A reachability
 
 Ported/unified from ORBIS's ``agent/delegate_adapters.py`` — the canonical
 protoLabs delegate registry — adapted to protoAgent (the acp adapter reuses the
-ADR 0024 ``AcpClient``; the a2a adapter reuses the ``peer_tools`` A2A parse helpers).
+ADR 0024 ``AcpClient``; the a2a adapter reuses the ``a2a_parse`` A2A parse helpers).
 """
 
 from __future__ import annotations
@@ -191,7 +191,7 @@ class A2aAdapter(Adapter):
         import httpx
 
         from security import policy
-        from tools.peer_tools import _extract_text, _is_terminal
+        from tools.a2a_parse import _extract_text, _is_terminal
 
         blocked = policy.check_url(d.url)
         if blocked:
