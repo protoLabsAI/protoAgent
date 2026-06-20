@@ -109,7 +109,6 @@ def build_runtime_status(
             "audit": bool(getattr(config, "audit_middleware", False)),
             "memory": bool(getattr(config, "memory_middleware", False)),
             "scheduler": bool(getattr(config, "scheduler_enabled", False)),
-            "enforcement": bool(getattr(config, "enforcement_enabled", False)),
             "prompt_cache": bool(getattr(config, "prompt_cache_enabled", False)),
             "compaction": bool(getattr(config, "compaction_enabled", False)),
             "execute_code": bool(getattr(config, "execute_code_enabled", False)),
