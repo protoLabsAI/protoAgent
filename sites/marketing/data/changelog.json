@@ -3,9 +3,9 @@
     "version": "v0.64.1",
     "date": "2026-06-20",
     "changes": [
-      "Desktop: the common-MCP-servers picker is no longer empty.",
-      "Settings: the \"Host · box defaults\" badge moved into the dialog header",
-      "MCP: more breathing room in the \"Browse common servers\" dialog"
+      "Desktop: the \"Browse common servers\" picker now lists the curated MCP servers — they weren't being bundled into the packaged app.",
+      "The \"Host · box defaults\" badge moved into the Settings dialog header so it no longer pushes the panel content down.",
+      "More breathing room in the \"Browse common servers\" dialog — the search and cards no longer sit flush to the edge."
     ]
   },
   {
