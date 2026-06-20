@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.63.0",
+    "date": "2026-06-20",
+    "changes": [
+      "Shared knowledge tier — a commons every agent on the box can read, with tier badges and share/unshare in the console.",
+      "Skills got progressive disclosure (an always-on index + load-on-demand) and tier-aware curation.",
+      "execute_code is now an opt-in plugin — enable it under Plugins; it's out of the default tool set.",
+      "A new desktop download page with a signed macOS installer.",
+      "Honest middleware surfaces — dropped a dormant capture path and made the session-memory and enforcement surfaces say what they actually do."
+    ]
+  },
+  {
     "version": "v0.62.0",
     "date": "2026-06-20",
     "changes": [
