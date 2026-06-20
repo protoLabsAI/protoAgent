@@ -42,6 +42,7 @@ def test_runtime_status_redacts_secret_values() -> None:
     # Flag on (default) + store built → ready.
     assert status["knowledge"]["status"] == "ready"
     assert status["scheduler"]["backend"] == "local"
+    assert status["agent_runtime"] == "native"  # no agent_runtime set → native
     assert "sk-secret" not in repr(status)
 
 
@@ -56,6 +57,7 @@ def test_runtime_status_handles_missing_config() -> None:
     assert status["graph_loaded"] is False
     assert status["model"] is None
     assert status["knowledge"]["enabled"] is False
+    assert status["agent_runtime"] == "native"  # no config → default native
     # No config yet (booting) → initializing, not "disabled".
     assert status["knowledge"]["status"] == "initializing"
     assert status["project"]["allowed_dirs"] == []

@@ -48,11 +48,21 @@ def test_adapter_default_and_override():
         adapter_for("nonexistent")
 
 
-def test_operator_mcp_spec_gated_on_allowlist():
-    assert operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=[])) is None
-    spec = operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=["beads_list"]))
+def test_operator_mcp_spec_defaults_to_full_toolset():
+    """No "enable tools for ACP" step: an empty operator_mcp.tools defaults to "*" — the
+    coding-agent brain gets protoAgent's full toolset, parity with the native runtime."""
+    spec = operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=[]))
     assert spec["name"] == "protoagent-operator"
     assert spec["args"] == ["-m", "server.operator_mcp"]
+    env = {e["name"]: e["value"] for e in spec["env"]}
+    assert env["OPERATOR_MCP_TOOLS"] == "*"  # empty ⇒ everything
+
+
+def test_operator_mcp_spec_honors_explicit_restriction():
+    """A configured allowlist is honored verbatim as a *restriction* on the ACP brain."""
+    spec = operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=["beads_list", "web_search"]))
+    env = {e["name"]: e["value"] for e in spec["env"]}
+    assert env["OPERATOR_MCP_TOOLS"] == "beads_list,web_search"
 
 
 class _FakeCtx:

@@ -18,7 +18,29 @@ import pytest
 
 import plugins.coding_agent as P
 from plugins.coding_agent import _make_permission
-from plugins.coding_agent.acp_client import AcpClient, AcpError
+from plugins.coding_agent.acp_client import AcpClient, AcpError, _short_tool_name, _split_tool_title
+
+
+def test_short_tool_name_peels_inline_args_and_mcp_source():
+    # A verbose MCP tool title → a compact card label (args + source go to the body).
+    assert (
+        _short_tool_name('web_search (protoagent-operator MCP Server): {"query":"pdx weather"}')
+        == "web_search"
+    )
+    assert _short_tool_name('fetch_url (protoagent-operator MCP Server): {"url":"https://x"}') == "fetch_url"
+    # No inline args / no parenthetical → left mostly as-is.
+    assert _short_tool_name("Skill: Use skill: 'browser-automation'") == "Skill: Use skill: 'browser-automation'"
+    # Defensive cap so an unbounded title can never blow out the header.
+    assert len(_short_tool_name("x" * 500)) <= 80
+
+
+def test_split_tool_title_separates_inline_json():
+    label, inline = _split_tool_title('web_search (proto MCP Server): {"query":"pdx"}')
+    assert label == "web_search (proto MCP Server)"
+    assert inline == '{"query":"pdx"}'
+    # No JSON → empty inline, label unchanged.
+    assert _split_tool_title("current_time") == ("current_time", "")
+
 
 # ── a minimal ACP "agent" (server side) we can drive over stdio ───────────────
 # Speaks just enough of the protocol: handshakes, opens a session, and on a

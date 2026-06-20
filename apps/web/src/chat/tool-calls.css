@@ -42,6 +42,18 @@
   flex: none;
 }
 
+/* Defensive: an ACP coding agent can report a long/unbroken tool NAME (e.g. a verbose
+   MCP tool title). Let the header shrink + the name wrap so it can never force the card
+   wider than the chat panel — the args/source live in the expandable body, not here. */
+.tool-calls .pl-toolcard__head-row,
+.tool-calls .pl-toolcard__label {
+  min-width: 0;
+}
+.tool-calls .pl-toolcard__name {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
 .pl-toolcard__body pre {
   margin: 0;

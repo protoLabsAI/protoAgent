@@ -73,11 +73,12 @@ FIELDS: list[Field] = [
     Field(
         "operator_mcp.tools",
         "operator_mcp_tools",
-        "Tools exposed to the ACP brain",
+        "Restrict tools for the ACP brain",
         "string_list",
         "Agent runtime",
-        "Allowlist of operator tools an external (ACP) brain may call via MCP — "
-        "one per line, or `*` for all (minus execute_code). Empty = none. Ignored by native.",
+        "Optional restriction on which operator tools an external (ACP) brain may call via "
+        "MCP — one per line, or `*` for all. Empty = the full toolset (parity with the native "
+        "runtime, minus execute_code the coding agent already has). Ignored by native.",
     ),
     # ── Model ────────────────────────────────────────────────────────────────
     Field(

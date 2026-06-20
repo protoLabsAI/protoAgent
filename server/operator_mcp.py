@@ -8,9 +8,13 @@ subagents, set goals, schedule work — whatever you allowlist.
 
 Design (ADR 0033 D3 + D5):
 
-- **Opt-in + allowlist-gated.** Only tools named in ``operator_mcp.tools`` are exposed
-  (empty → nothing, mirroring how the comps default external brains to no framework
-  tools). Don't hand ``execute_code`` etc. to an outside agent unless you mean to.
+- **Allowlist-gated resolver, ACP-brain defaults to all.** ``operator_tools`` exposes only
+  the tools named in its allowlist (empty → nothing) — so a *foreign* MCP client (Claude
+  Desktop, Cursor) gets nothing it wasn't granted. But when the operator MCP is the BRAIN's
+  own tool bridge (``agent_runtime: acp:<agent>``), ``operator_mcp_server_spec`` defaults the
+  allowlist to ``"*"`` — full parity with the native runtime, where the model has every tool.
+  ``operator_mcp.tools`` then only *restricts* the ACP brain. (``execute_code`` is dropped
+  from ``"*"`` — the coding agent already has its own; allowlist it by name to override.)
 - **Core + plugin, uniformly.** Plugin tools live in the same registry, so they ride
   this one bridge for free — no per-plugin MCP. (Plugins that *are* an MCP server, via
   ``register_mcp_server``, are mounted directly by the client, not re-wrapped here.)

@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -50,6 +51,28 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
         elif isinstance(block.get("text"), str):
             out.append(block["text"])
     return " ".join(o for o in out if o).strip()[:limit]
+
+
+def _split_tool_title(title: str) -> tuple[str, str]:
+    """Split an ACP tool ``title`` into (label, inline_input). Many agents format the
+    title as ``tool_name (… MCP Server): {json args}`` — the inline JSON blows out the
+    card header and overflows the chat panel, so peel it into the body. Returns
+    ``(label, inline_json)`` where ``inline_json`` is ``""`` when there's none."""
+    s = (title or "").strip()
+    i = s.find("{")
+    if i > 0:
+        return s[:i].rstrip().rstrip(":").rstrip(), s[i:].strip()
+    return s, ""
+
+
+def _short_tool_name(title: str) -> str:
+    """A compact card label from a (possibly verbose) ACP tool title: drop the inline
+    JSON args and a trailing ``(… MCP Server)`` source so the header stays a short
+    at-a-glance name (parity with the native runtime's clean tool names). The args +
+    source live in the card body instead."""
+    label, _ = _split_tool_title(title)
+    label = re.sub(r"\s*\([^)]*\)\s*$", "", label).strip()  # drop trailing "(… server)"
+    return (label or (title or "").strip() or "tool")[:80]
 
 
 def _content_text(content) -> str:
@@ -320,15 +343,27 @@ class AcpClient:
                 await self._emit_thought(text)
         elif kind == "tool_call":
             # A tool call STARTED — narrate its title + emit a structured start event so the
-            # UI can render a card (parity with the native runtime's tool_start).
-            title = update.get("title") or update.get("kind") or "working"
-            await self._narrate(str(title))
+            # UI can render a card (parity with the native runtime's tool_start). The card
+            # NAME is a short label; the verbose args (structured rawInput, else the title's
+            # inline JSON) go into the card BODY so they don't overflow the chat header.
+            title = str(update.get("title") or update.get("kind") or "working")
+            name = _short_tool_name(title)
+            await self._narrate(name)
+            raw_input = update.get("rawInput")
+            if raw_input not in (None, "", {}, []):
+                try:
+                    tool_input = json.dumps(raw_input, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    tool_input = str(raw_input)
+            else:
+                _, inline = _split_tool_title(title)
+                tool_input = inline or str(update.get("kind") or "")
             await self._emit_tool(
                 {
                     "phase": "start",
                     "id": str(update.get("toolCallId") or title),
-                    "name": str(title),
-                    "input": str(update.get("kind") or ""),
+                    "name": name,
+                    "input": tool_input,
                 }
             )
         elif kind == "tool_call_update":
@@ -339,7 +374,7 @@ class AcpClient:
                     {
                         "phase": "end",
                         "id": str(update.get("toolCallId") or ""),
-                        "name": str(update.get("title") or ""),
+                        "name": _short_tool_name(str(update.get("title") or "")),
                         "output": _tool_output_preview(update),
                         "status": status,
                     }

@@ -8,6 +8,11 @@ export type RuntimeStatus = {
     path: string;
     allowed_dirs?: string[];
   };
+  /** Which brain drives a turn (ADR 0033): "native" = the LangGraph loop, or
+   *  "acp:<agent>" = an external coding agent. The console reads this to label the
+   *  active runtime instead of the gateway model and to flag that protoAgent
+   *  skills/commands don't apply in coding-agent mode. */
+  agent_runtime?: string;
   model: null | {
     provider: string;
     name: string;

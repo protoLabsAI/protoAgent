@@ -58,6 +58,7 @@ def build_runtime_status(
             "setup_complete": bool(setup_complete),
             "graph_loaded": False,
             "project": project,
+            "agent_runtime": "native",
             "model": None,
             "identity": None,
             "middleware": {},
@@ -83,6 +84,11 @@ def build_runtime_status(
         "setup_complete": bool(setup_complete),
         "graph_loaded": bool(graph_loaded),
         "project": project,
+        # Which brain drives a turn (ADR 0033): "native" = the LangGraph loop, or
+        # "acp:<agent>" = an external coding agent. The console reads this to stop
+        # misrepresenting an ACP turn as the gateway model + to flag that protoAgent
+        # skills/commands don't apply in coding-agent mode.
+        "agent_runtime": str(getattr(config, "agent_runtime", "native") or "native"),
         "model": {
             "provider": getattr(config, "model_provider", ""),
             "name": getattr(config, "model_name", ""),
