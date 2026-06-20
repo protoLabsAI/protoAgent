@@ -61,8 +61,9 @@ Skills live in a SQLite/FTS5 index (`skills.db`). Each row carries a `source`:
 | `distilled` | the `/distill` subagent (`save_skill`) | yes (curator) |
 | `promoted` | `python -m server skills promote <name>` → the **commons** | **no** — the curator writes the private tier only, so promoted skills never auto-decay. Remove one with `python -m server skills forget <name>`. |
 
-The curator (`python -m graph.skills.curator`) decays + prunes non-`disk` **private** skills; see the
-[Skills guide](/guides/skills).
+Run the curator with `python -m server skills curate [--tier private|commons]`: the **private** tier
+decays + dedupes + prunes non-`disk` skills; the **commons** is trusted, so it **dedupes only** (no
+idle-decay, no auto-prune — `--prune` opts in). See the [Skills guide](/guides/skills).
 
 ## Configuration (`skills:` block)
 
