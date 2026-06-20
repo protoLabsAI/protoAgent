@@ -71,7 +71,8 @@ def _short_tool_name(title: str) -> str:
     at-a-glance name (parity with the native runtime's clean tool names). The args +
     source live in the card body instead."""
     label, _ = _split_tool_title(title)
-    label = re.sub(r"\s*\([^)]*\)\s*$", "", label).strip()  # drop trailing "(… server)"
+    # Drop a trailing "(… MCP Server)" source suffix only — NOT a legit "(beta)" / "(v2)".
+    label = re.sub(r"\s*\([^)]*\b(?:MCP|server)\b[^)]*\)\s*$", "", label, flags=re.IGNORECASE).strip()
     return (label or (title or "").strip() or "tool")[:80]
 
 

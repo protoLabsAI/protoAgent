@@ -30,6 +30,8 @@ def test_short_tool_name_peels_inline_args_and_mcp_source():
     assert _short_tool_name('fetch_url (protoagent-operator MCP Server): {"url":"https://x"}') == "fetch_url"
     # No inline args / no parenthetical → left mostly as-is.
     assert _short_tool_name("Skill: Use skill: 'browser-automation'") == "Skill: Use skill: 'browser-automation'"
+    # A legit, non-MCP trailing parenthetical is PRESERVED (only "(… MCP Server)" is peeled).
+    assert _short_tool_name("search (beta)") == "search (beta)"
     # Defensive cap so an unbounded title can never blow out the header.
     assert len(_short_tool_name("x" * 500)) <= 80
 

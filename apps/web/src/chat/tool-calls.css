@@ -51,7 +51,6 @@
 }
 .tool-calls .pl-toolcard__name {
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
