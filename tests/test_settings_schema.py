@@ -97,6 +97,10 @@ def test_validate_rejects_bad_types_and_bounds():
     assert validate_flat({"prompt_cache.ttl": "9m"})[0] is False  # not in options
     assert validate_flat({"nope.nope": 1})[0] is False  # unknown key
     assert validate_flat({"model.temperature": 0.5, "compaction.enabled": True})[0] is True
+    # skills.top_k allows 0 ("index off, /slash + load_skill still work" — ADR 0060),
+    # so the schema agrees with the runtime that honors 0; negatives still rejected.
+    assert validate_flat({"skills.top_k": 0})[0] is True
+    assert validate_flat({"skills.top_k": -1})[0] is False
 
 
 def test_nest_updates_builds_yaml_shape_and_drops_blank_secrets():

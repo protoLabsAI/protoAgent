@@ -890,12 +890,15 @@ def load_skill(name: str) -> str:
         return "Skills index is not available."
     rec = idx.get_skill((name or "").strip())
     if rec is None:
-        # Recover from a typo'd name by offering the discoverable set.
+        # Recover from a typo'd name by offering the discoverable set — capped so a
+        # large library can't blow up the error string.
         try:
             names = [s["name"] for s in idx.skill_summaries()]
         except Exception:  # noqa: BLE001
             names = []
-        hint = f" Available skills: {', '.join(names)}." if names else ""
+        shown = names[:40]
+        more = f" (+{len(names) - len(shown)} more — call list_skills)" if len(names) > len(shown) else ""
+        hint = f" Available skills: {', '.join(shown)}.{more}" if shown else ""
         return f"No skill named {name!r}.{hint}"
 
     desc = " ".join((rec.get("description") or "").split())

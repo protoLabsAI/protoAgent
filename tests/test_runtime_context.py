@@ -50,6 +50,15 @@ def test_no_query_means_no_knowledge_but_skills_still_listed():
     assert "deploy: how to deploy" in ctx.volatile_delta
 
 
+def test_skills_top_k_zero_lists_no_skills():
+    """An explicit skills_top_k=0 means "list none" — it must NOT be coerced to the
+    default 5 (the `or 5` bug). Matches the middleware path, which respects 0."""
+    cfg = types.SimpleNamespace(knowledge_top_k=5, skills_top_k=0)
+    ctx = assemble_context(cfg, query="x", knowledge_store=_FakeStore(), skills_index=_FakeSkills())
+    assert "deploy" not in ctx.volatile_delta
+    assert not any(s.startswith("skills:") for s in ctx.sources)
+
+
 def test_as_prompt_keeps_prefix_first_then_volatile_then_message():
     ctx = AssembledContext(stable_prefix="PERSONA", volatile_delta="KB", sources=[])
     prompt = ctx.as_prompt("do the thing")
