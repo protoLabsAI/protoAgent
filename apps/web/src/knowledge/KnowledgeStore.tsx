@@ -1,7 +1,7 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Brain, Database, FileUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { Database, FileUp, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -414,10 +414,6 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
           ? `"${pendingDelete.heading || pendingDelete.preview.slice(0, 80)}" will be removed from the knowledge base — the agent will no longer recall it. This can't be undone.`
           : undefined}
       </ConfirmDialog>
-
-      <p className="playbook-foot">
-        <Brain size={13} /> This is the memory the agent retrieves into context before each turn — search it to see what it knows.
-      </p>
     </section>
   );
 }
