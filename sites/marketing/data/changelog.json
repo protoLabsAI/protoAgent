@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.64.3",
+    "date": "2026-06-20",
+    "changes": [
+      "Adding or editing a delegate now opens in a dialog instead of pushing the Delegates panel around.",
+      "The New/Edit skill dialog has more breathing room — roomier padding and field spacing."
+    ]
+  },
+  {
     "version": "v0.64.2",
     "date": "2026-06-20",
     "changes": [
