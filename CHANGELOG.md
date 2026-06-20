@@ -13,6 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.63.0] - 2026-06-20
 
+### Added
+- **Shared knowledge tier.** A promotion-defined commons read by every agent on the box — hybrid
+  (FTS5 + vector) with an embedding circuit-breaker — surfaced in the console (Knowledge ▸ Store)
+  with tier badges and inline share/unshare. (#1248, #1252)
+- **Skills: progressive disclosure + tiered curation.** An always-on `<available_skills>` index with
+  on-demand `load_skill` (ADR 0060) replaces the old per-turn BM25 retrieval; a tier-aware
+  `skills curate` (the commons is dedupe-only); and the Shared Skills panel folded into the Skills
+  view with share/unshare there. (#1235, #1246, #1245)
+- **Late-tools plugin seam.** `register_late_tool_factory` lets a plugin contribute a tool that needs
+  the fully-assembled toolset — the extension point behind moving `execute_code` to a plugin. (#1240)
+- **Desktop download page** on the marketing site — a macOS `.dmg` with OS detection and a
+  newsletter gate for Windows/Linux. (#1236)
+
+### Changed
+- **`execute_code` is now an opt-in plugin** (`plugins/execute_code`), out of the lean core's default
+  tool surface. **Migration:** enable it with `plugins.enabled: [execute_code]` instead of
+  `execute_code.enabled: true` (the `timeout` / `tools` / `output_truncate` settings carry over under
+  the plugin's `execute_code` config section). Its docs now describe it honestly as a sandboxed
+  Python interpreter — the `tools` allowlist scopes the convenience bridge, not a security boundary.
+  (#1240, #1241, #1243, #1244)
+- **Honest middleware surfaces.** Removed the dormant tool-output `ingest` middleware (nothing
+  consumed it); made `enforcement` a code/YAML fork seam hidden from the console (its bare toggle was
+  a no-op without a policy); and renamed `MemoryMiddleware` → `SessionSummaryMiddleware`, making it
+  write-only so `KnowledgeMiddleware` solely owns `<prior_sessions>` injection — correcting docs that
+  still claimed it wrote findings to the knowledge store. (#1238, #1239, #1247, #1249)
+- **Leaner default skill bundle** — dropped the release-notes skill from the core bundle. (#1251)
+
+### Fixed
+- **Skills hardening.** Hardened the shared-skills commons (promote guards, a `forget` CLI, tier
+  visibility, docs) and made the ACP feed respect `skills_top_k=0` while capping the `load_skill`
+  hint. (#1242, #1237)
+
 ## [0.62.0] - 2026-06-20
 
 ### Fixed
