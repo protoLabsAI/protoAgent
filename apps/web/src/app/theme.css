@@ -655,7 +655,15 @@ select:disabled {
 /* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
    self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
 .mcp-browse-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 6px;
+}
+.mcp-server-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .mcp-catalog-controls {
   display: flex;

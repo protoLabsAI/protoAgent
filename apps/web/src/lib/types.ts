@@ -69,7 +69,10 @@ export type RuntimeStatus = {
   };
   mcp?: {
     enabled: boolean;
-    servers: { name: string; transport: string; tool_count: number }[];
+    // tier (ADR 0041): "commons" (box-shared) · "private" (this agent) · "managed"
+    // (plugin-contributed) · null. Present only when the agent is layered; drives the
+    // console's tier badge + share/unshare.
+    servers: { name: string; transport: string; tool_count: number; tier?: "commons" | "private" | "managed" | null }[];
     tool_count: number;
   };
   plugins?: {

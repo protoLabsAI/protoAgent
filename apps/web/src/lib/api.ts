@@ -1443,6 +1443,18 @@ export const api = {
   mcpCatalog() {
     return request<{ servers: McpCatalogEntry[] }>("/api/mcp/catalog");
   },
+  promoteMcpServer(name: string) {
+    return request<{ ok: boolean; promoted: boolean; name: string }>(
+      `/api/mcp/servers/${encodeURIComponent(name)}/promote`,
+      { method: "POST" },
+    );
+  },
+  forgetMcpServer(name: string) {
+    return request<{ ok: boolean; forgotten: boolean; name: string }>(
+      `/api/mcp/servers/${encodeURIComponent(name)}/forget`,
+      { method: "POST" },
+    );
+  },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {
       method: "POST",

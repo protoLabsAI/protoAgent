@@ -1,16 +1,20 @@
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
-import { Button } from "@protolabsai/ui/primitives";
+import { Badge, Button } from "@protolabsai/ui/primitives";
+import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, Boxes, Library, Loader2, Plus, Share2, Trash2 } from "lucide-react";
 
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
 import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
 import { McpCatalogDialog } from "./McpCatalogDialog";
+import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+
+type McpServer = { name: string; transport: string; tool_count: number; tier?: "commons" | "private" | "managed" | null };
 
 // Agent → MCP: external Model Context Protocol servers whose tools are wired into
 // the agent (namespaced <server>__<tool>). Add/remove here hot-reloads — the new
@@ -131,8 +135,12 @@ function McpBody() {
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
-  const servers = runtime.mcp?.servers ?? [];
+  const [forgetPending, setForgetPending] = useState<McpServer | null>(null);
+  const servers = (runtime.mcp?.servers ?? []) as McpServer[];
   const total = runtime.mcp?.tool_count ?? 0;
+  // The agent participates in the box commons (mcp.scope: layered) when any server
+  // carries a tier — then we surface tier badges + share/unshare (ADR 0041).
+  const layered = servers.some((s) => s.tier);
 
   const remove = useMutation({
     mutationFn: (n: string) => api.removeMcpServer(n),
@@ -143,6 +151,24 @@ function McpBody() {
     onError: (err: unknown, n) => setHint(`Couldn't remove ${n}: ${errMsg(err)}`),
   });
   const removingName = remove.isPending ? remove.variables : undefined;
+
+  const promote = useMutation({
+    mutationFn: (n: string) => api.promoteMcpServer(n),
+    onSuccess: (_res, n) => {
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      setHint(`Shared ${n} to the box commons — every layered agent on this box now runs it.`);
+    },
+    onError: (err: unknown, n) => setHint(`Couldn't share ${n}: ${errMsg(err)}`),
+  });
+  const forget = useMutation({
+    mutationFn: (n: string) => api.forgetMcpServer(n),
+    onSuccess: (_res, n) => {
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      setHint(`Unshared ${n} — it's private to this agent again.`);
+    },
+    onError: (err: unknown, n) => setHint(`Couldn't unshare ${n}: ${errMsg(err)}`),
+  });
+  const busyName = promote.isPending ? promote.variables : forget.isPending ? forget.variables : undefined;
 
   return (
     <>
@@ -156,6 +182,7 @@ function McpBody() {
           <Button type="button" variant="ghost" onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
             <Boxes size={14} /> Browse common servers
           </Button>
+          <QuickSetting keys={["mcp.scope"]} title="MCP server sharing" label="MCP server sharing" icon={<Share2 size={16} />} />
         </div>
         <AddServerForm onDone={setHint} />
         <McpCatalogDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdded={setHint} />
@@ -163,9 +190,36 @@ function McpBody() {
           {servers.length ? (
             servers.map((server) => (
               <div className="table-row" key={server.name}>
-                <span>{server.name} · {server.transport}</span>
+                <span className="mcp-server-name">
+                  {layered && server.tier === "commons" ? (
+                    <span title="Shared commons — runs on every layered agent on this box">
+                      <Badge status="neutral"><Library size={12} /> commons</Badge>
+                    </span>
+                  ) : layered && server.tier === "private" ? (
+                    <span title="Private to this agent — share to run it on every layered agent on this box">
+                      <Badge status="neutral">private</Badge>
+                    </span>
+                  ) : null}
+                  {server.name} · {server.transport}
+                </span>
                 <div className="plugin-row-actions">
                   <StatusPill label={`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`} tone="success" />
+                  {layered && server.tier === "private" ? (
+                    <Button type="button" variant="ghost" disabled={busyName === server.name}
+                      onClick={() => { setHint(null); promote.mutate(server.name); }}
+                      title={`Share ${server.name} to the box commons`} aria-label={`share ${server.name}`}
+                    >
+                      <ArrowUpToLine size={14} className={busyName === server.name ? "spin" : ""} />
+                    </Button>
+                  ) : null}
+                  {layered && server.tier === "commons" ? (
+                    <Button type="button" variant="ghost" disabled={busyName === server.name}
+                      onClick={() => { setHint(null); setForgetPending(server); }}
+                      title={`Unshare ${server.name} from the box commons`} aria-label={`unshare ${server.name}`}
+                    >
+                      <ArrowDownFromLine size={14} />
+                    </Button>
+                  ) : null}
                   <Button type="button"
                     variant="ghost"
                     disabled={removingName === server.name}
@@ -185,6 +239,19 @@ function McpBody() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={forgetPending !== null}
+        title="Unshare from the box commons?"
+        confirmLabel="Unshare"
+        destructive
+        onConfirm={() => { if (forgetPending) forget.mutate(forgetPending.name); setForgetPending(null); }}
+        onClose={() => setForgetPending(null)}
+      >
+        {forgetPending
+          ? `"${forgetPending.name}" will be removed from the box commons and become private to this agent — no other agent on this box will run it.`
+          : undefined}
+      </ConfirmDialog>
     </>
   );
 }

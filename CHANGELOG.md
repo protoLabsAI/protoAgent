@@ -19,9 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Share MCP servers across the box (commons).** A new `mcp.scope` (scoped · layered)
   lets an agent also run the box-shared MCP commons (`~/.protoagent/commons/mcp-servers.json`),
   unioned with its own servers — private wins by name (ADR 0041, mirroring how skills &
-  knowledge share). `POST /api/mcp/servers/{name}/promote` and `/forget` move a server
-  between this agent's config and the commons. A shared server runs on every layered
-  agent on the box, so it only adds servers you trust box-wide.
+  knowledge share). In Settings ▸ MCP, layered servers show a commons/private tier badge
+  with one-click share / unshare, and a sharing-mode quick-set sits by the header. A
+  shared server runs on every layered agent on the box, so it only adds servers you trust
+  box-wide.
 
 ## [0.63.1] - 2026-06-20
 

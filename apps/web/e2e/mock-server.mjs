@@ -417,6 +417,16 @@ const server = createServer(async (req, res) => {
       playbooks = clonePlaybooks();
       return sendJson(res, { ok: true });
     }
+    if (pathname === "/api/__test__/mcp/layered" && req.method === "POST") {
+      // Put the MCP roster into "layered" mode (servers carry a tier) so the tier
+      // badges + share/unshare surface — exercised by the commons e2e.
+      RUNTIME_STATUS.mcp.servers = [
+        { name: "shared-fs", transport: "stdio", tool_count: 1, tier: "commons" },
+        { name: "local-fs", transport: "stdio", tool_count: 1, tier: "private" },
+      ];
+      RUNTIME_STATUS.mcp.tool_count = 2;
+      return sendJson(res, { ok: true });
+    }
     if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
       knowledgeChunks = cloneKnowledge();
       return sendJson(res, { ok: true });
@@ -554,6 +564,18 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { ok: true, added, servers: added });
     }
     {
+      const mp = pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/promote$/);
+      if (mp && req.method === "POST") {
+        const name = decodeURIComponent(mp[1]);
+        RUNTIME_STATUS.mcp.servers = RUNTIME_STATUS.mcp.servers.map((s) => (s.name === name ? { ...s, tier: "commons" } : s));
+        return sendJson(res, { ok: true, promoted: true, name });
+      }
+      const mf = pathname.match(/^\/api\/mcp\/servers\/([^/]+)\/forget$/);
+      if (mf && req.method === "POST") {
+        const name = decodeURIComponent(mf[1]);
+        RUNTIME_STATUS.mcp.servers = RUNTIME_STATUS.mcp.servers.map((s) => (s.name === name ? { ...s, tier: "private" } : s));
+        return sendJson(res, { ok: true, forgotten: true, name });
+      }
       const m = pathname.match(/^\/api\/mcp\/servers\/([^/]+)$/);
       if (m && req.method === "DELETE") {
         return sendJson(res, { ok: true, servers: [] });

@@ -70,3 +70,28 @@ test("MCP catalog adds a no-input server in one click", async ({ page }) => {
   await expect(page.locator(".plugin-hint")).toContainText("Connected memory");
   await expect(page.getByText("memory · stdio")).toBeVisible();
 });
+
+// Box-commons sharing (ADR 0041): when the agent is layered, each server shows a
+// commons/private tier badge and a share / unshare action. (Runs last — the seed
+// replaces the MCP roster.)
+test("MCP servers show tier badges and share / unshare", async ({ page }) => {
+  await page.request.post("/api/__test__/mcp/layered");
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "MCP", exact: true }).click();
+
+  const sharedRow = page.locator(".table-row", { hasText: "shared-fs" });
+  const localRow = page.locator(".table-row", { hasText: "local-fs" });
+  await expect(sharedRow.getByText("commons")).toBeVisible();
+  await expect(localRow.getByText("private")).toBeVisible();
+
+  // Share the private server → it joins the commons (badge flips).
+  await page.getByRole("button", { name: "share local-fs" }).click();
+  await expect(localRow.getByText("commons")).toBeVisible();
+
+  // Unshare a commons server → confirm → it goes private again.
+  await page.getByRole("button", { name: "unshare shared-fs" }).click();
+  await page.getByRole("dialog", { name: "Unshare from the box commons?" })
+    .getByRole("button", { name: "Unshare", exact: true }).click();
+  await expect(sharedRow.getByText("private")).toBeVisible();
+});
