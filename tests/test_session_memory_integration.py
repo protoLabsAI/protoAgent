@@ -37,6 +37,7 @@ def _make_fake(replies):
 
 def _build_graph(monkeypatch, memory_dir, store, replies):
     """Build the real agent graph with a fake model + a temp MEMORY_PATH."""
+    import graph.agent as agentmod
     import graph.middleware.memory as memmod
     from graph.config import LangGraphConfig
     from langgraph.checkpoint.memory import MemorySaver
@@ -44,6 +45,10 @@ def _build_graph(monkeypatch, memory_dir, store, replies):
     # Both the writer (_persist_session) and the reader (load_prior_sessions)
     # resolve the module-level MEMORY_PATH — redirect it to a temp dir.
     monkeypatch.setattr(memmod, "MEMORY_PATH", str(memory_dir), raising=False)
+    # Another suite (test_memory_persistence) importlib.reload()s this module,
+    # leaving graph.agent's imported class pointing at the pre-reload version.
+    # Re-sync so the graph builds with the same class our patches target.
+    monkeypatch.setattr(agentmod, "SessionSummaryMiddleware", memmod.SessionSummaryMiddleware, raising=False)
 
     with patch("graph.agent.create_llm", lambda *a, **k: _make_fake(replies)):
         from graph.agent import create_agent_graph
