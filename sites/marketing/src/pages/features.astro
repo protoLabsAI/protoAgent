@@ -1,93 +1,87 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 
-// Differentiators deep-dive + a comparison vs batteries-included agent frameworks.
-// NOTE: the Hermes / OpenClaw cells are a best-effort read of their positioning, not a
-// verified feature audit — sharpen before leaning on it publicly. protoAgent's column
-// is accurate to the codebase.
+// Differentiators deep-dive, organized around protoAgent's three ideas: a simple core,
+// a fully extensible plugin platform, and A2A-native fleet orchestration. Everything here
+// is accurate to the codebase — keep it that way (this is the public feature claim).
 
 const pillars = [
   {
-    title: 'Bare-bones core, opt-in everything',
-    body: "You start with a small, legible core and add only what you need — tools, skills, subagents, workflows, console views, memory backends — as plugins. No inheriting a pile of use-cases you'll never use, then fighting to remove them.",
+    title: 'Simple, legible core',
+    body: "You start with a small core you can actually read: the agent runtime, a spec-compliant A2A server, and a handful of keyless tools. Everything else — extra tools, skills, subagents, workflows, memory backends, console views — is opt-in. No inheriting a pile of use-cases you'll never use, then fighting to remove them.",
   },
   {
-    title: 'A2A-native, built for fleets',
-    body: "Every protoAgent is a first-class A2A 1.0 server and can fan out to other A2A endpoints (delegate_to). It's designed to run distributed and be orchestrated as a fleet across your machines — not as one monolith on one box.",
+    title: 'Extensible platform',
+    body: "Grow the agent without forking. Drop-in plugins — installable from a git URL, pinned in a lockfile, shareable as repos — add tools, SKILL.md skills, subagents, workflows, FastAPI routes, managed MCP servers, and their own console dashboards. The core stays lean; you opt into surface area as you need it.",
   },
   {
-    title: 'Local-first, model-agnostic',
-    body: "Powered by your models through an OpenAI-compatible gateway — local 30B, a hosted frontier model, whatever you point it at. Not a coding-agent competitor: it orchestrates work (and can drive any coding agent over ACP).",
+    title: 'Fleet orchestration',
+    body: "Every protoAgent is a first-class A2A 1.0 server. Agents discover and delegate to one another (delegate_to over a2a / openai / acp), and a single slug-routed console manages the whole fleet — built to run distributed across your machines, not as one monolith on one box.",
   },
 ];
 
-// The honest edges. Hermes & OpenClaw are extensible, OpenAI-compatible, local-first
-// agents too — these are the places protoAgent's design genuinely differs, not claims
-// of exclusivity.
+// The features that carry those three ideas — accurate to the codebase, no competitor framing.
 const differentiators = [
   {
     title: 'A2A 1.0 as the native interface',
-    body: "protoAgent IS a spec-compliant A2A 1.0 server (HTTP/JSON-RPC, agent card, extensions) — shipped, not proposed. A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints. The whole design assumes a fleet: agents discovering and delegating to each other over the open standard.",
+    body: "protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, confidence). A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.",
   },
   {
     title: 'Built on LangGraph',
-    body: "The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You're extending a graph, not a bespoke loop, so what you learn here transfers.",
+    body: "The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You extend a graph, not a bespoke loop, so what you learn here transfers.",
   },
   {
     title: 'A lean core, not a bundle',
-    body: "Hermes and OpenClaw ship rich built-ins (browser automation, voice, 50+ chat channels). protoAgent ships a small legible core and you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. You opt in to surface area instead of opting out of it.",
+    body: "A small, legible core ships by default; you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. A plugin is a full package (tools, skills, subagents, workflows, routes, console views), so you opt in to surface area instead of opting out of it.",
   },
   {
-    title: 'An operator console, not just chat apps',
-    body: "Where the others live inside your chat apps, protoAgent centers on a dedicated React console (+ a native desktop app) where a plugin can add its own left-rail dashboard — the SpaceTraders Fleet view, a Quant Desk — without a rebuild. Manage a fleet from one surface.",
+    title: 'Extend without forking',
+    body: "Three opt-in ways to extend a running agent: SKILL.md skills (auto-retrieved into context, even agent-authored), MCP servers (external tools over stdio/HTTP), and plugins (full packages). Shared-runtime fixes land upstream; your domain logic lives in your fork or your plugins.",
   },
   {
-    title: 'Built-in cost & latency telemetry',
-    body: "A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Some agents deliberately keep zero telemetry; protoAgent treats cost/latency visibility as core.",
+    title: 'An operator console + custom dashboards',
+    body: "A dedicated React console (and a native desktop app) where a plugin can add its own left-rail dashboard — a Fleet view, a Quant Desk — without a rebuild. Run from chat, manage from surfaces, orchestrate a fleet from one place.",
+  },
+  {
+    title: 'Memory, knowledge & skills',
+    body: "A bundled hybrid knowledge store (SQLite FTS5 + embeddings, RRF fusion) the agent reads before every turn, with ingestion for docs / web / audio / video. Skills are retrieved into context automatically and curated over time — the agent can even author its own.",
   },
   {
     title: 'Goals with testable outcomes',
     body: "Beyond a scheduler: goal mode with pluggable verifiers (a goal is met when a check passes, not when the model says so) and monitor goals for long-horizon, externally-driven targets — e.g. a background loop grinding toward 1M credits, evaluated out-of-band.",
   },
   {
+    title: 'Built-in cost & latency telemetry',
+    body: "A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Cost and latency visibility is treated as core, not an add-on.",
+  },
+  {
     title: 'Drive any coding agent (ACP)',
-    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol. protoAgent orchestrates coding agents rather than competing as one.",
+    body: "Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.",
+  },
+  {
+    title: 'Local-first & model-agnostic',
+    body: "Powered by your models through an OpenAI-compatible gateway — a local 30B, a hosted frontier model, whatever you point it at. Model choice is gateway config, not code.",
   },
   {
     title: 'Headless, API-first',
     body: "Run it with no UI (--ui none): A2A + an OpenAI-compatible /v1 endpoint + /metrics. Point any OpenAI client or agent fleet at it. The console is optional, not the product.",
   },
-];
-
-// Honest comparison — these are all capable, MIT-licensed, local-first agents. The
-// point isn't a feature-count win; it's a different center of gravity. ✓ = yes ·
-// ~ = partial / different flavor / via add-on · — = not a focus.
-const cmp = [
-  ['Foundation', 'LangGraph + A2A 1.0', 'own runtime', 'own gateway'],
-  ['Center of gravity', 'A2A orchestration substrate', 'self-improving personal agent', 'multi-channel chat gateway'],
-  ['Core stance', 'minimal core, opt-in plugins', 'feature-rich built-ins', 'feature-rich built-ins'],
-  ['Extend without forking', '✓ git-URL plugins', '✓ plugins', '✓ skills/plugins'],
-  ['Agent-to-agent', '✓ A2A 1.0 (HTTP/JSON-RPC), shipped', '~ proposed (#514)', '~ encrypted relay'],
-  ['OpenAI-compatible endpoint', '✓', '✓', '~'],
-  ['Pluggable memory / vector store', '✓', '✓ providers', '~ markdown'],
-  ['Built-in cost/latency telemetry + CSV export', '✓', '— (local-only by design)', '—'],
-  ['Langfuse tracing', '✓ first-class', '✓ plugin', '~'],
-  ['Operator console + custom plugin dashboards', '✓ (+ native desktop)', '~', '~'],
-  ['Chat-channel breadth', '~ Discord/Telegram/Slack', '✓ broad', '✓ 50+ (widest)'],
-  ['Delegate to coding agents', '✓ ACP', '~', '✓'],
-  ['Autonomy (scheduler / heartbeat)', '✓ + goal mode & verifiers', '✓', '✓ heartbeat'],
-  ['Sandboxing / NVIDIA', '✓ OpenShell + egress fence', '~', '✓ NemoClaw'],
-  ['License', 'MIT / fork-to-ship', 'MIT', 'MIT'],
+  {
+    title: 'Sandboxed by design',
+    body: "Optional OpenShell isolation (kernel-enforced filesystem + seccomp + an egress proxy) and a deny-by-default fetch_url host fence — generated from your config, so the blast radius is bounded without hand-writing policy.",
+  },
 ];
 ---
 
-<BaseLayout title="Features — protoAgent" description="How protoAgent is different: a bare-bones, A2A-native, fully extensible agent platform — vs batteries-included frameworks like Hermes and OpenClaw.">
+<BaseLayout title="Features — protoAgent" description="protoAgent: a simple, legible core, a fully extensible plugin platform, and A2A-native fleet orchestration. Run one agent or orchestrate many — local-first.">
   <div class="mx-auto max-w-6xl px-6 py-20">
     <h1 class="text-4xl font-bold tracking-tight mb-3">Why protoAgent</h1>
     <p class="text-zinc-400 text-lg max-w-2xl mb-14">
-      Most agent frameworks hand you everything and dare you to delete what you don't want.
-      protoAgent inverts that: a small core you actually understand, and everything else as
-      a plugin — built to run distributed and orchestrate a fleet over A2A.
+      Three ideas, one substrate: a <strong class="text-zinc-200">simple core</strong> you can
+      actually read, a <strong class="text-zinc-200">fully extensible</strong> plugin platform,
+      and <strong class="text-zinc-200">A2A-native fleet orchestration</strong>. Start with a
+      working agent on a fresh clone, grow it into exactly what you need, and run it solo or as a
+      fleet across your machines.
     </p>
 
     <!-- Pillars -->
@@ -100,40 +94,8 @@ const cmp = [
       ))}
     </div>
 
-    <!-- Comparison -->
-    <h2 class="text-2xl font-bold tracking-tight mb-2">protoAgent vs Hermes &amp; OpenClaw</h2>
-    <p class="text-sm text-zinc-500 mb-6">✓ yes · ~ partial / via add-ons · — not a focus</p>
-    <div class="overflow-x-auto mb-3">
-      <table class="w-full text-sm border-collapse">
-        <thead>
-          <tr class="text-left border-b border-[var(--pl-color-border)]">
-            <th class="py-2 pr-4 font-medium text-zinc-300"></th>
-            <th class="py-2 px-3 font-semibold" style="color: var(--pl-color-brand-lavender)">protoAgent</th>
-            <th class="py-2 px-3 font-medium text-zinc-400">Hermes</th>
-            <th class="py-2 px-3 font-medium text-zinc-400">OpenClaw</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cmp.map(([dim, a, b, c]) => (
-            <tr class="border-b border-[var(--pl-color-border)]">
-              <td class="py-2 pr-4 text-zinc-300">{dim}</td>
-              <td class="py-2 px-3 text-zinc-100">{a}</td>
-              <td class="py-2 px-3 text-zinc-500">{b}</td>
-              <td class="py-2 px-3 text-zinc-500">{c}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-    <p class="text-xs text-zinc-600 mb-20">
-      Hermes (NousResearch) and OpenClaw are capable, MIT-licensed, local-first agents too —
-      this maps where protoAgent's design priorities <em>differ</em>, not a claim that it does
-      more. They each lead in places (OpenClaw's 50+ chat channels, Hermes's self-improving
-      memory). Researched June 2026; these tools move fast — corrections welcome.
-    </p>
-
     <!-- Deep dive -->
-    <h2 class="text-2xl font-bold tracking-tight mb-6">The features that make the difference</h2>
+    <h2 class="text-2xl font-bold tracking-tight mb-6">The features behind the three ideas</h2>
     <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-20">
       {differentiators.map((f) => (
         <div class="card p-6">
