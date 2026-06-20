@@ -184,6 +184,28 @@ function handleApiGet(pathname, fleet = FLEET) {
           },
         ],
       };
+    case "/api/mcp/catalog": {
+      // Curated common-MCP-server directory (quick-add picker). `installed` mirrors
+      // whatever is already in the runtime roster.
+      const configured = new Set(RUNTIME_STATUS.mcp.servers.map((s) => s.name));
+      return {
+        servers: [
+          {
+            id: "memory", name: "Memory", category: "Reasoning",
+            tagline: "A persistent knowledge-graph memory.", requires: "node", official: true,
+            template: { name: "memory", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"] },
+            installed: configured.has("memory"),
+          },
+          {
+            id: "filesystem", name: "Filesystem", category: "Files",
+            tagline: "Read and write files under a directory you allow.", requires: "node", official: true,
+            template: { name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "${path}"] },
+            inputs: [{ key: "path", label: "Allowed directory", placeholder: "/data", required: true }],
+            installed: configured.has("filesystem"),
+          },
+        ],
+      };
+    }
     case "/api/plugins/updates":
       // Per-plugin freshness (ADR 0027). Console-installed plugins are up to date
       // (their resolved_sha is the latest); the seeded fixtures exercise the other
@@ -515,26 +537,6 @@ const server = createServer(async (req, res) => {
           restart_recommended: !body.enabled && m[1] === "boardy",
         });
       }
-    }
-    if (pathname === "/api/mcp/catalog" && req.method === "GET") {
-      const configured = new Set(RUNTIME_STATUS.mcp.servers.map((s) => s.name));
-      return sendJson(res, {
-        servers: [
-          {
-            id: "memory", name: "Memory", category: "Reasoning",
-            tagline: "A persistent knowledge-graph memory.", requires: "node", official: true,
-            template: { name: "memory", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"] },
-            installed: configured.has("memory"),
-          },
-          {
-            id: "filesystem", name: "Filesystem", category: "Files",
-            tagline: "Read and write files under a directory you allow.", requires: "node", official: true,
-            template: { name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "${path}"] },
-            inputs: [{ key: "path", label: "Allowed directory", placeholder: "/data", required: true }],
-            installed: configured.has("filesystem"),
-          },
-        ],
-      });
     }
     if (pathname === "/api/mcp/servers" && req.method === "POST") {
       const name = body.name || "server";
