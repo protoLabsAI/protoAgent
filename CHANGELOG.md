@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-06-20
+
+### Changed
+- **An ACP coding-agent runtime now gets protoAgent's full toolset by default.** Under
+  `agent_runtime: acp:<agent>` the external coding agent *is* the brain, so it now has every
+  tool — parity with the native runtime, where the gateway model does. `operator_mcp.tools`
+  is now an optional *restriction* rather than a required allowlist (empty = everything, minus
+  the redundant `execute_code` the coding agent already has), so a skill handed to the coding
+  agent can actually run its `web_search`/`fetch_url`/… tools instead of getting a procedure it
+  can't execute. The chat also labels the active runtime ("`<agent>` · coding agent") instead
+  of the gateway model that never ran the turn. (#1224)
+- **Removed the redundant "working…" status strip above the chat composer** — the spinner +
+  status readout is covered by the inline turn indicators now. (#1225)
+
 ## [0.60.0] - 2026-06-19
 
 ### Added
