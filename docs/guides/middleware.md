@@ -40,10 +40,15 @@ Two protoAgent-specific facilities round out the contract:
 ## The chain and where you land
 
 Core middlewares run in a fixed order (`graph/agent.py::_build_middleware`):
-prompt-cache → enforcement → knowledge → tool-deferral → audit → memory →
-knowledge-ingest → compaction → model-fallback → **your plugin middleware** →
-message-capture. Plugin middleware is appended after the core chain and before the
-internal message-capture, so all your hooks run and the turn is still captured.
+tool-call-repair → wait-yield → steering → model-override → prompt-cache →
+enforcement → knowledge → tool-deferral → audit → memory → knowledge-ingest →
+compaction → model-fallback → **your plugin middleware** → message-capture. The four
+leading ones are internal lifecycle hooks — self-heal a dangling tool call, end the turn
+after the `wait` tool, fold in mid-turn steering, apply a per-tab model override — and run
+outermost; each is a no-op on a turn that didn't trigger it. Several core ones (enforcement,
+knowledge, tool-deferral, compaction) are opt-in via config and absent when off. Plugin
+middleware is appended after the core chain and before the internal message-capture, so all
+your hooks run and the turn is still captured.
 
 Two consequences worth designing around:
 

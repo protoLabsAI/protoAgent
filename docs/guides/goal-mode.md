@@ -9,6 +9,8 @@ There are **two kinds**, and the difference is *who moves the needle*:
 
 When a goal reaches a terminal state it **broadcasts on the event bus** (`goal.achieved` / `goal.failed`, ADR 0039) — so the console, or any plugin, can react without writing code (see [Reacting to a goal](#reacting-to-a-goal)).
 
+> Goal mode is **always on** — there's no enable/disable toggle. The machinery stays dormant (and the `set_goal` tool a no-op gate) until you actually set a goal, so it costs nothing when unused. The tuning knobs (`goal.max_iterations`, `goal.eval_model`) live in **Settings ▸ Agent**.
+
 It's modelled on protocli's goal system but deliberately more rigorous for a long-running server agent:
 
 | | protocli | protoAgent goal mode |
