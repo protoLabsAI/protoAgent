@@ -108,7 +108,7 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 |---|---|---|
 | `knowledge` | `true` | Inject retrieved knowledge into state before LLM calls. Backed by the bundled `KnowledgeStore` (sqlite + FTS5). Set `false` for a stateless agent. |
 | `audit` | `true` | Append every tool call to `/sandbox/audit/audit.jsonl`. |
-| `memory` | `true` | Persist a session summary on terminal turn and asynchronously index conversation findings under `domain='finding'`. |
+| `memory` | `true` | Persist a reasoning-stripped session summary at terminal turn / session end (read back as `<prior_sessions>` by the knowledge middleware). |
 | `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite, or `WorkstaceanScheduler` when env vars are set). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
 | `enforcement` | `false` | Opt-in safety gate that blocks tool calls **before** they execute (see `enforcement` block below). **YAML / code seam — not surfaced in the console**, since it's a no-op until a deny list, rate limit, or predicate is configured. |
 

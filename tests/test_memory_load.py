@@ -357,28 +357,3 @@ async def test_abefore_model_runs_search_off_event_loop():
     # …but the blocking search ran on a worker thread, not the event loop.
     assert seen_threads, "store.search was never called"
     assert seen_threads[0] is not threading.main_thread()
-
-
-async def test_memory_middleware_abefore_model_off_loop(tmp_path, monkeypatch):
-    """SessionSummaryMiddleware.abefore_model (standalone mode, disk reads) also
-    dispatches via to_thread."""
-    import threading
-
-    from langchain_core.messages import HumanMessage
-
-    import graph.middleware.memory as memmod
-
-    seen_threads: list[threading.Thread] = []
-
-    def _fake_load(self):
-        seen_threads.append(threading.current_thread())
-        return "<prior_sessions>old</prior_sessions>"
-
-    monkeypatch.setattr(memmod.SessionSummaryMiddleware, "_load_prior_sessions", _fake_load)
-    mw = memmod.SessionSummaryMiddleware(knowledge_store=None)
-
-    state = {"messages": [HumanMessage(content="hello")]}
-    result = await mw.abefore_model(state, runtime=None)
-
-    assert result is not None  # prior sessions injected
-    assert seen_threads and seen_threads[0] is not threading.main_thread()

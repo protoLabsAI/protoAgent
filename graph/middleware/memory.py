@@ -42,28 +42,10 @@ MEMORY_PATH = str(scope_leaf(os.environ.get("MEMORY_PATH") or data_home() / "mem
 _DISABLE_ENV = os.environ.get("PROTOAGENT_DISABLE_MEMORY", "")
 _PERSISTENCE_DISABLED = _DISABLE_ENV.lower() in ("1", "true", "yes")
 
-# How long the <prior_sessions> block is cached before a disk reload (bounds
-# staleness vs per-turn I/O). Mirrors KnowledgeMiddleware's constant.
-_PRIOR_SESSIONS_TTL_S = 60.0
-
 if _PERSISTENCE_DISABLED:
     log.debug("[memory] persistence disabled via PROTOAGENT_DISABLE_MEMORY")
 else:
     log.info("[memory] session persistence enabled — path: %s", MEMORY_PATH)
-
-
-def _in_goal_turn() -> bool:
-    """Whether the current turn is a goal-driven invocation.
-
-    Lazy import keeps memory decoupled from the goals package and fail-safe
-    (treat as a normal turn if the marker module is unavailable).
-    """
-    try:
-        from graph.goals.goal_turn import in_goal_turn
-
-        return in_goal_turn()
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -288,78 +270,17 @@ class SessionSummaryMiddleware(AgentMiddleware):
 
     Writes a reasoning-stripped JSON summary to ``MEMORY_PATH``, read back by
     ``KnowledgeMiddleware`` as ``<prior_sessions>`` for cross-session continuity.
-    Does **not** write to the knowledge store (ADR 0021 — see ``after_agent``).
 
-    Also injects ``<prior_sessions>`` itself, but only as a fallback when no
-    ``KnowledgeMiddleware`` is active (``self._store is None``) — otherwise
-    Knowledge owns that injection.
+    **Write-only.** It does not write to the knowledge store (ADR 0021 — see
+    ``after_agent``) and does not inject ``<prior_sessions>``: that read/inject
+    path is owned solely by ``KnowledgeMiddleware``, so cross-session continuity
+    requires the knowledge middleware (on by default).
     """
 
     def __init__(self, knowledge_store=None):
         super().__init__()
+        # Accepted for ctor compatibility; unused now that this is write-only.
         self._store = knowledge_store
-        # TTL cache (see _PRIOR_SESSIONS_TTL_S): refreshed periodically so
-        # sessions persisted after boot become visible, not frozen at first load.
-        self._prior_sessions_cache: str | None = None
-        self._prior_sessions_loaded_at: float = 0.0
-
-    # --- Session memory loading (only used when no KnowledgeMiddleware is active) ---
-
-    def _load_prior_sessions(self) -> str:
-        """Prior-session continuity when standalone (no KnowledgeMiddleware).
-
-        Delegates to the shared :func:`load_prior_sessions` (ADR 0021) — one
-        source of truth for both middlewares. Runs only when ``self._store is
-        None``, so there's no double-injection with KnowledgeMiddleware.
-        """
-        return load_prior_sessions(MEMORY_PATH)
-
-    def before_model(self, state, runtime) -> dict | None:
-        """Inject `<prior_sessions>` into system prompt when running standalone.
-
-        When KnowledgeMiddleware is present it handles this; we only act when
-        `self._store is None`.
-        """
-        if self._store is not None:
-            return None
-        # Suppressed on goal-driven turns (see graph.goals.goal_turn):
-        # unrelated cross-session history biases the self-driving loop.
-        if _in_goal_turn():
-            return None
-        import time
-
-        now = time.monotonic()
-        if self._prior_sessions_cache is None or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
-            self._prior_sessions_cache = self._load_prior_sessions()
-            self._prior_sessions_loaded_at = now
-        if not self._prior_sessions_cache:
-            return None
-        messages = state.get("messages", [])
-        if not messages:
-            return None
-        # Prepend as a system-adjacent HumanMessage block. LangGraph has no
-        # dedicated system-context append hook on state, so we piggyback on
-        # the first human message by modifying its content.
-        from langchain_core.messages import SystemMessage
-
-        first = messages[0]
-        if isinstance(first, SystemMessage):
-            # Already has a system message — append prior_sessions to it
-            new_content = first.content + "\n\n" + self._prior_sessions_cache
-            new_msgs = [SystemMessage(content=new_content)] + list(messages[1:])
-            return {"messages": new_msgs}
-        # Otherwise prepend a new SystemMessage
-        new_msgs = [SystemMessage(content=self._prior_sessions_cache)] + list(messages)
-        return {"messages": new_msgs}
-
-    async def abefore_model(self, state, runtime) -> dict | None:
-        # before_model reads prior sessions from disk — keep that I/O off the
-        # event loop (same pattern as graph/checkpointer.py).
-        import asyncio
-
-        return await asyncio.to_thread(self.before_model, state, runtime)
-
-    # --- Knowledge extraction (existing) ---
 
     def after_agent(self, state, runtime) -> dict | None:
         """Persist a session summary on the terminal turn.
