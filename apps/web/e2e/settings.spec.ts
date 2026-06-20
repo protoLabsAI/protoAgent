@@ -73,9 +73,9 @@ test("the settings dialog lists the grouped Agent + Box sections (host, no scope
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Compaction", "Runtime"]);
 });
 
-test("the host inheritance banner explains box defaults", async ({ page }) => {
+test("the host scope badge marks box defaults", async ({ page }) => {
   await openSettings(page);
-  await expect(page.locator(".settings-overlay .pl-alert").first()).toContainText("box defaults every agent inherits");
+  await expect(page.locator(".settings-overlay .settings-scope-badge")).toContainText("Host · box defaults");
 });
 
 test("opening from the header drawer's Settings item shows the same dialog + the Box sections", async ({ page }) => {
