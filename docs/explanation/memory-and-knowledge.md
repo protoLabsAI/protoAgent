@@ -18,7 +18,7 @@ the agent knows; rows are distinguished by a few columns:
 | Column | Meaning |
 |---|---|
 | `domain` | the bucket — `fact`, `conversation`, `hot`, `finding`, or anything a tool sets (`preferences`, `context`, …) |
-| `finding_type` | sub-type within a domain (e.g. `fact`, `ingest`) |
+| `finding_type` | sub-type within a domain (e.g. `fact`, `conversation`) |
 | `namespace` | optional per-project / per-owner scope (ADR 0021) — a *filter* for multi-project forks, never required |
 | `source` / `source_type` | provenance (`harvest`, `tool:<name>`, …) |
 | `heading`, `content`, `created_at` | the chunk itself |
@@ -48,8 +48,6 @@ Everything that writes to the store funnels through `KnowledgeStore.add_chunk`:
    when `knowledge.facts` is on, **extracts durable facts** and consolidates them
    (near-duplicates are skipped). This is *extract, don't dump* — it never stores
    raw turns.
-3. **Tool-output ingest** — the opt-in `KnowledgeIngestMiddleware`
-   (`middleware.ingest`) captures tool output as findings.
 
 ### The reasoning guardrail
 
