@@ -2,12 +2,13 @@ import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Boxes, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { runtimeStatusQuery } from "../lib/queries";
 import { StagePanel } from "./ErrorBoundary";
 import { StatusPill } from "./StatusPill";
+import { McpCatalogDialog } from "./McpCatalogDialog";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 
@@ -129,6 +130,7 @@ function McpBody() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const servers = runtime.mcp?.servers ?? [];
   const total = runtime.mcp?.tool_count ?? 0;
 
@@ -150,7 +152,13 @@ function McpBody() {
       />
       <div className="stage-body">
         {hint ? <p className="plugin-hint">{hint}</p> : null}
+        <div className="mcp-browse-row">
+          <Button type="button" variant="ghost" onClick={() => setCatalogOpen(true)} title="Add a common MCP server from a curated list">
+            <Boxes size={14} /> Browse common servers
+          </Button>
+        </div>
         <AddServerForm onDone={setHint} />
+        <McpCatalogDialog open={catalogOpen} onClose={() => setCatalogOpen(false)} onAdded={setHint} />
         <div className="table-list">
           {servers.length ? (
             servers.map((server) => (

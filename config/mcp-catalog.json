@@ -1,0 +1,152 @@
+{
+  "_comment": "Curated common MCP servers for the console quick-add picker (Settings ▸ MCP ▸ Browse common servers). Each entry's `template` is a partial mcp.servers config with ${input} placeholders the operator fills in before adding. Commands verified against upstream 2026-06-20: the reference servers live in modelcontextprotocol/servers (npx for Node, uvx for Python); GitHub/Brave have moved to their own official homes. Keep this in sync with sites/marketing if a public directory is added later.",
+  "servers": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "category": "Files",
+      "tagline": "Read and write files under a directory you allow.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+      "requires": "node",
+      "official": true,
+      "template": {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "${path}"]
+      },
+      "inputs": [
+        { "key": "path", "label": "Allowed directory", "placeholder": "/Users/you/project", "required": true }
+      ]
+    },
+    {
+      "id": "git",
+      "name": "Git",
+      "category": "Dev",
+      "tagline": "Inspect and operate on a local git repository.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+      "requires": "uv",
+      "official": true,
+      "template": {
+        "name": "git",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-git", "--repository", "${path}"]
+      },
+      "inputs": [
+        { "key": "path", "label": "Repository path", "placeholder": "/Users/you/project", "required": true }
+      ]
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch",
+      "category": "Web",
+      "tagline": "Fetch a URL and convert it to markdown for the model.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+      "requires": "uv",
+      "official": true,
+      "template": {
+        "name": "fetch",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"]
+      }
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "category": "Reasoning",
+      "tagline": "A persistent knowledge-graph memory the agent reads and writes.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+      "requires": "node",
+      "official": true,
+      "template": {
+        "name": "memory",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"]
+      }
+    },
+    {
+      "id": "sequential-thinking",
+      "name": "Sequential Thinking",
+      "category": "Reasoning",
+      "tagline": "A structured step-by-step reasoning scratchpad tool.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+      "requires": "node",
+      "official": true,
+      "template": {
+        "name": "sequential-thinking",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"]
+      }
+    },
+    {
+      "id": "time",
+      "name": "Time",
+      "category": "Utilities",
+      "tagline": "Current time and timezone conversions.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+      "requires": "uv",
+      "official": true,
+      "template": {
+        "name": "time",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-time"]
+      }
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "Dev",
+      "tagline": "Repos, issues, PRs and code search via GitHub's hosted MCP server.",
+      "docs": "https://github.com/github/github-mcp-server",
+      "official": true,
+      "template": {
+        "name": "github",
+        "transport": "http",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": { "Authorization": "Bearer ${token}" }
+      },
+      "inputs": [
+        { "key": "token", "label": "GitHub personal access token", "placeholder": "ghp_…", "secret": true, "required": true }
+      ]
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "category": "Web",
+      "tagline": "Web and local search via the Brave Search API.",
+      "docs": "https://github.com/brave/brave-search-mcp-server",
+      "requires": "node",
+      "official": true,
+      "template": {
+        "name": "brave-search",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@brave/brave-search-mcp-server"],
+        "env": { "BRAVE_API_KEY": "${apiKey}" }
+      },
+      "inputs": [
+        { "key": "apiKey", "label": "Brave Search API key", "placeholder": "BSA…", "secret": true, "required": true }
+      ]
+    },
+    {
+      "id": "everything",
+      "name": "Everything (reference)",
+      "category": "Reference",
+      "tagline": "A demo server exercising every MCP feature — handy for testing.",
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+      "requires": "node",
+      "official": true,
+      "template": {
+        "name": "everything",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everything"]
+      }
+    }
+  ]
+}

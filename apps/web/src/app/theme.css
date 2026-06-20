@@ -652,6 +652,153 @@ select:disabled {
   line-height: 1.5;
 }
 
+/* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
+   self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
+.mcp-browse-row {
+  margin: 0 0 6px;
+}
+.mcp-catalog-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 12px;
+}
+.mcp-catalog-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 200px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.mcp-catalog-search > svg {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+.mcp-catalog-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+}
+.mcp-catalog-cats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mcp-catalog-cat {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.mcp-catalog-cat:hover {
+  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);
+}
+.mcp-catalog-cat.on {
+  background: color-mix(in srgb, var(--pl-color-brand-lavender) 18%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 55%, transparent);
+  color: var(--fg);
+}
+.mcp-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+  max-height: 52vh;
+  overflow: auto;
+}
+.mcp-catalog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-raised);
+}
+.mcp-catalog-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mcp-catalog-card-head strong {
+  font-size: 14px;
+}
+.mcp-catalog-chip {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.mcp-catalog-tagline {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  margin: 0;
+  flex: 1;
+}
+.mcp-catalog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+.mcp-catalog-docs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.mcp-catalog-docs:hover {
+  color: var(--fg-secondary);
+}
+.mcp-catalog-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  margin-bottom: 8px;
+}
+.mcp-catalog-back:hover {
+  color: var(--fg);
+}
+.mcp-catalog-config-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-catalog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
 /* Scroll regions use @protolabsai/ui <ScrollArea> (.pl-scroll). Bridge the bits
    the DS primitive doesn't carry yet: min-height:0 so it scrolls inside a flex/
    grid parent, overscroll containment, a stable gutter, and a focus ring for the
