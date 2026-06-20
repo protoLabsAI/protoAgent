@@ -2,15 +2,19 @@ id: execute_code
 name: Execute Code
 version: 0.1.0
 description: >-
-  Programmatic tool-calling: the agent writes ONE Python script that calls
-  several of its tools, loops/filters/composes their results in code, and prints
-  only what matters — collapsing a multi-step tool chain into a single turn. The
-  script runs in an isolated subprocess with a scrubbed environment (no
-  credentials) and a hard timeout. SECURITY: this is model-authored code
-  execution — isolation, NOT a true sandbox (the script can reach the
-  disk/network as the server user) — so it ships disabled; enable only for a
-  trusted model or inside a hardened container. Unavailable in the packaged
-  desktop build (no standalone Python interpreter). Enable with
+  A sandboxed Python code interpreter for the agent: it writes a Python script,
+  the script runs in an isolated subprocess, and its stdout comes back. The
+  script can do anything Python can — compute, parse, transform data — so it's
+  effectively a one-shot Python REPL (no state persists between calls). Its
+  headline use is programmatic tool-calling (call several tools, compose their
+  results in code, print only what matters — collapsing a multi-step tool chain
+  into one turn), but it is not limited to tool calls. SECURITY: this runs
+  arbitrary model-authored code — subprocess + scrubbed env (no credentials) +
+  hard timeout is isolation, NOT a true sandbox (the script can reach the
+  disk/network as the server user; the `tools` allowlist scopes only the tool
+  bridge, not what code runs) — so it ships disabled; enable only for a trusted
+  model or inside a hardened container. Unavailable in the packaged desktop build
+  (no standalone Python interpreter). Enable with
   `plugins: { enabled: [execute_code] }`.
 enabled: false
 

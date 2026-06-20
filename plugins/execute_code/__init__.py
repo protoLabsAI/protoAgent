@@ -1,14 +1,17 @@
-"""execute_code plugin — programmatic tool-calling as an opt-in plugin.
+"""execute_code plugin — a sandboxed Python code interpreter, as an opt-in plugin.
 
-Moved out of the lean core (bd-37i). The model writes ONE Python script that
-calls several of its tools and returns just the result — collapsing a long
-think→call→read chain into a single turn. The script runs in an isolated
-subprocess with a scrubbed environment (no credentials) and a hard timeout;
-tools are invoked back in the parent over an fd-based RPC bridge.
+Moved out of the lean core (bd-37i). The model writes a Python script that runs
+in an isolated subprocess; its stdout comes back. The script can do anything
+Python can — compute, parse, transform data — effectively a one-shot REPL. Its
+headline use is programmatic tool-calling (call several tools, compose their
+results in code, print only what matters — collapsing a think→call→read chain
+into one turn), but it is **not** limited to tool calls.
 
-This is **model-authored code execution** — isolation, NOT a true sandbox (the
-script can still reach the disk/network as the server user) — so it ships
-DISABLED; enable only for a trusted model or inside a hardened container.
+This runs **arbitrary model-authored code** — subprocess + scrubbed env (no
+credentials) + hard timeout is isolation, NOT a true sandbox (the script can
+reach the disk/network as the server user; the `tools` allowlist scopes only the
+bridge, not what code runs) — so it ships DISABLED; enable only for a trusted
+model or inside a hardened container.
 
 It uses the late-tools seam (``register_late_tool_factory``) because the tool
 must proxy the FULLY assembled toolset, which a normal ``register_tool`` can't

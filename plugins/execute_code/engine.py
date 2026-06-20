@@ -1,32 +1,39 @@
-"""execute_code — programmatic tool calling (bd-pe2.6).
+"""execute_code — a sandboxed Python code interpreter for the agent (bd-pe2.6).
 
-Instead of the model emitting one tool call per turn (think → call → read →
-think → call …), it writes a single Python script that calls several tools,
-loops/filters/composes their results in code, and prints only what matters.
-A chain of N tool round-trips collapses into one turn; the model reads just
-the script's stdout instead of every intermediate tool payload.
+The model writes a single Python script; it runs in an isolated child process
+and its stdout comes back. This is **general-purpose code execution** — the
+script can do anything Python can (compute, parse, transform data, call out) —
+effectively a one-shot Python REPL (no state persists between calls; each runs
+in a fresh subprocess).
+
+Its headline use is **programmatic tool-calling**: instead of emitting one tool
+call per turn (think → call → read → think …), the script calls several tools,
+loops/filters/composes their results in code, and prints only what matters —
+collapsing N round-trips into one turn (the model reads just the stdout, not
+every intermediate payload). But the script is **not** limited to tool calls.
 
 How it runs
 -----------
-The script executes in a **child Python process** (``python -u <tmpfile>``)
-with:
+The script executes in a **child Python process** (``python -u <tmpfile>``) with:
 
 - a **scrubbed environment** — only ``PATH`` + the bridge fds are passed, so
   gateway keys / auth tokens in the parent env are never visible to the script;
-- a **hard timeout** (``execute_code_timeout``) after which the process is killed;
+- a **hard timeout** (the plugin's ``timeout`` setting) after which it's killed;
 - a **tool-RPC bridge**: the script gets a ``tools`` object whose attributes are
-  proxies for the allowlisted tools. Calling ``tools.web_search(query=...)``
+  proxies for the exposed tools. Calling ``tools.web_search(query=...)``
   serialises the call over a dedicated pipe back to the **parent**, which runs
-  the real (async) tool and returns the result. Tools therefore execute with
-  the parent's credentials and audit/trace context — the child only orchestrates.
+  the real (async) tool and returns the result. Tools therefore execute with the
+  parent's credentials and audit/trace context — the child only orchestrates.
 
 Security posture
 ----------------
-This is **opt-in** (``execute_code.enabled``) and runs model-authored code.
-Subprocess + env-scrub + timeout is *isolation, not a true sandbox*: the child
-can still touch the filesystem and network as the server user. Enable it only
-for trusted-model output or inside a hardened container (seccomp / read-only FS
-/ network policy). The ``execute_code`` tool never exposes itself, so scripts
+Opt-in (``plugins.enabled: [execute_code]``); runs **arbitrary model-authored
+code**. Subprocess + env-scrub + timeout is *isolation, not a true sandbox*: the
+child can still touch the filesystem and network as the server user. The ``tools``
+allowlist only scopes the convenience bridge — it is **not** a security boundary;
+the script can ``import os`` and do anything regardless. Enable only for
+trusted-model output or inside a hardened container (seccomp / read-only FS /
+network policy). The ``execute_code`` tool never exposes itself, so a script
 can't recurse into more code execution.
 """
 
@@ -244,19 +251,22 @@ def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.
     available = ", ".join(sorted(tool_map)) or "(none)"
 
     description = (
-        "Run a Python script that calls tools programmatically; returns its stdout.\n\n"
-        "Use this to collapse a multi-step tool chain into one turn: write a "
-        "script that calls several tools, loops/filters/combines their results, "
-        "and print() only the final answer. You read just the stdout, not every "
-        "intermediate tool payload.\n\n"
-        "Inside the script, call tools via the injected `tools` object, e.g.:\n"
+        "Run a Python script in a sandboxed subprocess and get its stdout — a "
+        "general-purpose code interpreter. Two main uses:\n"
+        "1. Computation/data work — parse, transform, compute, filter; anything "
+        "Python (stdlib) can do.\n"
+        "2. Programmatic tool-calling — collapse a multi-step tool chain into one "
+        "turn: call several tools, loop/filter/combine their results in code, and "
+        "print() only the final answer (you read just the stdout, not every "
+        "intermediate payload).\n\n"
+        "Call tools via the injected `tools` object, e.g.:\n"
         "    results = [tools.web_search(query=q) for q in queries]\n"
         "    print('\\n\\n'.join(results)[:2000])\n\n"
-        f"Every tool returns a string. Available tools: {available}\n\n"
+        f"Each tool returns a string. Available tools: {available}\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
-        "and a scrubbed environment (no credentials). Only stdout is returned; "
-        "write your result with print(). Exceptions and a non-zero exit are "
-        "reported back to you."
+        "and a scrubbed environment (no credentials), fresh each call (no state "
+        "persists between runs). Only stdout is returned; write your result with "
+        "print(). Exceptions and a non-zero exit are reported back to you."
     )
 
     @tool("execute_code", description=description)
