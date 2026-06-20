@@ -3,8 +3,9 @@
     "version": "v0.64.0",
     "date": "2026-06-20",
     "changes": [
-      "Quick-add for common MCP servers.",
-      "Share MCP servers across the box (commons)."
+      "Quick-add common MCP servers from a curated picker in Settings ▸ MCP — one click (or a path/token) and the server's tools are live.",
+      "Share MCP servers across the box: a layered agent runs a shared commons of servers alongside its own, with one-click share/unshare and tier badges.",
+      "The desktop in-app updater now shows the curated changelog for the new version instead of raw commit subjects."
     ]
   },
   {
