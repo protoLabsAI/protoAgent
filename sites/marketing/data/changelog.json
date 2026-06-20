@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.64.2",
+    "date": "2026-06-20",
+    "changes": [
+      "The \"Browse common servers\" dialog now fills its height with the card grid — search stays pinned, no dead space below the cards."
+    ]
+  },
+  {
     "version": "v0.64.1",
     "date": "2026-06-20",
     "changes": [
