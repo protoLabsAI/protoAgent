@@ -476,7 +476,11 @@ FIELDS: list[Field] = [
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
     Field("middleware.audit", "audit_middleware", "Audit middleware", "bool", "Middleware"),
     Field("middleware.scheduler", "scheduler_enabled", "Scheduler", "bool", "Middleware"),
-    Field("middleware.enforcement", "enforcement_enabled", "Tool enforcement", "bool", "Middleware"),
+    # Enforcement is a code/YAML fork seam (deny-list + rate-limits + a pluggable
+    # predicate), not a console feature: the bare on/off toggle is a no-op until a
+    # policy is configured in YAML, so it's ui_hidden (kept in FIELDS for config
+    # round-trip). See docs/reference/configuration.md `## enforcement`.
+    Field("middleware.enforcement", "enforcement_enabled", "Tool enforcement", "bool", "Middleware", ui_hidden=True),
     # ── Telemetry (local cost/latency store, ADR 0006) ───────────────────────
     Field(
         "telemetry.enabled",
