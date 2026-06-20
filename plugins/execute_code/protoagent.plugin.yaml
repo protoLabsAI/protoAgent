@@ -4,8 +4,7 @@ version: 0.1.0
 description: >-
   A sandboxed Python code interpreter for the agent: it writes a Python script,
   the script runs in an isolated subprocess, and its stdout comes back. The
-  script can do anything Python can — compute, parse, transform data — so it's
-  effectively a one-shot Python REPL (no state persists between calls). Its
+  script can do anything Python can — compute, parse, transform data. Its
   headline use is programmatic tool-calling (call several tools, compose their
   results in code, print only what matters — collapsing a multi-step tool chain
   into one turn), but it is not limited to tool calls. SECURITY: this runs

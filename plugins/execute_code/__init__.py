@@ -2,7 +2,7 @@
 
 Moved out of the lean core (bd-37i). The model writes a Python script that runs
 in an isolated subprocess; its stdout comes back. The script can do anything
-Python can — compute, parse, transform data — effectively a one-shot REPL. Its
+Python can — compute, parse, transform data. Its
 headline use is programmatic tool-calling (call several tools, compose their
 results in code, print only what matters — collapsing a think→call→read chain
 into one turn), but it is **not** limited to tool calls.
