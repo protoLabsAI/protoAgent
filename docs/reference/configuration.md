@@ -339,6 +339,7 @@ Only read when `middleware.knowledge` is `true`.
 | Key | Default | What |
 |---|---|---|
 | `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
+| `scope` | `""` (→ `scoped`) | Tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private, **default**) · `shared` (the whole store is the host-level commons) · `layered` (read commons ∪ private, write private, operator-`promote`d). The commons lives at `commons.path`/knowledge.db and is host-level + un-scoped (every agent reading the same `commons.path` shares it). A shared/layered fleet must share one `embed_model` — the commons is stamped with it and a mismatched agent serves the commons tier **FTS5-only** (no incompatible-vector fusion). |
 | `embeddings` | `true` | Hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused). `false` = keyword-only FTS5. (ADR 0021.) |
 | `embed_model` | `qwen3-embedding` | Gateway embedding model used when `embeddings` is on — must be a model your gateway serves (not the chat model). |
 | `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |

@@ -367,6 +367,11 @@ class LangGraphConfig:
     # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
     # is read-only or absent (e.g. local ``python -m server``).
     knowledge_db_path: str = "/sandbox/knowledge/agent.db"
+    # Tier (ADR 0041 / bd-2wu): scoped (private, default) | shared (the whole store is
+    # the host-level commons) | layered (read commons ∪ private, write private, operator
+    # `knowledge promote`). Blank → scoped. The commons lives at `commons.path`/knowledge.db
+    # and a shared/layered fleet must share one `embed_model` (stamped + enforced).
+    knowledge_scope: str = ""
     # Knowledge backend selector (ADR 0031) — "" = the built-in SQLite/FTS5 store;
     # otherwise the name of a plugin-registered backend (register_knowledge_store).
     # An unregistered name / a factory error degrades to the built-in store.
@@ -808,6 +813,7 @@ class LangGraphConfig:
             subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
             subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
             knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
+            knowledge_scope=knowledge.get("scope", cls.knowledge_scope),
             knowledge_backend=knowledge.get("backend", cls.knowledge_backend),
             knowledge_embedder=knowledge.get("embedder", cls.knowledge_embedder),
             checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),

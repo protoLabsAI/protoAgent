@@ -326,3 +326,44 @@ def test_attach_disabled_when_store_off(monkeypatch):
     c = _client(monkeypatch)
     files = {"file": ("note.txt", b"hi", "text/plain")}
     assert c.post("/api/knowledge/attach", data={"session_id": "s1"}, files=files).json() == {"enabled": False}
+
+
+# ── Commons promote/forget (ADR 0041 / bd-2wu) ──────────────────────────────────
+
+
+def _layered(tmp_path):
+    from knowledge.layered import LayeredKnowledgeStore
+    from knowledge.store import KnowledgeStore
+
+    return LayeredKnowledgeStore(
+        KnowledgeStore(str(tmp_path / "priv.db")), KnowledgeStore(str(tmp_path / "commons.db"))
+    )
+
+
+def test_knowledge_promote_then_forget(monkeypatch, tmp_path):
+    """A private chunk promotes into the commons via the route; forget removes the
+    commons copy by its commons-tier id. Search/list surface the tier tag."""
+    store = _layered(tmp_path)
+    cid = store._private.add_chunk("deploy runbook: drain, ship, verify", domain="reference")
+    c = _client(monkeypatch, knowledge=store)
+
+    assert c.post(f"/api/knowledge/{cid}/promote").json() == {"enabled": True, "promoted": True}
+    # The browse view now shows a commons-tier row.
+    rows = c.get("/api/knowledge/search?q=").json()["results"]
+    commons = [r for r in rows if r.get("tier") == "commons"]
+    assert commons and "deploy runbook" in commons[0]["content"]
+
+    assert c.post(f"/api/knowledge/{commons[0]['id']}/forget").json() == {"enabled": True, "forgotten": True}
+    rows = c.get("/api/knowledge/search?q=").json()["results"]
+    assert not any(r.get("tier") == "commons" for r in rows)
+
+
+def test_knowledge_promote_not_layered_hints(monkeypatch, tmp_path):
+    """A plain (non-layered) store has no commons — the route hints, not errors."""
+    from knowledge.store import KnowledgeStore
+
+    c = _client(monkeypatch, knowledge=KnowledgeStore(str(tmp_path / "k.db")))
+    r = c.post("/api/knowledge/1/promote").json()
+    assert r["enabled"] is True and r["promoted"] is False and "layered" in r["error"]
+    r = c.post("/api/knowledge/1/forget").json()
+    assert r["forgotten"] is False and "layered" in r["error"]

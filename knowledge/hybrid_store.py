@@ -56,6 +56,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         chunk_overlap_chars: int = 150,
         chunk_min_chars: int = 200,
         context_fn: Callable[[str, str], str] | None = None,
+        scoped: bool = True,
     ):
         super().__init__(
             db_path,
@@ -64,6 +65,7 @@ class HybridKnowledgeStore(KnowledgeStore):
             chunk_overlap_chars=chunk_overlap_chars,
             chunk_min_chars=chunk_min_chars,
             context_fn=context_fn,
+            scoped=scoped,
         )
         self._embed_fn = embed_fn
         # Optional batched embedder (texts -> vectors in one request). When set,
