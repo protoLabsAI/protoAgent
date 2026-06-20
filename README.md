@@ -155,7 +155,10 @@ are on by default, and the rest are opt-in (enable via `plugins.enabled`):
 
 Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`) and **Google**
 Gmail/Calendar (managed MCP server with in-app OAuth) install as **external plugins** from
-their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
+their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins). So does
+**Artifact** — the agent's `show_artifact` tool renders a chart, diagram, Mermaid, Markdown,
+or live React widget into a sandboxed console panel for "show me" requests
+([ADR 0038](./docs/adr/0038-generative-ui-artifacts-two-mode.md)).
 
 **Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
 small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,

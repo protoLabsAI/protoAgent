@@ -24,9 +24,12 @@ See [ADR 0033](/adr/0033-pluggable-agent-runtime-acp) for the design.
 ```yaml
 agent_runtime: acp:proto         # native (default) | acp:<agent>
 
-# Expose the operator tools the coding agent may use (allowlist — empty = none).
-operator_mcp:
-  tools: [memory_recall, memory_ingest, beads_create, beads_list, notes_read, run_workflow]
+# By default the coding agent gets protoAgent's FULL toolset — parity with the native
+# runtime, where the model has every tool. `operator_mcp.tools` is an OPTIONAL restriction:
+# list specific tools to clamp the brain, or omit it entirely for everything. (`execute_code`
+# is excluded from the default set — the coding agent has its own; add it by name to override.)
+# operator_mcp:
+#   tools: [memory_recall, memory_ingest, beads_create, beads_list, notes_read, run_workflow]
 
 # Optional — override an agent's launch command (defaults shown).
 # acp:
@@ -58,6 +61,8 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
    `memory_recall`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
    to the chat as **tool cards** (`tool_start`/`tool_end`), the same as the native runtime.
 4. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
+   The chat's model indicator shows the active runtime (`<agent> · coding agent`) rather than
+   the gateway model, since the gateway model never runs the turn.
 5. **Write back** — durable facts persist to the knowledge store after the turn.
 
 One stateful ACP session is kept **per conversation thread** and reused across turns.
@@ -66,7 +71,8 @@ One stateful ACP session is kept **per conversation thread** and reused across t
 > (e.g. proto's `TaskCreate`) and will reach for them by default — state that then vanishes
 > with its session. The persona file steers it to use the `protoagent-operator` tools
 > (`beads_create`, `memory_ingest`, `set_goal`, …) for anything that must **persist** in
-> protoAgent. Set `operator_mcp.tools: ['*']` (or list them) so they're actually available.
+> protoAgent — and they're available **by default** (the full toolset rides the bus; clamp
+> it with `operator_mcp.tools` only if you want to restrict the brain).
 
 ## No gateway? ACP-only works
 
@@ -80,7 +86,7 @@ recall degrades to keyword search.)
 
 | Capability | How |
 |---|---|
-| Tools (core + plugin) | the operator **MCP bus** — allowlisted, plugins ride it for free |
+| Tools (core + plugin) | the operator **MCP bus** — the **full toolset by default** (clamp with `operator_mcp.tools`); plugins ride it for free |
 | Subagents / workflows | as tools (`task`, `run_workflow`) on the bus |
 | Knowledge / memory | R/W via tools on the bus; **auto-recall** injected as context |
 | Skills, SOUL/persona, history | **context** (assembled into the prompt) |
@@ -88,9 +94,12 @@ recall degrades to keyword search.)
 
 ## Security
 
-The coding agent only gets the tools you **allowlist** in `operator_mcp.tools` — nothing by
-default. Don't expose powerful tools (e.g. `execute_code`) to an external brain unless you mean
-to. The agent runs with its own permissions on the host (its CLI's auth + sandbox).
+By default the coding agent gets protoAgent's **full toolset** — parity with the native
+runtime, where the model has every tool. To clamp a specific instance, set `operator_mcp.tools`
+to a named allowlist (`execute_code` is already excluded from the default set — the coding
+agent has its own; add it by name only if you mean to). Note the *foreign* MCP clients of this
+same operator server (Claude Desktop, Cursor) stay allowlist-gated — it's the ACP **brain** that
+defaults to all. The agent runs with its own permissions on the host (its CLI's auth + sandbox).
 
 ## Limits
 
