@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Quick-add for common MCP servers.** Settings ▸ MCP has a "Browse common servers"
+  picker — a curated directory (filesystem, git, fetch, GitHub, Brave Search, memory,
+  sequential-thinking, time) that one-click adds a server, prompting only for the path
+  or API token it needs. Backed by `config/mcp-catalog.json` + `GET /api/mcp/catalog`.
+
 ## [0.63.1] - 2026-06-20
 
 ### Fixed

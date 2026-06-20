@@ -171,6 +171,34 @@ export type CatalogPlugin = {
   enabled: boolean;
 };
 
+// A value the operator must supply before a catalog server is added — a filesystem
+// path, an API token. `secret` renders a password field; the value is substituted
+// into the `${key}` placeholders in the entry's template.
+export type McpCatalogInput = {
+  key: string;
+  label: string;
+  placeholder?: string;
+  secret?: boolean;
+  required?: boolean;
+};
+
+// An entry in the curated common-MCP-servers directory (GET /api/mcp/catalog).
+// `template` is a partial mcp.servers config with `${input}` placeholders; filling
+// the `inputs` and substituting yields the entry POSTed to /api/mcp/servers.
+// `installed` = a server with this name is already configured.
+export type McpCatalogEntry = {
+  id: string;
+  name: string;
+  category?: string;
+  tagline?: string;
+  docs?: string;
+  requires?: string;
+  official?: boolean;
+  template: Record<string, unknown>;
+  inputs?: McpCatalogInput[];
+  installed?: boolean;
+};
+
 // Per-plugin update status (GET /api/plugins/updates, ADR 0027). The backend
 // TTL-caches these — a *pinned* plugin (its requested_ref is a full SHA) skips
 // the network; the rest ls-remote their ref. `behind` ⇒ the recorded

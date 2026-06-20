@@ -18,6 +18,7 @@ import type {
   HitlPayload,
   InboxItem,
   CatalogPlugin,
+  McpCatalogEntry,
   InstalledPlugin,
   PluginInstallSummary,
   PluginUpdate,
@@ -1438,6 +1439,9 @@ export const api = {
       "/api/mcp/servers/import",
       { method: "POST", body: { raw } },
     );
+  },
+  mcpCatalog() {
+    return request<{ servers: McpCatalogEntry[] }>("/api/mcp/catalog");
   },
   createDelegate(entry: Record<string, unknown>) {
     return request<{ ok: boolean; message: string; delegates: DelegateView[] }>("/api/delegates", {

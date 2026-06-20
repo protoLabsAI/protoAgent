@@ -135,3 +135,18 @@ def test_import_invalid_json_is_400(monkeypatch):
 def test_import_requires_raw(monkeypatch):
     _wire(monkeypatch, servers=[])
     assert _client().post("/api/mcp/servers/import", json={}).status_code == 400
+
+
+def test_catalog_lists_servers_and_marks_installed(monkeypatch):
+    """GET /api/mcp/catalog serves the bundled config/mcp-catalog.json and flags which
+    entries are already configured (by name)."""
+    _wire(monkeypatch, servers=[{"name": "filesystem", "transport": "stdio", "command": "npx"}])
+    body = _client().get("/api/mcp/catalog").json()
+    by_id = {s["id"]: s for s in body["servers"]}
+    assert {"filesystem", "github", "memory"} <= set(by_id)  # curated entries present
+    # GitHub ships as a remote streamable-http template gated on a secret token.
+    assert by_id["github"]["template"]["transport"] == "http"
+    assert any(i.get("secret") for i in by_id["github"].get("inputs", []))
+    # The configured server is flagged installed; the rest aren't.
+    assert by_id["filesystem"]["installed"] is True
+    assert by_id["memory"]["installed"] is False

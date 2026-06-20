@@ -153,6 +153,40 @@ def register_mcp_routes(app) -> None:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "added": sorted(names), "servers": [s["name"] for s in servers]}
 
+    @app.get("/api/mcp/catalog")
+    async def _catalog():
+        """Curated common MCP servers (`config/mcp-catalog.json`, live dir overrides the
+        bundle) — each a templated `mcp.servers` entry the console can one-click add. Marks
+        `installed` by name so the picker shows what's already configured."""
+        import json
+
+        from graph.config_io import _BUNDLE_CONFIG_DIR, _live_config_dir
+
+        entries: list[dict] = []
+        for base in (_live_config_dir(), _BUNDLE_CONFIG_DIR):
+            f = base / "mcp-catalog.json"
+            if f.exists():
+                try:
+                    entries = (json.loads(f.read_text()) or {}).get("servers") or []
+                except (json.JSONDecodeError, OSError):
+                    log.warning("[mcp] mcp-catalog.json unreadable at %s", f)
+                break
+
+        cfg = STATE.graph_config
+        configured = {
+            str(s.get("name", "")).strip().lower()
+            for s in (getattr(cfg, "mcp_servers", []) or [])
+            if isinstance(s, dict)
+        }
+        out: list[dict] = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            tmpl = e.get("template") if isinstance(e.get("template"), dict) else {}
+            nm = str(tmpl.get("name") or e.get("id") or "").strip().lower()
+            out.append({**e, "installed": bool(nm) and nm in configured})
+        return {"servers": out}
+
     @app.delete("/api/mcp/servers/{name}")
     async def _remove(name: str):
         cfg = STATE.graph_config
