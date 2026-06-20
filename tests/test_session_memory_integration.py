@@ -42,12 +42,14 @@ def _build_graph(monkeypatch, memory_dir, store, replies):
     from graph.config import LangGraphConfig
     from langgraph.checkpoint.memory import MemorySaver
 
-    # Both the writer (_persist_session) and the reader (load_prior_sessions)
-    # resolve the module-level MEMORY_PATH — redirect it to a temp dir.
+    # test_memory_persistence importlib.reload()s this module under various env,
+    # which can leave the module in a polluted state for whatever runs after it:
+    #  - MEMORY_PATH pointing at a stale temp dir,
+    #  - _PERSISTENCE_DISABLED left True (a reload with PROTOAGENT_DISABLE_MEMORY=1),
+    #  - graph.agent's imported class pointing at the pre-reload version.
+    # Pin all three so this test is independent of run order and CI-vs-local env.
     monkeypatch.setattr(memmod, "MEMORY_PATH", str(memory_dir), raising=False)
-    # Another suite (test_memory_persistence) importlib.reload()s this module,
-    # leaving graph.agent's imported class pointing at the pre-reload version.
-    # Re-sync so the graph builds with the same class our patches target.
+    monkeypatch.setattr(memmod, "_PERSISTENCE_DISABLED", False, raising=False)
     monkeypatch.setattr(agentmod, "SessionSummaryMiddleware", memmod.SessionSummaryMiddleware, raising=False)
 
     with patch("graph.agent.create_llm", lambda *a, **k: _make_fake(replies)):
