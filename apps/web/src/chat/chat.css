@@ -94,16 +94,6 @@
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
 
-/* Subtle live status above the composer while streaming (was a header pill). */
-.composer-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px 0;
-  font-size: 11px;
-  color: var(--fg-secondary);
-}
-
 /* Stop (while streaming) and the queued-steer bubble are now the DS busy mode +
    <Message queued> (0.42.0) — see ChatSurface. No bespoke CSS needed here. */
 

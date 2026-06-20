@@ -222,7 +222,9 @@ function ChatSessionSlot({
   const session = useSession(sessionId);
   const chat = useChatState();
   const [draft, setDraft] = useState("");
-  const [statusMessage, setStatusMessage] = useState("");
+  // Turn status is still tracked (drives the stream lifecycle) but no longer surfaced as
+  // a spinner/"working…" strip above the composer — the inline indicators cover it now.
+  const [, setStatusMessage] = useState("");
   const [taskId, setTaskId] = useState("");
   const [hitl, setHitl] = useState<HitlPayload | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -1112,14 +1114,6 @@ function ChatSessionSlot({
           }
         }}
       >
-        {status === "streaming" ? (
-          // Live turn status. Stop now lives inside the composer (the DS busy mode's
-          // self-contained onStop), so this strip is just the "working…" readout.
-          <div className="composer-status">
-            <Loader2 className="spin" size={12} />
-            <span>{statusMessage || "working"}</span>
-          </div>
-        ) : null}
         <PromptInput
           value={draft}
           onChange={(v) => {
