@@ -1,0 +1,217 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import changelog from '../../data/changelog.json';
+
+const repo = 'https://github.com/protoLabsAI/protoAgent';
+
+// Buttondown newsletter — gates the not-yet-public platforms (Windows / Linux)
+// behind a notify-me signup until those builds are tested here. Set this to the
+// account's Buttondown username.
+const BUTTONDOWN_USER = 'protoLabsAI';
+
+// The release pipeline regenerates this changelog.json on every release
+// (scripts/changelog.py via prepare-release.yml), so changelog[0] is always the
+// latest shipped version and the derived dmg asset is guaranteed to exist.
+const latest = changelog[0];
+const version = latest.version.replace(/^v/, ''); // 0.62.0
+const tag = latest.version.startsWith('v') ? latest.version : `v${latest.version}`;
+// Stable mac asset name: protoAgent-<bare-version>-aarch64-apple-darwin.dmg
+const dmgUrl = `${repo}/releases/download/${tag}/protoAgent-${version}-aarch64-apple-darwin.dmg`;
+
+const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
+const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
+---
+
+<BaseLayout
+  title="Download protoAgent"
+  description="Download protoAgent — the lean, A2A-native operator agent for macOS. Apple Silicon, signed & notarized. Windows and Linux in testing."
+>
+  <!-- Detect the OS before paint so the right block is visible with no flash. -->
+  <script is:inline>
+    (function () {
+      function detect() {
+        var ua = (navigator.userAgent || '').toLowerCase();
+        var plat =
+          ((navigator.userAgentData && navigator.userAgentData.platform) ||
+            navigator.platform ||
+            '').toLowerCase();
+        var s = plat + ' ' + ua;
+        // iPadOS reports as a Mac in desktop Safari — touch-Macs can't run the
+        // desktop app, so route them to the "other" (notify-me) experience.
+        if (/mac/.test(s) && navigator.maxTouchPoints > 1) return 'other';
+        if (/iphone|ipad|ipod/.test(s)) return 'other';
+        if (/mac/.test(s)) return 'mac';
+        if (/win/.test(s)) return 'windows';
+        if (/linux|android|cros/.test(s)) return 'linux';
+        return 'other';
+      }
+      try {
+        document.documentElement.setAttribute('data-os', detect());
+      } catch (e) {
+        document.documentElement.setAttribute('data-os', 'mac');
+      }
+    })();
+  </script>
+
+  <div class="max-w-2xl mx-auto px-6 py-24">
+    <!-- Header -->
+    <div class="mb-10">
+      <h1 class="text-4xl font-bold tracking-tight mb-3">Download protoAgent</h1>
+      <div class="flex items-center gap-3">
+        <span
+          class="px-2 py-0.5 rounded text-sm font-mono border border-[var(--color-edge)] bg-[var(--color-surface-1)]"
+          style="color: var(--pl-color-brand-lavender);"
+        >
+          {latest.version}
+        </span>
+        <span
+          class="px-2 py-0.5 rounded text-xs font-mono uppercase tracking-wider"
+          style="color: var(--pl-color-brand-lavender); border: 1px solid color-mix(in srgb, var(--pl-color-brand-lavender) 35%, transparent);"
+        >
+          Beta
+        </span>
+        <span class="text-zinc-500 text-sm">{latest.date}</span>
+      </div>
+    </div>
+
+    <!-- ===== macOS: the only shipping download ===== -->
+    <div class="dl-os dl-os-mac">
+      <a
+        href={dmgUrl}
+        class="flex items-center justify-center gap-2.5 w-full py-4 px-6 rounded-xl font-semibold text-[#0a0a0c] text-lg mb-10 bg-[var(--color-accent)] hover:brightness-110 transition"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+        Download protoAgent {latest.version} (.dmg)
+      </a>
+
+      <!-- System requirements -->
+      <div class="card p-5 mb-10">
+        <h3 class="font-semibold mb-3">System requirements</h3>
+        <ul class="space-y-1.5">
+          {[
+            'Apple Silicon (M1 or later)',
+            'macOS 13 Ventura or newer',
+            'A model gateway — connect an OpenAI-compatible endpoint or key in setup',
+          ].map((item) => (
+            <li class="text-zinc-400 text-sm flex items-start gap-2">
+              <span class="text-zinc-600 mt-0.5">—</span>
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <!-- Install steps -->
+      <div class="mb-10">
+        <h2 class="text-lg font-semibold mb-5">Installation</h2>
+        <ol class="space-y-4">
+          {[
+            'Download the .dmg above.',
+            'Open it and drag protoAgent to Applications.',
+            'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+            'The setup wizard connects your model and you’re live.',
+          ].map((step, i) => (
+            <li class="flex gap-4 items-start">
+              <span class="font-mono text-sm w-5 shrink-0 pt-0.5" style="color: var(--color-accent);">{i + 1}</span>
+              <span class="text-zinc-300 text-sm">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <!-- Signed + beta note -->
+      <div class="border-l-2 pl-4 mb-10" style="border-color: color-mix(in srgb, var(--pl-color-brand-lavender) 45%, transparent);">
+        <p class="text-zinc-400 text-sm">
+          <strong class="text-zinc-200">Signed &amp; notarized by Apple</strong> — opens cleanly, no
+          Gatekeeper workaround. protoAgent is in <strong class="text-zinc-200">public beta</strong> and
+          updates itself in place; expect frequent releases.
+        </p>
+      </div>
+    </div>
+
+    <!-- ===== Windows / Linux / other: not yet downloadable ===== -->
+    <div class="dl-os dl-os-other">
+      <div class="card p-6 mb-10">
+        <h2 class="text-lg font-semibold mb-2">The desktop app is macOS-only for now</h2>
+        <p class="text-zinc-400 text-sm">
+          We build signed Windows and Linux installers on every release, but we’re still testing them
+          before we hand them out. Drop your email below and we’ll tell you the moment your platform is
+          ready — or run protoAgent from source today.
+        </p>
+      </div>
+    </div>
+
+    <!-- ===== Mailing list (shown to everyone) ===== -->
+    <div class="card p-6 mb-10">
+      <h2 class="text-lg font-semibold mb-1">Get notified about Windows &amp; Linux</h2>
+      <p class="text-zinc-400 text-sm mb-5">
+        The desktop app is macOS-only while we test the Windows and Linux builds. Leave your email and
+        we’ll let you know the moment they ship.
+      </p>
+      <form
+        action={subscribeAction}
+        method="post"
+        target="popupwindow"
+        onsubmit={`window.open('${subscribePopup}', 'popupwindow')`}
+        class="embeddable-buttondown-form flex flex-col sm:flex-row gap-3"
+      >
+        <label for="bd-email" class="sr-only">Email</label>
+        <input
+          type="email"
+          name="email"
+          id="bd-email"
+          required
+          placeholder="you@example.com"
+          class="flex-1 rounded-lg border border-[var(--color-edge)] bg-[var(--color-surface-1)] px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-[var(--color-accent)] focus:outline-none"
+        />
+        <button
+          type="submit"
+          class="rounded-lg bg-[var(--color-accent)] px-5 py-3 font-medium text-[#0a0a0c] hover:brightness-110 transition whitespace-nowrap"
+        >
+          Notify me
+        </button>
+      </form>
+      <p class="text-zinc-500 text-xs mt-3">No spam — release announcements only. Unsubscribe anytime.</p>
+    </div>
+
+    <!-- ===== Build from source (shown to everyone) ===== -->
+    <div class="border-l-2 border-[var(--color-edge)] pl-4 mb-10">
+      <p class="text-zinc-400 text-sm">
+        <strong class="text-zinc-200">Prefer to run it yourself?</strong> protoAgent is open source —
+        clone
+        <a href={repo} target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">the repo</a>
+        and run the console + server locally (<code class="text-zinc-300">npm ci</code> then
+        <code class="text-zinc-300">python -m server</code>). The
+        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer" class="text-zinc-300 hover:text-zinc-100 transition-colors underline underline-offset-2">first-agent tutorial</a>
+        walks through it. Runs anywhere Python does — macOS, Linux, or Windows.
+      </p>
+    </div>
+
+    <p class="text-zinc-500 text-sm">
+      <a href="/changelog" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">View full release history →</a>
+    </p>
+  </div>
+
+  <style is:global>
+    /* OS-gated blocks — the inline head script sets data-os on <html>. */
+    .dl-os {
+      display: none;
+    }
+    :root[data-os='mac'] .dl-os-mac {
+      display: block;
+    }
+    :root[data-os='windows'] .dl-os-other,
+    :root[data-os='linux'] .dl-os-other,
+    :root[data-os='other'] .dl-os-other {
+      display: block;
+    }
+    /* No-JS / pre-detection fallback: show the Mac download (the shipping platform). */
+    :root:not([data-os]) .dl-os-mac {
+      display: block;
+    }
+  </style>
+</BaseLayout>
