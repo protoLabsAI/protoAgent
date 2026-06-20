@@ -108,6 +108,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "max_tokens": 32768,
     "mcp_denylist": [],
     "mcp_enabled": False,
+    "mcp_scope": "",
     "mcp_servers": [],
     "mcp_timeout_seconds": 20.0,
     "memory_middleware": True,
@@ -239,6 +240,7 @@ CONFIG_TO_DICT_GOLDEN = {
     "mcp": {
         "denylist": [],
         "enabled": False,
+        "scope": "",
         "servers": [],
         "timeout_seconds": 20.0,
     },
@@ -374,6 +376,7 @@ EMITTED_ATTRS = {
     "mcp_servers",
     "mcp_timeout_seconds",
     "mcp_denylist",
+    "mcp_scope",
     # plugins.* (disabled + sources.allow added by the 2026-06-10 N6 fix —
     # config_to_dict used to emit only enabled/dir, so any complete-dict
     # consumer lost them)

@@ -20,6 +20,42 @@ from typing import Any
 log = logging.getLogger("protoagent.mcp")
 
 
+def _mcp_commons_path(config):
+    """The box-shared MCP-server commons file (ADR 0041) — read by every agent on the
+    host, never per-instance scoped. Under ``commons.path`` (blank → ``~/.protoagent/
+    commons``)."""
+    from pathlib import Path
+
+    raw = (getattr(config, "commons_path", "") or "").strip()
+    base = Path(raw).expanduser() if raw else (Path.home() / ".protoagent" / "commons")
+    return base / "mcp-servers.json"
+
+
+def read_mcp_commons(config) -> list[dict]:
+    """The shared MCP servers (``{"servers": [...]}``); [] when absent/unreadable."""
+    import json
+
+    path = _mcp_commons_path(config)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        log.warning("[mcp] commons file unreadable at %s — ignoring", path)
+        return []
+    servers = data.get("servers") if isinstance(data, dict) else data
+    return [s for s in (servers or []) if isinstance(s, dict) and s.get("name")]
+
+
+def write_mcp_commons(config, servers: list[dict]) -> None:
+    """Persist the shared MCP-server commons (used by promote/unshare)."""
+    import json
+
+    path = _mcp_commons_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"servers": list(servers)}, indent=2) + "\n")
+
+
 def _mcp_tool_error_handler(exc: Exception) -> str:
     """Turn an MCP tool failure into a recoverable tool result (roxy #58).
 
@@ -161,10 +197,32 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
     tools: list = []
     meta: list[dict] = []
 
-    # Plugin-contributed managed MCP servers (ADR 0019). A factory returns an
-    # entry only when its surface is on + connected, so the
-    # server comes and goes with config without the operator touching mcp.servers.
-    servers = list(getattr(config, "mcp_servers", []) or [])
+    # Tiered merge (ADR 0041), lowest precedence first so a later layer wins by name:
+    #   box commons (mcp.scope: layered) < this agent's mcp.servers < plugin-managed.
+    # Each surviving server is tagged with its tier for runtime status (drives the
+    # console's commons/private badges + share/unshare).
+    servers: list = []
+    tier_by_name: dict[str, str] = {}
+
+    def _layer(entries, tier):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            nm = str(entry.get("name") or "").strip()
+            if not nm:
+                continue
+            servers[:] = [s for s in servers if str(s.get("name") or "").strip() != nm]
+            servers.append(entry)
+            tier_by_name[nm] = tier
+
+    scope = str(getattr(config, "mcp_scope", "") or "").strip().lower()
+    commons_servers = read_mcp_commons(config) if scope == "layered" else []
+    _layer(commons_servers, "commons")
+    _layer(list(getattr(config, "mcp_servers", []) or []), "private")
+
+    # Plugin-contributed managed MCP servers (ADR 0019). A factory returns an entry
+    # only when its surface is on + connected, so the server comes and goes with
+    # config without the operator touching mcp.servers.
     plugin_entries = []
     for factory in plugin_servers or []:
         try:
@@ -174,12 +232,11 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
             continue
         if entry:
             plugin_entries.append(entry)
-    for entry in plugin_entries:
-        name = str(entry.get("name") or "")
-        servers = [s for s in servers if not (isinstance(s, dict) and str(s.get("name") or "") == name)]
-        servers.append(entry)
+    _layer(plugin_entries, "managed")
 
-    if not (getattr(config, "mcp_enabled", False) or plugin_entries):
+    # MCP is active if the operator enabled it, a plugin contributes a server, or the
+    # agent opted into the box commons (layered) and that commons has servers.
+    if not (getattr(config, "mcp_enabled", False) or plugin_entries or commons_servers):
         return clients, tools, meta
 
     timeout = float(getattr(config, "mcp_timeout_seconds", 20.0))
@@ -256,6 +313,7 @@ def build_mcp_tools(config, *, plugin_servers=None) -> tuple[list, list, list[di
                 "name": name,
                 "transport": conn["transport"],
                 "tool_count": len(kept),
+                "tier": tier_by_name.get(name),
             }
         )
         log.info("[mcp] server %s (%s): %d tool(s)", name, conn["transport"], len(kept))

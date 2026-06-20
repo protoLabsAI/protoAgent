@@ -108,7 +108,7 @@ def test_build_collects_tools_and_meta(monkeypatch) -> None:
         _cfg([{"name": "echo", "transport": "stdio", "command": "python", "args": ["s.py"]}])
     )
     assert [t.name for t in tools] == ["echo__echo"]
-    assert meta == [{"name": "echo", "transport": "stdio", "tool_count": 1}]
+    assert meta == [{"name": "echo", "transport": "stdio", "tool_count": 1, "tier": "private"}]
     assert len(clients) == 1
 
 
@@ -338,3 +338,77 @@ def test_config_to_dict_includes_mcp() -> None:
     d = config_to_dict(LangGraphConfig(mcp_enabled=True))
     assert d["mcp"]["enabled"] is True
     assert "servers" in d["mcp"] and "denylist" in d["mcp"]
+    assert d["mcp"]["scope"] == ""  # tier field round-trips
+
+
+# ── Box-commons sharing (ADR 0041) ────────────────────────────────────────────
+
+
+def test_commons_round_trip(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from tools.mcp_tools import read_mcp_commons, write_mcp_commons
+
+    cfg = SimpleNamespace(commons_path=str(tmp_path))
+    assert read_mcp_commons(cfg) == []  # absent → empty
+    write_mcp_commons(cfg, [{"name": "s", "transport": "stdio", "command": "x"}])
+    assert [s["name"] for s in read_mcp_commons(cfg)] == ["s"]
+
+
+def test_layered_unions_commons_and_tags_tiers(monkeypatch, tmp_path) -> None:
+    from tools.mcp_tools import write_mcp_commons
+
+    _fake_client_factory(
+        monkeypatch,
+        by_server={"shared": [SimpleNamespace(name="shared__a")], "mine": [SimpleNamespace(name="mine__b")]},
+    )
+    cfg = LangGraphConfig(
+        mcp_enabled=True,
+        mcp_scope="layered",
+        commons_path=str(tmp_path),
+        mcp_servers=[{"name": "mine", "transport": "stdio", "command": "python", "args": ["m.py"]}],
+    )
+    write_mcp_commons(cfg, [{"name": "shared", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    _clients, tools, meta = build_mcp_tools(cfg)
+    by_name = {m["name"]: m for m in meta}
+    assert by_name["shared"]["tier"] == "commons"
+    assert by_name["mine"]["tier"] == "private"
+    assert {t.name for t in tools} == {"shared__a", "mine__b"}
+
+
+def test_layered_commons_activates_mcp_without_enabled(monkeypatch, tmp_path) -> None:
+    # Opting into the commons (layered) with a shared server activates MCP even when
+    # mcp.enabled is off and there are no private servers.
+    from tools.mcp_tools import write_mcp_commons
+
+    _fake_client_factory(monkeypatch, by_server={"shared": [SimpleNamespace(name="shared__a")]})
+    cfg = LangGraphConfig(mcp_enabled=False, mcp_scope="layered", commons_path=str(tmp_path), mcp_servers=[])
+    write_mcp_commons(cfg, [{"name": "shared", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    _clients, tools, meta = build_mcp_tools(cfg)
+    assert [t.name for t in tools] == ["shared__a"]
+    assert meta[0]["tier"] == "commons"
+
+
+def test_scoped_ignores_commons(monkeypatch, tmp_path) -> None:
+    from tools.mcp_tools import write_mcp_commons
+
+    _fake_client_factory(monkeypatch, by_server={"shared": [SimpleNamespace(name="shared__a")]})
+    cfg = LangGraphConfig(mcp_enabled=False, mcp_scope="scoped", commons_path=str(tmp_path), mcp_servers=[])
+    write_mcp_commons(cfg, [{"name": "shared", "transport": "stdio", "command": "python", "args": ["s.py"]}])
+    # scoped + no private servers → the commons is not read, MCP stays inert.
+    assert build_mcp_tools(cfg) == ([], [], [])
+
+
+def test_private_shadows_commons_by_name(monkeypatch, tmp_path) -> None:
+    from tools.mcp_tools import write_mcp_commons
+
+    _fake_client_factory(monkeypatch, by_server={"dup": [SimpleNamespace(name="dup__x")]})
+    cfg = LangGraphConfig(
+        mcp_enabled=True,
+        mcp_scope="layered",
+        commons_path=str(tmp_path),
+        mcp_servers=[{"name": "dup", "transport": "stdio", "command": "private", "args": []}],
+    )
+    write_mcp_commons(cfg, [{"name": "dup", "transport": "stdio", "command": "commons", "args": []}])
+    _clients, _tools, meta = build_mcp_tools(cfg)
+    assert len(meta) == 1 and meta[0]["tier"] == "private"  # private wins by name

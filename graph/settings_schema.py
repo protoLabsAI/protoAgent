@@ -469,6 +469,21 @@ FIELDS: list[Field] = [
         "Box-shared skill library read by every agent on this machine. Blank = ~/.protoagent/commons.",
         scope="host",
     ),
+    # MCP server sharing tier (ADR 0041) — mirrors skills.scope. The commons of shared
+    # servers lives at `commons.path`/mcp-servers.json; share/unshare moves a server
+    # between this agent's config and that commons (Settings ▸ MCP).
+    Field(
+        "mcp.scope",
+        "mcp_scope",
+        "MCP server sharing",
+        "select",
+        "MCP",
+        "How this agent uses MCP servers: scoped (only this agent's servers) · layered "
+        "(also run the box commons — every agent on this machine shares those — ∪ your "
+        "own). Blank = scoped. A shared server runs as a subprocess with its configured "
+        "secrets on every agent, so share only servers you trust box-wide.",
+        options=["scoped", "layered"],
+    ),
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
@@ -708,6 +723,9 @@ _SECTION_CATEGORY = {
     # category today (Agent ▸ Settings); folds into Workspace ▸ Skills, with
     # commons.path (host-scoped) surfacing in Host/App (ADR 0048).
     "Skills": "Agent",
+    # MCP — the agent's MCP-server sharing tier (ADR 0041), alongside Skills in the
+    # Agent category; the dedicated MCP panel (Settings ▸ MCP) is the primary home.
+    "MCP": "Agent",
     # System — runtime + performance knobs (central Settings → System).
     "Compaction": "System",
     "Caching": "System",

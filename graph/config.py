@@ -525,6 +525,13 @@ class LangGraphConfig:
     mcp_servers: list[dict] = field(default_factory=list)
     mcp_timeout_seconds: float = 20.0
     mcp_denylist: list[str] = field(default_factory=list)
+    # Tier (ADR 0041) — does this agent run the box-shared MCP commons? "scoped"
+    # (default/blank) = only this agent's ``mcp.servers``; "layered" = also run the
+    # box commons (``~/.protoagent/commons/mcp-servers.json``), ∪ private (private
+    # wins by name). Share/unshare moves an entry between this agent's config and the
+    # commons (operator_api/mcp_routes). A shared server runs as a subprocess with its
+    # configured secrets on every agent on the box.
+    mcp_scope: str = ""
 
     # Operator MCP server (ADR 0033 slice 1) — expose THIS agent's tools as an MCP
     # server so any MCP client (Claude Desktop, Cursor) or an ACP coding-agent runtime
@@ -869,6 +876,7 @@ class LangGraphConfig:
             mcp_servers=list(mcp.get("servers", []) or []),
             mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
             mcp_denylist=list(mcp.get("denylist", []) or []),
+            mcp_scope=mcp.get("scope", cls.mcp_scope),
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),

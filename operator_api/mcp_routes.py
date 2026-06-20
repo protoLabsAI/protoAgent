@@ -198,3 +198,53 @@ def register_mcp_routes(app) -> None:
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "servers": [s["name"] for s in servers]}
+
+    @app.post("/api/mcp/servers/{name}/promote")
+    async def _promote(name: str):
+        """Share a configured server to the box commons (ADR 0041): MOVE it from this
+        agent's ``mcp.servers`` into ``commons/mcp-servers.json``. With ``mcp.scope:
+        layered`` the agent keeps running it (now as the commons tier) and every other
+        layered agent on the box picks it up."""
+        from tools.mcp_tools import read_mcp_commons, write_mcp_commons
+
+        cfg = STATE.graph_config
+        private = [s for s in (getattr(cfg, "mcp_servers", []) or []) if isinstance(s, dict)]
+        entry = next((s for s in private if s.get("name") == name), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"no configured server named {name!r}")
+
+        commons = [s for s in read_mcp_commons(cfg) if s.get("name") != name]
+        commons.append(entry)
+        write_mcp_commons(cfg, commons)
+
+        remaining = [s for s in private if s.get("name") != name]
+        from server.agent_init import _apply_settings_changes
+
+        ok, messages = _apply_settings_changes(config={"mcp": {"servers": remaining}})
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        return {"ok": True, "promoted": True, "name": name}
+
+    @app.post("/api/mcp/servers/{name}/forget")
+    async def _forget(name: str):
+        """Unshare a commons server (the inverse of promote): MOVE it out of the box
+        commons back into this agent's ``mcp.servers``. No other agent on the box will
+        run it after this."""
+        from tools.mcp_tools import read_mcp_commons, write_mcp_commons
+
+        cfg = STATE.graph_config
+        commons = read_mcp_commons(cfg)
+        entry = next((s for s in commons if s.get("name") == name), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"no commons server named {name!r}")
+
+        write_mcp_commons(cfg, [s for s in commons if s.get("name") != name])
+
+        private = [s for s in (getattr(cfg, "mcp_servers", []) or []) if isinstance(s, dict) and s.get("name") != name]
+        private.append(entry)
+        from server.agent_init import _apply_settings_changes
+
+        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": private}})
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        return {"ok": True, "forgotten": True, "name": name}

@@ -150,3 +150,57 @@ def test_catalog_lists_servers_and_marks_installed(monkeypatch):
     # The configured server is flagged installed; the rest aren't.
     assert by_id["filesystem"]["installed"] is True
     assert by_id["memory"]["installed"] is False
+
+
+# ── Box-commons share/unshare (ADR 0041) ──────────────────────────────────────
+
+
+def test_promote_moves_server_to_commons(monkeypatch, tmp_path):
+    import json
+
+    import runtime.state as rs
+
+    captured = _wire(monkeypatch, servers=[{"name": "echo", "transport": "stdio", "command": "x"}])
+    rs.STATE.graph_config.commons_path = str(tmp_path)
+    body = _client().post("/api/mcp/servers/echo/promote").json()
+    assert body["promoted"] is True and body["name"] == "echo"
+    # Removed from this agent's private config (persisted via _apply_settings_changes)…
+    assert captured["config"]["mcp"]["servers"] == []
+    # …and written into the box commons file.
+    commons = json.loads((tmp_path / "mcp-servers.json").read_text())
+    assert [s["name"] for s in commons["servers"]] == ["echo"]
+
+
+def test_promote_unknown_is_404(monkeypatch, tmp_path):
+    import runtime.state as rs
+
+    _wire(monkeypatch, servers=[])
+    rs.STATE.graph_config.commons_path = str(tmp_path)
+    assert _client().post("/api/mcp/servers/nope/promote").status_code == 404
+
+
+def test_forget_moves_server_back_to_private(monkeypatch, tmp_path):
+    import json
+
+    import runtime.state as rs
+
+    captured = _wire(monkeypatch, servers=[])
+    rs.STATE.graph_config.commons_path = str(tmp_path)
+    (tmp_path / "mcp-servers.json").write_text(
+        json.dumps({"servers": [{"name": "shared", "transport": "stdio", "command": "y"}]})
+    )
+    body = _client().post("/api/mcp/servers/shared/forget").json()
+    assert body["forgotten"] is True
+    # Moved back into this agent's private config…
+    assert [s["name"] for s in captured["config"]["mcp"]["servers"]] == ["shared"]
+    # …and removed from the commons.
+    commons = json.loads((tmp_path / "mcp-servers.json").read_text())
+    assert commons["servers"] == []
+
+
+def test_forget_unknown_is_404(monkeypatch, tmp_path):
+    import runtime.state as rs
+
+    _wire(monkeypatch, servers=[])
+    rs.STATE.graph_config.commons_path = str(tmp_path)
+    assert _client().post("/api/mcp/servers/nope/forget").status_code == 404
