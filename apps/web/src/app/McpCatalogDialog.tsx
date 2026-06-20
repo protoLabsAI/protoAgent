@@ -110,7 +110,7 @@ export function McpCatalogDialog({
   const missing = selected?.inputs?.some((i) => i.required && !values[i.key]?.trim()) ?? false;
 
   return (
-    <Dialog open onClose={close} title="Add a common MCP server" width="min(720px, 95vw)">
+    <Dialog open onClose={close} title="Add a common MCP server" width="min(720px, 95vw)" className="mcp-catalog-dialog">
       {selected ? (
         <div className="mcp-catalog-configure">
           <button type="button" className="mcp-catalog-back" onClick={back}>

@@ -3,7 +3,6 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
-import { Badge } from "@protolabsai/ui/primitives";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
 import { McpPanel } from "../app/McpPanel";
@@ -111,14 +110,6 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     <div className="settings-shell">
       <SideNav ariaLabel="Settings sections" groups={groups} active={active.id} onSelect={(id) => setSection(id)} />
       <div className="settings-content">
-        {onHost ? (
-          <div
-            className="settings-scope-badge"
-            title="Box defaults — every agent on this machine inherits these unless it sets its own. Per-agent overrides live under each agent's Settings."
-          >
-            <Badge status="info"><Server size={12} /> Host · box defaults</Badge>
-          </div>
-        ) : null}
         {active.render()}
       </div>
     </div>

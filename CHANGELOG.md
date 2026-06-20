@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Desktop: the common-MCP-servers picker is no longer empty.** `config/mcp-catalog.json`
+  wasn't bundled into the packaged desktop app, so "Browse common servers" showed "no
+  servers match"; the sidecar build now ships it (with a regression guard).
+
+### Changed
+- **Settings: the "Host · box defaults" badge moved into the dialog header** next to the
+  Settings title, instead of sitting atop the body where it pushed the panel content down.
+- **MCP: more breathing room in the "Browse common servers" dialog** — the search and card
+  grid no longer sit flush against the panel edge.
+
 ## [0.64.0] - 2026-06-20
 
 ### Added

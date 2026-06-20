@@ -204,3 +204,19 @@ def test_forget_unknown_is_404(monkeypatch, tmp_path):
     _wire(monkeypatch, servers=[])
     rs.STATE.graph_config.commons_path = str(tmp_path)
     assert _client().post("/api/mcp/servers/nope/forget").status_code == 404
+
+
+def test_mcp_catalog_is_bundled_in_the_desktop_sidecar():
+    """The frozen desktop app reads config/mcp-catalog.json from the bundle; if the
+    sidecar build forgets it, the picker shows "no servers match". Guard the
+    hand-maintained data-files list (the same trap the plugin catalog hit)."""
+    import importlib.util
+    from pathlib import Path
+
+    spec_path = Path(__file__).resolve().parents[1] / "apps" / "desktop" / "sidecar" / "build_sidecar.py"
+    spec = importlib.util.spec_from_file_location("build_sidecar", spec_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bundled = {src for src, _dest in mod.BUNDLED_DATA}
+    assert "config/mcp-catalog.json" in bundled
+    assert "config/plugin-catalog.json" in bundled  # its sibling — same bundling trap

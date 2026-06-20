@@ -654,6 +654,11 @@ select:disabled {
 
 /* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
    self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
+/* A bit more breathing room than the DS default (16px) — the full-width search +
+   multi-column card grid feel cramped flush to the body edge. */
+.mcp-catalog-dialog .pl-dialog__body {
+  padding: var(--pl-space-6, 24px);
+}
 .mcp-browse-row {
   display: flex;
   align-items: center;

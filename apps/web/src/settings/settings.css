@@ -195,11 +195,15 @@
   cursor: pointer;
 }
 
-/* Host scope badge (2026-06) — a compact "you're editing the box defaults" marker atop
-   the settings content on the host console; replaces the old full-width inheritance banner. */
+/* Host scope badge (2026-06) — a compact "you're editing the box defaults" marker in the
+   dialog header next to the "Settings" title (host console only); replaces the old
+   full-width inheritance banner. */
+.settings-overlay-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
 .settings-scope-badge {
-  display: flex;
-  justify-content: flex-end;
-  margin: 0 0 10px;
-  flex: none;
+  display: inline-flex;
+  align-items: center;
 }

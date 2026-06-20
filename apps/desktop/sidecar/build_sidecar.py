@@ -47,6 +47,11 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # REPO_ROOT/config (→ _MEIPASS/config when frozen); without it the desktop app's
     # Plugins ▸ Discover shows "0 official plugins" (every entry is unreachable).
     ("config/plugin-catalog.json", "config"),
+    # The curated common-MCP-server picker (Settings ▸ MCP ▸ Browse common servers).
+    # `/api/mcp/catalog` reads it from REPO_ROOT/config (→ _MEIPASS/config when frozen);
+    # without it the desktop app shows "no servers match" (same trap as the plugin
+    # catalog above).
+    ("config/mcp-catalog.json", "config"),
     ("config/soul-presets", "config/soul-presets"),
     # The bundled first-party skills (config/skills/*/SKILL.md — release-notes,
     # web-research). `_build_skills_index` (server/agent_init.py) seeds the skill
