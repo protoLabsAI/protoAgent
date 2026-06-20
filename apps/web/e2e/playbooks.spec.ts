@@ -78,6 +78,25 @@ test("layered skills show tier badges and promote a private skill to the commons
   await expect(surface.getByTestId("playbook-promote-2")).toHaveCount(0);
 });
 
+test("unshares a commons skill from the Skills view (forget, with confirm)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Skills", exact: true }).click();
+  const surface = page.getByTestId("playbooks-surface");
+  await expect(surface).toBeVisible();
+
+  // Unshare is offered on the commons skill (id 1), not the private one (id 2).
+  await expect(surface.getByTestId("playbook-forget-1")).toBeVisible();
+  await expect(surface.getByTestId("playbook-forget-2")).toHaveCount(0);
+
+  // It confirms first (a commons skill is read by every agent), then removes the row.
+  await surface.getByTestId("playbook-forget-1").click();
+  const dialog = page.getByRole("dialog", { name: "Unshare from the commons?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Unshare", exact: true }).click();
+  await expect(surface.getByTestId("playbook-forget-1")).toHaveCount(0);
+});
+
 test("deleting a playbook confirms first, then removes it", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();

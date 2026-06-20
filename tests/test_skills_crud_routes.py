@@ -162,3 +162,58 @@ def test_list_tags_origin_and_editable(monkeypatch, tmp_path):
     assert by_name["Mine"]["origin"] == "user" and by_name["Mine"]["editable"] is True
     assert by_name["Emitted one"]["origin"] == "learned" and by_name["Emitted one"]["editable"] is True
     assert by_name["Shipped"]["origin"] == "bundled" and by_name["Shipped"]["editable"] is False
+
+
+# ── Share / unshare the commons (ADR 0041) — the Skills view's promote + forget ──
+
+
+def _client_layered(monkeypatch, tmp_path):
+    """A client whose STATE.skills_index is a LayeredSkillsIndex (private ∪ commons),
+    so the promote/forget routes have a commons to act on."""
+    from graph.skills.layered import LayeredSkillsIndex
+
+    idx = LayeredSkillsIndex(
+        SkillsIndex(db_path=str(tmp_path / "priv.db")),
+        SkillsIndex(db_path=str(tmp_path / "commons.db")),
+    )
+    monkeypatch.setattr(kr, "_user_skills_root", lambda: tmp_path / "userskills")
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "skills_index", idx, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", None, raising=False)
+    app = FastAPI()
+    register_knowledge_routes(app)
+    return TestClient(app), idx
+
+
+def test_promote_then_forget_round_trip(monkeypatch, tmp_path):
+    """Promote lifts a private skill into the commons; forget (the Skills view's
+    unshare) removes the commons copy — by its commons-tier id."""
+    c, idx = _client_layered(monkeypatch, tmp_path)
+    _seed_emitted(idx._private, name="Nightly", desc="d", body="b")
+
+    priv = next(p for p in c.get("/api/playbooks").json()["playbooks"] if p["tier"] == "private")
+    assert c.post(f"/api/playbooks/{priv['id']}/promote").json() == {
+        "enabled": True, "promoted": True, "name": "Nightly"
+    }
+
+    commons = next(p for p in c.get("/api/playbooks").json()["playbooks"] if p["tier"] == "commons")
+    assert c.post(f"/api/playbooks/{commons['id']}/forget").json() == {
+        "enabled": True, "forgotten": True, "name": "Nightly"
+    }
+    assert not any(p["tier"] == "commons" for p in c.get("/api/playbooks").json()["playbooks"])
+    assert any(p["tier"] == "private" for p in c.get("/api/playbooks").json()["playbooks"])  # private untouched
+
+
+def test_forget_unknown_commons_id(monkeypatch, tmp_path):
+    c, _idx = _client_layered(monkeypatch, tmp_path)
+    assert c.post("/api/playbooks/9999/forget").json() == {
+        "enabled": True, "forgotten": False, "error": "no commons skill with that id"
+    }
+
+
+def test_forget_not_layered_hints(monkeypatch, tmp_path):
+    """A scoped index has no commons — forget reports a hint, not an error."""
+    c, _idx, _root = _client(monkeypatch, tmp_path)
+    r = c.post("/api/playbooks/1/forget").json()
+    assert r["enabled"] is True and r["forgotten"] is False and "layered" in r["error"]

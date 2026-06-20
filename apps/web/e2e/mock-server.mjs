@@ -469,6 +469,13 @@ const server = createServer(async (req, res) => {
       if (p) p.tier = "commons"; // promoted: now reads from the commons tier
       return sendJson(res, { enabled: true, promoted: true, name: p?.name });
     }
+    if (req.method === "POST" && /^\/api\/playbooks\/\d+\/forget$/.test(pathname)) {
+      const id = Number(pathname.split("/").at(-2));
+      const i = playbooks.findIndex((x) => x.id === id && x.tier === "commons");
+      if (i < 0) return sendJson(res, { enabled: true, forgotten: false, error: "no commons skill with that id" });
+      const [p] = playbooks.splice(i, 1); // removed from the commons → no agent reads it
+      return sendJson(res, { enabled: true, forgotten: true, name: p.name });
+    }
     if (req.method === "DELETE" && /^\/api\/playbooks\/\d+$/.test(pathname)) {
       return sendJson(res, { enabled: true, deleted: true });
     }

@@ -138,10 +138,6 @@ function deepLinkCommands(): Command[] {
       kind: "global",
       section: "telemetry",
     }),
-    link("box:commons", "Settings: Shared Skills", ["commons", "shared", "skills", "box", "global"], {
-      kind: "global",
-      section: "commons",
-    }),
   ];
 }
 

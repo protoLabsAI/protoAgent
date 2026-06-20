@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Layers, Library, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Layers, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -15,7 +15,6 @@ import { PluginsSurface } from "../plugins/PluginsSurface";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useUI } from "../state/uiStore";
-import { CommonsPanel } from "./CommonsPanel";
 import { DelegatesSection } from "./DelegatesSection";
 import { FleetSurface } from "./FleetSurface";
 import { OverviewPanel } from "./OverviewPanel";
@@ -30,7 +29,8 @@ import { ThemeSurface } from "./ThemeSurface";
 //   Agent — everything that defines the focused agent. Host-scoped fields here carry an
 //           inheritance badge (ADR 0047): on a fleet member, "inherited from host" + override;
 //           on the host console, "box default" (you're setting what others inherit).
-//   Box   — box-wide ops (Fleet · Telemetry · Shared Skills). Host-console only.
+//   Box   — box-wide ops (Fleet · Telemetry). Host-console only. (Shared skills live in
+//           Agent ▸ Skills — the commons is browsed + shared from there, not a separate panel.)
 
 type Section = { id: string; label: string; icon: LucideIcon; render: () => ReactNode };
 
@@ -53,14 +53,15 @@ const AGENT_SECTIONS: Section[] = [
   { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
 ];
 
-// Box-wide operations (host console only) — the former Global ▸ Fleet/Telemetry/Shared Skills.
+// Box-wide operations (host console only) — the former Global ▸ Fleet/Telemetry.
 // The old Global ▸ Configuration section is GONE: host-scoped FIELDS are edited inline in the
 // Agent group (on the host they write the host layer; elsewhere they override per-agent).
+// Shared Skills folded into Agent ▸ Skills (PlaybooksSurface) — it already browses the
+// commons (tier badges) and shares/unshares from there, so a separate panel was redundant.
 const BOX_SECTIONS: Section[] = [
   { id: "overview", label: "Overview", icon: Gauge, render: () => <OverviewPanel /> },
   { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
   { id: "telemetry", label: "Telemetry", icon: BarChart3, render: () => <TelemetrySurface /> },
-  { id: "commons", label: "Shared Skills", icon: Library, render: () => <CommonsPanel /> },
 ];
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) lives

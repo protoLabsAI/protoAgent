@@ -63,11 +63,10 @@ test("the settings dialog lists the grouped Agent + Box sections (host, no scope
     "Memory",
     "System",
     "Theme",
-    // Box group (host console only)
+    // Box group (host console only). (Shared Skills folded into Agent ▸ Skills.)
     "Overview",
     "Fleet",
     "Telemetry",
-    "Shared Skills",
   ]);
   await section(page, "System");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();

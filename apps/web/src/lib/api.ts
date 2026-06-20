@@ -713,6 +713,15 @@ export const api = {
     );
   },
 
+  // Forget a skill FROM the shared commons (ADR 0041) — the inverse of promote, on a
+  // COMMONS-tier id. Layered-only; reports forgotten:false with a hint otherwise.
+  forgetPlaybook(id: number) {
+    return request<{ enabled: boolean; forgotten: boolean; name?: string; error?: string }>(
+      `/api/playbooks/${id}/forget`,
+      { method: "POST" },
+    );
+  },
+
   setupStatus() {
     return request<SetupStatus>("/api/config/setup-status");
   },

@@ -1,6 +1,6 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, Library, Pencil, Pin, Plus, Share2, Sparkles, Trash2 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -17,8 +17,11 @@ import type { Playbook } from "../lib/types";
 // operator-facing name for skill-v1 artifacts: user = operator-authored SKILL.md,
 // bundled = shipped example, learned = agent-emitted (curated/decaying).
 // Full CRUD: author a new skill, edit one (editing a learned skill materializes
-// it as a durable user SKILL.md), delete, promote to the shared commons. Bundled
-// examples + commons skills are read-only.
+// it as a durable user SKILL.md), delete. This is also the single home for the
+// shared-skills commons (ADR 0041): private skills show a "share" (promote) action,
+// commons skills an "unshare" (forget) — it absorbed the former Settings ▸ Shared
+// Skills panel. Bundled examples are read-only; commons content is read-only here
+// (manage it via share/unshare), the underlying skill is edited in its own agent.
 
 type Draft = {
   name: string;
@@ -169,6 +172,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<Playbook | null>(null);
   const [promoting, setPromoting] = useState<number | null>(null);
+  const [forgetPending, setForgetPending] = useState<Playbook | null>(null);
 
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -291,6 +295,25 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
       onError(errMsg(e));
     } finally {
       setPromoting(null);
+    }
+  }
+
+  // Unshare = forget from the commons (the inverse of promote). Confirmed, since it
+  // affects every agent on the box. A private copy of the skill (if any) is untouched.
+  async function confirmUnshare() {
+    if (!forgetPending) return;
+    const p = forgetPending;
+    setForgetPending(null);
+    try {
+      const r = await api.forgetPlaybook(p.id);
+      if (!r.forgotten) {
+        onError(r.error || "unshare failed");
+        return;
+      }
+      onError("");
+      await load();
+    } catch (e) {
+      onError(errMsg(e));
     }
   }
 
@@ -436,8 +459,19 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
                             <Trash2 size={14} />
                           </Button>
                         </>
+                      ) : p.tier === "commons" ? (
+                        <Button
+                          type="button"
+                          icon
+                          variant="ghost"
+                          title="Unshare — remove from the shared commons (no agent on this box will read it anymore)"
+                          onClick={() => setForgetPending(p)}
+                          data-testid={`playbook-forget-${p.id}`}
+                        >
+                          <ArrowDownFromLine size={14} />
+                        </Button>
                       ) : (
-                        <span className="playbook-readonly" title="Bundled/shared skill — read-only here">
+                        <span className="playbook-readonly" title="Bundled skill — read-only here">
                           read-only
                         </span>
                       )}
@@ -459,6 +493,19 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
       >
         {pending
           ? `Remove "${pending.name}"${pending.origin === "user" ? " — its SKILL.md is deleted too." : "."}`
+          : undefined}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={forgetPending !== null}
+        title="Unshare from the commons?"
+        confirmLabel="Unshare"
+        destructive
+        onConfirm={() => void confirmUnshare()}
+        onClose={() => setForgetPending(null)}
+      >
+        {forgetPending
+          ? `"${forgetPending.name}" will be removed from the shared commons — no other agent on this box will read it. A private copy (if any) is untouched.`
           : undefined}
       </ConfirmDialog>
 
