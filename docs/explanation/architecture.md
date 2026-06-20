@@ -98,17 +98,17 @@ The three layers compose: auth proves the caller is known, redaction ensures the
 
 ## Skill loop
 
-A **skill** teaches the agent how and when to run a recurring workflow. Skills are retrieved by relevance and injected each turn, so the agent reuses proven approaches on similar future problems — the "gets better the longer it runs" property, adapted to protoAgent's A2A-native shape.
+A **skill** teaches the agent how and when to run a recurring workflow. Available skills are advertised to the agent every turn as a lightweight index; the agent loads a skill's full procedure only when it judges one fits the task, so it reuses proven approaches on similar future problems — the "gets better the longer it runs" property, adapted to protoAgent's A2A-native shape.
 
-Three pieces:
+Three pieces ([progressive disclosure, ADR 0060](/adr/0060-skill-progressive-disclosure)):
 
 1. **Authoring** — a skill is an [AgentSkills `SKILL.md`](/guides/skills) folder. You drop them in by hand, and the agent can author its own from a proven workflow via the `/distill` subagent (it writes a new `SKILL.md`). All land in the index as `source=disk`.
 2. **Indexing** — `graph/skills/index.py` is a SQLite/FTS5 store at `/sandbox/skills.db` (→ `~/.protoagent/skills.db` when `/sandbox` isn't writable). `SKILL.md` folders are re-seeded on every boot; console edits (Agent → Skills) index live.
-3. **Retrieval** — `KnowledgeMiddleware.load_skills(query)` returns the top-k matches (default 5, BM25-ranked) for the current user message + recent context, injected as a `<learned_skills>` block in the system prompt. Same 2 K-token budget discipline as `<prior_sessions>`. The retrieved set is surfaced to the user as a "skills loaded" chip in chat (`skills.announce`, default on). (The index is wired into `KnowledgeMiddleware` via `create_agent_graph`'s `skills_index`.)
+3. **Disclosure** — `KnowledgeMiddleware` injects an always-on `<available_skills>` block listing up to `skills.top_k` skills' `{name, description}` (recency-ordered, query-independent), and the agent calls the `load_skill(name)` tool to pull one skill's full procedure on demand (visible as a tool card). This replaced per-turn BM25 retrieval of full skill bodies. (The index is wired into `KnowledgeMiddleware` via `create_agent_graph`'s `skills_index`.)
 
 **Curation** — `python -m graph.skills.curator` runs a periodic sweep that deduplicates near-identical skills and decays confidence 50 % every 90 days of idleness. Skills below 0.2 confidence are pruned. `disk` skills are **pinned** (re-seeded from `SKILL.md` files, not curated). Run it on a cron or let operators trigger it manually — no automatic scheduling in the template.
 
-**Why SQLite + FTS5** — the index lives inside the container, survives restarts if `/sandbox` is volume-mounted, handles tens of thousands of skills without a separate service, and the fts5 virtual table gives BM25 ranking without embedding model overhead. You can swap in a vector store later if recall beats keyword BM25 for your domain; the `KnowledgeMiddleware.load_skills()` seam is the single swap point.
+**Why SQLite + FTS5** — the index lives inside the container, survives restarts if `/sandbox` is volume-mounted, handles tens of thousands of skills without a separate service, and the fts5 virtual table backs both the `list_skills`/`get_skill` lookups and the curator's queries without embedding-model overhead. `SkillsIndex.skill_summaries()` (the always-on index) and `get_skill()` (on-demand body) are the single read seam — swap the store there if your domain outgrows keyword search.
 
 ## Extending the agent (tools, skills, plugins)
 

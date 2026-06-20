@@ -43,9 +43,9 @@ class SkillV1Artifact:
     # deliberately-authored skills become directly invokable.
     user_facing: bool = False
     slash: str = ""
-    # User-ONLY skills (2026-06): user_facing AND withheld from the agent's retrieval
-    # (`load_skills`) — a `/<slash>` command the operator can run, but the agent never
-    # pulls into context. Implies user_facing.
+    # User-ONLY skills (2026-06): user_facing AND withheld from the agent's
+    # <available_skills> index — a `/<slash>` command the operator can run, but the
+    # agent never sees or loads it. Implies user_facing.
     user_only: bool = False
 
     def __post_init__(self) -> None:
@@ -55,6 +55,14 @@ class SkillV1Artifact:
             raise TypeError("SkillV1Artifact.tools_used must be a list")
         if not isinstance(self.created_at, datetime):
             raise TypeError("SkillV1Artifact.created_at must be a datetime")
+        # Enforce user_only ⇒ user_facing at the single source (not just in comments):
+        # a user_only skill is withheld from the agent's <available_skills> index, so
+        # its `/slash` is the ONLY way to reach it — a user_only-but-not-user_facing
+        # artifact would be invisible to both the agent AND the operator. (add_skill
+        # only auto-derives a slash for user_facing skills, so the contradiction would
+        # otherwise produce an unusable, slash-less skill.)
+        if self.user_only:
+            self.user_facing = True
 
     def slash_token(self) -> str:
         """The whitespace-free `/<token>` trigger — explicit ``slash`` or a slug of

@@ -12,15 +12,15 @@ class _FakeStore:
         return [{"table": "finding", "preview": f"hit for {query}"}]
 
 
-class _FakeSkill:
-    def __init__(self, name, desc):
-        self.name = name
-        self.description = desc
-
-
 class _FakeSkills:
-    def load_skills(self, query, k=5):
-        return [_FakeSkill("deploy", "how to deploy")]
+    """Stub matching the always-on index surface (ADR 0060)."""
+
+    def skill_summaries(self, limit=None):
+        rows = [{"name": "deploy", "description": "how to deploy", "slash": ""}]
+        return rows[:limit] if limit is not None else rows
+
+    def discoverable_count(self):
+        return 1
 
 
 def _cfg():
@@ -42,10 +42,12 @@ def test_volatile_delta_reflects_retrieval_and_query():
     assert any(s.startswith("skills:") for s in ctx.sources)
 
 
-def test_no_query_means_no_knowledge_or_skills():
+def test_no_query_means_no_knowledge_but_skills_still_listed():
+    """Knowledge is query-bound (no query → no knowledge); the skill index is
+    always-on (ADR 0060), so it appears regardless of the query."""
     ctx = assemble_context(_cfg(), query="", knowledge_store=_FakeStore(), skills_index=_FakeSkills())
     assert "hit for" not in ctx.volatile_delta
-    assert "deploy" not in ctx.volatile_delta
+    assert "deploy: how to deploy" in ctx.volatile_delta
 
 
 def test_as_prompt_keeps_prefix_first_then_volatile_then_message():

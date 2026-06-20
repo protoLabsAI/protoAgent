@@ -14,7 +14,6 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
     tool_start      a tool began      (dict {id,name,input} | str)
     tool_end        a tool finished   (dict {id,name,output} | str)
     delta           a worldstate-delta {domain,path,op,value}
-    skills          auto-retrieved skills for the turn {skills:[{name,description}]}
     usage           per-LLM-call token usage {input_tokens,output_tokens,...}
     confidence      self-reported {confidence, explanation?}
     input_required  HITL pause {question}
@@ -57,10 +56,6 @@ HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
 # a DataPart, distinct from the answer artifact, so the console can show a
 # collapsible reasoning view. Plain consumers ignore it.
 REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
-# The skills the agent auto-retrieved for a turn ({"skills": [{name, description}]}) —
-# carried on WORKING status frames so the console can show a "skills loaded" chip,
-# making the implicit skill-retrieval path visible. Plain consumers ignore it.
-SKILLS_MIME = "application/vnd.protolabs.skills-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -382,15 +377,6 @@ class ProtoAgentExecutor(AgentExecutor):
                             message=updater.new_agent_message(
                                 [_data_part_proto({"text": str(payload)}, REASONING_MIME)]
                             ),
-                        )
-
-                elif event_type == "skills":
-                    # Auto-retrieved skills for the turn — a skills DataPart on a
-                    # WORKING frame so the console shows a "skills loaded" chip.
-                    if isinstance(payload, dict) and payload.get("skills"):
-                        await updater.update_status(
-                            TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message([_data_part_proto(payload, SKILLS_MIME)]),
                         )
 
                 elif event_type == "delta":

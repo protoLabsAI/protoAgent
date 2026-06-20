@@ -107,7 +107,7 @@ def test_shared_commons_skill_visible_across_agents(tmp_path):
 
     b = SkillsIndex(db_path=path_b)  # a DIFFERENT agent opening the same commons db
     b.initialize_db()
-    assert "warp_jump" in {r.name for r in b.load_skills("warp", k=10)}
+    assert "warp_jump" in {r["name"] for r in b.skill_summaries()}
 
 
 # ── Shared knowledge: deliberately NOT implemented (guard against silent drift) ──

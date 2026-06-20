@@ -12,25 +12,10 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import sqlite3
-from typing import NamedTuple
 
 log = logging.getLogger(__name__)
-
-
-def _build_match_query(query: str) -> str:
-    """Turn free text into a safe FTS5 prefix-OR MATCH expression.
-
-    A bare query string is an implicit AND of its terms, so one non-matching
-    word (or a morphological variant like ``calculation`` vs ``calculations``)
-    zeroes the result. We instead OR each token as a prefix (``term*``), which
-    matches variants and ranks by BM25. Tokenizing to ``\\w+`` also strips FTS5
-    syntax characters, so arbitrary user text can't raise a query error.
-    """
-    terms = re.findall(r"\w+", query.lower())
-    return " OR ".join(f"{t}*" for t in terms)
 
 
 # Bump when FTS table columns change — triggers auto-migration
@@ -51,16 +36,6 @@ _FTS_CONTENT_COLUMNS = (
 )
 
 
-class SkillRecord(NamedTuple):
-    """A single result from FTS5 skill retrieval."""
-
-    name: str
-    description: str
-    prompt_template: str
-    score: float
-    tools_used: tuple[str, ...] = ()
-
-
 class SkillsIndex:
     """SQLite FTS5-backed skill index.
 
@@ -68,7 +43,8 @@ class SkillsIndex:
 
         index = SkillsIndex("/sandbox/skills.db")
         index.add_skill(artifact)           # SkillV1Artifact from extensions.skills
-        results = index.load_skills("web research", k=5)
+        index.skill_summaries()                 # always-on {name, description} index
+        full = index.get_skill("web-research")  # on-demand full procedure
     """
 
     def __init__(self, db_path: str = "/sandbox/skills.db") -> None:
@@ -216,7 +192,7 @@ class SkillsIndex:
         slash = getattr(artifact, "slash", "") or ""
         if user_facing == "1" and not slash and hasattr(artifact, "slash_token"):
             slash = artifact.slash_token()
-        # User-only (v5): withheld from load_skills (agent retrieval) but still a /slash.
+        # User-only (v5): withheld from the always-on skill index (agent discovery) but still a /slash.
         user_only = "1" if getattr(artifact, "user_only", False) else "0"
 
         conn = self._open_conn()
@@ -265,58 +241,68 @@ class SkillsIndex:
 
     # ── Read path ─────────────────────────────────────────────────────────────
 
-    def load_skills(self, query: str, k: int = 5) -> list[SkillRecord]:
-        """Return top-k skills matching *query* ranked by FTS5 BM25 relevance.
+    def skill_summaries(self, limit: int | None = None) -> list[dict]:
+        """The always-on skill INDEX (progressive disclosure, ADR 0060).
 
-        Returns an empty list when the database is empty or the query has no
-        FTS5 matches — callers must handle the empty case gracefully.
+        Returns the lightweight ``{name, description, slash}`` of every
+        *discoverable* skill — user_only skills are slash-only and withheld —
+        most-recently-used first, capped at ``limit`` (``None`` = all). The model
+        reads a skill's full procedure on demand via the ``load_skill`` tool /
+        :meth:`get_skill`; nothing is matched against the conversation here, so
+        there is no per-turn relevance guess to misfire (the old BM25 path's bug).
 
-        BM25 scores in SQLite FTS5 are negative; lower (more negative) = more
-        relevant. Results are ordered ascending so index 0 is the best match.
-
-        Args:
-            query: Free-text query string (user message + recent context).
-            k:     Maximum number of results to return (default 5).
-
-        Returns:
-            List of SkillRecord named tuples ordered best-first.
+        Empty on error — callers must handle the empty case gracefully.
         """
-        if not query or not query.strip():
-            return []
-
-        match_query = _build_match_query(query)
-        if not match_query:
-            return []
-
         conn = self._open_conn()
         try:
             cur = conn.execute(
                 """
-                SELECT name, description, prompt_template, tools_used,
-                       bm25(skills_fts) AS score
+                SELECT name, description, slash
                 FROM skills_fts
-                WHERE skills_fts MATCH ?
-                  AND user_only = '0'
-                ORDER BY score
-                LIMIT ?
-                """,
-                (match_query, k),
+                WHERE user_only = '0'
+                ORDER BY last_used DESC, confidence DESC, name ASC
+                """
             )
-            rows = cur.fetchall()
-            return [
-                SkillRecord(
-                    name=row["name"],
-                    description=row["description"],
-                    prompt_template=row["prompt_template"],
-                    score=float(row["score"]),
-                    tools_used=tuple((row["tools_used"] or "").split()),
-                )
-                for row in rows
+            rows = [
+                {"name": r["name"], "description": r["description"], "slash": r["slash"]}
+                for r in cur.fetchall()
             ]
         except sqlite3.OperationalError as exc:
-            # Table may be empty or query syntax invalid
-            log.debug("[skills] FTS5 search error (returning empty): %s", exc)
+            log.debug("[skills] skill_summaries error (returning empty): %s", exc)
             return []
+        return rows[:limit] if limit is not None else rows
+
+    def discoverable_count(self) -> int:
+        """Count of discoverable (non-user_only) skills — drives the index's
+        "+N more" hint. 0 on error."""
+        conn = self._open_conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS n FROM skills_fts WHERE user_only = '0'")
+            return int(cur.fetchone()["n"])
+        except sqlite3.OperationalError:
+            return 0
+
+    def get_skill(self, name: str) -> dict | None:
+        """Full record for one skill by exact name — the procedure the model
+        loads on demand via ``load_skill``. Returns None when absent. Includes
+        user_only skills so a /slash-invoked skill still resolves."""
+        if not name or not name.strip():
+            return None
+        conn = self._open_conn()
+        try:
+            cur = conn.execute(
+                """
+                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                       created_at, confidence, last_used, source, user_facing, slash, user_only
+                FROM skills_fts WHERE name = ? LIMIT 1
+                """,
+                (name.strip(),),
+            )
+            row = cur.fetchone()
+            return self._row_to_dict(row) if row else None
+        except sqlite3.OperationalError as exc:
+            log.debug("[skills] get_skill error (returning None): %s", exc)
+            return None
 
     # ── Curation surface (consumed by graph/skills/curator.py) ─────────────────
 

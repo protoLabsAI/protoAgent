@@ -60,12 +60,17 @@ def build_stable_prefix(config=None, *, include_subagents: bool = True) -> str:
     return build_system_prompt(include_subagents=include_subagents)
 
 
-def _format_skills(skills) -> str:
-    lines = ["[Relevant learned skills:]"]
-    for s in skills:
-        name = getattr(s, "name", "skill")
-        desc = getattr(s, "description", "") or ""
+def _format_skills(summaries: list[dict], total: int) -> str:
+    """The always-on skill index (ADR 0060) for an external brain — name + summary
+    of available skills. The brain loads a full procedure on demand via the
+    ``load_skill`` operator tool (bridged through the operator MCP server)."""
+    lines = ["[Available skills — call load_skill(name) to read one's full steps:]"]
+    for s in summaries:
+        name = s.get("name", "skill")
+        desc = " ".join((s.get("description") or "").split())
         lines.append(f"- {name}: {desc}".rstrip())
+    if total > len(summaries):
+        lines.append(f"- (+{total - len(summaries)} more — call list_skills.)")
     return "\n".join(lines)
 
 
@@ -100,15 +105,17 @@ def retrieve_volatile(
     except Exception:  # noqa: BLE001
         log.debug("[context] prior-sessions load skipped", exc_info=True)
 
-    if skills_index is not None and q:
+    # The skill index is the same regardless of the turn's query (progressive
+    # disclosure, ADR 0060) — inject it whenever an index is present, not gated on q.
+    if skills_index is not None:
         try:
             k = int(getattr(config, "skills_top_k", 5) or 5)
-            skills = skills_index.load_skills(q, k=k)
-            if skills:
-                blocks.append(_format_skills(skills))
-                sources.append(f"skills:{len(skills)}")
+            summaries = skills_index.skill_summaries(limit=k)
+            if summaries:
+                blocks.append(_format_skills(summaries, skills_index.discoverable_count()))
+                sources.append(f"skills:{len(summaries)}")
         except Exception:  # noqa: BLE001
-            log.warning("[context] skills retrieval failed", exc_info=True)
+            log.warning("[context] skill index failed", exc_info=True)
 
     if knowledge_store is not None and q:
         try:

@@ -7,9 +7,9 @@ Code use — adopting it (rather than a bespoke shape) keeps protoAgent skills
 shareable across the ecosystem.
 
 Loaded skills are turned into the existing ``SkillV1Artifact`` shape and seeded
-into the ``SkillsIndex`` (FTS5), so the dormant retrieval path in
-``KnowledgeMiddleware`` (``load_skills`` → ``<learned_skills>`` injection) lights
-up without any new retrieval code.
+into the ``SkillsIndex`` (FTS5), so they appear in the agent's always-on
+``<available_skills>`` index (``KnowledgeMiddleware``, ADR 0060) and are loadable
+on demand via ``load_skill`` — no new wiring needed.
 
 Two roots, mirroring the config bundle/live split:
 - bundle (read-only, shipped): ``<repo>/config/skills/<slug>/SKILL.md``

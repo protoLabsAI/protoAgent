@@ -79,9 +79,9 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
             )
         )
 
-    # KnowledgeMiddleware also carries human-authored skill retrieval (the
-    # <learned_skills> injection). Build it when knowledge OR skills is active,
-    # so skills work even on a KB-less agent (the store is None-tolerant).
+    # KnowledgeMiddleware also carries the always-on skill index (the
+    # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
+    # is active, so skills work even on a KB-less agent (the store is None-tolerant).
     _skills_index = skills_index if config.skills_enabled else None
     if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
         middleware.append(
@@ -90,7 +90,6 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
                 top_k=config.knowledge_top_k,
                 skills_index=_skills_index,
                 skills_top_k=config.skills_top_k,
-                skills_announce=config.skills_announce,
             )
         )
 

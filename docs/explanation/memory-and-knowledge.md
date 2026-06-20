@@ -66,7 +66,7 @@ The `KnowledgeMiddleware` runs before each LLM turn and injects relevant context
 - **Relevance** — searches the store with the user's message and injects the
   top-k matches.
 - **Hot memory** — always-on `domain="hot"` facts, injected every turn.
-- **Learned skills** — top-k Playbooks for the turn (a `<learned_skills>` block).
+- **Available skills** — the always-on `<available_skills>` index (name + summary of each skill; the agent loads a full procedure on demand via `load_skill`, ADR 0060).
 - **Prior sessions** — recent session summaries for cross-session recency.
 
 The operator can browse and search the whole store in the console under

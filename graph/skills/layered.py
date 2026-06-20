@@ -7,7 +7,8 @@ proven skill is lifted into the commons explicitly via :meth:`promote` (curated,
 automatic — the commons is trusted).
 
 This wraps two ordinary :class:`SkillsIndex` backends and presents the same surface
-the middleware uses (``load_skills`` + the write methods), so it's a drop-in.
+the middleware uses (the ``skill_summaries`` index + ``get_skill`` + the write
+methods), so it's a drop-in.
 """
 
 from __future__ import annotations
@@ -26,14 +27,28 @@ class LayeredSkillsIndex:
         self._private = private
         self._commons = commons
 
-    # ── read: commons ∪ private, merged + de-duped, best-first ────────────────
-    def load_skills(self, query: str, k: int = 5):
-        merged: dict[str, object] = {}
-        for rec in [*self._private.load_skills(query, k=k), *self._commons.load_skills(query, k=k)]:
-            cur = merged.get(rec.name)
-            if cur is None or rec.score < cur.score:  # BM25: lower = more relevant
-                merged[rec.name] = rec
-        return sorted(merged.values(), key=lambda r: r.score)[:k]
+    # ── read: the always-on index — commons ∪ private, de-duped (private wins) ──
+    def skill_summaries(self, limit: int | None = None) -> list[dict]:
+        """Union the two tiers' lightweight ``{name, description, slash}`` index,
+        de-duped by name (private shadows commons), then cap at ``limit``. Ordering
+        follows each backend (most-recently-used first); private entries lead."""
+        merged: dict[str, dict] = {}
+        for backend in (self._commons, self._private):  # private listed last → wins
+            for rec in backend.skill_summaries():
+                merged[rec["name"]] = rec
+        rows = list(merged.values())
+        return rows[:limit] if limit is not None else rows
+
+    def discoverable_count(self) -> int:
+        """Distinct discoverable skills across both tiers (de-duped by name)."""
+        names: set[str] = set()
+        for backend in (self._private, self._commons):
+            names.update(r["name"] for r in backend.skill_summaries())
+        return len(names)
+
+    def get_skill(self, name: str) -> dict | None:
+        """Resolve one skill's full procedure by name — private shadows commons."""
+        return self._private.get_skill(name) or self._commons.get_skill(name)
 
     # ── writes → private only ─────────────────────────────────────────────────
     def add_skill(self, artifact, source: str = "emitted") -> None:

@@ -871,6 +871,48 @@ def _build_set_goal_tool():
     return set_goal
 
 
+@tool
+def load_skill(name: str) -> str:
+    """Load the full step-by-step procedure for a skill.
+
+    The ``<available_skills>`` block in your context lists each skill as a name +
+    one-line summary (progressive disclosure, ADR 0060). This returns that skill's
+    complete body so you can follow it. Call it the moment you judge a listed skill
+    fits the task — *before* acting — and follow the steps it returns; do not guess
+    a skill's contents from its summary. ``name`` must match a ``<skill name="…">``
+    exactly. Returns an error string (it never raises) when the skill or the index
+    is unavailable.
+    """
+    from runtime.state import STATE
+
+    idx = STATE.skills_index
+    if idx is None:
+        return "Skills index is not available."
+    rec = idx.get_skill((name or "").strip())
+    if rec is None:
+        # Recover from a typo'd name by offering the discoverable set.
+        try:
+            names = [s["name"] for s in idx.skill_summaries()]
+        except Exception:  # noqa: BLE001
+            names = []
+        hint = f" Available skills: {', '.join(names)}." if names else ""
+        return f"No skill named {name!r}.{hint}"
+
+    desc = " ".join((rec.get("description") or "").split())
+    body = (rec.get("prompt_template") or "").strip()
+    tools_used = rec.get("tools_used") or []
+    if isinstance(tools_used, str):
+        tools_used = tools_used.split()
+
+    lines = [f"# Skill: {rec.get('name')}"]
+    if desc:
+        lines.append(desc)
+    if tools_used:
+        lines.append(f"\nRelevant tools: {', '.join(tools_used)}")
+    lines.append(f"\n## Procedure\n{body}" if body else "\n(This skill has no recorded procedure.)")
+    return "\n".join(lines)
+
+
 def _build_curation_tools():
     """Read-mostly tools for the memory/skill curation subagents (`dream` /
     `distill`, ADR 0054). They read from STATE at call time (the ``set_goal``
@@ -1014,7 +1056,8 @@ def _build_curation_tools():
         idx.add_skill(art, source="distilled")
         return (
             f"Created skill {name!r} (source=distilled, confidence 1.0). It'll be "
-            "retrieval-injected for matching tasks and curator-managed."
+            "listed in the agent's <available_skills> index and loadable on demand "
+            "via load_skill — curator-managed (confidence decays if unused)."
         )
 
     return [recent_activity, list_skills, save_skill]
@@ -1038,7 +1081,7 @@ def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_
     # LangGraph interrupt that only the lead turn's runner resumes. Subagents
     # (run outside that runner) must not get it, so it's gated by allowlist:
     # present in the full set for the lead agent, absent from subagent allowlists.
-    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, show_component]
+    tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input, show_component, load_skill]
     # GitHub read tools (PRs/issues/commits) moved to the first-party `github`
     # plugin (opt-in) — not everyone needs them. Enable with plugins.enabled: [github].
     # Notes tools now ship with the first-party `notes` plugin (ADR 0034 S4):
@@ -1087,6 +1130,7 @@ DEFERRED_BASE_TOOL_NAMES = frozenset(
         "fetch_url",
         "ask_human",
         "request_user_input",
+        "load_skill",
         "task",
         "task_batch",
         "run_workflow",

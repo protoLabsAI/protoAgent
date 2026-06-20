@@ -11,7 +11,6 @@ import {
 } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
-  BookOpen,
   Check,
   Copy,
   GitBranch,
@@ -842,22 +841,6 @@ function ChatSessionSlot({
             ),
           );
         },
-        onSkills: (skills) => {
-          // Skills the agent auto-retrieved for the turn — show as a chip above the
-          // answer. Union by name across the turn's model calls (a later call may
-          // pull a different set); keep each skill's description for the hover.
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => {
-              if (message.id !== assistantId) return message;
-              const byName = new Map((message.skillsLoaded || []).map((s) => [s.name, s]));
-              for (const s of skills) byName.set(s.name, s);
-              return { ...message, skillsLoaded: [...byName.values()] };
-            }),
-          );
-        },
         onToolCall: (evt) => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
@@ -1000,21 +983,6 @@ function ChatSessionSlot({
               role={message.role}
               streaming={message.status === "streaming"}
             >
-              {message.skillsLoaded && message.skillsLoaded.length > 0 ? (
-                // Skills the agent auto-retrieved for this turn — a compact chip so the
-                // user can see what guidance shaped the answer. Hover a name for its
-                // description (the SKILL.md `description` / trigger signal).
-                <div className="chat-skills-chip" role="note">
-                  <BookOpen size={13} aria-hidden />
-                  <span className="chat-skills-chip-label">Skills:</span>
-                  {message.skillsLoaded.map((s, i) => (
-                    <span key={s.name} className="chat-skills-chip-item" title={s.description || s.name}>
-                      {s.name}
-                      {i < message.skillsLoaded!.length - 1 ? <span aria-hidden> · </span> : null}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
               {message.reasoning ? (
                 // Collapsible "thinking" — open while the model is still reasoning
                 // (no answer text yet), auto-collapses once the answer starts.

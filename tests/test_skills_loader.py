@@ -1,11 +1,11 @@
-"""Tests for the SKILL.md loader and the (now-activated) skill retrieval path.
+"""Tests for the SKILL.md loader and the always-on skill index (ADR 0060).
 
 Covers:
 - parse_skill_md: valid, missing frontmatter, missing required fields,
   oversized description, invalid YAML.
 - bundle/live name override (live wins).
-- seed_skills_index → SkillsIndex.load_skills round-trip.
-- KnowledgeMiddleware now carries a skills_index and injects <learned_skills>.
+- seed_skills_index → SkillsIndex.skill_summaries round-trip.
+- KnowledgeMiddleware carries a skills_index and injects <available_skills>.
 """
 
 from __future__ import annotations
@@ -103,8 +103,9 @@ def test_seed_and_retrieve_round_trip(tmp_path: Path) -> None:
     count = seed_skills_index(index, [root])
     assert count == 1
 
-    hits = index.load_skills("research the web", k=5)
-    assert any(h.name == "web-research" for h in hits)
+    hits = index.skill_summaries()
+    assert any(h["name"] == "web-research" for h in hits)
+    assert index.get_skill("web-research")["prompt_template"].startswith("Plan, search")
 
 
 def test_middleware_carries_skills_index_when_enabled(tmp_path: Path) -> None:
@@ -120,7 +121,7 @@ def test_middleware_carries_skills_index_when_enabled(tmp_path: Path) -> None:
     assert km._skills_index is index
 
 
-def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
+def test_before_model_injects_available_skills(tmp_path: Path) -> None:
     from langchain_core.messages import HumanMessage
 
     from graph.middleware.knowledge import KnowledgeMiddleware
@@ -140,7 +141,7 @@ def test_before_model_injects_learned_skills(tmp_path: Path) -> None:
     state = {"messages": [HumanMessage(content="please research the web for me")]}
     out = mw.before_model(state, runtime=None)
     assert out is not None
-    assert "<learned_skills>" in out["context"]
+    assert "<available_skills>" in out["context"]
     assert "web-research" in out["context"]
 
 
@@ -177,3 +178,39 @@ def test_user_facing_defaults_off_and_slug_fallback(tmp_path: Path) -> None:
     art2 = parse_skill_md(uf)
     assert art2 is not None and art2.user_facing is True
     assert art2.slash == "" and art2.slash_token() == "big-task"
+
+
+def test_user_only_implies_user_facing_at_the_dataclass(tmp_path: Path) -> None:
+    """user_only ⇒ user_facing is enforced on the artifact itself (single source),
+    so even a SKILL.md / programmatic artifact that sets only user_only can't end up
+    withheld from the index AND slash-less (ADR 0060). add_skill then derives a slash."""
+    from datetime import datetime, timezone
+
+    from graph.extensions.skills import SkillV1Artifact
+
+    # Direct construction with only user_only set — __post_init__ coerces user_facing.
+    art = SkillV1Artifact(
+        name="Deploy",
+        description="deploy + verify",
+        prompt_template="run it",
+        created_at=datetime.now(timezone.utc),
+        user_only=True,
+    )
+    assert art.user_only is True
+    assert art.user_facing is True  # coerced — never a contradictory state
+
+    # And via the SKILL.md parser (frontmatter sets only user_only).
+    p = _write_skill(
+        tmp_path,
+        "deploy",
+        "name: deploy\ndescription: Deploy + verify.\nuser_only: true\nslash: deploy",
+        "1. deploy\n2. verify",
+    )
+    parsed = parse_skill_md(p)
+    assert parsed is not None and parsed.user_only is True and parsed.user_facing is True
+
+    # End-to-end: it's withheld from the index but resolvable as a /slash.
+    index = SkillsIndex(db_path=str(tmp_path / "skills.db"))
+    index.add_skill(parsed, source="disk")
+    assert "deploy" not in [s["name"] for s in index.skill_summaries()]
+    assert "deploy" in [s["slash"] for s in index.user_facing_skills()]

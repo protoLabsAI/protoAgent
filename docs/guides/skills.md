@@ -3,15 +3,16 @@
 protoAgent loads **human-authored skills** in the [AgentSkills](https://agentskills.io/specification)
 open `SKILL.md` format — the same portable format Claude Code, Hermes, and
 OpenClaw use. A skill teaches the agent *how and when* to use its tools for a
-recurring task. Relevant skills are retrieved and injected into the system
-prompt at inference time (the `<learned_skills>` block), so the agent picks the
-right approach without you re-explaining it each turn. When that happens the
-console shows a small **"Skills: …" chip** above the answer (hover a name for its
-description) so you can see what guidance shaped the turn — set `skills.announce:
-false` to silence it.
+recurring task. Every available skill is listed in the agent's context as an
+always-on `<available_skills>` index — just its name + one-line summary — and the
+agent **loads a skill's full procedure on demand** with the `load_skill` tool the
+moment it judges one fits the task ([progressive disclosure, ADR 0060](/adr/0060-skill-progressive-disclosure)).
+A `load_skill` call shows in chat as an ordinary tool card, so you can see which
+guidance shaped the turn. (This replaced the old per-turn relevance retrieval,
+which injected full skill bodies on every model call.)
 
 > The console surfaces the skill index under **Agent → Skills**. A skill
-> **advises** (retrieved guidance the model may adapt); it does **not** execute. For
+> **advises** (loaded guidance the model may adapt); it does **not** execute. For
 > deterministic, run-the-same-steps orchestration across subagents, that's a
 > [Workflow](/guides/workflows#skills-vs-workflows) — different tool, different altitude.
 
@@ -44,9 +45,9 @@ tools: [web_search, fetch_url]   # optional, advisory
 |---|---|---|
 | `name` | ✅ | Unique, lowercase-with-hyphens. |
 | `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
-| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the skill is retrieved for a turn, these are surfaced to the agent as `<relevant_tools>` so it knows which of its (already-bound) tools this skill relies on — a relevance hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
+| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the agent loads the skill (`load_skill`), these are surfaced to it as `Relevant tools:` so it knows which of its (already-bound) tools this skill relies on — a hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
 | `user_facing` | — | `true` makes the skill directly invokable as a `/<slash>` command in the chat composer (ADR 0052). Off by default. |
-| `user_only` | — | `true` makes it an **operator-only** skill: a `/<slash>` command the agent **never auto-loads** into context. Implies `user_facing`. Off by default. |
+| `user_only` | — | `true` makes it an **operator-only** skill: a `/<slash>` command **withheld from the agent's `<available_skills>` index** (the agent never sees or loads it). Implies `user_facing`. Off by default. |
 | `slash` | — | The trigger token for a `user_facing` skill (whitespace-free); blank → slug of `name`. e.g. `slash: web-research` → `/web-research`. |
 
 The markdown **body** is the skill's instructions — freeform; write whatever
@@ -54,7 +55,7 @@ helps the agent perform the task.
 
 ## Run a skill on demand (`/slash`)
 
-By default a skill fires only when retrieval matches it. Mark a skill
+By default the agent decides when to `load_skill` one from the index. Mark a skill
 `user_facing: true` (ADR 0052) and it *also* shows up as a `/<slash>` command in
 the composer's slash menu. Invoking `/<slash> [input]` **rewrites the turn** to
 inject the skill's procedure as a directive and runs it on the normal lead-agent
@@ -81,10 +82,10 @@ slash: deploy
 1. …procedure…
 ```
 
-The skill is **excluded from the agent's retrieval** (`load_skills`) — it never
-lands in the `<learned_skills>` context block, so the agent won't pull it in on a
-hunch — but it stays a `/<slash>` command you can run on demand. In the Skills
-panel a **`user-only`** badge marks which skills the agent can't auto-load. Toggle
+The skill is **excluded from the agent's `<available_skills>` index** — it never
+appears in context, so the agent can't see or `load_skill` it — but it stays a
+`/<slash>` command you can run on demand. In the Skills
+panel a **`user-only`** badge marks which skills the agent can't load. Toggle
 it in the editor with **"Hide from the agent — operator `/slash` command only."**
 
 ## Where skills live
@@ -111,18 +112,20 @@ reload, since there's no filesystem watch on the skill roots.
 skills:
   enabled: true            # default
   db_path: /sandbox/skills.db   # falls back to ~/.protoagent/skills.db
-  top_k: 5                 # max skills injected per turn
-  announce: true           # show a "skills loaded" chip in chat (default)
+  top_k: 5                 # max skills listed in the always-on <available_skills> index
   dir: ""                  # optional override for the writable skills root
 ```
 
+`top_k` caps the per-turn **index** (the rest stay reachable via `list_skills`,
+and any one's full body loads on demand via `load_skill`) — not what's usable.
 `GET /api/runtime/status` reports `skills.count` so you can confirm how many
 loaded.
 
 ## Notes
 
-- Skills are *retrieved by relevance* (BM25 over name/description/body), so a
-  precise, trigger-oriented `description` matters most.
+- The `description` is the skill's **summary in the index** — the only thing the
+  agent sees before it decides to `load_skill` one, so write it precise and
+  trigger-oriented (say plainly *when* to reach for the skill).
 - The agent can also **author its own** skills: the `/distill` subagent looks back
   over recent work and turns a proven, repeated workflow into a new skill (its
   companion `/dream` consolidates memory). Both are schedulable (ADR 0054). The

@@ -29,7 +29,7 @@ def test_layered_union_write_private_promote(tmp_path):
     commons.add_skill(_art("triage_ticket", "a commons triage skill"))
     idx = LayeredSkillsIndex(private, commons)
 
-    names = {r.name for r in idx.load_skills("skill", k=10)}
+    names = {r["name"] for r in idx.skill_summaries()}
     assert {"scrape_web", "triage_ticket"} <= names  # reads BOTH tiers
 
     idx.add_skill(_art("new_one", "freshly learned skill"))  # write → private only
@@ -50,15 +50,18 @@ def test_skills_scope_config_parses(tmp_path):
     assert LangGraphConfig.from_yaml(str(cfg)).skills_scope == "layered"
 
 
-def test_layered_dedup_best_match_wins(tmp_path):
+def test_layered_dedup_private_wins(tmp_path):
     """ADR 0041 contract — a skill present in BOTH tiers appears once in a layered
-    read (de-duped by name; the better BM25 match wins)."""
+    read (de-duped by name; private shadows commons)."""
     private, commons = _idx(tmp_path)
     private.add_skill(_art("dup_skill", "private copy mentions apples"))
     commons.add_skill(_art("dup_skill", "commons copy mentions apples"))
     idx = LayeredSkillsIndex(private, commons)
-    hits = [r for r in idx.load_skills("apples", k=10) if r.name == "dup_skill"]
-    assert len(hits) == 1  # de-duped across tiers, single best-scoring record
+    hits = [r for r in idx.skill_summaries() if r["name"] == "dup_skill"]
+    assert len(hits) == 1  # de-duped across tiers
+    assert hits[0]["description"] == "private copy mentions apples"  # private shadows commons
+    assert idx.discoverable_count() == 1
+    assert idx.get_skill("dup_skill")["prompt_template"] == "do dup_skill"
     idx.close()
 
 

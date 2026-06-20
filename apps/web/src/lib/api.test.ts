@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ApiError, apiUrl, drainSseBuffer, isColdStart, textFromParts, hitlFromParts, skillsFromParts } from "./api";
+import { ApiError, apiUrl, drainSseBuffer, isColdStart, textFromParts, hitlFromParts } from "./api";
 
 describe("cold-start detection (ApiError / isColdStart)", () => {
   it("ApiError carries the HTTP status", () => {
@@ -115,36 +115,6 @@ describe("hitlFromParts", () => {
 
   it("returns null for undefined parts", () => {
     expect(hitlFromParts(undefined)).toBeNull();
-  });
-});
-
-describe("skillsFromParts", () => {
-  const SKILLS_MIME = "application/vnd.protolabs.skills-v1+json";
-
-  it("reads the member-discriminated form (content.$case=data)", () => {
-    const parts = [
-      {
-        metadata: { mimeType: SKILLS_MIME },
-        content: { $case: "data", value: { skills: [{ name: "web-research", description: "research" }] } },
-      },
-    ];
-    expect(skillsFromParts(parts)).toEqual([{ name: "web-research", description: "research" }]);
-  });
-
-  it("reads the flattened proto-JSON form (top-level data)", () => {
-    const parts = [{ metadata: { mimeType: SKILLS_MIME }, data: { skills: [{ name: "release-notes" }] } }];
-    expect(skillsFromParts(parts)).toEqual([{ name: "release-notes", description: undefined }]);
-  });
-
-  it("drops entries without a name", () => {
-    const parts = [{ metadata: { mimeType: SKILLS_MIME }, data: { skills: [{ name: "" }, { name: "ok" }] } }];
-    expect(skillsFromParts(parts)).toEqual([{ name: "ok", description: undefined }]);
-  });
-
-  it("returns null when no part matches the skills mime or the list is empty", () => {
-    expect(skillsFromParts([{ metadata: { mimeType: "text/plain" }, data: {} }])).toBeNull();
-    expect(skillsFromParts([{ metadata: { mimeType: SKILLS_MIME }, data: { skills: [] } }])).toBeNull();
-    expect(skillsFromParts(undefined)).toBeNull();
   });
 });
 

@@ -13,7 +13,7 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 | Command palette (⌘K) — was shipped, not just proposed | `docs/guides/command-palette.md` |
 | Mid-turn steering | `docs/explanation/steering.md` |
 | Operator REST API reference | `docs/reference/operator-api.md` |
-| Skills loaded chip / `skills.announce` | already in `docs/guides/skills.md` |
+| Skill progressive disclosure (`<available_skills>` index + `load_skill`, ADR 0060) | `docs/guides/skills.md` |
 | Operator-console rewrite (was the Gradio→React migration plan) | `docs/guides/react-tauri-ui.md` |
 | Skills reference (frontmatter/schema lookup) | `docs/reference/skills.md` |
 | "Write your first skill" tutorial | `docs/tutorials/first-skill.md` |
