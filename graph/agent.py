@@ -108,16 +108,6 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
     if config.memory_middleware:
         middleware.append(MemoryMiddleware(knowledge_store))
 
-    if config.ingest_enabled and knowledge_store is not None:
-        from graph.middleware.knowledge_ingest import KnowledgeIngestMiddleware
-
-        middleware.append(
-            KnowledgeIngestMiddleware(
-                knowledge_store,
-                ingest_tools=config.ingest_tools or None,
-            )
-        )
-
     # Context compaction — summarize old history near the context limit.
     # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
     # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).

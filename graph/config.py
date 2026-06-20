@@ -288,13 +288,6 @@ class LangGraphConfig:
     enforcement_disallowed_tools: list[str] = field(default_factory=list)
     enforcement_rate_limits: dict = field(default_factory=dict)
 
-    # Knowledge-ingest gate — opt-in middleware that captures tool output into
-    # the KB after execution. Off by default; ``ingest_tools`` (empty = all)
-    # narrows which tools are captured. Forks attach a structured extractor in
-    # code. See graph/middleware/knowledge_ingest.py.
-    ingest_enabled: bool = False
-    ingest_tools: list[str] = field(default_factory=list)
-
     # Prompt caching — Anthropic prefix caching on the stable system prompt.
     # Safe no-op on non-Anthropic models (gated on model name unless forced).
     # NOTE: this middleware also DELIVERS KnowledgeMiddleware's context to the
@@ -801,8 +794,6 @@ class LangGraphConfig:
             enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
             enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
             enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
-            ingest_enabled=middleware.get("ingest", cls.ingest_enabled),
-            ingest_tools=data.get("ingest", {}).get("tools", []),
             prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
             prompt_cache_ttl=data.get("prompt_cache", {}).get("ttl", cls.prompt_cache_ttl),
             prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),

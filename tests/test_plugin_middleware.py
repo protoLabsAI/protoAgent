@@ -18,7 +18,6 @@ def _no_llm_config() -> LangGraphConfig:
     c.tools_deferred_enabled = False
     c.audit_middleware = False
     c.memory_middleware = False
-    c.ingest_enabled = False
     c.knowledge_middleware = False
     c.skills_enabled = False
     return c

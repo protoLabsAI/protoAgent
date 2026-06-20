@@ -111,7 +111,6 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 | `memory` | `true` | Persist a session summary on terminal turn and asynchronously index conversation findings under `domain='finding'`. |
 | `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite, or `WorkstaceanScheduler` when env vars are set). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
 | `enforcement` | `false` | Opt-in safety gate that blocks tool calls **before** they execute (see `enforcement` block below). No-op unless a deny list or rate limit is configured. |
-| `ingest` | `false` | Opt-in: capture tool output into the KB **after** execution (see `ingest` block below). |
 
 ## `enforcement`
 
@@ -130,21 +129,6 @@ enforcement:
 |---|---|---|
 | `disallowed_tools` | `[]` | Tool names that are always blocked. |
 | `rate_limits` | `{}` | Per-tool sliding-window limit: `{max, window_seconds}`. |
-
-## `ingest`
-
-Optional post-execution capture (`graph/middleware/knowledge_ingest.py`). Only read when `middleware.ingest: true`. After a tool runs, its output is stored in the KB under `domain='finding'` (recall-able later). Fire-and-forget — never breaks the loop. With no extractor it stores the raw (truncated) output; forks attach `extractor(tool_name, output) -> list[str]` in code (e.g. a small LLM) for distilled findings.
-
-```yaml
-middleware:
-  ingest: true
-ingest:
-  tools: [web_search, fetch_url]   # empty/omitted = capture all tools
-```
-
-| Key | Default | What |
-|---|---|---|
-| `tools` | `[]` | Restrict capture to these tool names (empty = all). |
 
 ## `prompt_cache`
 

@@ -86,8 +86,6 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "identity_name": "protoagent",
     "identity_operator": "",
     "identity_org": "",
-    "ingest_enabled": False,
-    "ingest_tools": [],
     "instance_id": "",
     "knowledge_backend": "",
     "knowledge_db_path": "/sandbox/knowledge/agent.db",
@@ -662,23 +660,17 @@ def test_case6a_cross_section_both_present(tmp_path):
         """
         middleware:
           enforcement: true
-          ingest: true
         enforcement:
           disallowed_tools:
             - dangerous_tool
           rate_limits:
             web_search: 5
-        ingest:
-          tools:
-            - memory_ingest
         """,
     )
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.enforcement_enabled is True
     assert cfg.enforcement_disallowed_tools == ["dangerous_tool"]
     assert cfg.enforcement_rate_limits == {"web_search": 5}
-    assert cfg.ingest_enabled is True
-    assert cfg.ingest_tools == ["memory_ingest"]
 
 
 def test_case6b_middleware_flags_only_no_toplevel_sections(tmp_path):
@@ -689,15 +681,12 @@ def test_case6b_middleware_flags_only_no_toplevel_sections(tmp_path):
         """
         middleware:
           enforcement: true
-          ingest: true
         """,
     )
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.enforcement_enabled is True
     assert cfg.enforcement_disallowed_tools == []
     assert cfg.enforcement_rate_limits == {}
-    assert cfg.ingest_enabled is True
-    assert cfg.ingest_tools == []
 
 
 def test_case7_key_rename_max_retries(tmp_path):

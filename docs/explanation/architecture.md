@@ -67,10 +67,9 @@ The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ord
 4. **ToolDeferralMiddleware** (optional) — progressive tool disclosure (ADR 0005)
 5. **AuditMiddleware** — records every tool call to JSONL + Langfuse
 6. **MemoryMiddleware** (optional) — extracts conversation findings to the knowledge store
-7. **KnowledgeIngestMiddleware** (optional) — harvests durable facts
-8. **CountingSummarizationMiddleware** (optional) — context compaction with a Prometheus counter (ADR 0006)
-9. **ModelFallbackMiddleware** (optional) — retry on fallback models (`routing.fallback_models`)
-10. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
+7. **CountingSummarizationMiddleware** (optional) — context compaction with a Prometheus counter (ADR 0006)
+8. **ModelFallbackMiddleware** (optional) — retry on fallback models (`routing.fallback_models`)
+9. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
 
 Order matters: prompt-cache + knowledge run before audit (so injected context is captured), and message capture runs last.
 
