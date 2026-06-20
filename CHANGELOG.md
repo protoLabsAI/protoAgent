@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.1] - 2026-06-20
+
 ### Fixed
 - **Desktop: the common-MCP-servers picker is no longer empty.** `config/mcp-catalog.json`
   wasn't bundled into the packaged desktop app, so "Browse common servers" showed "no

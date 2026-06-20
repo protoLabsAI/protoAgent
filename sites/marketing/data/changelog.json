@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.64.1",
+    "date": "2026-06-20",
+    "changes": [
+      "Desktop: the common-MCP-servers picker is no longer empty.",
+      "Settings: the \"Host · box defaults\" badge moved into the dialog header",
+      "MCP: more breathing room in the \"Browse common servers\" dialog"
+    ]
+  },
+  {
     "version": "v0.64.0",
     "date": "2026-06-20",
     "changes": [
