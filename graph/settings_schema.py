@@ -211,21 +211,6 @@ FIELDS: list[Field] = [
         "with a coding agent.",
         options_source="models+acp",
     ),
-    # ── Programmatic tool calling ────────────────────────────────────────────
-    Field(
-        "execute_code.enabled",
-        "execute_code_enabled",
-        "Enable execute_code",
-        "bool",
-        "Tools",
-        "The model writes ONE Python script that calls several of its tools and returns "
-        "just the result — collapsing a long think→call→read tool chain into a single "
-        "turn. SECURITY: runs model-written code in a subprocess (its env scrubbed of "
-        "secrets + a hard timeout). That's isolation, NOT a true sandbox — the script "
-        "can still reach the disk/network as the server user, so enable it only for a "
-        "trusted model or inside a hardened container.",
-    ),
-    Field("execute_code.timeout", "execute_code_timeout", "Script timeout (s)", "number", "Tools", minimum=1),
     # ── Prompt caching ───────────────────────────────────────────────────────
     Field(
         "prompt_cache.enabled",
@@ -769,20 +754,11 @@ def build_schema(
 
     Secrets report ``value: ""`` plus ``is_set`` rather than echoing the secret.
     """
-    import sys as _sys
-
-    # In the frozen desktop build execute_code can't run (no standalone Python to
-    # spawn — see graph.agent), so hide its toggle entirely rather than offer a
-    # setting that does nothing. From source / Docker it shows as normal.
-    _frozen = getattr(_sys, "frozen", False)
-
     defaults = type(config)()
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
         if f.ui_hidden:
             continue  # in FIELDS for config round-trip, but a dedicated panel owns the UI (#1076)
-        if _frozen and f.key.startswith("execute_code"):
-            continue
         current = getattr(config, f.attr, None)
         entry: dict[str, Any] = {
             "key": f.key,

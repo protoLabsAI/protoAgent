@@ -4,11 +4,15 @@ These run real child processes (the Docker CI image has python), exercising
 the subprocess + fd-based tool-RPC bridge end to end with fake tools.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 from langchain_core.tools import tool
 
-from graph.config import LangGraphConfig
-from tools.execute_code import build_execute_code_tool, run_code
+from graph.plugins.registry import PluginRegistry
+from plugins.execute_code import register
+from plugins.execute_code.engine import build_execute_code_tool, run_code
 
 
 @tool
@@ -91,9 +95,8 @@ async def test_output_truncation():
 
 
 def test_build_excludes_self_and_respects_allowlist():
-    cfg = LangGraphConfig(execute_code_enabled=True, execute_code_tools=["echo_tool"])
     # include a decoy + a self-named tool to prove filtering
-    ec = build_execute_code_tool([echo_tool, boom_tool], config=cfg)
+    ec = build_execute_code_tool([echo_tool, boom_tool], tools=["echo_tool"])
     assert ec.name == "execute_code"
     # allowlist limited to echo_tool; the docstring lists available tools
     assert "echo_tool" in ec.description
@@ -102,15 +105,35 @@ def test_build_excludes_self_and_respects_allowlist():
 
 @pytest.mark.asyncio
 async def test_built_tool_runs():
-    cfg = LangGraphConfig(execute_code_enabled=True)
-    ec = build_execute_code_tool([echo_tool], config=cfg)
+    ec = build_execute_code_tool([echo_tool])
     out = await ec.ainvoke({"code": "print(tools.echo_tool(text='hi'))"})
     assert out == "HI"
 
 
 @pytest.mark.asyncio
 async def test_built_tool_rejects_empty():
-    cfg = LangGraphConfig(execute_code_enabled=True)
-    ec = build_execute_code_tool([echo_tool], config=cfg)
+    ec = build_execute_code_tool([echo_tool])
     out = await ec.ainvoke({"code": "  "})
     assert "empty code" in out
+
+
+# --- plugin wiring ----------------------------------------------------------
+
+
+def test_plugin_register_wires_a_late_factory_that_builds_the_tool():
+    reg = PluginRegistry(
+        "execute_code", Path("."), config={"timeout": 5, "output_truncate": 100, "tools": ["echo_tool"]}
+    )
+    register(reg)
+    assert len(reg.late_tool_factories) == 1
+    ec = reg.late_tool_factories[0]([echo_tool, boom_tool], None)
+    assert ec.name == "execute_code"
+    # allowlist from the plugin's config section is applied
+    assert "echo_tool" in ec.description and "boom_tool" not in ec.description
+
+
+def test_plugin_not_loaded_in_frozen_build(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    reg = PluginRegistry("execute_code", Path("."), config={})
+    register(reg)
+    assert reg.late_tool_factories == []  # no standalone Python in the packaged desktop build

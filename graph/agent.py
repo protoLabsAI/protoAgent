@@ -693,35 +693,14 @@ def create_agent_graph(
 
     # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
     # Opt-in; inert unless filesystem.enabled + a non-empty projects registry.
-    # Added before execute_code/deferred so they're wrappable + discoverable.
+    # Added before the late-tools seam / deferred so they're wrappable + discoverable.
     if config.filesystem_enabled:
         from tools.fs_tools import build_fs_tools
 
         all_tools.extend(build_fs_tools(config))
 
-    # Programmatic tool calling — opt-in. Built last so it can wrap every
-    # other tool (including task/task_batch) but never itself.
-    # Not in the frozen desktop build: it spawns a Python subprocess, but the
-    # PyInstaller binary has no standalone interpreter (sys.executable is the
-    # server itself). Don't even offer it to the model there — the Settings
-    # toggle is hidden too (graph.settings_schema.build_schema). From source /
-    # Docker it works normally.
-    if config.execute_code_enabled:
-        import logging
-        import sys as _sys
-
-        if getattr(_sys, "frozen", False):
-            logging.getLogger(__name__).warning(
-                "execute_code is enabled but unavailable in the packaged desktop build "
-                "(no standalone Python interpreter) — not loading the tool."
-            )
-        else:
-            from tools.execute_code import build_execute_code_tool
-
-            all_tools.append(build_execute_code_tool(all_tools, config=config))
-
     # Plugin-contributed late tools (the late-tools seam) — factories that need the
-    # FULLY assembled toolset (core + subagent + plugin + MCP + execute_code). Built
+    # FULLY assembled toolset (core + subagent + plugin + MCP tools). Built
     # here, before the deferred meta-tool, so a late tool can wrap or proxy any other
     # tool (but never itself) and is still surfaced by search_tools.
     # factory(all_tools, config) -> tool | list[tool] | None; a raiser is skipped.

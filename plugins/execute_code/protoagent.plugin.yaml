@@ -1,0 +1,35 @@
+id: execute_code
+name: Execute Code
+version: 0.1.0
+description: >-
+  Programmatic tool-calling: the agent writes ONE Python script that calls
+  several of its tools, loops/filters/composes their results in code, and prints
+  only what matters — collapsing a multi-step tool chain into a single turn. The
+  script runs in an isolated subprocess with a scrubbed environment (no
+  credentials) and a hard timeout. SECURITY: this is model-authored code
+  execution — isolation, NOT a true sandbox (the script can reach the
+  disk/network as the server user) — so it ships disabled; enable only for a
+  trusted model or inside a hardened container. Unavailable in the packaged
+  desktop build (no standalone Python interpreter). Enable with
+  `plugins: { enabled: [execute_code] }`.
+enabled: false
+
+# Declarative (not yet enforced) — surfaced in the console for transparency.
+capabilities:
+  network: []
+  filesystem: workspace
+  subprocess: ["python"]
+
+# Plugin config (ADR 0019) — claims the top-level `execute_code` config section
+# (the same one the core tool used, so existing `execute_code:` YAML carries
+# over). Renders in Settings (group "Execute Code"). NOTE: enabling the tool is
+# now `plugins.enabled: [execute_code]`, not an `execute_code.enabled` flag.
+config_section: execute_code
+config:
+  timeout: 30.0
+  output_truncate: 6000
+  tools: []
+settings:
+  - { key: timeout, label: "Script timeout (s)", type: number, description: "Hard timeout (seconds) before the subprocess is killed." }
+  - { key: output_truncate, label: "Output truncate (chars)", type: number, description: "Max characters of stdout returned to the model." }
+  - { key: tools, label: "Exposed tools", type: string_list, description: "Restrict which tools the script may call (empty = all)." }

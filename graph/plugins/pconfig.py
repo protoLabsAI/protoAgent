@@ -33,7 +33,6 @@ _RESERVED_SECTIONS = {
     "checkpoint",
     "routing",
     "goal",
-    "execute_code",
     # NB: plugin sections (e.g. `discord` from the external discord plugin) are NOT
     # reserved — a plugin (bundled or external) legitimately claims its own section.
     "operator",

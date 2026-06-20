@@ -145,7 +145,6 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
         "agent_runtime",
         "checkpoint",
         "compaction",
-        "execute_code",
         "goal",
         "operator_mcp",
         "prompt_cache",

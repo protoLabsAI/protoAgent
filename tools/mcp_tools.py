@@ -132,7 +132,7 @@ def _core_tool_names() -> set[str]:
 
         names = {t.name for t in get_all_tools()}
         names |= set(MEMORY_TOOL_NAMES) | set(SCHEDULER_TOOL_NAMES) | set(INBOX_TOOL_NAMES)
-        names |= {"task", "task_batch", "execute_code"}
+        names |= {"task", "task_batch"}
         return names
     except Exception:  # noqa: BLE001 — collision check is best-effort
         return set()

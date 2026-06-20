@@ -66,10 +66,6 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "enforcement_disallowed_tools": [],
     "enforcement_enabled": False,
     "enforcement_rate_limits": {},
-    "execute_code_enabled": False,
-    "execute_code_output_truncate": 6000,
-    "execute_code_timeout": 30,
-    "execute_code_tools": [],
     "filesystem_allow_run": True,
     "filesystem_enabled": True,
     "filesystem_projects": [],
@@ -195,10 +191,6 @@ CONFIG_TO_DICT_GOLDEN = {
         "keep_messages": 20,
         "model": "",
         "trigger": "fraction:0.8",
-    },
-    "execute_code": {
-        "enabled": False,
-        "timeout": 30,
     },
     "fleet": {
         "port_base": 7870,
@@ -415,9 +407,6 @@ EMITTED_ATTRS = {
     "goal_enabled",
     "goal_max_iterations",
     "goal_eval_model",
-    # execute_code.*
-    "execute_code_enabled",
-    "execute_code_timeout",
     # prompt_cache.* (incl. prompt_cache.warm.*)
     "prompt_cache_enabled",
     "prompt_cache_ttl",

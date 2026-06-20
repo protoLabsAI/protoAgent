@@ -111,7 +111,6 @@ def build_runtime_status(
             "scheduler": bool(getattr(config, "scheduler_enabled", False)),
             "prompt_cache": bool(getattr(config, "prompt_cache_enabled", False)),
             "compaction": bool(getattr(config, "compaction_enabled", False)),
-            "execute_code": bool(getattr(config, "execute_code_enabled", False)),
         },
         "knowledge": {
             "enabled": _kn_on,

@@ -229,20 +229,19 @@ async def run_code(code: str, tool_map: dict, *, timeout: float = 30.0, truncate
             pass
 
 
-def build_execute_code_tool(all_tools: list, *, config):
+def build_execute_code_tool(all_tools: list, *, tools=None, timeout: float = 30.0, truncate: int = 6000):
     """Build the ``execute_code`` LangChain tool over an allowlist of tools.
 
     ``all_tools`` is the agent's full toolset; ``execute_code`` itself is never
-    exposed to the script (no recursion). ``config.execute_code_tools`` empty
-    means expose all other tools.
+    exposed to the script (no recursion). ``tools`` empty/None means expose all
+    other tools; ``timeout`` (seconds) and ``truncate`` (chars of stdout) come
+    from the plugin's ``execute_code`` config section.
     """
     from langchain_core.tools import tool
 
-    allow = set(config.execute_code_tools or [])
+    allow = set(tools or [])
     tool_map = {t.name: t for t in all_tools if t.name != "execute_code" and (not allow or t.name in allow)}
     available = ", ".join(sorted(tool_map)) or "(none)"
-    timeout = config.execute_code_timeout
-    truncate = config.execute_code_output_truncate
 
     description = (
         "Run a Python script that calls tools programmatically; returns its stdout.\n\n"
