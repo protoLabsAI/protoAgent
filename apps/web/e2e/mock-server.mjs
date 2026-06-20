@@ -541,6 +541,11 @@ const server = createServer(async (req, res) => {
         present: true, enabled: true,   // install AUTO-ENABLES + runs it (trust-by-default)
         manifest: { name: id, version: "0.1.0", description: "installed via console", requires_pip: [], views: [] },
       });
+      // The new plugin joins the runtime roster too (install → reload), so it shows as a
+      // row in the Installed list (and, being lock-backed, gets an Uninstall button).
+      RUNTIME_STATUS.plugins = RUNTIME_STATUS.plugins.filter((p) => p.id !== id).concat({
+        id, name: id, version: "0.1.0", enabled: true, loaded: true, tools: [], skills: 0,
+      });
       return sendJson(res, {
         installed: {
           id, name: id, version: "0.1.0", description: "installed via console",
@@ -572,6 +577,7 @@ const server = createServer(async (req, res) => {
     if (req.method === "DELETE" && /^\/api\/plugins\/[^/]+$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split("/").pop());
       INSTALLED_PLUGINS = INSTALLED_PLUGINS.filter((p) => p.id !== id);
+      RUNTIME_STATUS.plugins = RUNTIME_STATUS.plugins.filter((p) => p.id !== id);
       return sendJson(res, { ok: true });
     }
     return sendJson(res, { ok: true });

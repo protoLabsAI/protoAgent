@@ -1,42 +1,37 @@
 import { expect, test } from "@playwright/test";
 
-// Console Plugins manager (Settings ▸ Plugins, 2026-06) — install a plugin from a git
-// URL; the installed list round-trips install → uninstall.
+// Console Plugins manager (Settings ▸ Plugins, 2026-06 consolidation) — install a plugin
+// from a git URL via the dialog; uninstall it from its row in the Installed list.
 
-async function openPluginsPanel(page) {
+async function openInstallDialog(page) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
-  // Install-from-URL is the advanced action under Installed (ADR 0059 D4) — expand it.
-  await page.getByRole("button", { name: "Install from a git URL" }).click();
-  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
+  // Install-from-URL is a dialog opened from the Installed toolbar.
+  await page.getByRole("button", { name: "Install from URL" }).click();
+  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toBeVisible();
 }
 
-test("install a plugin from a git URL, then uninstall it", async ({ page }) => {
-  await openPluginsPanel(page);
+test("install a plugin from a git URL, then uninstall it from its row", async ({ page }) => {
+  await openInstallDialog(page);
 
-  await expect(page.getByText("No git-installed plugins yet.")).toBeVisible();
-
-  // Install
+  // Install — a clean install closes the dialog; the new (auto-enabled) plugin joins the
+  // Installed list.
   await page.getByLabel("plugin git URL").fill("https://github.com/acme/protoagent-plugin-widgets");
   await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toHaveCount(0);
 
-  // Row appears, AUTO-ENABLED — installing enables + runs the plugin (trust-by-default).
-  const row = page.locator(".plugin-row");
-  await expect(row).toHaveCount(1);
-  await expect(row.locator(".plugin-row-title")).toContainText("protoagent-plugin-widgets");
-  await expect(row.getByText("enabled", { exact: true })).toBeVisible();
+  const row = page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" });
+  await expect(row).toBeVisible();
 
-  // Uninstall
+  // Uninstall from the row — a window.confirm guards it; accept and the row disappears.
+  page.once("dialog", (d) => d.accept());
   await row.getByRole("button", { name: /uninstall/i }).click();
-  await expect(page.locator(".plugin-row")).toHaveCount(0);
-  await expect(page.getByText("No git-installed plugins yet.")).toBeVisible();
+  await expect(page.locator(".plugin-row-wrap", { hasText: "protoagent-plugin-widgets" })).toHaveCount(0);
 });
 
-test("install surfaces a bad-URL error from the server", async ({ page }) => {
-  await openPluginsPanel(page);
-  // Empty URL keeps the button disabled; a URL the mock accepts installs fine —
-  // so just assert the form is present + actionable.
+test("the install dialog's form guards an empty URL", async ({ page }) => {
+  await openInstallDialog(page);
   await expect(page.getByLabel("plugin git URL")).toBeVisible();
   await expect(page.getByRole("button", { name: "Install", exact: true })).toBeDisabled();
 });

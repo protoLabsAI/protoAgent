@@ -94,9 +94,12 @@ test("plugins section: Installed / Discover (config + advanced install folded in
   await demoRow.getByRole("button", { name: "Configure" }).click();
   await expect(demoRow.locator('.plugin-row-config .setting-row[data-key="demo.greeting"]')).toBeVisible();
 
-  // Install-from-URL is now the advanced action under Installed (ADR 0059 D4), not a tab.
-  await page.getByRole("button", { name: "Install from a git URL" }).click();
-  await expect(page.getByRole("heading", { name: "Install from a git URL" })).toBeVisible();
+  // Install-from-URL is a dialog opened from the Installed toolbar (2026-06 consolidation).
+  await page.getByRole("button", { name: "Install from URL" }).click();
+  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toBeVisible();
+  // Close the modal before moving on (it would intercept the Discover tab click).
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toHaveCount(0);
 
   // Discover tab — the in-app official-plugin directory (ADR 0059): cards + search.
   await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();

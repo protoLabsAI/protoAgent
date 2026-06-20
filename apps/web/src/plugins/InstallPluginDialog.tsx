@@ -24,21 +24,26 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
     onSuccess: (res) => {
       const s = res.installed;
+      // Refresh the Installed list (runtime roster) AND the lock-backed inventory that
+      // gates Uninstall.
+      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+      qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
+      setUrl("");
+      setRef("");
+      // Clean install (auto-enabled, nothing to flag) → close; the new row shows in the
+      // list. If auto-enable failed or there are deps to install manually, keep the
+      // dialog open with the note so it isn't lost.
+      if (!res.enable_error && !s.requires_pip?.length) {
+        onClose();
+        return;
+      }
       const who = res.enabled.length ? res.enabled.join(", ") : (s.id ?? "plugin");
       const deps = s.requires_pip?.length ? ` — declares deps (install manually): ${s.requires_pip.join(", ")}` : "";
       setStatus(
         res.enable_error
           ? `✓ installed ${who} — auto-enable failed (${res.enable_error}); enable it from the list${deps}`
-          : res.reloaded
-            ? `✓ installed + enabled ${who} — it's live${deps}`
-            : `✓ installed ${who}${deps}`,
+          : `✓ installed ${who}${deps}`,
       );
-      setUrl("");
-      setRef("");
-      // Refresh the Installed list (runtime roster) AND the lock-backed inventory that
-      // gates Uninstall.
-      qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
     },
     onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "install failed"}`),
   });
