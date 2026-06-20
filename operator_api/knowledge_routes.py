@@ -95,6 +95,9 @@ def _knowledge_row(d: dict) -> dict:
         # RRF relevance score on a hybrid store (#1043); null for unranked rows
         # (plain FTS store / list_chunks).
         "score": d.get("score"),
+        # Tier (ADR 0041 / bd-2wu): "private" | "commons" — present only on a layered
+        # store; null otherwise. Backs the console's tier badges + promote/unshare.
+        "tier": d.get("tier"),
     }
 
 
@@ -335,8 +338,10 @@ def register_knowledge_routes(app) -> None:
                 rows = await asyncio.to_thread(STATE.knowledge_store.search, q, k=k, domain=domain or None)
                 results = [_knowledge_row(r) for r in rows]
             else:
+                # list_chunks yields Chunk objects (plain store) or tier-tagged dicts
+                # (LayeredKnowledgeStore) — normalize either.
                 results = [
-                    _knowledge_row(c.as_dict())
+                    _knowledge_row(c if isinstance(c, dict) else c.as_dict())
                     for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)
                 ]
         except Exception:  # noqa: BLE001 — never 500 the console
@@ -346,6 +351,48 @@ def register_knowledge_routes(app) -> None:
         except Exception:  # noqa: BLE001
             stats = {}
         return {"enabled": True, "query": q, "results": results, "stats": stats}
+
+    # --- Knowledge commons promote/forget (ADR 0041 / bd-2wu) ----------------
+    # The curated lift into the shared commons + its inverse. Only meaningful when
+    # the store is layered (it has promote/forget_from_commons); otherwise there's a
+    # single store and nothing to promote into — report a hint, mirroring playbooks.
+    @app.post("/api/knowledge/{chunk_id}/promote")
+    async def _api_knowledge_promote(chunk_id: int):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "promoted": False}
+        promote = getattr(store, "promote", None)
+        if promote is None:
+            return {
+                "enabled": True,
+                "promoted": False,
+                "error": "knowledge isn't in layered mode — set knowledge.scope: layered to share a commons.",
+            }
+        try:
+            rec = await asyncio.to_thread(promote, chunk_id)
+            return {"enabled": True, "promoted": rec is not None}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[knowledge] promote failed")
+            return {"enabled": True, "promoted": False, "error": str(exc)}
+
+    @app.post("/api/knowledge/{chunk_id}/forget")
+    async def _api_knowledge_forget(chunk_id: int):
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "forgotten": False}
+        forget = getattr(store, "forget_from_commons", None)
+        if forget is None:
+            return {
+                "enabled": True,
+                "forgotten": False,
+                "error": "knowledge isn't in layered mode — there's no commons to forget from.",
+            }
+        try:
+            ok = await asyncio.to_thread(forget, chunk_id)
+            return {"enabled": True, "forgotten": bool(ok)}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[knowledge] forget failed")
+            return {"enabled": True, "forgotten": False, "error": str(exc)}
 
     # --- Knowledge chunk CRUD (operator curation) ---------------------------
     # The store fills up with harvested sessions / findings the operator could

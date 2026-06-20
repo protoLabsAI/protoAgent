@@ -103,9 +103,20 @@ class Chunk:
         }
 
 
-def _resolve_path(db_path: str | Path | None) -> Path:
-    """Pick a writable DB path. Env > arg > default; fall back to ~/.protoagent."""
+def _resolve_path(db_path: str | Path | None, *, scoped: bool = True) -> Path:
+    """Pick a writable DB path. Env > arg > default; fall back to ~/.protoagent.
+
+    ``scoped=False`` (ADR 0041, tiered stores) skips both the ``KNOWLEDGE_DB_PATH``
+    env override and ``scope_leaf`` — the path is used verbatim. The shared
+    **commons** knowledge store is host-level + un-scoped, so every agent on the box
+    reads one DB regardless of ``instance.id`` (mirrors ``_resolve_skills_db(shared=True)``).
+    """
     from infra.paths import scope_leaf  # ADR 0004 — per-instance scoping (no-op when unset)
+
+    if not scoped:
+        p = Path(db_path or DEFAULT_DB_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
 
     raw = os.environ.get("KNOWLEDGE_DB_PATH") or db_path or DEFAULT_DB_PATH
     p = scope_leaf(raw)
@@ -185,6 +196,11 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
 CREATE INDEX IF NOT EXISTS idx_chunks_created_at ON chunks(created_at);
+
+CREATE TABLE IF NOT EXISTS _kb_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 _FTS_SCHEMA = """
@@ -228,8 +244,10 @@ class KnowledgeStore:
         chunk_overlap_chars: int = 150,
         chunk_min_chars: int = 200,
         context_fn: Callable[[str, str], str] | None = None,
+        scoped: bool = True,
     ):
-        self.path = _resolve_path(db_path)
+        # scoped=False → the host-level shared commons (un-scoped path, ADR 0041).
+        self.path = _resolve_path(db_path, scoped=scoped)
         self._fts_available: bool | None = None
         # How much of each hit's `heading: content` is returned as the `preview`
         # the model sees on recall. Bumped from a hardcoded 240 (RAG bake-off:
@@ -297,6 +315,39 @@ class KnowledgeStore:
             db.close()
         except sqlite3.DatabaseError:
             log.exception("[knowledge] schema init failed at %s", self.path)
+
+    # ── store metadata (key/value) ──────────────────────────────────────────
+    # Used to STAMP the shared commons with the embed model it was built on
+    # (ADR 0041 / bd-2wu): a fleet sharing a commons must share one embed model,
+    # or its vectors are incompatible. The guard lives in the store builder.
+
+    def get_meta(self, key: str) -> str | None:
+        db = self._get_db()
+        if db is None:
+            return None
+        try:
+            row = db.execute("SELECT value FROM _kb_meta WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+        except sqlite3.DatabaseError:
+            return None
+        finally:
+            db.close()
+
+    def set_meta(self, key: str, value: str) -> None:
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.execute(
+                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            db.commit()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] set_meta(%s) failed: %s", key, exc)
+        finally:
+            db.close()
 
     # Convenience for middleware that wants the raw connection. Kept
     # private so the public API stays small.
@@ -717,6 +768,38 @@ class KnowledgeStore:
         finally:
             db.close()
         return Chunk(**dict(row)) if row else None
+
+    def get_chunk(self, chunk_id: int) -> dict | None:
+        """Return one chunk's full row as a dict by id, or None. The reader the
+        layered store's ``promote`` uses to copy a private chunk into the commons."""
+        db = self._get_db()
+        if db is None:
+            return None
+        try:
+            row = db.execute("SELECT * FROM chunks WHERE id = ?", (int(chunk_id),)).fetchone()
+            return dict(row) if row else None
+        except sqlite3.DatabaseError:
+            return None
+        finally:
+            db.close()
+
+    def id_for_exact_content(self, content: str) -> int | None:
+        """Id of a chunk whose content is EXACTLY ``content`` (not a LIKE), else None.
+        Keeps promotion idempotent — a chunk already in the commons isn't duplicated."""
+        if not content:
+            return None
+        db = self._get_db()
+        if db is None:
+            return None
+        try:
+            row = db.execute(
+                "SELECT id FROM chunks WHERE content = ? ORDER BY id LIMIT 1", (content,)
+            ).fetchone()
+            return int(row["id"]) if row else None
+        except sqlite3.DatabaseError:
+            return None
+        finally:
+            db.close()
 
     def delete_by_content(self, contains: str) -> int:
         """Delete chunks whose content matches ``%contains%``. Returns count.

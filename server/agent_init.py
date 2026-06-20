@@ -289,22 +289,26 @@ def _init_langgraph_agent(headless_setup: bool = False):
 
 
 def _build_knowledge_store(config):
-    """Return a ``KnowledgeStore`` bound to the configured DB path.
+    """Return a ``KnowledgeStore`` — or a tiered store (ADR 0041 / bd-2wu) — bound to the
+    configured DB path(s).
 
-    Best-effort: any sqlite-level failure is logged and the store
-    falls back to ``~/.protoagent/knowledge/agent.db`` automatically
-    (see ``knowledge.store._resolve_path``). Returns ``None`` only when
-    knowledge is disabled in config — kept as a separate code path so
-    forks can audit when the agent is running KB-less.
+    ``knowledge.scope`` selects the tier: ``scoped`` (private, **default**) · ``shared``
+    (the whole store is the host-level commons) · ``layered`` (read commons ∪ private,
+    write private, operator-``promote``d). The commons is host-level + un-scoped — every
+    agent on the box reads ``commons.path``/knowledge.db regardless of ``instance.id``.
+    A fleet sharing a commons must share one embed model — **enforced**: the commons is
+    stamped with the embed model it was built on, and an agent whose model differs serves
+    the commons tier FTS5-only (no vector fusion of incompatible embeddings).
+
+    Best-effort: failures degrade (hybrid→FTS5, never KB-less); returns ``None`` only when
+    knowledge is disabled.
     """
     if not getattr(config, "knowledge_middleware", True):
         return None
     try:
         from knowledge import KnowledgeStore
 
-        # Contextual Retrieval (ADR 0021): build the (doc, chunk) -> context fn
-        # once and pass it to whichever store we construct. Helps FTS5 + vector
-        # alike, so it's wired for both tiers. Off → None (no enrichment cost).
+        # Contextual Retrieval (ADR 0021): (doc, chunk) -> context fn, shared by both tiers.
         context_fn = None
         if getattr(config, "knowledge_contextual_enrichment", False):
             try:
@@ -315,44 +319,82 @@ def _build_knowledge_store(config):
                     log.info("[server] knowledge: contextual enrichment on (aux model)")
             except Exception as exc:  # noqa: BLE001 — enrichment is optional
                 log.warning("[server] context fn init failed: %s; enrichment off", exc)
-        # Semantic recall (ADR 0021): when knowledge.embeddings is on, use the
-        # HybridKnowledgeStore (FTS5 + vector, fused with RRF) with an embed_fn
-        # wired to the gateway. Any failure degrades to keyword-only FTS5 — never
-        # KB-less — and the store's circuit breaker handles runtime outages.
+
+        # Semantic recall (ADR 0021): build the embed fns ONCE (hoisted so both tiers
+        # share them). None → keyword-only FTS5 everywhere; failures degrade, never fail.
+        embed_fn = embed_batch_fn = None
         if getattr(config, "knowledge_embeddings", False):
             try:
                 from graph.llm import create_embed_batch_fn, create_embed_fn
-                from knowledge.hybrid_store import HybridKnowledgeStore
 
                 embed_fn = create_embed_fn(config)
-                if embed_fn is not None:
-                    log.info("[server] knowledge: hybrid store (FTS5 + embeddings via %s)", config.embed_model)
-                    return HybridKnowledgeStore(
-                        db_path=config.knowledge_db_path,
-                        embed_fn=embed_fn,
-                        embed_batch_fn=create_embed_batch_fn(config),
-                        vector_k=config.knowledge_vector_k,
-                        rrf_k=config.knowledge_rrf_k,
-                        min_score=config.knowledge_min_score,
-                        breaker_threshold=config.knowledge_embed_breaker_threshold,
-                        breaker_cooldown_s=config.knowledge_embed_breaker_cooldown_s,
-                        preview_chars=config.knowledge_recall_preview_chars,
-                        chunk_max_chars=config.knowledge_chunk_max_chars,
-                        chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
-                        chunk_min_chars=config.knowledge_chunk_min_chars,
-                        context_fn=context_fn,
-                    )
-                log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
-            except Exception as exc:  # noqa: BLE001 — degrade to FTS5, never fail
-                log.warning("[server] hybrid store init failed: %s; FTS5 only", exc)
-        return KnowledgeStore(
-            db_path=config.knowledge_db_path,
-            preview_chars=config.knowledge_recall_preview_chars,
-            chunk_max_chars=config.knowledge_chunk_max_chars,
-            chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
-            chunk_min_chars=config.knowledge_chunk_min_chars,
-            context_fn=context_fn,
-        )
+                embed_batch_fn = create_embed_batch_fn(config) if embed_fn is not None else None
+                if embed_fn is None:
+                    log.warning("[server] knowledge.embeddings on but no embed_model — FTS5 only")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("[server] embed fn init failed: %s; FTS5 only", exc)
+                embed_fn = embed_batch_fn = None
+
+        def _make(db_path, *, scoped, force_plain=False):
+            """Build ONE store at *db_path* — hybrid when embeddings are on (unless
+            *force_plain*, used for an embed-model-mismatched commons), else plain FTS5."""
+            if embed_fn is not None and not force_plain:
+                from knowledge.hybrid_store import HybridKnowledgeStore
+
+                return HybridKnowledgeStore(
+                    db_path=db_path, scoped=scoped, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn,
+                    vector_k=config.knowledge_vector_k, rrf_k=config.knowledge_rrf_k,
+                    min_score=config.knowledge_min_score,
+                    breaker_threshold=config.knowledge_embed_breaker_threshold,
+                    breaker_cooldown_s=config.knowledge_embed_breaker_cooldown_s,
+                    preview_chars=config.knowledge_recall_preview_chars,
+                    chunk_max_chars=config.knowledge_chunk_max_chars,
+                    chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
+                    chunk_min_chars=config.knowledge_chunk_min_chars, context_fn=context_fn,
+                )
+            return KnowledgeStore(
+                db_path=db_path, scoped=scoped,
+                preview_chars=config.knowledge_recall_preview_chars,
+                chunk_max_chars=config.knowledge_chunk_max_chars,
+                chunk_overlap_chars=config.knowledge_chunk_overlap_chars,
+                chunk_min_chars=config.knowledge_chunk_min_chars, context_fn=context_fn,
+            )
+
+        private = _make(config.knowledge_db_path, scoped=True)
+
+        scope = (getattr(config, "knowledge_scope", "") or "").strip().lower()
+        if scope not in ("scoped", "shared", "layered"):
+            scope = "scoped"
+        if scope == "scoped":
+            log.info("[knowledge] tier=scoped into %s", private.path)
+            return private
+
+        # shared/layered → build the host-level commons, enforcing one-fleet-one-embed-model.
+        commons_path = str(_commons_dir(config) / "knowledge.db")
+        force_plain = False
+        if embed_fn is not None:
+            stamp = KnowledgeStore(db_path=commons_path, scoped=False)  # creates schema + _kb_meta
+            stamped = stamp.get_meta("embed_model")
+            want = config.embed_model or ""
+            if stamped is None:
+                stamp.set_meta("embed_model", want)  # first build → this fleet claims the commons
+            elif stamped != want:
+                force_plain = True
+                log.warning(
+                    "[knowledge] commons %s was built with embed model %r but this agent uses %r — "
+                    "serving the commons tier FTS5-only (no vector fusion). Align the fleet's embed_model, "
+                    "or point this agent at a different commons.path.",
+                    commons_path, stamped, want,
+                )
+        commons = _make(commons_path, scoped=False, force_plain=force_plain)
+
+        if scope == "shared":
+            log.info("[knowledge] tier=shared (commons) into %s", commons.path)
+            return commons
+        from knowledge.layered import LayeredKnowledgeStore
+
+        log.info("[knowledge] tier=layered (%s ∪ %s)", private.path, commons.path)
+        return LayeredKnowledgeStore(private, commons)
     except Exception as exc:
         log.warning("[server] knowledge store init failed: %s; running KB-less", exc)
         return None

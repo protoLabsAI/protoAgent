@@ -192,9 +192,15 @@ Where the implementation diverges from the plan above — recorded so the *why* 
   read. Sharing is **opt-in** — set `skills.scope: shared` (whole library is the commons) or
   `layered` (read commons ∪ private, write private, `promote` to lift). This is the safe default;
   the "canonical commons" in the store table is the *opt-in* target, not the out-of-box state.
-- **Only skills are tiered — shared *knowledge* (slice 3) is unbuilt.** There is no
-  `knowledge.scope`/commons; the knowledge store is always scoped. Promoting curated/reference
-  knowledge into a commons remains future work (tracked separately).
+- **Shared *knowledge* is now tiered too (bd-2wu, 2026-06-20).** `knowledge.scope`
+  (`scoped`/`shared`/`layered`) mirrors `skills.scope`, with the commons at
+  `commons.path`/knowledge.db. Sharing is **promotion-defined** — knowledge stays private and
+  an operator `promote`s a specific chunk into the commons (`LayeredKnowledgeStore`; reads fuse
+  the tiers with RRF over rank, writes go to private). It's **full hybrid** (vector + FTS5),
+  which adds one invariant skills didn't have: a shared/layered fleet must share **one embedding
+  model**. Enforced — the commons DB is stamped (`_kb_meta.embed_model`) with the model it was
+  built on; an agent whose `embed_model` differs serves the commons tier **FTS5-only** (no
+  vector fusion of incompatible embeddings) + a loud warning. *Working* knowledge stays scoped.
 - **The commons is host-level and un-scoped.** A `shared`/`layered` skills DB resolves to
   `commons.path` (default `~/.protoagent/commons/skills.db`), bypassing `scope_leaf`, so **every
   agent on the host reads the same commons regardless of `instance.id`**. To run two *isolated*

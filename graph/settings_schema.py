@@ -242,6 +242,19 @@ FIELDS: list[Field] = [
     ),
     # ── Knowledge / memory ───────────────────────────────────────────────────
     Field("knowledge.top_k", "knowledge_top_k", "Knowledge recall top-k", "number", "Knowledge", minimum=1),
+    # Tier (ADR 0041 / bd-2wu) — mirrors `skills.scope`; the commons lives at `commons.path`.
+    Field(
+        "knowledge.scope",
+        "knowledge_scope",
+        "Knowledge sharing",
+        "select",
+        "Knowledge",
+        "How this agent uses the knowledge base: scoped (private only) · shared (the one "
+        "box commons) · layered (read the commons ∪ private, write private, promote proven "
+        "facts up). Blank = scoped. A shared/layered fleet must share one embedding model.",
+        options=["scoped", "shared", "layered"],
+        restart=True,
+    ),
     Field(
         "knowledge.embeddings",
         "knowledge_embeddings",

@@ -70,6 +70,11 @@ middleware:
 
 knowledge:
   db_path: /sandbox/knowledge/agent.db
+  # Tier (ADR 0041 / bd-2wu): scoped (private, default) | shared (the whole store is the
+  # host-level commons) | layered (read commons ∪ private, write private, operator
+  # `python -m server`-promoted). The commons lives at `commons.path`/knowledge.db; a
+  # shared/layered fleet must share ONE embed_model (the commons is stamped + enforced).
+  # scope: scoped
   # Semantic recall: hybrid FTS5 + vector search (RRF-fused) via embed_model.
   # Off by default (keyword-only) — turn on once your gateway serves an
   # embedding model. Degrades to keyword search on embedding outage.
