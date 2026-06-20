@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.1] - 2026-06-20
+
+### Fixed
+- **Plugin manager: uninstall restored.** A regression had left git-installed plugins
+  installable and toggleable but not removable; uninstall works again, gated on the
+  lock-backed plugin inventory. (#1255)
+
+### Changed
+- **Consolidated plugin manager.** Plugin management now lives in one surface, and
+  "Install from URL" became a dialog opened from the Installed toolbar (ADR 0059). (#1255)
+- **Settings host cue.** The full-width host inheritance banner is now a compact
+  "Host · box defaults" badge by the settings header. (#1256)
+- **Execute Code plugin card.** Trimmed its catalog-card description (~2.3×) so it fits
+  the display, keeping the headline use and the "isolation, not a true sandbox" caveat. (#1257)
+
 ## [0.63.0] - 2026-06-20
 
 ### Added

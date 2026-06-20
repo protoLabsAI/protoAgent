@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.63.1",
+    "date": "2026-06-20",
+    "changes": [
+      "Uninstall works again for git-installed plugins — a regression had left them installable and toggleable but not removable.",
+      "Plugin management is consolidated into one surface, and Install-from-URL is now a dialog opened from the Installed toolbar.",
+      "The host-scope cue in Settings is a compact \"Host · box defaults\" badge instead of a full-width banner.",
+      "Tightened the Execute Code plugin's catalog-card description so it fits the display."
+    ]
+  },
+  {
     "version": "v0.63.0",
     "date": "2026-06-20",
     "changes": [
