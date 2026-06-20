@@ -640,6 +640,7 @@ def create_agent_graph(
     skills_index=None,
     extra_tools=None,
     extra_middleware=None,
+    late_tool_factories=None,
     include_subagents: bool = True,
     checkpointer=None,
     inbox_store=None,
@@ -718,6 +719,22 @@ def create_agent_graph(
             from tools.execute_code import build_execute_code_tool
 
             all_tools.append(build_execute_code_tool(all_tools, config=config))
+
+    # Plugin-contributed late tools (the late-tools seam) — factories that need the
+    # FULLY assembled toolset (core + subagent + plugin + MCP + execute_code). Built
+    # here, before the deferred meta-tool, so a late tool can wrap or proxy any other
+    # tool (but never itself) and is still surfaced by search_tools.
+    # factory(all_tools, config) -> tool | list[tool] | None; a raiser is skipped.
+    for _late_factory in late_tool_factories or ():
+        try:
+            _produced = _late_factory(all_tools, config)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("[plugins] late tool factory failed — skipped")
+            continue
+        if _produced:
+            all_tools.extend(_produced if isinstance(_produced, list) else [_produced])
 
     # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
     # search_tools meta-tool is built over the full set (so it can surface any

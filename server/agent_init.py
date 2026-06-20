@@ -216,6 +216,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     _register_plugin_subagents(_plugins.subagents)
     _apply_config_subagents(STATE.graph_config)  # YAML subagent overrides (tools/max_turns/model)
     STATE.plugin_middleware = _resolve_plugin_middleware(STATE.graph_config, _plugins.middleware)  # ADR 0032
+    STATE.plugin_late_tool_factories = _plugins.late_tool_factories  # late-tools seam
 
     # MCP — external Model Context Protocol servers; their tools become agent
     # tools (namespaced <server>__<tool>). Off unless mcp.enabled OR a plugin
@@ -254,6 +255,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         skills_index=STATE.skills_index,
         extra_tools=STATE.mcp_tools + STATE.plugin_tools,
         extra_middleware=STATE.plugin_middleware,
+        late_tool_factories=STATE.plugin_late_tool_factories,
         checkpointer=STATE.checkpointer,
         inbox_store=STATE.inbox_store,
         beads_store=STATE.beads_store,
@@ -1301,6 +1303,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             _register_plugin_subagents(new_plugins.subagents)
             _apply_config_subagents(new_config)  # YAML subagent overrides take effect on reload
             new_middleware = _resolve_plugin_middleware(new_config, new_plugins.middleware)  # ADR 0032
+            new_late_tool_factories = new_plugins.late_tool_factories  # late-tools seam
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_inbox_store = _build_inbox_store(new_config)
             new_graph = create_agent_graph(
@@ -1310,6 +1313,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 skills_index=new_skills,
                 extra_tools=new_mcp_tools + new_plugin_tools,
                 extra_middleware=new_middleware,
+                late_tool_factories=new_late_tool_factories,
                 checkpointer=STATE.checkpointer,
                 inbox_store=new_inbox_store,
                 # The background manager (ADR 0050) survives reloads unchanged — its
@@ -1329,6 +1333,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         # reload 500s (e.g. installing a plugin during the wizard, whose
         # auto-enable reloads through here).
         new_middleware = []
+        new_late_tool_factories = []  # late-tools seam
 
     # Commit: config → A2A bearer → graph. All three reference the
     # same ``new_config`` so they stay consistent.
@@ -1359,6 +1364,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         pass
     STATE.graph = new_graph
     STATE.plugin_middleware = new_middleware  # ADR 0032
+    STATE.plugin_late_tool_factories = new_late_tool_factories  # late-tools seam
     # STATE.workflow_registry / workflow_run were (re)set by the workflows plugin above.
     STATE.inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget

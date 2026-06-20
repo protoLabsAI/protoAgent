@@ -45,6 +45,7 @@ class AppState:
     plugin_tools: list = field(default_factory=list)
     plugin_skill_dirs: list = field(default_factory=list)
     plugin_middleware: list = field(default_factory=list)  # resolved AgentMiddleware instances (ADR 0032)
+    plugin_late_tool_factories: list = field(default_factory=list)  # (all_tools, config) -> tool|list (late seam)
     plugin_workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     plugin_a2a_skills: list = field(default_factory=list)  # A2A card skills from plugins (#570)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571)

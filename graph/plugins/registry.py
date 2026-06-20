@@ -53,6 +53,7 @@ class PluginRegistry:
         self.surfaces: list[dict] = []  # {"name", "start", "stop"}
         self.subagents: list = []  # SubagentConfig instances
         self.middleware: list = []  # factories: (config) -> AgentMiddleware|None (ADR 0032)
+        self.late_tool_factories: list = []  # factories: (all_tools, config) -> tool|list|None (late seam)
         self.mcp_servers: list = []  # factories: config -> entry dict | None
         self.thread_id_resolver = None  # (request_metadata, session_id) -> str (#571)
         self.goal_verifiers: dict = {}  # name -> async (spec, ctx) -> VerifyResult (ADR 0028)
@@ -306,3 +307,21 @@ class PluginRegistry:
             log.warning("[plugins] %s: register_middleware needs a callable factory, got %r", self.plugin_id, factory)
             return
         self.middleware.append(factory)
+
+    def register_late_tool_factory(self, factory) -> None:
+        """Contribute a tool factory that runs AFTER the full toolset is assembled.
+
+        ``factory(all_tools, config) -> BaseTool | list[BaseTool] | None`` receives the
+        fully-resolved tool list (core + subagent + plugin + MCP tools) and the live
+        ``LangGraphConfig``; its result is appended last, before the deferred
+        ``search_tools`` meta-tool (so the late tool stays discoverable). For a
+        *meta-tool* that must see or wrap **every** other tool — e.g. programmatic
+        tool-calling that proxies the whole set — which a plain ``register_tool`` can't,
+        because plugin tools are registered before the set is complete. Built last, so
+        it can reference any tool but never itself. A raising factory is logged and
+        skipped, never breaking the graph build.
+        """
+        if not callable(factory):
+            log.warning("[plugins] %s: register_late_tool_factory needs a callable, got %r", self.plugin_id, factory)
+            return
+        self.late_tool_factories.append(factory)
