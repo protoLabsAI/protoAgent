@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.64.3",
+    "date": "2026-06-20",
+    "changes": [
+      "Settings: the Add/Edit delegate form is now a dialog",
+      "Settings: the New/Edit skill dialog has more breathing room"
+    ]
+  },
+  {
     "version": "v0.64.2",
     "date": "2026-06-20",
     "changes": [

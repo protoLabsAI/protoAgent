@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.3] - 2026-06-20
+
 ### Changed
 - **Settings: the Add/Edit delegate form is now a dialog** instead of rendering inline
   in the Delegates panel and pushing the list down.
