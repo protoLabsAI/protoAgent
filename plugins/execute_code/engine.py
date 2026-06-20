@@ -2,9 +2,7 @@
 
 The model writes a single Python script; it runs in an isolated child process
 and its stdout comes back. This is **general-purpose code execution** — the
-script can do anything Python can (compute, parse, transform data, call out) —
-effectively a one-shot Python REPL (no state persists between calls; each runs
-in a fresh subprocess).
+script can do anything Python can (compute, parse, transform data, call out).
 
 Its headline use is **programmatic tool-calling**: instead of emitting one tool
 call per turn (think → call → read → think …), the script calls several tools,
