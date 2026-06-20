@@ -109,7 +109,10 @@ def retrieve_volatile(
     # disclosure, ADR 0060) — inject it whenever an index is present, not gated on q.
     if skills_index is not None:
         try:
-            k = int(getattr(config, "skills_top_k", 5) or 5)
+            # Default to 5 only when unset — an explicit skills_top_k=0 means "list
+            # none" (an `or 5` would silently override it, unlike the middleware path).
+            top_k = getattr(config, "skills_top_k", 5)
+            k = int(top_k if top_k is not None else 5)
             summaries = skills_index.skill_summaries(limit=k)
             if summaries:
                 blocks.append(_format_skills(summaries, skills_index.discoverable_count()))

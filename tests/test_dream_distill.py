@@ -196,6 +196,18 @@ def test_load_skill_unknown_name_lists_available(tmp_path, monkeypatch):
     assert "Real skill" in out  # recovers by offering the discoverable set
 
 
+def test_load_skill_unknown_name_caps_the_hint(tmp_path, monkeypatch):
+    """A large library must not blow up the not-found hint — cap at 40 + "+N more"."""
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    save_skill = _by_name(_build_curation_tools())["save_skill"]
+    for i in range(50):
+        save_skill.invoke({"name": f"skill-{i:02d}", "description": "d", "body": "b"})
+    out = load_skill.invoke({"name": "nope"})
+    assert out.count("skill-") == 40  # only 40 names listed
+    assert "+10 more — call list_skills" in out
+
+
 def test_load_skill_no_index(monkeypatch):
     monkeypatch.setattr(STATE, "skills_index", None)
     assert "not available" in load_skill.invoke({"name": "anything"})
