@@ -61,8 +61,7 @@ the composer's slash menu. Invoking `/<slash> [input]` **rewrites the turn** to
 inject the skill's procedure as a directive and runs it on the normal lead-agent
 turn (full toolset, history intact) — it doesn't spawn a detached worker.
 Precedence on a shared token: `goal` > workflow > subagent > skill. The shipped
-`web-research` skill is user-facing as `/web-research`, and `release-notes` as
-`/release-notes`.
+`web-research` skill is user-facing as `/web-research`.
 
 ### Operator-only skills (`user_only`)
 
