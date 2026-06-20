@@ -15,7 +15,7 @@ from graph.llm import create_llm
 from graph.prompts import build_system_prompt, build_subagent_prompt
 from graph.middleware.audit import AuditMiddleware
 from graph.middleware.knowledge import KnowledgeMiddleware
-from graph.middleware.memory import MemoryMiddleware
+from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
@@ -106,7 +106,7 @@ def _build_middleware(config: LangGraphConfig, knowledge_store=None, skills_inde
         middleware.append(AuditMiddleware())
 
     if config.memory_middleware:
-        middleware.append(MemoryMiddleware(knowledge_store))
+        middleware.append(SessionSummaryMiddleware(knowledge_store))
 
     # Context compaction — summarize old history near the context limit.
     # CountingSummarizationMiddleware adds a Prometheus compaction counter on top

@@ -442,11 +442,11 @@ def test_persist_session_unknown_only_when_no_session_id_anywhere(tmp_path):
 
 
 def test_on_session_end_calls_persist_session(tmp_path):
-    """MemoryMiddleware.on_session_end must call _persist_session."""
+    """SessionSummaryMiddleware.on_session_end must call _persist_session."""
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     store = MagicMock()
-    mw = mod.MemoryMiddleware(knowledge_store=store)
+    mw = mod.SessionSummaryMiddleware(knowledge_store=store)
 
     state = _make_state("hook-session")
     runtime = MagicMock()
@@ -471,7 +471,7 @@ def test_after_agent_persists_on_terminal_turn(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     store = MagicMock()
-    mw = mod.MemoryMiddleware(knowledge_store=store)
+    mw = mod.SessionSummaryMiddleware(knowledge_store=store)
 
     messages = [
         HumanMessage(content="Hello"),
@@ -496,7 +496,7 @@ def test_after_agent_does_not_dump_findings_to_store(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     store = MagicMock()
-    mw = mod.MemoryMiddleware(knowledge_store=store)
+    mw = mod.SessionSummaryMiddleware(knowledge_store=store)
 
     messages = [
         HumanMessage(content="What's the release cadence?"),
@@ -516,7 +516,7 @@ def test_after_agent_does_not_persist_when_tool_calls_pending(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     store = MagicMock()
-    mw = mod.MemoryMiddleware(knowledge_store=store)
+    mw = mod.SessionSummaryMiddleware(knowledge_store=store)
 
     ai_msg = AIMessage(content="")
     ai_msg.tool_calls = [{"id": "tc1", "name": "search", "args": {"query": "x"}}]
@@ -541,7 +541,7 @@ def test_after_agent_does_not_persist_when_last_msg_not_ai(tmp_path):
     mod = _reload_memory({"MEMORY_PATH": str(tmp_path), "PROTOAGENT_DISABLE_MEMORY": ""})
 
     store = MagicMock()
-    mw = mod.MemoryMiddleware(knowledge_store=store)
+    mw = mod.SessionSummaryMiddleware(knowledge_store=store)
 
     messages = [
         HumanMessage(content="Hello"),

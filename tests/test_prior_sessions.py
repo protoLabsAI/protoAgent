@@ -1,7 +1,7 @@
 """ADR 0021 Phase 3: one shared <prior_sessions> loader, with read-time
 reasoning stripping.
 
-The loader is the single source of truth for both MemoryMiddleware and
+The loader is the single source of truth for both SessionSummaryMiddleware and
 KnowledgeMiddleware (previously two copy-pasted copies). It strips reasoning at
 read so a session file written by an older build can't inject <scratch_pad> into
 the prompt.

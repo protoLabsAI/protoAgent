@@ -344,7 +344,7 @@ Only read when `middleware.knowledge` is `true`.
 | `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |
 | `top_k` | `5` | Results per query fed into state. |
 
-The bundled store is hybrid by default — FTS5 keyword search fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage; set `embeddings: false` for keyword-only. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `MemoryMiddleware` (`domain='finding'`).
+The bundled store is hybrid by default — FTS5 keyword search fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage; set `embeddings: false` for keyword-only. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), daily-log entries (`daily_log`), and conversation findings extracted by `conversation_harvest` (`domain='finding'`).
 
 **Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
 

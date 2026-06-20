@@ -3,7 +3,7 @@
 The template's default knowledge surface. One ``chunks`` table holds
 every piece of stored content (operator notes via ``memory_ingest``,
 daily-log entries, conversation findings extracted by
-``MemoryMiddleware``); the ``domain`` column distinguishes them.
+``conversation_harvest``); the ``domain`` column distinguishes them.
 
 Search uses sqlite FTS5 when available (true on virtually all modern
 sqlite builds). When FTS5 is missing — sandboxed sqlite, custom builds

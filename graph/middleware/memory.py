@@ -1,10 +1,13 @@
-"""MemoryMiddleware — queues conversation for async knowledge extraction.
+"""SessionSummaryMiddleware — persists a session summary on each terminal turn.
 
-After the agent responds, extracts key topics/findings from the
-conversation and stores them in the knowledge base asynchronously.
+Writes a reasoning-stripped JSON summary of the session to disk (``MEMORY_PATH``)
+on the terminal turn and on session end, enabling cross-session memory across
+restarts — read back by ``KnowledgeMiddleware`` as a ``<prior_sessions>`` block.
 
-Also persists a session summary to disk when sessions end via the
-on_session_end lifecycle hook, enabling session memory across restarts.
+It does **not** write to the knowledge store: the old per-turn finding extraction
+was removed in ADR 0021 (it dumped raw, truncated, scratch_pad-laden turns). KB
+capture now lives in ``conversation_harvest`` (on thread retire) + the fact
+extractor — extract, don't dump.
 """
 
 import json
@@ -210,7 +213,7 @@ def load_prior_sessions(
 ) -> str:
     """Format the most-recent persisted sessions as a ``<prior_sessions>`` block.
 
-    The canonical loader used by *both* ``MemoryMiddleware`` and
+    The canonical loader used by *both* ``SessionSummaryMiddleware`` and
     ``KnowledgeMiddleware`` — previously two copy-pasted implementations. Reads
     up to ``max_sessions`` newest JSON files, drops oldest-first to fit
     ``max_tokens`` (char/4 approximation), and **strips reasoning at read** so a
@@ -280,10 +283,16 @@ def load_prior_sessions(
 # ---------------------------------------------------------------------------
 
 
-class MemoryMiddleware(AgentMiddleware):
-    """Extract and store QA findings after agent responses.
+class SessionSummaryMiddleware(AgentMiddleware):
+    """Persist a session summary on the terminal turn (+ on session end).
 
-    Also persists a session summary on session end via on_session_end.
+    Writes a reasoning-stripped JSON summary to ``MEMORY_PATH``, read back by
+    ``KnowledgeMiddleware`` as ``<prior_sessions>`` for cross-session continuity.
+    Does **not** write to the knowledge store (ADR 0021 — see ``after_agent``).
+
+    Also injects ``<prior_sessions>`` itself, but only as a fallback when no
+    ``KnowledgeMiddleware`` is active (``self._store is None``) — otherwise
+    Knowledge owns that injection.
     """
 
     def __init__(self, knowledge_store=None):

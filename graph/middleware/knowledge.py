@@ -92,7 +92,7 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         Delegates to the shared :func:`graph.middleware.memory.load_prior_sessions`
         (ADR 0021) — one source of truth, with read-time reasoning stripping —
-        so this and ``MemoryMiddleware`` can't drift. ``memory_path`` defaults
+        so this and ``SessionSummaryMiddleware`` can't drift. ``memory_path`` defaults
         to the writer's resolved ``MEMORY_PATH`` (no duplicate path literal,
         same can't-drift reasoning). Never raises.
         """

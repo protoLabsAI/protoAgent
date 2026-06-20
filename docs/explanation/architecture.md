@@ -66,7 +66,7 @@ The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ord
 3. **KnowledgeMiddleware** (optional) — injects retrieved knowledge + human-authored skills before each LLM call; also loads prior session memory
 4. **ToolDeferralMiddleware** (optional) — progressive tool disclosure (ADR 0005)
 5. **AuditMiddleware** — records every tool call to JSONL + Langfuse
-6. **MemoryMiddleware** (optional) — extracts conversation findings to the knowledge store
+6. **SessionSummaryMiddleware** (optional) — persists a session summary on session end (read back as `<prior_sessions>`)
 7. **CountingSummarizationMiddleware** (optional) — context compaction with a Prometheus counter (ADR 0006)
 8. **ModelFallbackMiddleware** (optional) — retry on fallback models (`routing.fallback_models`)
 9. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
@@ -75,7 +75,7 @@ Order matters: prompt-cache + knowledge run before audit (so injected context is
 
 ## Session memory
 
-Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config.yaml`). At session end `MemoryMiddleware` writes a JSON summary to `/sandbox/memory/`. On the next session, `KnowledgeMiddleware.load_memory()` reads the 10 most recent summaries and injects them as a `<prior_sessions>` XML block into the system prompt context, giving the agent continuity across restarts without any external store.
+Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config.yaml`). At session end `SessionSummaryMiddleware` writes a JSON summary to `/sandbox/memory/`. On the next session, `KnowledgeMiddleware.load_memory()` reads the 10 most recent summaries and injects them as a `<prior_sessions>` XML block into the system prompt context, giving the agent continuity across restarts without any external store.
 
 **Token budget:** the prior-sessions block is capped at 2 000 tokens (character approximation: chars ÷ 4). Oldest sessions are dropped first when the budget is exceeded.
 

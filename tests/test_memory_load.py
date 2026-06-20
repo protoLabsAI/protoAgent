@@ -360,7 +360,7 @@ async def test_abefore_model_runs_search_off_event_loop():
 
 
 async def test_memory_middleware_abefore_model_off_loop(tmp_path, monkeypatch):
-    """MemoryMiddleware.abefore_model (standalone mode, disk reads) also
+    """SessionSummaryMiddleware.abefore_model (standalone mode, disk reads) also
     dispatches via to_thread."""
     import threading
 
@@ -374,8 +374,8 @@ async def test_memory_middleware_abefore_model_off_loop(tmp_path, monkeypatch):
         seen_threads.append(threading.current_thread())
         return "<prior_sessions>old</prior_sessions>"
 
-    monkeypatch.setattr(memmod.MemoryMiddleware, "_load_prior_sessions", _fake_load)
-    mw = memmod.MemoryMiddleware(knowledge_store=None)
+    monkeypatch.setattr(memmod.SessionSummaryMiddleware, "_load_prior_sessions", _fake_load)
+    mw = memmod.SessionSummaryMiddleware(knowledge_store=None)
 
     state = {"messages": [HumanMessage(content="hello")]}
     result = await mw.abefore_model(state, runtime=None)

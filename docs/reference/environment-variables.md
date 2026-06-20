@@ -72,7 +72,7 @@ Session memory is enabled by default. See [architecture § Session memory](/expl
 
 | Variable | Default | What |
 |---|---|---|
-| `MEMORY_PATH` | `/sandbox/memory/` | Directory where `MemoryMiddleware` writes JSON session summaries and where `KnowledgeMiddleware.load_memory()` reads them. Writes are atomic (temp file + rename). |
+| `MEMORY_PATH` | `/sandbox/memory/` | Directory where `SessionSummaryMiddleware` writes JSON session summaries and where `KnowledgeMiddleware.load_memory()` reads them. Writes are atomic (temp file + rename). |
 | `PROTOAGENT_DISABLE_MEMORY` | (unset) | Set to `1` (or any non-empty value) to suppress disk persistence without changing `langgraph-config.yaml`. Loading still occurs if summaries exist from prior runs. |
 
 To persist memory across container restarts, mount a volume at whatever `MEMORY_PATH` resolves to. Without a volume the directory is ephemeral.
