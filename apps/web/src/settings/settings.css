@@ -195,9 +195,11 @@
   cursor: pointer;
 }
 
-/* Inheritance banner (2026-06 settings consolidation) — sits atop the settings content,
-   above the active section, clarifying host (box defaults) vs member (overrides) context. */
-.settings-inheritance-banner {
-  margin: 0 0 14px;
+/* Host scope badge (2026-06) — a compact "you're editing the box defaults" marker atop
+   the settings content on the host console; replaces the old full-width inheritance banner. */
+.settings-scope-badge {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 10px;
   flex: none;
 }
