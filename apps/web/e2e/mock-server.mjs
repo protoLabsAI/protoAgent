@@ -88,6 +88,12 @@ let PLUGIN_UPDATES = {};
 const clonePlaybooks = () => JSON.parse(JSON.stringify(PLAYBOOKS));
 let playbooks = clonePlaybooks();
 
+// Knowledge chunks are MUTATED by the promote/forget spec (a chunk flips
+// private→commons, then a commons chunk is dropped), so serve a working copy each
+// knowledge test resets via POST /api/__test__/knowledge/reset.
+const cloneKnowledge = () => JSON.parse(JSON.stringify(KNOWLEDGE_CHUNKS));
+let knowledgeChunks = cloneKnowledge();
+
 // Fleet state is the one slice of the mock backend the specs MUTATE (create /
 // stop / rename / add-remote). Isolate it PER SPEC so parallel files and serial-
 // group retries can't observe each other's writes: every `x-e2e-fleet` request
@@ -221,8 +227,11 @@ function handleApiGet(pathname, fleet = FLEET) {
       return { enabled: true, playbooks };
     case "/api/knowledge/search":
       return {
-        enabled: true, query: "", results: KNOWLEDGE_CHUNKS,
-        stats: { total: KNOWLEDGE_CHUNKS.length },
+        enabled: true, query: "", results: knowledgeChunks,
+        stats: {
+          total: knowledgeChunks.length,
+          commons: knowledgeChunks.filter((c) => c.tier === "commons").length,
+        },
       };
     default:
       return null;
@@ -385,6 +394,23 @@ const server = createServer(async (req, res) => {
       // Per-test hermeticity: undo any promote (private→commons) from a prior test.
       playbooks = clonePlaybooks();
       return sendJson(res, { ok: true });
+    }
+    if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
+      knowledgeChunks = cloneKnowledge();
+      return sendJson(res, { ok: true });
+    }
+    if (req.method === "POST" && /^\/api\/knowledge\/\d+\/promote$/.test(pathname)) {
+      const id = Number(pathname.split("/").at(-2));
+      const c = knowledgeChunks.find((x) => x.id === id);
+      if (c) c.tier = "commons"; // promoted: now reads from the commons tier
+      return sendJson(res, { enabled: true, promoted: !!c });
+    }
+    if (req.method === "POST" && /^\/api\/knowledge\/\d+\/forget$/.test(pathname)) {
+      const id = Number(pathname.split("/").at(-2));
+      const i = knowledgeChunks.findIndex((x) => x.id === id && x.tier === "commons");
+      if (i < 0) return sendJson(res, { enabled: true, forgotten: false, error: "no commons chunk with that id" });
+      knowledgeChunks.splice(i, 1); // removed from the commons
+      return sendJson(res, { enabled: true, forgotten: true });
     }
     if (pathname === "/api/settings") {
       // ADR 0047: a layer-aware save — "agent" (per-agent leaf, default) or "host"

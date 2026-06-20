@@ -577,6 +577,9 @@ export type KnowledgeChunk = {
   source_type: string | null;
   finding_type: string | null;
   created_at: string | null;
+  // Tier (ADR 0041 / bd-2wu): "private" | "commons" — present only when the store is
+  // layered (commons ∪ private); null otherwise. Drives the tier badge + promote/unshare.
+  tier?: "private" | "commons" | null;
 };
 
 // Delegate registry (ADR 0025) — the agents & endpoints the agent can talk to.

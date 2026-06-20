@@ -1,7 +1,7 @@
 import { Input, Textarea } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Database, FileUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -209,6 +209,8 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeChunk | null>(null);
+  const [promoting, setPromoting] = useState<number | null>(null);
+  const [forgetPending, setForgetPending] = useState<KnowledgeChunk | null>(null);
 
   async function run(q: string) {
     setLoading(true);
@@ -259,6 +261,43 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
     }
   }
 
+  // Share a private chunk into the shared commons (ADR 0041 / bd-2wu).
+  async function promote(c: KnowledgeChunk) {
+    setPromoting(c.id);
+    try {
+      const r = await api.promoteKnowledgeChunk(c.id);
+      if (!r.promoted) {
+        onError(r.error || "promote failed");
+        return;
+      }
+      onError("");
+      await run(query); // the chunk now also reads from the commons tier
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setPromoting(null);
+    }
+  }
+
+  // Unshare = forget from the commons (the inverse of promote). Confirmed — it affects
+  // every agent on the box. The private copy (if any) is untouched.
+  async function confirmUnshare() {
+    if (!forgetPending) return;
+    const c = forgetPending;
+    setForgetPending(null);
+    try {
+      const r = await api.forgetKnowledgeChunk(c.id);
+      if (!r.forgotten) {
+        onError(r.error || "unshare failed");
+        return;
+      }
+      onError("");
+      await run(query);
+    } catch (e) {
+      onError(errMsg(e));
+    }
+  }
+
   function startEdit(c: KnowledgeChunk) {
     setAdding(false);
     setEditingId(c.id);
@@ -271,7 +310,7 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
     <section className="panel stage-panel" data-testid="knowledge-store">
       <PanelHeader
         title="Knowledge"
-        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}`}
+        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}${stats.commons ? ` · ${stats.commons} shared` : ""}`}
         actions={
           <>
             {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
@@ -371,6 +410,17 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
                             <Badge status="neutral">{c.finding_type}</Badge>
                           </span>
                         ) : null}
+                        {c.tier === "commons" ? (
+                          <span title="Shared commons — readable by every agent on this box">
+                            <Badge status="neutral">
+                              <Library size={12} /> commons
+                            </Badge>
+                          </span>
+                        ) : c.tier === "private" ? (
+                          <span title="Private to this agent — share to make it readable by the fleet">
+                            <Badge status="neutral">private</Badge>
+                          </span>
+                        ) : null}
                         {c.heading ? <strong>{c.heading}</strong> : null}
                       </div>
                       <p className="playbook-desc">{c.content || c.preview}</p>
@@ -383,12 +433,42 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
                     <div className="playbook-meta">
                       <span title="added">{ago(c.created_at)}</span>
                       <span className="knowledge-chunk-actions">
-                        <Button icon variant="ghost" type="button" title="Edit entry" onClick={() => startEdit(c)} aria-label={`edit entry ${c.id}`}>
-                          <Pencil size={14} />
-                        </Button>
-                        <Button icon variant="ghost" type="button" title="Delete entry" onClick={() => setPendingDelete(c)} aria-label={`delete entry ${c.id}`}>
-                          <Trash2 size={14} />
-                        </Button>
+                        {c.tier === "private" ? (
+                          <Button
+                            icon
+                            variant="ghost"
+                            type="button"
+                            title="Share to the commons (every agent on this box can then recall it)"
+                            onClick={() => void promote(c)}
+                            disabled={promoting === c.id}
+                            aria-label={`share entry ${c.id}`}
+                          >
+                            <ArrowUpToLine size={14} className={promoting === c.id ? "spin" : ""} />
+                          </Button>
+                        ) : null}
+                        {c.tier === "commons" ? (
+                          // Commons chunks are read-only here (edit/delete target the PRIVATE
+                          // tier) — manage them with Unshare, the inverse of Share.
+                          <Button
+                            icon
+                            variant="ghost"
+                            type="button"
+                            title="Unshare — remove from the commons (no other agent will recall it)"
+                            onClick={() => setForgetPending(c)}
+                            aria-label={`unshare entry ${c.id}`}
+                          >
+                            <ArrowDownFromLine size={14} />
+                          </Button>
+                        ) : (
+                          <>
+                            <Button icon variant="ghost" type="button" title="Edit entry" onClick={() => startEdit(c)} aria-label={`edit entry ${c.id}`}>
+                              <Pencil size={14} />
+                            </Button>
+                            <Button icon variant="ghost" type="button" title="Delete entry" onClick={() => setPendingDelete(c)} aria-label={`delete entry ${c.id}`}>
+                              <Trash2 size={14} />
+                            </Button>
+                          </>
+                        )}
                       </span>
                     </div>
                   </>
@@ -412,6 +492,19 @@ export function KnowledgeStore({ onError }: { onError: (message: string) => void
       >
         {pendingDelete
           ? `"${pendingDelete.heading || pendingDelete.preview.slice(0, 80)}" will be removed from the knowledge base — the agent will no longer recall it. This can't be undone.`
+          : undefined}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={forgetPending !== null}
+        title="Unshare from the commons?"
+        confirmLabel="Unshare"
+        destructive
+        onConfirm={() => void confirmUnshare()}
+        onClose={() => setForgetPending(null)}
+      >
+        {forgetPending
+          ? `"${forgetPending.heading || forgetPending.preview.slice(0, 80)}" will be removed from the shared commons — no other agent on this box will recall it. A private copy (if any) is untouched.`
           : undefined}
       </ConfirmDialog>
     </section>
