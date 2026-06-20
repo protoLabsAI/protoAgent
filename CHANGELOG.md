@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-06-20
+
 ### Added
 - **Quick-add for common MCP servers.** Settings ▸ MCP has a "Browse common servers"
   picker — a curated directory (filesystem, git, fetch, GitHub, Brave Search, memory,

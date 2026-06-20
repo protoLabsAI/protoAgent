@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.64.0",
+    "date": "2026-06-20",
+    "changes": [
+      "Quick-add for common MCP servers.",
+      "Share MCP servers across the box (commons)."
+    ]
+  },
+  {
     "version": "v0.63.1",
     "date": "2026-06-20",
     "changes": [
