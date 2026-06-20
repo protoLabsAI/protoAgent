@@ -631,6 +631,21 @@ export const api = {
       { method: "DELETE" },
     );
   },
+  // Promote a private chunk into the shared commons (ADR 0041 / bd-2wu) — only
+  // meaningful when knowledge is layered; the route hints with promoted:false otherwise.
+  promoteKnowledgeChunk(id: number) {
+    return request<{ enabled: boolean; promoted: boolean; error?: string }>(
+      `/api/knowledge/${id}/promote`,
+      { method: "POST" },
+    );
+  },
+  // Forget a chunk FROM the commons (the inverse of promote), by its commons-tier id.
+  forgetKnowledgeChunk(id: number) {
+    return request<{ enabled: boolean; forgotten: boolean; error?: string }>(
+      `/api/knowledge/${id}/forget`,
+      { method: "POST" },
+    );
+  },
   // Document ingestion engine — extract a file/URL/YouTube into the KB (chunked,
   // enriched, embedded). FormData carries `file` OR `url` OR `text`, plus `domain`.
   ingestKnowledge(form: FormData) {

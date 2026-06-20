@@ -495,12 +495,14 @@ export const KNOWLEDGE_CHUNKS = [
     preview: "Release cadence: Releases are cut manually via workflow_dispatch.",
     domain: "process", source: "daily-log", source_type: "log", finding_type: "fact",
     created_at: "2026-06-03T12:00:00+00:00",
+    tier: "commons",   // layered store (ADR 0041): already in the shared commons
   },
   {
     id: 12, heading: "", content: "The gateway alias for the live model is protolabs/reasoning.",
     preview: "The gateway alias for the live model is protolabs/reasoning.",
     domain: "general", source: null, source_type: null, finding_type: null,
     created_at: "2026-06-02T09:00:00+00:00",
+    tier: "private",   // private to this agent → eligible for Share (promote)
   },
 ];
 
