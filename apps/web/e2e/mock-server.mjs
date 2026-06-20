@@ -419,12 +419,15 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === "/api/__test__/mcp/layered" && req.method === "POST") {
       // Put the MCP roster into "layered" mode (servers carry a tier) so the tier
-      // badges + share/unshare surface — exercised by the commons e2e.
+      // badges + share/unshare surface — exercised by the commons e2e. Keep `echo`
+      // (the default fixture other specs assert against — RUNTIME_STATUS is shared
+      // across parallel spec files) and ADD the tiered servers.
       RUNTIME_STATUS.mcp.servers = [
+        { name: "echo", transport: "stdio", tool_count: 2 },
         { name: "shared-fs", transport: "stdio", tool_count: 1, tier: "commons" },
         { name: "local-fs", transport: "stdio", tool_count: 1, tier: "private" },
       ];
-      RUNTIME_STATUS.mcp.tool_count = 2;
+      RUNTIME_STATUS.mcp.tool_count = 4;
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/knowledge/reset" && req.method === "POST") {
