@@ -121,6 +121,39 @@ and any one's full body loads on demand via `load_skill`) — not what's usable.
 `GET /api/runtime/status` reports `skills.count` so you can confirm how many
 loaded.
 
+## Sharing skills across a fleet (the commons)
+
+By default each agent's skill library is **private** (`scope: scoped`) — a fresh
+agent never auto-publishes what it learns. To let a fleet pool skills, opt a
+store into a shared **commons** ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)):
+
+```yaml
+skills:
+  scope: layered          # read commons ∪ private, write private, promote to share
+commons:
+  path: ~/.protoagent/commons   # host-level, shared by every agent that points here
+```
+
+- **`scope: shared`** — the whole skills library *is* the commons (read + write).
+- **`scope: layered`** — "shared brain, private hands": the agent reads
+  `commons ∪ private` (private shadows commons on a name clash) and writes to its
+  **private** tier, so half-baked learned skills never pollute the fleet. You lift
+  a proven one explicitly.
+
+The commons is **host-level and un-scoped** — every agent pointing at the same
+`commons.path` reads it, regardless of `instance.id`. Run two *isolated* fleets on
+one host by giving each a distinct `commons.path`. The boot log names the active
+tier and path (`[skills] tier=layered into …`).
+
+Curate the commons from the CLI (the curator only decays/prunes the *private*
+tier, so promoted skills are otherwise permanent):
+
+```bash
+python -m server skills ls                 # list both tiers + the commons path
+python -m server skills promote <name>     # lift a private skill into the commons (upsert)
+python -m server skills forget  <name>     # remove a skill from the commons
+```
+
 ## Notes
 
 - The `description` is the skill's **summary in the index** — the only thing the
@@ -129,8 +162,9 @@ loaded.
 - The agent can also **author its own** skills: the `/distill` subagent looks back
   over recent work and turns a proven, repeated workflow into a new skill (its
   companion `/dream` consolidates memory). Both are schedulable (ADR 0054). The
-  skill curator (`graph/skills/curator.py`) decays and prunes non-pinned skills;
-  disk skills (your `SKILL.md` files) are pinned.
+  skill curator (`graph/skills/curator.py`) decays and prunes non-pinned **private**
+  skills; disk skills (your `SKILL.md` files) are pinned, and commons skills are
+  curator-immutable (manage them with `skills promote`/`forget`).
 - Only `name` / `description` / `tools` / `user_facing` / `slash` are read; any other
   frontmatter keys are ignored. See the [Skills reference](/reference/skills) for the exact
   field + config schema.

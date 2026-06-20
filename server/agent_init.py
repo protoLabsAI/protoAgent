@@ -463,7 +463,10 @@ def _build_skills_index(config, extra_skill_dirs=None):
 
         roots.append(user_skills_dir())
         count = seed_skills_index(index, roots)
-        log.info("[skills] indexed %d SKILL.md skill(s) into %s", count, db_path)
+        # Name the tier explicitly: a `shared`/`layered` commons is host-level and
+        # un-scoped (every agent on the box reads it), so making that visible at boot
+        # guards the shared-host footgun (ADR 0041).
+        log.info("[skills] tier=%s — indexed %d SKILL.md skill(s) into %s", scope, count, db_path)
         return index
     except Exception as exc:  # noqa: BLE001 — skills are optional, never fatal
         log.warning("[skills] index init failed: %s; running without SKILL.md skills", exc)

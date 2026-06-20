@@ -66,6 +66,24 @@ class LayeredSkillsIndex:
     def rebuild_index(self, artifacts: list) -> None:
         self._private.rebuild_index(artifacts)
 
+    # ── commons curation — the inverse of promote ─────────────────────────────
+    @staticmethod
+    def _forget_from_backend(backend, name: str) -> bool:
+        """Delete every row named *name* from one backend. Returns True if any went."""
+        removed = False
+        for s in backend.all_skills():
+            if s.get("name") == name and s.get("id") is not None:
+                backend.delete_skill(s["id"])
+                removed = True
+        return removed
+
+    def forget_from_commons(self, name: str) -> bool:
+        """Remove a skill from the shared commons by name — the inverse of
+        :meth:`promote`, and the only way to curate the otherwise curator-immutable
+        commons (the curator writes private-only). Returns False when no commons
+        skill by that name exists. Never touches the private tier."""
+        return self._forget_from_backend(self._commons, name)
+
     # ── introspection + promotion ─────────────────────────────────────────────
     def all_skills(self) -> list[dict]:
         return [{**s, "tier": "private"} for s in self._private.all_skills()] + [
@@ -86,8 +104,12 @@ class LayeredSkillsIndex:
         return list(merged.values())
 
     def promote(self, name: str) -> bool:
-        """Copy a private skill (by name) into the commons. Returns False if no
-        private skill by that name exists. Curated, explicit — the commons is trusted."""
+        """Lift a private skill (by name) into the commons. **Upsert**: re-promoting
+        refreshes the commons copy instead of leaving a duplicate row (``add_skill``
+        has no dedup of its own). Returns False if no private skill by that name
+        exists, or if the commons write didn't land (e.g. an unwritable commons path,
+        which ``add_skill`` would otherwise swallow). Curated, explicit — the commons
+        is trusted."""
         match = next((s for s in self._private.all_skills() if s.get("name") == name), None)
         if match is None:
             return False
@@ -99,8 +121,19 @@ class LayeredSkillsIndex:
             source_session_id=match.get("source_session_id", ""),
             user_facing=bool(match.get("user_facing", False)),
             slash=match.get("slash", "") or "",
+            # Preserve user_only across promotion — a /slash-only private skill must
+            # stay /slash-only in the commons, not become agent-discoverable.
+            user_only=bool(match.get("user_only", False)),
         )
+        # Upsert: drop any prior commons copy first so re-promoting refreshes rather
+        # than duplicating (the layered read de-dups by name, hiding the dupes in-app).
+        self._forget_from_backend(self._commons, name)
         self._commons.add_skill(artifact, source="promoted")
+        # add_skill swallows write errors; confirm the row actually landed so an
+        # unwritable commons surfaces as a failure instead of a false success.
+        if self._commons.get_skill(name) is None:
+            log.error("[skills] promote(%r): commons write did not land — is the commons writable?", name)
+            return False
         log.info("[skills] promoted %r to the commons", name)
         return True
 

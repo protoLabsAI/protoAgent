@@ -42,6 +42,88 @@ def test_layered_union_write_private_promote(tmp_path):
     idx.close()
 
 
+def test_promote_is_upsert_no_duplicate_rows(tmp_path):
+    """Re-promoting refreshes the commons copy instead of leaving duplicate rows
+    (add_skill has no dedup; the layered read hides dupes by name)."""
+    private, commons = _idx(tmp_path)
+    private.add_skill(_art("nightly", "v1 — buy low"))
+    idx = LayeredSkillsIndex(private, commons)
+    assert idx.promote("nightly") is True
+
+    # Update the private copy, re-promote → commons reflects v2, still ONE row.
+    private.add_skill(_art("nightly", "v2 — buy lower"))  # private now has 2 rows; promote uses all_skills match
+    assert idx.promote("nightly") is True
+    commons_rows = [s for s in commons.all_skills() if s["name"] == "nightly"]
+    assert len(commons_rows) == 1  # upsert — not duplicated
+    idx.close()
+
+
+def test_promote_preserves_user_only(tmp_path):
+    """A user_only (slash-only) private skill stays user_only in the commons — it
+    must not become agent-discoverable just by being promoted."""
+    private, commons = _idx(tmp_path)
+    private.add_skill(
+        types.SimpleNamespace(
+            name="deploy", description="deploy + verify", prompt_template="run it",
+            tools_used=(), source_session_id="", user_facing=True, slash="deploy", user_only=True,
+        )
+    )
+    idx = LayeredSkillsIndex(private, commons)
+    assert idx.promote("deploy") is True
+    rec = commons.get_skill("deploy")
+    assert rec is not None and rec["user_only"] is True
+    # Withheld from the agent index, but resolvable as a /slash on the commons.
+    assert "deploy" not in [s["name"] for s in commons.skill_summaries()]
+    assert "deploy" in [s["slash"] for s in commons.user_facing_skills()]
+    idx.close()
+
+
+def test_forget_from_commons(tmp_path):
+    """forget_from_commons removes a commons skill (the inverse of promote) without
+    touching the private tier; missing name → False."""
+    private, commons = _idx(tmp_path)
+    private.add_skill(_art("scrape", "a private skill"))
+    idx = LayeredSkillsIndex(private, commons)
+    idx.promote("scrape")
+    assert "scrape" in [s["name"] for s in commons.all_skills()]
+
+    assert idx.forget_from_commons("scrape") is True
+    assert "scrape" not in [s["name"] for s in commons.all_skills()]
+    assert "scrape" in [s["name"] for s in private.all_skills()]  # private untouched
+    assert idx.forget_from_commons("scrape") is False  # already gone
+    idx.close()
+
+
+def test_skills_cli_forget(tmp_path, monkeypatch, capsys):
+    """`skills forget <name>` removes from the commons + reports the commons path;
+    a missing name exits 1. (run_skills_cli closes its index, so build a fresh one
+    per call over the same on-disk dbs — mirroring real invocations.)"""
+    from graph.skills import cli
+    from graph.skills.index import SkillsIndex
+
+    priv_path = str(tmp_path / "priv.db")
+    comm_path = str(tmp_path / "commons" / "skills.db")
+    (tmp_path / "commons").mkdir(parents=True, exist_ok=True)
+
+    def _fresh():
+        return LayeredSkillsIndex(SkillsIndex(priv_path), SkillsIndex(comm_path)), comm_path
+
+    # Seed: a skill promoted into the commons.
+    seed_idx, _ = _fresh()
+    seed_idx._private.add_skill(_art("ore_run", "a private skill"))
+    assert seed_idx.promote("ore_run") is True
+    seed_idx.close()
+
+    monkeypatch.setattr(cli, "_layered_index", _fresh)
+
+    assert cli.run_skills_cli(["forget", "ore_run"]) == 0
+    out = capsys.readouterr().out
+    assert "forgot 'ore_run'" in out and "commons" in out
+    assert "ore_run" not in [s["name"] for s in SkillsIndex(comm_path).all_skills()]
+
+    assert cli.run_skills_cli(["forget", "nope"]) == 1  # nothing to forget
+
+
 def test_skills_scope_config_parses(tmp_path):
     from graph.config import LangGraphConfig
 
