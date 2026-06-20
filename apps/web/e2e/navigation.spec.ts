@@ -95,11 +95,16 @@ test("plugins section: Installed / Discover (config + advanced install folded in
   await expect(demoRow.locator('.plugin-row-config .setting-row[data-key="demo.greeting"]')).toBeVisible();
 
   // Install-from-URL is a dialog opened from the Installed toolbar (2026-06 consolidation).
+  // The DS Dialog title is role="dialog" (not a heading); assert via the URL field, which
+  // only renders while the dialog is open.
   await page.getByRole("button", { name: "Install from URL" }).click();
-  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toBeVisible();
-  // Close the modal before moving on (it would intercept the Discover tab click).
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { name: "Install a plugin from a git URL" })).toHaveCount(0);
+  const installDialog = page.getByRole("dialog", { name: "Install a plugin from a git URL" });
+  await expect(installDialog.getByLabel("plugin git URL")).toBeVisible();
+  // Close just this dialog via its scoped Close button before clicking the Discover tab —
+  // Escape would also dismiss the Settings overlay (a sibling DS Dialog shares a
+  // document-level Escape handler).
+  await installDialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByLabel("plugin git URL")).toHaveCount(0);
 
   // Discover tab — the in-app official-plugin directory (ADR 0059): cards + search.
   await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
