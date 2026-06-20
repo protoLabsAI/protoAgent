@@ -1,17 +1,18 @@
 import "../settings/plugins.css";
 
 import { Button } from "@protolabsai/ui/primitives";
+import { Alert } from "@protolabsai/ui/data";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import { Suspense, useState } from "react";
-import { Download, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store } from "lucide-react";
+import { Download, DownloadCloud, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { pluginUpdatesQuery, queryKeys, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
+import { installedPluginsQuery, pluginUpdatesQuery, queryKeys, runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { StagePanel } from "../app/ErrorBoundary";
 import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
-import { PluginsSection } from "../settings/PluginsSection";
+import { InstallPluginDialog } from "./InstallPluginDialog";
 import { SettingsCategory } from "../settings/SettingsCategory";
 import { PluginFreshness } from "./PluginFreshness";
 import { catalogCategories, filterCatalog } from "./catalog";
@@ -42,6 +43,9 @@ function PluginRow({
   onUpdate,
   updating,
   configurable,
+  removable,
+  onRemove,
+  removing,
 }: {
   p: Plugin;
   update?: PluginUpdate;
@@ -50,6 +54,9 @@ function PluginRow({
   onUpdate: (p: Plugin) => void;
   updating: boolean;
   configurable: boolean;
+  removable: boolean;
+  onRemove: (p: Plugin) => void;
+  removing: boolean;
 }) {
   const on = p.enabled;
   const [open, setOpen] = useState(false);
@@ -101,6 +108,21 @@ function PluginRow({
           >
             {busy ? <Loader2 size={14} className="spin" /> : on ? "Disable" : "Enable"}
           </Button>
+          {/* Uninstall — only plugins in the writable plugins dir (git-installed / local
+              copies) are removable; in-tree built-ins are refused server-side, so they
+              only get Disable. */}
+          {removable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={removing}
+              onClick={() => onRemove(p)}
+              title={`Uninstall ${p.name}`}
+              aria-label={`uninstall ${p.id}`}
+            >
+              {removing ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} Uninstall
+            </Button>
+          ) : null}
         </div>
       </div>
       {configurable && open ? (
@@ -116,22 +138,33 @@ function PluginRow({
 
 type PluginsTab = "local" | "market";
 
-// Local — installed plugins, grouped Loaded → Disabled (alpha), with enable/disable.
+// Installed — the single plugin manager: every installed plugin with enable/disable,
+// update, configure, and uninstall (git-installed only); a Sync action for locked-but-
+// missing ones; and an Install-from-URL dialog. (ADR 0027 + ADR 0059.)
 function LocalTab() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
   // Update status (ADR 0027) — joined per plugin id; degrades gracefully (non-suspense,
-  // retry:false) so a missing updates API never blanks the Local tab.
+  // retry:false) so a missing updates API never blanks the list.
   const updates = useQuery(pluginUpdatesQuery());
+  // Lock-backed inventory: which plugins live in the writable plugins dir (uninstallable —
+  // in-tree built-ins are not) + which are locked-but-missing on disk.
+  const installed = useQuery(installedPluginsQuery());
   const qc = useQueryClient();
   const [hint, setHint] = useState<string | null>(null);
-  const [urlOpen, setUrlOpen] = useState(false); // advanced: install-from-URL (ADR 0059 D4)
+  const [installOpen, setInstallOpen] = useState(false);
+
+  const refreshAll = () => {
+    qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
+    qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
+    qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
+  };
+
   const toggle = useMutation({
     mutationFn: (p: Plugin) => api.setPluginEnabled(p.id, !p.enabled),
     onSuccess: (res, p) => {
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
-      // Enable is fully live now (its router — which serves any console view — hot-mounts
-      // on reload, #822). Only DISABLE leaves a stale route/surface behind (FastAPI can't
-      // unmount), so restart_recommended is set only when turning a view/route plugin OFF.
+      // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
+      // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
       setHint(
         res.restart_recommended
           ? `${p.name} disabled — restart to fully remove its console view or background surface.`
@@ -146,12 +179,8 @@ function LocalTab() {
   const update = useMutation({
     mutationFn: (p: Plugin) => api.updatePlugin(p.id),
     onSuccess: (res, p) => {
-      // Re-read BOTH the runtime plugin roster (new version/sha + reload state) and the
-      // freshness probe (badge flips to "up to date").
       qc.invalidateQueries({ queryKey: runtimeStatusQuery().queryKey });
       qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
-      // Same restart-hint contract the enable flow uses: a view/route plugin can't swap
-      // its mounted router live, so updating it recommends a restart.
       setHint(
         res.restart_recommended
           ? `${p.name} updated${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.`
@@ -164,13 +193,53 @@ function LocalTab() {
   const updatingId = update.isPending ? update.variables?.id : undefined;
   const updateById = new Map((updates.data?.plugins ?? []).map((u) => [u.id, u]));
 
-  // Which plugins have settings to fold in (ADR 0059) — the schema's plugin-tagged
-  // groups. Non-suspense + cached, so it never blocks the list and dedupes with the
-  // SettingsCategory the Configure expander renders.
+  // Uninstall (DELETE /api/plugins/{id}) — removes the code + plugins.lock / enabled refs.
+  // Refused server-side for in-tree built-ins, so it's only offered for plugins in the
+  // lock-backed inventory.
+  const remove = useMutation({
+    mutationFn: (p: Plugin) => api.uninstallPlugin(p.id),
+    onSuccess: (_res, p) => { refreshAll(); setHint(`${p.name} uninstalled.`); },
+    onError: (err: unknown, p) => setHint(`Couldn't uninstall ${p.name}: ${errMsg(err)}`),
+  });
+  const onRemove = (p: Plugin) => {
+    if (window.confirm(`Uninstall ${p.name}? This deletes its code from disk and removes it from plugins.lock. (To keep it installed, Disable it instead.)`)) {
+      setHint(null);
+      remove.mutate(p);
+    }
+  };
+  const removingId = remove.isPending ? remove.variables?.id : undefined;
+
+  // Re-clone locked-but-missing plugins (fresh clone / restored data dir).
+  const sync = useMutation({
+    mutationFn: () => api.syncPlugins(),
+    onSuccess: (res) => {
+      const fetched = res.plugins.filter((r) => r.status === "installed").map((r) => r.id);
+      const failed = res.plugins.filter((r) => r.status === "failed");
+      setHint(
+        failed.length
+          ? `Sync: ${failed.map((f) => `${f.id} (${f.error ?? "failed"})`).join(", ")}${fetched.length ? ` — fetched ${fetched.join(", ")}` : ""}`
+          : fetched.length
+            ? `Fetched ${fetched.join(", ")}${res.reloaded ? " — enabled plugins are live" : ""}.`
+            : "Nothing to sync — all locked plugins present.",
+      );
+      refreshAll();
+    },
+    onError: (err: unknown) => setHint(`Couldn't sync: ${errMsg(err)}`),
+  });
+
+  const restart = useMutation({
+    mutationFn: () => api.restart(),
+    onSuccess: () => setHint("Restarting server… the console will reconnect when it's back."),
+    onError: (err: unknown) => setHint(`Couldn't restart: ${errMsg(err)}`),
+  });
+
+  // Which plugins have settings to fold in (ADR 0059) — the schema's plugin-tagged groups.
   const schema = useQuery(settingsSchemaQuery());
   const configurableIds = new Set(
     (schema.data?.groups ?? []).filter((g) => g.plugin_id).map((g) => g.plugin_id as string),
   );
+  const removableIds = new Set((installed.data?.plugins ?? []).map((e) => e.id));
+  const missing = (installed.data?.plugins ?? []).filter((e) => !e.present);
 
   // Built-ins (core runtime infrastructure like the delegate registry) aren't optional
   // add-ons — they always load, can't be toggled, and are configured in Workspace
@@ -180,43 +249,96 @@ function LocalTab() {
   const loaded = plugins.filter((p) => p.loaded).sort(byName);
   const disabled = plugins.filter((p) => !p.loaded).sort(byName);
 
+  const renderRow = (p: Plugin) => (
+    <PluginRow
+      key={p.id}
+      p={p}
+      update={updateById.get(p.id)}
+      busy={pendingId === p.id}
+      onToggle={onToggle}
+      onUpdate={onUpdate}
+      updating={updatingId === p.id}
+      configurable={configurableIds.has(p.id)}
+      removable={removableIds.has(p.id)}
+      onRemove={onRemove}
+      removing={removingId === p.id}
+    />
+  );
+
   return (
     <>
       <PanelHeader title="Installed" kicker={`${plugins.length} installed · ${loaded.length} loaded`} />
       <div className="stage-body">
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+          <Button type="button" variant="ghost" onClick={() => setInstallOpen(true)} title="Install a plugin from a git URL">
+            <Download size={14} /> Install from URL
+          </Button>
+        </div>
         {hint ? <p className="plugin-hint">{hint}</p> : null}
+
+        {missing.length ? (
+          <Alert
+            status="warning"
+            action={
+              <Button type="button" variant="default" size="sm" disabled={sync.isPending} onClick={() => { setHint(null); sync.mutate(); }} title="Re-clone every locked plugin at its pinned commit">
+                {sync.isPending ? <Loader2 size={13} className="spin" /> : <DownloadCloud size={13} />} Sync plugins
+              </Button>
+            }
+          >
+            {missing.length === 1 ? <><code>{missing[0].id}</code> is</> : <>{missing.length} plugins are</>}{" "}
+            in <code>plugins.lock</code> but missing on disk.
+          </Alert>
+        ) : null}
+
         {plugins.length ? (
           <>
             {loaded.length ? (
               <>
                 <p className="panel-kicker">Loaded <span className="muted">· {loaded.length}</span></p>
-                <div className="subagent-list">{loaded.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} configurable={configurableIds.has(p.id)} />)}</div>
+                <div className="subagent-list">{loaded.map(renderRow)}</div>
               </>
             ) : null}
             {disabled.length ? (
               <>
                 <p className="panel-kicker">Disabled <span className="muted">· {disabled.length}</span></p>
-                <div className="subagent-list">{disabled.map((p) => <PluginRow key={p.id} p={p} update={updateById.get(p.id)} busy={pendingId === p.id} onToggle={onToggle} onUpdate={onUpdate} updating={updatingId === p.id} configurable={configurableIds.has(p.id)} />)}</div>
+                <div className="subagent-list">{disabled.map(renderRow)}</div>
               </>
             ) : null}
           </>
         ) : (
           <div className="table-list">
             <div className="table-row">
-              <span>no plugins installed — browse the Discover tab, or install from a git URL below</span>
+              <span>no plugins installed — browse the Discover tab, or Install from URL</span>
               <StatusPill label="none" tone="muted" />
             </div>
           </div>
         )}
-        {/* Install-from-URL is the advanced path (ADR 0059 D4) — the curated Discover
-            directory is the primary way to add a plugin. */}
-        <div className="plugin-install-advanced">
-          <Button type="button" variant="ghost" aria-expanded={urlOpen} onClick={() => setUrlOpen((o) => !o)}>
-            <Download size={14} /> Install from a git URL
+
+        {/* Server restart — a plugin's console view / background surface (and env / launch
+            flags) only fully (un)load on restart. The console reconnects on its own. */}
+        <div className="plugin-restart-row">
+          <span className="settings-section-sub">
+            A plugin's console view or background surface — and env / launch-flag changes — need a
+            server restart to take effect.
+          </span>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            disabled={restart.isPending}
+            onClick={() => {
+              if (window.confirm("Restart the server now? In-flight work finishes, then the console reconnects automatically.")) {
+                setHint("Restarting server…");
+                restart.mutate();
+              }
+            }}
+            title="Gracefully restart the server process"
+          >
+            {restart.isPending ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Restart server
           </Button>
-          {urlOpen ? <PluginsSection /> : null}
         </div>
       </div>
+      <InstallPluginDialog open={installOpen} onClose={() => setInstallOpen(false)} />
     </>
   );
 }
