@@ -234,6 +234,7 @@ export function App() {
   const setBottomCollapsed = useUI((s) => s.setBottomCollapsed);
   const railOrder = useUI((s) => s.railOrder);
   const reconcilePluginViews = useUI((s) => s.reconcilePluginViews);
+  const reconcileCoreSurfaces = useUI((s) => s.reconcileCoreSurfaces);
   const isMobile = useIsMobile();
   useActiveTheme(); // apply the focused agent's saved theme on boot + repaint on switch (ADR 0042)
   const mobileActive = useUI((s) => s.mobileActive);
@@ -574,6 +575,15 @@ export function App() {
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pluginViewSig, pluginViewsLoaded, reconcilePluginViews]);
+
+  // Self-heal a persisted railOrder that's missing a CORE surface (e.g. Knowledge lost from a
+  // layout saved before it existed / after an IA pass) — railSurfaces() never re-adds a missing
+  // core surface, only plugin views. Runs once on mount; idempotent (no-op when the layout is
+  // whole), so it can't churn or fight the operator's drag-and-drop order. Unlike plugin views
+  // this is NOT gated on runtime — the core set is static, so there's no "unresolved" race.
+  useEffect(() => {
+    reconcileCoreSurfaces(CORE_SURFACES.map((s) => s.id));
+  }, [reconcileCoreSurfaces]);
 
   // Active surface per rail, clamped to a member of that side (a moved surface never leaves a
   // stale active). Chat is no longer pinned — it lives on whichever rail holds it.

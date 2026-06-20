@@ -84,6 +84,11 @@ type UIState = {
   // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
   // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
   reconcilePluginViews: (views: { id: string; side: "left" | "right" | "bottom" }[]) => void;
+  // Re-add any CORE surface missing from a persisted railOrder to its default dock. railSurfaces()
+  // renders only ids already in railOrder and never re-adds a missing core surface, so a layout
+  // saved before a surface existed (or that dropped one) silently loses the icon — this is the
+  // general safety net (replaces the per-surface v9-style migrations). Idempotent; no-op when whole.
+  reconcileCoreSurfaces: (ids: string[]) => void;
   // Bottom dock — active surface + height + collapse (mirror the right panel, on the Y axis).
   bottomPanel: string;
   bottomHeight: number;
@@ -110,6 +115,24 @@ type UIState = {
   pluginDots: Record<string, boolean>;
   setPluginDot: (key: string, on: boolean) => void;
 };
+
+// The pristine rail layout — the store's initial value AND the side-of-record for
+// `reconcileCoreSurfaces`, which re-adds a CORE surface to its default dock when a
+// persisted `railOrder` is missing it (see the action). Keep ids in sync with
+// CORE_SURFACES (apps/web/src/app/coreSurfaces.tsx).
+const DEFAULT_RAIL_ORDER: { left: string[]; right: string[]; bottom: string[] } = {
+  left: ["chat", "knowledge"],
+  right: ["work"],
+  bottom: [],
+};
+const coreDefaultSide = (id: string): "left" | "right" | "bottom" | null =>
+  DEFAULT_RAIL_ORDER.left.includes(id)
+    ? "left"
+    : DEFAULT_RAIL_ORDER.right.includes(id)
+      ? "right"
+      : DEFAULT_RAIL_ORDER.bottom.includes(id)
+        ? "bottom"
+        : null;
 
 /** persist v1→v2 migration: drop the obsolete `railOf` (side map); `railOrder`
  * falls back to the default via the store's merge. Exported for unit testing. */
@@ -242,11 +265,7 @@ export const useUI = create<UIState>()(
       bottomPanel: "",
       bottomHeight: 240,
       bottomCollapsed: false,
-      railOrder: {
-        left: ["chat", "studio", "knowledge"],
-        right: ["work"],
-        bottom: [],
-      },
+      railOrder: { left: [...DEFAULT_RAIL_ORDER.left], right: [...DEFAULT_RAIL_ORDER.right], bottom: [...DEFAULT_RAIL_ORDER.bottom] },
       moveSurface: (id, side) =>
         set((s) => {
           const arrs = {
@@ -287,6 +306,15 @@ export const useUI = create<UIState>()(
           for (const v of views) {
             if (!arrs.left.includes(v.id) && !arrs.right.includes(v.id) && !arrs.bottom.includes(v.id)) arrs[v.side].push(v.id);
           }
+          return { railOrder: arrs };
+        }),
+      reconcileCoreSurfaces: (ids) =>
+        set((s) => {
+          const placed = new Set([...s.railOrder.left, ...s.railOrder.right, ...s.railOrder.bottom]);
+          const missing = ids.filter((id) => !placed.has(id) && coreDefaultSide(id));
+          if (!missing.length) return {}; // whole already — avoid a needless state write
+          const arrs = { left: [...s.railOrder.left], right: [...s.railOrder.right], bottom: [...s.railOrder.bottom] };
+          for (const id of missing) arrs[coreDefaultSide(id)!].push(id);
           return { railOrder: arrs };
         }),
       setSurface: (surface) => set({ surface }),
