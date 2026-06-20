@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **MCP: the "Browse common servers" card grid now fills the dialog height** instead of
+  capping short and leaving dead space below it; the search/filter row stays pinned and
+  the grid scrolls.
+
 ## [0.64.1] - 2026-06-20
 
 ### Fixed
