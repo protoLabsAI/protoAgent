@@ -659,6 +659,17 @@ select:disabled {
 .mcp-catalog-dialog .pl-dialog__body {
   padding: var(--pl-space-6, 24px);
 }
+/* Browse (grid) view: pin the dialog to a tall, consistent height and let the card
+   grid fill the space below the search/filter controls instead of capping the grid
+   short and leaving dead space under it. The configure step keeps its content height. */
+.mcp-catalog-dialog--browse .pl-dialog {
+  height: min(82vh, calc(100vh - 2 * var(--pl-space-4, 16px)));
+}
+.mcp-catalog-dialog--browse .pl-dialog__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .mcp-browse-row {
   display: flex;
   align-items: center;
@@ -728,7 +739,9 @@ select:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
-  max-height: 52vh;
+  /* Fill the dialog body below the controls (flex parent); scroll internally. */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 .mcp-catalog-card {
