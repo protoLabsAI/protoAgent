@@ -178,3 +178,39 @@ def test_user_facing_defaults_off_and_slug_fallback(tmp_path: Path) -> None:
     art2 = parse_skill_md(uf)
     assert art2 is not None and art2.user_facing is True
     assert art2.slash == "" and art2.slash_token() == "big-task"
+
+
+def test_user_only_implies_user_facing_at_the_dataclass(tmp_path: Path) -> None:
+    """user_only ⇒ user_facing is enforced on the artifact itself (single source),
+    so even a SKILL.md / programmatic artifact that sets only user_only can't end up
+    withheld from the index AND slash-less (ADR 0060). add_skill then derives a slash."""
+    from datetime import datetime, timezone
+
+    from graph.extensions.skills import SkillV1Artifact
+
+    # Direct construction with only user_only set — __post_init__ coerces user_facing.
+    art = SkillV1Artifact(
+        name="Deploy",
+        description="deploy + verify",
+        prompt_template="run it",
+        created_at=datetime.now(timezone.utc),
+        user_only=True,
+    )
+    assert art.user_only is True
+    assert art.user_facing is True  # coerced — never a contradictory state
+
+    # And via the SKILL.md parser (frontmatter sets only user_only).
+    p = _write_skill(
+        tmp_path,
+        "deploy",
+        "name: deploy\ndescription: Deploy + verify.\nuser_only: true\nslash: deploy",
+        "1. deploy\n2. verify",
+    )
+    parsed = parse_skill_md(p)
+    assert parsed is not None and parsed.user_only is True and parsed.user_facing is True
+
+    # End-to-end: it's withheld from the index but resolvable as a /slash.
+    index = SkillsIndex(db_path=str(tmp_path / "skills.db"))
+    index.add_skill(parsed, source="disk")
+    assert "deploy" not in [s["name"] for s in index.skill_summaries()]
+    assert "deploy" in [s["slash"] for s in index.user_facing_skills()]
