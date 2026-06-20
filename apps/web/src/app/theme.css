@@ -1889,6 +1889,13 @@ textarea {
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
 
+/* New/Edit skill dialog (PlaybooksSurface) — roomier than the DS default + a little
+   more space between fields than the knowledge inline form it grew out of. */
+.skill-dialog .pl-dialog__body { padding: var(--pl-space-6, 24px); }
+.skill-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* The trailing action row gets a little separation from the fields above it. */
+.skill-form > .knowledge-chunk-form-row:last-child { margin-top: 4px; }
+
 /* Document ingestion drop-zone (ADR 0021) — file/URL "Add source". */
 .knowledge-ingest-drop {
   display: flex; align-items: center; gap: 8px;

@@ -2,16 +2,12 @@
 .delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* .delegate-type-badge / .delegate-badge-warn / .delegate-badge-ok retired (#832) —
    now DS Badge (type) + StatusPill (unconfigured/secret-set). */
+/* Lives in a dialog now (DelegatesSection) — just the field grid; the dialog
+   supplies the header, padding, and border chrome. */
 .delegate-form {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
   display: grid;
   gap: 12px;
 }
-.delegate-form-head { display: flex; align-items: center; justify-content: space-between; }
 /* The delegate-type picker is the DS RadioCardGroup/RadioCard now (matches the
    archetype picker in NewAgentPanel) — the hand-rolled .delegate-type-tile* tiles
    are retired. */

@@ -3,13 +3,14 @@ import "./delegates.css";
 
 import { DropdownSelect, Input, RadioCard, RadioCardGroup, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Dialog } from "@protolabsai/ui/overlays";
 
 import { StatusDot } from "@protolabsai/ui/data";
 
 import { StatusPill } from "../app/StatusPill";
 import { HelpLink } from "../app/ui-kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2, X } from "lucide-react";
+import { Loader2, Pencil, Plug, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "../lib/api";
@@ -68,6 +69,7 @@ export function DelegatesSection() {
   const [probes, setProbes] = useState<Record<string, DelegateProbe>>({});
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.delegates });
+  const closeForm = () => { setAdding(false); setEditing(null); };
 
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteDelegate(name),
@@ -151,28 +153,30 @@ export function DelegatesSection() {
 
       {status ? <p className="settings-inline-status">{status}</p> : null}
 
-      {editing ? (
+      <div className="settings-group-actions">
+        <Button type="button" onClick={() => { setEditing(null); setAdding(true); }} disabled={!typeSpecs.length}>
+          <Plus size={15} /> Add delegate
+        </Button>
+      </div>
+
+      {/* Add / edit happen in a dialog (the form used to render inline and push the
+          panel down). The DS Dialog supplies the header + close, so DelegateForm
+          carries only the fields + actions. */}
+      <Dialog
+        open={adding || editing != null}
+        onClose={closeForm}
+        title={editing ? `Edit ${editing.name}` : "Add a delegate"}
+        width="min(560px, 94vw)"
+        className="delegate-dialog"
+      >
         <DelegateForm
-          key={editing.name}
+          key={editing?.name ?? "_new"}
           spec={typeSpecs}
           initial={editing}
-          onClose={() => setEditing(null)}
-          onSaved={(msg) => { setEditing(null); setStatus(msg); void invalidate(); }}
+          onClose={closeForm}
+          onSaved={(msg) => { closeForm(); setStatus(msg); void invalidate(); }}
         />
-      ) : adding ? (
-        <DelegateForm
-          spec={typeSpecs}
-          initial={null}
-          onClose={() => setAdding(false)}
-          onSaved={(msg) => { setAdding(false); setStatus(msg); void invalidate(); }}
-        />
-      ) : (
-        <div className="settings-group-actions">
-          <Button type="button" onClick={() => setAdding(true)} disabled={!typeSpecs.length}>
-            <Plus size={15} /> Add delegate
-          </Button>
-        </div>
-      )}
+      </Dialog>
     </section>
   );
 }
@@ -227,11 +231,6 @@ function DelegateForm({
 
   return (
     <div className="delegate-form">
-      <div className="delegate-form-head">
-        <strong>{editing ? `Edit ${initial?.name}` : "New delegate"}</strong>
-        <Button icon variant="ghost" title="Cancel" onClick={onClose}><X size={15} /></Button>
-      </div>
-
       {!editing ? (
         <RadioCardGroup
           name="delegate-type"
