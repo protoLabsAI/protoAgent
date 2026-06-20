@@ -134,6 +134,29 @@ def test_scaffold_omits_empty_release(tmp_path, monkeypatch):
     assert changelog.missing_versions() == []
 
 
+def test_notes_returns_section_body_markdown(tmp_path, monkeypatch):
+    """`notes <version>` returns the curated CHANGELOG section (for the desktop updater)."""
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(_SCAFFOLD_MD, encoding="utf-8")
+    monkeypatch.setattr(changelog, "CHANGELOG", cl)
+
+    body = changelog.notes("0.2.0")
+    assert body.startswith("### Added")
+    assert "**Bold title**" in body  # markdown preserved (UpdateNotice renders it)
+    assert "## [0.2.0]" not in body  # the heading itself is not included
+    assert "## [Unreleased]" not in body  # and it doesn't bleed into other sections
+
+
+def test_notes_is_empty_for_missing_or_empty_section(tmp_path, monkeypatch):
+    """Empty output signals the workflow to fall back (release body → placeholder)."""
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text("# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2026-03-03\n\n", encoding="utf-8")
+    monkeypatch.setattr(changelog, "CHANGELOG", cl)
+
+    assert changelog.notes("0.3.0") == ""  # section exists but has no body
+    assert changelog.notes("9.9.9") == ""  # section absent entirely
+
+
 def test_no_released_version_is_missing_from_marketing_changelog():
     """Staleness guard (the original 'stuck at 0.21' bug): every dated CHANGELOG.md
     version must have a marketing changelog.json entry."""

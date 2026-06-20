@@ -141,6 +141,17 @@ def scaffold(version: str) -> bool:
     return True
 
 
+def notes(version: str) -> str:
+    """Return the CHANGELOG.md section body for *version* (markdown), or '' if absent/empty.
+
+    Fed to the desktop updater-manifest job so the in-app UpdateNotice shows the curated
+    CHANGELOG section instead of raw commit subjects. Empty output is the caller's signal
+    to fall back (GitHub release body → placeholder) — e.g. a patch with no bullets.
+    """
+    _date, body = _section(CHANGELOG.read_text(encoding="utf-8"), version)
+    return body.strip()
+
+
 def roll(text: str, version: str, date: str) -> str:
     """Return *text* with the Unreleased section promoted to ``[version] - date``.
 
@@ -182,6 +193,11 @@ def main() -> None:
         help="prepend a concise DRAFT changelog.json entry for a version (curated content stays)",
     )
     p_sc.add_argument("version", help="version released, e.g. 0.26.0")
+    p_notes = sub.add_parser(
+        "notes",
+        help="print the CHANGELOG.md section body for a version (the desktop in-app updater notes)",
+    )
+    p_notes.add_argument("version", help="version released, e.g. 0.60.0")
     sub.add_parser("check", help="fail if any released version is missing from changelog.json")
     args = parser.parse_args()
 
@@ -195,6 +211,10 @@ def main() -> None:
             f"changelog: {'scaffolded draft' if added else 'already present'} v{args.version}"
             f" in {MARKETING_JSON.name} (polish the wording by hand)"
         )
+    elif args.cmd == "notes":
+        body = notes(args.version)
+        if body:  # empty → print nothing so the caller's fallback chain kicks in
+            print(body)
     elif args.cmd == "check":
         missing = missing_versions()
         if missing:

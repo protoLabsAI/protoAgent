@@ -367,6 +367,14 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
+      # Checkout at the tag so we can read the rolled CHANGELOG.md section for the
+      # in-app updater notes (below). By tag-push time CHANGELOG.md already holds the
+      # dated `## [VERSION]` section — the bump PR (prepare-release.yml) merged before
+      # the tag. Without this the job has no working tree (it only `gh release`s).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -388,12 +396,14 @@ jobs:
             echo "::notice::No signed updater bundles on the release — skipping latest.json (in-app updates disabled for ${TAG})."
             exit 0
           fi
-          # Use the real GitHub Release body as the updater notes, so the in-app
-          # UpdateNotice shows the actual changelog (not a generic placeholder). By the
-          # time this fan-in runs (after the long desktop matrix), release.yml has long
-          # since created + populated the release. Fall back to the placeholder if the
-          # body is somehow empty.
-          NOTES="$(gh release view "$TAG" --repo "${{ github.repository }}" --json body -q .body 2>/dev/null || true)"
+          # Updater notes, best → worst source:
+          #   1. The curated CHANGELOG.md section for this version (the human-written
+          #      "### Added/Changed/Fixed" markdown) — what the in-app UpdateNotice renders.
+          #   2. The GitHub Release body (auto-generated commit subjects) — used when the
+          #      CHANGELOG section is empty (e.g. a patch with no [Unreleased] bullets).
+          #   3. A generic placeholder, if both are empty.
+          NOTES="$(python3 scripts/changelog.py notes "$VERSION" 2>/dev/null || true)"
+          [ -z "$NOTES" ] && NOTES="$(gh release view "$TAG" --repo "${{ github.repository }}" --json body -q .body 2>/dev/null || true)"
           [ -z "$NOTES" ] && NOTES="protoAgent ${TAG} — see the GitHub Release for details."
           npx --yes -p '@protolabsai/release-tools@latest' build-updater-manifest \
             --version "$VERSION" \
