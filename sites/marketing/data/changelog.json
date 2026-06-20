@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.61.0",
+    "date": "2026-06-20",
+    "changes": [
+      "An ACP coding-agent runtime now gets protoAgent's full toolset by default.",
+      "Removed the redundant \"working…\" status strip above the chat composer"
+    ]
+  },
+  {
     "version": "v0.60.0",
     "date": "2026-06-19",
     "changes": [
