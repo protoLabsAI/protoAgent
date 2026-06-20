@@ -145,14 +145,22 @@ The commons is **host-level and un-scoped** — every agent pointing at the same
 one host by giving each a distinct `commons.path`. The boot log names the active
 tier and path (`[skills] tier=layered into …`).
 
-Curate the commons from the CLI (the curator only decays/prunes the *private*
-tier, so promoted skills are otherwise permanent):
+Curate the skill library from the CLI:
 
 ```bash
-python -m server skills ls                 # list both tiers + the commons path
-python -m server skills promote <name>     # lift a private skill into the commons (upsert)
-python -m server skills forget  <name>     # remove a skill from the commons
+python -m server skills ls                  # list both tiers + the commons path
+python -m server skills promote <name>      # lift a private skill into the commons (upsert)
+python -m server skills forget  <name>      # remove a skill from the commons
+python -m server skills curate              # curate the PRIVATE tier (decay + dedupe + prune)
+python -m server skills curate --tier commons   # curate the COMMONS — dedupe ONLY
 ```
+
+`curate` runs the skill curator against **one concrete tier**. The **private** tier
+gets the full pass (idle-decay → dedupe → prune-below-threshold). The shared
+**commons** is curated + trusted, so it only **dedupes** — it never idle-decays (a
+promoted runbook mustn't rot because the fleet was idle) and never auto-prunes
+(removal is the explicit `forget`; pass `--prune` to also prune the commons). Add
+`--dry-run` to preview.
 
 ## Notes
 
@@ -162,9 +170,10 @@ python -m server skills forget  <name>     # remove a skill from the commons
 - The agent can also **author its own** skills: the `/distill` subagent looks back
   over recent work and turns a proven, repeated workflow into a new skill (its
   companion `/dream` consolidates memory). Both are schedulable (ADR 0054). The
-  skill curator (`graph/skills/curator.py`) decays and prunes non-pinned **private**
-  skills; disk skills (your `SKILL.md` files) are pinned, and commons skills are
-  curator-immutable (manage them with `skills promote`/`forget`).
+  skill curator (`graph/skills/curator.py`, run via `skills curate`) decays + dedupes
+  + prunes non-pinned **private** skills; disk skills (your `SKILL.md` files) are
+  pinned; the **commons** is dedupe-only (no decay/auto-prune) and removed from via
+  `skills forget`.
 - Only `name` / `description` / `tools` / `user_facing` / `slash` are read; any other
   frontmatter keys are ignored. See the [Skills reference](/reference/skills) for the exact
   field + config schema.

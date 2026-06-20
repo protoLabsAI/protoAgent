@@ -1,9 +1,12 @@
 """``python -m server skills …`` — inspect/curate the skills index (ADR 0041).
 
 ``ls`` lists skills (tagged by tier when layered); ``promote <name>`` lifts a private
-skill into the shared commons; ``forget <name>`` removes a skill FROM the commons (the
-only way to curate it — the curator writes private-only). Builds the same layered index
-the running agent uses, scoped to this config's ``instance.id``.
+skill into the shared commons; ``forget <name>`` removes a skill FROM the commons.
+``curate [--tier]`` runs the skill curator on ONE concrete tier: the **private** tier
+gets the full pass (idle-decay + dedupe + prune-below-threshold); the shared **commons**
+is trusted, so it only **dedupes** — no idle-decay (a promoted skill mustn't rot because
+the fleet was idle) and no auto-prune (removal is the explicit ``forget``). Builds the
+same tier paths the running agent uses, scoped to this config's ``instance.id``.
 """
 
 from __future__ import annotations
@@ -23,6 +26,17 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("name", help="the skill name to promote")
     fp = sub.add_parser("forget", help="remove a skill FROM the shared commons (inverse of promote)")
     fp.add_argument("name", help="the commons skill name to forget")
+    cp = sub.add_parser(
+        "curate",
+        help="run the curator on ONE tier (private: decay+dedupe+prune · commons: dedupe only)",
+    )
+    cp.add_argument("--tier", choices=("private", "commons"), default="private", help="tier to curate (default: private)")
+    cp.add_argument(
+        "--prune",
+        action="store_true",
+        help="also prune below-threshold skills on the commons (private prunes by default)",
+    )
+    cp.add_argument("--dry-run", action="store_true", help="compute changes but write nothing")
     return p
 
 
@@ -46,8 +60,58 @@ def _layered_index():
     return LayeredSkillsIndex(private, shared), shared_path
 
 
+def _resolve_tier_db(tier: str) -> str:
+    """Resolve the concrete on-disk DB path for ONE tier (private | commons) using the
+    same resolution the running agent uses — so the curator targets a single backend
+    (never a layered union, which would make rowid-based deletes ambiguous)."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import _live_config_dir
+    from server.agent_init import _commons_dir, _resolve_skills_db, _seed_instance_env
+
+    cfg = LangGraphConfig.from_yaml(str(_live_config_dir() / "langgraph-config.yaml"))
+    _seed_instance_env(cfg)
+    if tier == "commons":
+        return _resolve_skills_db(cfg.skills_db_path, shared=True, commons=_commons_dir(cfg))
+    return _resolve_skills_db(cfg.skills_db_path, shared=False)
+
+
+def _run_curate(args) -> int:
+    """`skills curate --tier` — run the curator on one concrete tier with the tier's
+    policy (private: full pass; commons: dedupe only unless --prune, never decay)."""
+    from pathlib import Path
+
+    from graph.skills.curator import SkillCurator
+    from graph.skills.index import SkillsIndex
+
+    tier = args.tier
+    db_path = _resolve_tier_db(tier)
+    index = SkillsIndex(db_path=db_path)
+    decay = tier == "private"  # commons is trusted — never idle-decays
+    prune = True if tier == "private" else bool(args.prune)  # commons prunes only on --prune
+    # Audit next to the tier's DB (not a global default) — the commons audit lives with
+    # the commons, the private audit with the private store.
+    audit_path = str(Path(db_path).with_name(f"curator-audit-{tier}.jsonl"))
+    curator = SkillCurator(
+        db_path=db_path, audit_path=audit_path, index=index, tier=tier, decay=decay, prune=prune, dry_run=args.dry_run
+    )
+    try:
+        entry = curator.run()
+    finally:
+        index.close()
+    mode = "dry-run, nothing written" if args.dry_run else "applied"
+    print(
+        f"✓ curated tier={tier} ({mode}) — {db_path}\n"
+        f"  before={entry['skills_before']} after={entry['skills_after']} · "
+        f"decay={len(entry['decay_applied'])} dedup_clusters={len(entry['deduplicated'])} "
+        f"pruned={len(entry['pruned'])}"
+    )
+    return 0
+
+
 def run_skills_cli(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
+    if args.cmd == "curate":
+        return _run_curate(args)  # single-tier — no layered index
     idx, commons_path = _layered_index()
     try:
         if args.cmd == "ls":

@@ -15,6 +15,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 
 from graph.skills.curator import (
     PRUNE_THRESHOLD,
@@ -437,3 +438,63 @@ class TestCuratorRun:
         assert remaining[0]["name"] == "active summarizer"
         # Survivor's decayed confidence was written back (< its seeded 0.9).
         assert remaining[0]["confidence"] < 0.9
+
+
+# ── Per-tier curation policy (bd-2mc / ADR 0041) ────────────────────────────────
+
+
+class TestTierPolicy:
+    """The shared commons is curated + trusted: dedupe-only — no idle-decay (a promoted
+    skill mustn't rot because the fleet was idle) and no auto-prune (removal is the
+    explicit `skills forget`). The private tier keeps the full pass. And the curator
+    refuses a layered index outright (rowid deletes are only unambiguous per-backend)."""
+
+    def _audit(self, tmp_path):
+        return str(tmp_path / "audit.jsonl")
+
+    def test_commons_does_not_decay_or_prune(self, tmp_path):
+        # A long-idle skill the PRIVATE policy would decay + prune (see the contrast below).
+        idx = _seed_index(
+            str(tmp_path / "commons.db"),
+            [_make_skill(name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400)],
+        )
+        entry = SkillCurator(
+            index=idx, audit_path=self._audit(tmp_path), tier="commons", decay=False, prune=False, dry_run=False
+        ).run()
+
+        kept = idx.all_skills()
+        assert len(kept) == 1  # survives — not pruned
+        assert kept[0]["confidence"] == 1.0  # not decayed
+        assert entry["tier"] == "commons"
+        assert entry["decay_applied"] == [] and entry["pruned"] == []
+
+    def test_commons_still_dedupes(self, tmp_path):
+        idx = _seed_index(
+            str(tmp_path / "commons.db"),
+            [
+                _make_skill(name="deploy", description="ship the service then verify it", confidence=1.0),
+                _make_skill(name="deploy", description="ship the service then verify it", confidence=0.8),
+            ],
+        )
+        entry = SkillCurator(
+            index=idx, audit_path=self._audit(tmp_path), tier="commons", decay=False, prune=False, dry_run=False
+        ).run()
+        assert len(idx.all_skills()) == 1  # deduped despite decay/prune being off
+        assert entry["deduplicated"]  # a duplicate cluster was reported
+
+    def test_private_policy_decays_and_prunes(self, tmp_path):
+        # Contrast: the same long-idle skill IS reaped under the private (default) policy.
+        idx = _seed_index(
+            str(tmp_path / "priv.db"),
+            [_make_skill(name="rare runbook", description="emergency restore steps", confidence=1.0, last_used_days_ago=400)],
+        )
+        SkillCurator(index=idx, audit_path=self._audit(tmp_path), tier="private").run()
+        assert idx.all_skills() == []  # decayed below threshold → pruned
+
+    def test_refuses_a_layered_index(self, tmp_path):
+        from graph.skills.index import SkillsIndex
+        from graph.skills.layered import LayeredSkillsIndex
+
+        layered = LayeredSkillsIndex(SkillsIndex(str(tmp_path / "p.db")), SkillsIndex(str(tmp_path / "c.db")))
+        with pytest.raises(ValueError, match="single concrete tier"):
+            SkillCurator(index=layered, audit_path=self._audit(tmp_path)).run()

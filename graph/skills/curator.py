@@ -163,6 +163,9 @@ class SkillCurator:
         prune_threshold: float = PRUNE_THRESHOLD,
         similarity_threshold: float = SIMILARITY_THRESHOLD,
         index=None,
+        tier: str = "private",
+        decay: bool = True,
+        prune: bool = True,
     ) -> None:
         self.db_path = db_path
         self.audit_path = audit_path
@@ -170,6 +173,14 @@ class SkillCurator:
         self.half_life_days = half_life_days
         self.prune_threshold = prune_threshold
         self.similarity_threshold = similarity_threshold
+        # Tier label for the audit + the curation POLICY (ADR 0041 / bd-2mc): the
+        # private tier decays-on-idle + prunes-below-threshold + dedupes; the shared
+        # commons is curated + TRUSTED, so it only dedupes — `decay=False` (a promoted
+        # skill must not rot just because the fleet was idle) and `prune=False` by
+        # default (removal is the explicit `skills forget`). Caller sets these per tier.
+        self.tier = tier
+        self.decay = decay
+        self.prune = prune
         # The live SkillsIndex (SQLite). Injectable for tests; built lazily
         # from db_path otherwise.
         self._index = index
@@ -179,6 +190,16 @@ class SkillCurator:
             from graph.skills.index import SkillsIndex
 
             self._index = SkillsIndex(self.db_path)
+        # Guard: the curator deletes/updates by ROWID, which is only unambiguous
+        # within ONE backend. A LayeredSkillsIndex routes writes to private while
+        # all_skills() returns both tiers' rowids — a commons rowid could collide
+        # with a private one and reap the wrong skill. So refuse a layered index:
+        # curate one concrete tier at a time (the `skills curate --tier` path does).
+        if hasattr(self._index, "_private") or hasattr(self._index, "promote"):
+            raise ValueError(
+                "SkillCurator must run against a single concrete tier, not a layered index — "
+                "curate one tier's DB at a time (see `python -m server skills curate --tier`)."
+            )
         return self._index
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -195,15 +216,18 @@ class SkillCurator:
         skills = self._load_index()
         skills_before = len(skills)
 
-        decay_report = self._apply_decay(skills)
+        # Per-tier policy (bd-2mc): the commons doesn't decay (trusted/curated) and
+        # doesn't auto-prune (removal is the explicit `skills forget`); it only dedupes.
+        decay_report = self._apply_decay(skills) if self.decay else []
         dedup_report = self._deduplicate(skills)
-        prune_report, skills = self._prune(skills)
+        prune_report, skills = self._prune(skills) if self.prune else ([], skills)
 
         skills_after = len(skills)
 
         audit_entry = {
             "run_id": run_id,
             "timestamp": started_at.isoformat(),
+            "tier": self.tier,
             "dry_run": self.dry_run,
             "skills_before": skills_before,
             "skills_after": skills_after,

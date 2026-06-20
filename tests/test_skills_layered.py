@@ -124,6 +124,35 @@ def test_skills_cli_forget(tmp_path, monkeypatch, capsys):
     assert cli.run_skills_cli(["forget", "nope"]) == 1  # nothing to forget
 
 
+def test_skills_cli_curate_commons_dedupes_only(tmp_path, monkeypatch, capsys):
+    """`skills curate --tier commons` dedupes but does NOT decay/prune (bd-2mc): a
+    long-idle promoted skill survives, duplicates collapse."""
+    from graph.skills import cli
+    from graph.skills.index import SkillsIndex
+
+    comm = str(tmp_path / "commons.db")
+    idx = SkillsIndex(comm)
+    idx.add_skill(_art("deploy", "ship then verify the service"))  # dup pair → dedupe
+    idx.add_skill(_art("deploy", "ship then verify the service"))
+    # A stale, high-value skill seeded with an ancient last_used (private would prune it).
+    conn = idx._open_conn()
+    conn.execute(
+        "INSERT INTO skills_fts (name, description, prompt_template, tools_used, "
+        "source_session_id, created_at, confidence, last_used) VALUES (?,?,?,?,?,?,?,?)",
+        ("rare runbook", "emergency restore", "do it", "", "", "2025-01-01T00:00:00+00:00", 1.0, "2025-01-01T00:00:00+00:00"),
+    )
+    conn.commit()
+    idx.close()
+
+    monkeypatch.setattr(cli, "_resolve_tier_db", lambda tier: comm)
+    assert cli.run_skills_cli(["curate", "--tier", "commons"]) == 0
+    assert "tier=commons" in capsys.readouterr().out
+
+    after = SkillsIndex(comm).all_skills()
+    assert "rare runbook" in [s["name"] for s in after]  # not decayed/pruned despite being stale
+    assert len([s for s in after if s["name"] == "deploy"]) == 1  # deduped
+
+
 def test_skills_scope_config_parses(tmp_path):
     from graph.config import LangGraphConfig
 
