@@ -23,27 +23,29 @@ test("lists configured delegates with type + secret badges", async ({ page }) =>
   await expect(row.locator(".pl-dot--success")).toBeVisible();
 });
 
-test("Add opens a type picker and a schema-driven form", async ({ page }) => {
+test("Add opens a dialog with a type picker and a schema-driven form", async ({ page }) => {
   await openIntegrations(page);
-  const panel = page.locator(".delegates-section");
-  await panel.getByRole("button", { name: /Add delegate/ }).click();
+  await page.locator(".delegates-section").getByRole("button", { name: /Add delegate/ }).click();
+
+  // The add/edit form is a dialog now (it used to render inline in the panel).
+  const dialog = page.getByRole("dialog", { name: "Add a delegate" });
+  await expect(dialog).toBeVisible();
 
   // Three type cards from /api/delegate-types (DS RadioCard).
-  const tiles = panel.locator(".pl-radiocard");
-  await expect(tiles).toHaveCount(3);
+  await expect(dialog.locator(".pl-radiocard")).toHaveCount(3);
 
   // Default type (a2a) renders its URL field; switching to acp renders Command.
-  await expect(panel.getByText("URL", { exact: false })).toBeVisible();
-  await panel.locator(".pl-radiocard", { hasText: "Coding agent" }).click();
-  await expect(panel.getByText("Command", { exact: false })).toBeVisible();
-  await expect(panel.getByText("Workdir", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("URL", { exact: false })).toBeVisible();
+  await dialog.locator(".pl-radiocard", { hasText: "Coding agent" }).click();
+  await expect(dialog.getByText("Command", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("Workdir", { exact: false })).toBeVisible();
 
   // The coding-agent preset picker (from the canonical /api/acp-agents catalog) fills
   // Command + Args when an agent is chosen.
-  await expect(panel.locator("#acp-preset")).toBeVisible();
+  await expect(dialog.locator("#acp-preset")).toBeVisible();
   // DropdownSelect (#274): open the trigger, then pick the portaled menu item (rendered at
-  // document.body, so it's page-scoped, not inside `panel`).
-  await panel.locator("#acp-preset").click();
+  // document.body, so it's page-scoped, not inside `dialog`).
+  await dialog.locator("#acp-preset").click();
   await page.getByRole("menuitemradio", { name: "Claude Code" }).click();
-  await expect(panel.locator("#del-command")).toHaveValue("npx");
+  await expect(dialog.locator("#del-command")).toHaveValue("npx");
 });

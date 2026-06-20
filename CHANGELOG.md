@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings: the Add/Edit delegate form is now a dialog** instead of rendering inline
+  in the Delegates panel and pushing the list down.
+- **Settings: the New/Edit skill dialog has more breathing room** — roomier padding and
+  more space between fields.
+
 ## [0.64.2] - 2026-06-20
 
 ### Changed

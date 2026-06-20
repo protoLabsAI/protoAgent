@@ -51,7 +51,7 @@ function SkillForm({
 }) {
   const incomplete = !draft.name.trim() || !draft.description.trim() || !draft.body.trim();
   return (
-    <div className="knowledge-chunk-form">
+    <div className="skill-form">
       <Input
         type="text"
         placeholder="name — e.g. “Release notes”"
@@ -516,6 +516,7 @@ export function PlaybooksSurface({ onError = () => {} }: { onError?: (message: s
         onClose={cancelForm}
         title={editingId !== null ? "Edit skill" : "New skill"}
         width="min(640px, 94vw)"
+        className="skill-dialog"
       >
         <SkillForm
           draft={draft}
