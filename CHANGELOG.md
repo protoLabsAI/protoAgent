@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.62.0] - 2026-06-20
 
+### Fixed
+- **The Knowledge rail icon no longer disappears.** A core rail surface (Knowledge, Work, …)
+  missing from a saved layout is now re-added on load — `railSurfaces()` previously only restored
+  plugin views, so a layout saved before a surface existed (or that dropped one) silently lost its
+  icon, with no migration to bring it back. This is now a general safety net for every core surface.
+  (#1230)
+- **The active tab's underline is the brand accent again, not white.** Adopted the upstream
+  design-system fix (`@protolabsai/ui` 0.45.1) — every `<Tabs>` surface (e.g. the Work hub) now
+  marks the active tab with the accent. (#1229)
+
+### Changed
+- **Removed the "This is the memory the agent retrieves into context…" footer** from the Knowledge
+  panel. (#1230)
+- **Docs accuracy pass.** Corrected the starter-tools reference (the default tool set no longer
+  lists plugin or retired tools — notes/github/discord/peer aren't in `get_all_tools`) and closed
+  feature-coverage gaps (ACP full-tool-parity, the middleware chain, and the artifacts capability).
+  Also retired the misnamed `tools/peer_tools.py` → `tools/a2a_parse.py`. (#1228, #1231)
+
 ## [0.61.0] - 2026-06-20
 
 ### Changed

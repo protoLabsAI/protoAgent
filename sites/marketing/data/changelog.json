@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.62.0",
+    "date": "2026-06-20",
+    "changes": [
+      "The Knowledge rail icon no longer disappears.",
+      "The active tab's underline is the brand accent again, not white.",
+      "Removed the \"This is the memory the agent retrieves into context…\" footer",
+      "Docs accuracy pass."
+    ]
+  },
+  {
     "version": "v0.61.0",
     "date": "2026-06-20",
     "changes": [
