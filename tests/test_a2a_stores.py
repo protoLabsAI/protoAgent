@@ -261,9 +261,9 @@ def test_ssrf_guard_accepts_public(url):
 
 def test_ssrf_guard_honors_host_allowlist(monkeypatch):
     """A hostname in PUSH_NOTIFICATION_ALLOWED_HOSTS bypasses the IP check."""
-    # workstacean resolves to an RFC1918 docker address by design.
-    monkeypatch.setenv("PUSH_NOTIFICATION_ALLOWED_HOSTS", "workstacean")
-    assert is_safe_webhook_url("http://workstacean:7860/hook") is True
+    # automaker-server resolves to an RFC1918 docker address by design.
+    monkeypatch.setenv("PUSH_NOTIFICATION_ALLOWED_HOSTS", "automaker-server")
+    assert is_safe_webhook_url("http://automaker-server:7860/hook") is True
     # Anything not on the list still gets the IP check (and rejected).
     assert is_safe_webhook_url("http://10.0.0.1/hook") is False
 

@@ -181,8 +181,8 @@ to list it on the directory. See [Install & publish plugins](./docs/guides/plugi
 
 Declare additional extensions on the card in
 `server/a2a.py::_build_agent_card_proto` when your agent's skills
-actually mutate shared state (see `effect-domain-v1` in the
-Workstacean docs for when this applies).
+actually mutate shared state (see `effect-domain-v1` in
+[Extensions](./docs/reference/extensions.md) for when this applies).
 
 ## Push notification support
 

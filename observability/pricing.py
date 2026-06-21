@@ -1,11 +1,9 @@
 """Per-model token pricing → USD cost (ADR 0006, Slice 1).
 
-Rates mirror the structure + overlapping values of Workstacean's ``MODEL_RATES``
-(``protoWorkstacean/lib/types/budget.ts``) so protoAgent's emitted ``costUsd``
-agrees with the fleet's fallback computation. Cost is best-effort: an unknown
-model resolves by substring match (gateway aliases like
-``anthropic/claude-opus-4-8``), else falls back to the ``default`` rate. Never
-raises.
+``costUsd`` is emitted on the A2A cost-v1 extension so any consumer agrees on the
+per-call cost. Best-effort: an unknown model resolves by substring match (gateway
+aliases like ``anthropic/claude-opus-4-8``), else falls back to the ``default``
+rate. Never raises.
 
 ``costUsd`` here bills ``input_tokens`` + ``output_tokens`` at the base rates —
 the portion every consumer agrees on. Prompt-cache tokens are captured + emitted
@@ -17,7 +15,7 @@ semantics are validated end-to-end (different gateways disagree on whether
 
 from __future__ import annotations
 
-# USD per token, (input, output). Keep in sync with Workstacean MODEL_RATES.
+# USD per token, (input, output).
 MODEL_RATES: dict[str, dict[str, float]] = {
     "claude-opus-4-8": {"input": 0.000015, "output": 0.000075},
     "claude-opus-4-6": {"input": 0.000015, "output": 0.000075},
@@ -30,7 +28,7 @@ MODEL_RATES: dict[str, dict[str, float]] = {
     # spend, so these are a low nominal local-compute estimate (trackable, not
     # billing) rather than the Claude-ish `default` which would overstate cost
     # ~30x. Substring match covers the gateway aliases (protolabs/reasoning →
-    # protolabs/smart backend, etc.). Keep in sync with Workstacean MODEL_RATES.
+    # protolabs/smart backend, etc.).
     "protolabs/reasoning": {"input": 0.0000001, "output": 0.0000004},
     "protolabs/smart": {"input": 0.0000001, "output": 0.0000004},
     "protolabs/fast": {"input": 0.00000005, "output": 0.0000002},

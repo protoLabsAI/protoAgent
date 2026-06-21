@@ -5,7 +5,7 @@ A *skill* is a named capability A2A callers can dispatch to. Skills live on the 
 ## When you need a skill
 
 - You want another agent (via A2A) to invoke a specific mode of behaviour — e.g. `pr_review` vs. `bug_triage`.
-- You want Workstacean's planner to rank your agent against a specific goal.
+- You want a planner to rank your agent against a specific goal.
 - You want per-skill cost telemetry (cost-v1 samples are keyed by `(agent, skill)`).
 
 You don't need a skill for "things the chat UI does" — the React console chat is already covered by the default dispatch path.
@@ -27,11 +27,11 @@ a2a:
 
 The server merges these (plus any contributed by plugins via `register_a2a_skill`) and falls back to the template's `chat` placeholder when none are set. A plugin can ship card skills the same way — `registry.register_a2a_skill(spec)` — so a distributable extension carries its own advertised capabilities.
 
-**IDs are sticky**. `cost-v1` samples, `effect-domain-v1` declarations, and Workstacean's routing all key off the `id`. Pick one and don't rename later.
+**IDs are sticky**. `cost-v1` samples, `effect-domain-v1` declarations, and a consumer's routing all key off the `id`. Pick one and don't rename later.
 
 ## 2. (Optional) Declare an effect
 
-If the skill actually mutates shared state Workstacean cares about (creates a PR, files an issue, updates a board), declare it under `effect-domain-v1`:
+If the skill actually mutates shared state a planner cares about (creates a PR, files an issue, updates a board), declare it under `effect-domain-v1`:
 
 ```python
 "capabilities": {

@@ -142,7 +142,7 @@ a2a:
 - `capabilities.extensions` — `cost-v1` is declared by default
   (the runtime emits it automatically); add `effect-domain-v1`
   in `server/a2a.py::_build_agent_card_proto` if your skills
-  mutate shared state Workstacean's planner should know about.
+  mutate shared state a planner should know about.
 
 ## 7. Set up the model
 
@@ -210,7 +210,7 @@ python -m server
 
 Multi-fork safety: every job is namespaced by `AGENT_NAME`, so
 spinning up `gina-personal` next to `gina-work` (or any number of
-ginas under one Workstacean) doesn't cross-fire prompts. See
+ginas sharing a sqlite path) doesn't cross-fire prompts. See
 [Schedule future work](./docs/guides/scheduler.md) for the full
 firing model and integration notes.
 

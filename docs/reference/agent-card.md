@@ -105,8 +105,8 @@ Each entry describes one dispatchable capability:
 }
 ```
 
-- `id` — **sticky**. `cost-v1` samples, `worldstate-delta-v1` declarations, and Workstacean's routing all key on it. Don't rename.
-- `tags` — free-form. Workstacean's planner does substring matching against goals.
+- `id` — **sticky**. `cost-v1` samples, `worldstate-delta-v1` declarations, and a consumer's routing all key on it. Don't rename.
+- `tags` — free-form. A planner can do substring matching against goals.
 - `examples` — few-shot-ish prompts consumers can surface in their UI.
 - `inputModes` / `outputModes` — override `defaultInputModes` / `defaultOutputModes` for this specific skill.
 

@@ -11,13 +11,13 @@ A multi-agent fleet needs to answer: *how much is each (agent, skill) costing, a
 cost-v1 is the measurement. Every terminal task carries a DataPart with:
 
 - `usage.input_tokens`, `usage.output_tokens`, `usage.total_tokens`
-- `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens` — Anthropic-shaped prompt-cache tokens (ADR 0006), matching Workstacean's `CostArtifactUsage`
+- `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens` — Anthropic-shaped prompt-cache tokens (ADR 0006)
 - `durationMs`
 - `costUsd` — the in-process estimate accumulated across the turn's LLM calls (`pricing.py`); consumers prefer it over recomputing from tokens
 
-The agent also **declares the extension** in its card (`capabilities.extensions`, URI `https://proto-labs.ai/a2a/ext/cost-v1`), which is what gates Workstacean's cost interceptor.
+The agent also **declares the extension** in its card (`capabilities.extensions`, URI `https://proto-labs.ai/a2a/ext/cost-v1`), which is what gates a consumer's cost interceptor.
 
-The consuming system (Workstacean's `defaultCostStore`) keeps a rolling window of samples per `(agent, skill)` key and uses them to rank candidates for dispatch — replacing self-advertisement with observation after 5+ samples. See [ADR 0006](/adr/0006-observability-and-the-self-improving-flywheel).
+A consuming system can keep a rolling window of samples per `(agent, skill)` key and use them to rank candidates for dispatch — replacing self-advertisement with observation after enough samples. See [ADR 0006](/adr/0006-observability-and-the-self-improving-flywheel).
 
 ### Why token capture lives where it does
 

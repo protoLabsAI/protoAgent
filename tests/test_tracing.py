@@ -236,7 +236,7 @@ def test_no_legacy_shims_exist():
 
 
 def test_otel_cross_context_detach_error_is_silenced():
-    """When an SSE consumer (e.g. Workstacean's A2AExecutor) closes
+    """When an SSE consumer (e.g. an A2A executor) closes
     the stream early, GeneratorExit propagates through
     trace_session's __aexit__. The Langfuse span's underlying OTel
     token was attached in a child task's contextvar snapshot, so the

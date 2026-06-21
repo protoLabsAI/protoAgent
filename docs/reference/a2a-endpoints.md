@@ -203,7 +203,7 @@ Outgoing webhook URLs are resolved once and checked against an allowlist before 
 To permit trusted docker-network hostnames, set:
 
 ```bash
-PUSH_NOTIFICATION_ALLOWED_HOSTS=workstacean,automaker-server
+PUSH_NOTIFICATION_ALLOWED_HOSTS=automaker-server,internal-hooks
 PUSH_NOTIFICATION_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12
 ```
 

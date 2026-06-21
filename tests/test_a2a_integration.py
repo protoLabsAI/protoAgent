@@ -120,7 +120,7 @@ def test_agent_card_declares_all_four_protolabs_extensions() -> None:
 
 
 def test_agent_card_declares_cost_v1_extension() -> None:
-    """cost-v1 specifically — Workstacean's cost interceptor engages on this
+    """cost-v1 specifically — a consumer's cost interceptor engages on this
     canonical URI."""
     import protolabs_a2a as pa
 

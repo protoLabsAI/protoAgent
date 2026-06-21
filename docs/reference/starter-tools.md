@@ -6,7 +6,7 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a structured multi-step form) — pause the turn (A2A `input-required`) for the operator and resume with their answer (lead-agent only).
 - One **render tool** — `show_component` — emits a structured component (table, key-value, timeline, …) that the console renders inline in chat ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)), instead of formatting it as prose.
 - Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
-- Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite or the Workstacean adapter, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
+- Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
 - Four **beads tools** — `beads_create`, `beads_list`, `beads_update`, `beads_close` — the agent's in-process planning board, bridged to the console Beads panel. Bound when a beads store is present (default in `server/agent_init.py`).
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
 - One **goal tool** — `set_goal` — sets a standing, plugin-verified goal for the session ([ADR 0028](/adr/0028-plugin-goal-verifiers); goal mode is **always on**). See [Goal mode](/guides/goal-mode).
@@ -203,8 +203,6 @@ List the current scheduled jobs for *this* agent. Multi-agent isolation: each ag
 
 Output: one job per line with id, next-fire timestamp, schedule, and prompt preview. Returns `"No scheduled jobs."` when empty.
 
-The Workstacean adapter intentionally returns `[]` (Workstacean owns scheduling state and its `list` action publishes asynchronously to a topic). Run the local backend or query Workstacean directly for live introspection there.
-
 ## `cancel_schedule`
 
 ```python
@@ -214,7 +212,7 @@ async def cancel_schedule(job_id: str) -> str
 
 Cancel a scheduled job by id. Returns `"Canceled <id>."` or `"Error: no such job <id>."`.
 
-Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path or a Workstacean install.
+Cross-agent cancellation is blocked — `gina-personal` cannot cancel `gina-work`'s jobs even when sharing a sqlite path.
 
 ## `ask_human`
 

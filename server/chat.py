@@ -973,8 +973,8 @@ async def _chat_langgraph_stream(
             yield ("done", final_text)
 
         except GeneratorExit:
-            # Expected: A2A consumers (e.g. Workstacean's A2AExecutor) break
-            # out of the SSE loop after capturing the initial task event,
+            # Expected: A2A consumers break out of the SSE loop after
+            # capturing the initial task event,
             # then hand off to TaskTracker for polling. Re-raise so Python
             # finalizes the generator cleanly; the OTel cross-context detach
             # noise this used to emit is silenced at the logger level in

@@ -1,7 +1,7 @@
 """cost-v1 DataPart: cache fields + costUsd emission (ADR 0006 Slice 1, A2A 1.0).
 
-The terminal artifact carries Workstacean's Anthropic-shaped cache fields and a
-top-level costUsd. The bespoke ``_cost_payload`` was replaced by
+The terminal artifact carries the Anthropic-shaped cache fields and a top-level
+costUsd. The bespoke ``_cost_payload`` was replaced by
 ``protolabs_a2a.emit_cost``; the executor accumulates usage across LLM calls and
 passes it in. Also verifies ``metrics.record_llm_call`` accepts the enriched
 signature without a live Prometheus registry.
@@ -42,8 +42,9 @@ def test_cost_payload_omits_costusd_when_not_supplied() -> None:
     assert "costUsd" not in payload
 
 
-def test_extension_uri_is_the_canonical_workstacean_uri() -> None:
-    # Must match protoWorkstacean's COST_URI for its interceptor to engage.
+def test_extension_uri_is_the_canonical_cost_uri() -> None:
+    # The published proto-labs cost-v1 extension URI a consumer gates its cost
+    # interceptor on — frozen so we don't silently break the wire contract.
     assert pa.COST_EXT_URI == "https://proto-labs.ai/a2a/ext/cost-v1"
     assert pa.COST_MIME == "application/vnd.protolabs.cost-v1+json"
 
