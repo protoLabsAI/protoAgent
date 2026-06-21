@@ -14,9 +14,16 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   const last = next[next.length - 1];
   if (last?.kind === "text") {
     next[next.length - 1] = { kind: "text", text: append ? last.text + text : text };
-  } else {
-    next.push({ kind: "text", text });
+    return next;
   }
+  // Starting a NEW text run (first part, or after a tool group). Drop leading
+  // whitespace: a stray "\n" the model emits between two tool calls would otherwise
+  // become its own text part — rendering an empty markdown block (a visible gap) AND
+  // splitting the tool group so the next call can't extend it. Pure whitespace ⇒ skip
+  // entirely, keeping the tool group open.
+  const trimmed = text.replace(/^\s+/, "");
+  if (!trimmed) return next;
+  next.push({ kind: "text", text: trimmed });
   return next;
 }
 

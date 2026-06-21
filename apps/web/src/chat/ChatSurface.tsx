@@ -1005,7 +1005,7 @@ function ChatSessionSlot({
                 message.parts.map((part, i) =>
                   part.kind === "tools" ? (
                     <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} onCancelDelegation={cancelDelegation} />
-                  ) : part.text ? (
+                  ) : part.text.trim() ? (
                     message.role === "user" ? (
                       <span className="chat-user-text" key={i}>{part.text}</span>
                     ) : (

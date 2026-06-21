@@ -29,6 +29,24 @@ describe("appendText", () => {
       { kind: "text", text: "answer" },
     ]);
   });
+
+  it("skips a whitespace-only delta between tools, keeping the group open", () => {
+    // The "left a space" bug: a stray "\n" between two tool calls became an empty
+    // text part (a rendered gap) AND split the tool group.
+    let p: ChatPart[] | undefined = [{ kind: "tools", ids: ["a"] }];
+    p = appendText(p, "\n", true);
+    p = addToolRef(p, "b"); // extends the SAME group — no empty text part in between
+    expect(p).toEqual([{ kind: "tools", ids: ["a", "b"] }]);
+  });
+
+  it("trims leading whitespace when a text run starts after a tool group", () => {
+    let p: ChatPart[] | undefined = [{ kind: "tools", ids: ["a"] }];
+    p = appendText(p, "\n\nHere's the answer", true);
+    expect(p).toEqual([
+      { kind: "tools", ids: ["a"] },
+      { kind: "text", text: "Here's the answer" },
+    ]);
+  });
 });
 
 describe("addToolRef", () => {
