@@ -34,6 +34,38 @@ def test_empty_allowlist_exposes_nothing():
     assert operator_tools(_cfg([])) == []
 
 
+def test_boot_stores_builds_skills_index(tmp_path, monkeypatch):
+    """The sidecar must build STATE.skills_index, not just the other stores —
+    load_skill / list_skills / save_skill read it, and a fresh sidecar process
+    starts with it None. Regression: an ACP agent calling load_skill through this
+    server got "Skills index is not available." despite the prompt listing skills."""
+    import types
+
+    import server.agent_init as ai
+    from server.operator_mcp import _boot_stores_only
+
+    # Stub the heavy/side-effecting store builders; let the REAL _build_skills_index run.
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda c: None)
+    monkeypatch.setattr(ai, "_build_scheduler", lambda c: None)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda c: None)
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda c, ks, p: ks)
+    monkeypatch.setattr(
+        ai,
+        "_build_plugins",
+        lambda config, existing_tools=None: types.SimpleNamespace(tools=[], skill_dirs=[], meta={}),
+    )
+    monkeypatch.setattr(STATE, "beads_store", object(), raising=False)  # skip real BeadsStore
+    monkeypatch.setattr(STATE, "skills_index", None, raising=False)
+
+    cfg = _cfg([])
+    cfg.skills_db_path = str(tmp_path / "skills.db")  # don't touch the real DB
+    _boot_stores_only(cfg)
+
+    assert STATE.skills_index is not None  # the fix — was None before
+    # It's a real index the curation tools can query (bundled config/skills seed).
+    assert {s["name"] for s in STATE.skills_index.skill_summaries()}
+
+
 def test_plugin_tools_ride_the_same_bridge(monkeypatch):
     @tool
     def my_plugin_tool(x: str) -> str:

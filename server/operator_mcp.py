@@ -66,8 +66,15 @@ def _boot_stores_only(config):
         ),
     )
     STATE.plugin_tools = plugins.tools
+    STATE.plugin_skill_dirs = plugins.skill_dirs
     STATE.plugin_meta = plugins.meta
     STATE.knowledge_store = ai._apply_plugin_knowledge_backend(config, STATE.knowledge_store, plugins)
+    # Build the skills index too (mirrors agent_init) — load_skill / list_skills /
+    # save_skill read STATE.skills_index, which is None in a fresh sidecar process.
+    # Without this, an ACP agent calling load_skill through this server got
+    # "Skills index is not available." even though the prompt's <available_skills>
+    # block (built in the host process) listed the skill.
+    STATE.skills_index = ai._build_skills_index(config, extra_skill_dirs=plugins.skill_dirs)
 
 
 def operator_tools(config):
