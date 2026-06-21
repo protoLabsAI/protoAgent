@@ -1,5 +1,6 @@
-import { DropdownSelect, Input } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button, Empty } from "@protolabsai/ui/primitives";
+import { Dialog } from "@protolabsai/ui/overlays";
 import {
   QueryErrorResetBoundary,
   useMutation,
@@ -14,9 +15,10 @@ import {
   CircleAlert,
   Loader2,
   Play,
+  Plus,
   Trash2,
 } from "lucide-react";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -52,13 +54,117 @@ type ConfirmRequest = {
   onConfirm: () => void;
 };
 
+// Create a task from a dialog (opened by the panel's "New task" action) instead of
+// an always-visible inline form — keeps the board the focus, with the full set of
+// fields (title, type, priority, description) only when you're adding.
+function TaskCreateDialog({
+  open,
+  onClose,
+  onCreate,
+  busy,
+  error,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (draft: IssueDraft) => void;
+  busy: boolean;
+  error?: string | null;
+}) {
+  const [draft, setDraft] = useState<IssueDraft>(emptyIssueDraft);
+  // Reset to a blank draft each time the dialog opens.
+  useEffect(() => {
+    if (open) setDraft(emptyIssueDraft);
+  }, [open]);
+
+  const canSubmit = !!draft.title.trim() && !busy;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={<><Boxes size={16} /> New task</>}
+      width="min(520px, 94vw)"
+      footer={
+        <>
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={!canSubmit}
+            data-testid="task-create-submit"
+            onClick={() => onCreate(draft)}
+          >
+            {busy ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Create task
+          </Button>
+        </>
+      }
+    >
+      <div className="task-create-form" data-testid="task-create-dialog">
+        {error ? <p className="settings-status">Couldn't create: {error}</p> : null}
+        <label className="field">
+          <span>Title</span>
+          <Input
+            autoFocus
+            value={draft.title}
+            onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+            placeholder="What needs doing"
+            data-testid="task-create-title"
+          />
+        </label>
+        <div className="task-create-row">
+          <label className="field">
+            <span>Type</span>
+            <DropdownSelect
+              value={draft.type}
+              onValueChange={(v) => setDraft((d) => ({ ...d, type: v }))}
+              aria-label="Task type"
+              options={[
+                { value: "task", label: "task" },
+                { value: "bug", label: "bug" },
+                { value: "feature", label: "feature" },
+                { value: "chore", label: "chore" },
+                { value: "epic", label: "epic" },
+              ]}
+            />
+          </label>
+          <label className="field">
+            <span>Priority</span>
+            <DropdownSelect
+              value={String(draft.priority)}
+              onValueChange={(v) => setDraft((d) => ({ ...d, priority: Number(v) }))}
+              aria-label="Task priority"
+              options={[
+                { value: "0", label: "P0" },
+                { value: "1", label: "P1" },
+                { value: "2", label: "P2" },
+                { value: "3", label: "P3" },
+                { value: "4", label: "P4" },
+              ]}
+            />
+          </label>
+        </div>
+        <label className="field">
+          <span>Description (optional)</span>
+          <Textarea
+            value={draft.description}
+            rows={4}
+            onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+            placeholder="Any detail the agent should have when it picks this up"
+            data-testid="task-create-description"
+          />
+        </label>
+      </div>
+    </Dialog>
+  );
+}
+
 function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   const { data } = useSuspenseQuery(tasksQuery());
   const issues = data.issues;
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
 
-  const [draft, setDraft] = useState<IssueDraft>(emptyIssueDraft);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["closed"]));
 
   const create = useMutation({
@@ -69,7 +175,7 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         priority: d.priority,
         description: d.description.trim() || undefined,
       }),
-    onSuccess: () => setDraft(emptyIssueDraft),
+    onSuccess: () => setDialogOpen(false),
     onSettled: invalidate,
   });
   const update = useMutation({
@@ -98,60 +204,20 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
 
   return (
     <>
-      <form
-        className="issue-create"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (draft.title.trim()) create.mutate(draft);
-        }}
-      >
-        <Input
-          value={draft.title}
-          onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
-          placeholder="New issue title"
-        />
-        <Button variant="primary" type="submit" disabled={!draft.title.trim() || busy}>
-          {create.isPending ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-          Add
-        </Button>
-        <div className="issue-create-meta">
-          <DropdownSelect
-            value={draft.type}
-            onValueChange={(v) => setDraft((d) => ({ ...d, type: v }))}
-            aria-label="Issue type"
-            options={[
-              { value: "task", label: "task" },
-              { value: "bug", label: "bug" },
-              { value: "feature", label: "feature" },
-              { value: "chore", label: "chore" },
-            ]}
-          />
-          <DropdownSelect
-            value={String(draft.priority)}
-            onValueChange={(v) => setDraft((d) => ({ ...d, priority: Number(v) }))}
-            aria-label="Issue priority"
-            options={[
-              { value: "0", label: "P0" },
-              { value: "1", label: "P1" },
-              { value: "2", label: "P2" },
-              { value: "3", label: "P3" },
-              { value: "4", label: "P4" },
-            ]}
-          />
-          <Input
-            value={draft.description}
-            onChange={(event) => setDraft((d) => ({ ...d, description: event.target.value }))}
-            placeholder="Description"
-          />
-        </div>
-        {create.isError ? (
-          <p className="workflow-failed">{(create.error as Error).message}</p>
-        ) : null}
-      </form>
+      <PanelHeader
+        compact
+        title="Tasks"
+        kicker="the agent's task board"
+        actions={
+          <Button variant="primary" type="button" onClick={() => setDialogOpen(true)} data-testid="task-new">
+            <Plus size={16} /> New task
+          </Button>
+        }
+      />
 
-      <ScrollArea className="issue-list" role="region" aria-label="Tasks tasks" tabIndex={0}>
+      <ScrollArea className="issue-list" role="region" aria-label="Tasks" tabIndex={0}>
         {issues.length === 0 ? (
-          <Empty icon={<Boxes />} description="No issues yet — add one above, or the agent will." />
+          <Empty icon={<Boxes />} description="No tasks yet — add one with “New task”, or the agent will." />
         ) : (
           groupIssues(issues).map((group) => {
             const isGroupCollapsed = collapsed.has(group.status);
@@ -246,6 +312,14 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
           })
         )}
       </ScrollArea>
+
+      <TaskCreateDialog
+        open={dialogOpen}
+        onClose={() => { setDialogOpen(false); create.reset(); }}
+        onCreate={(d) => create.mutate(d)}
+        busy={create.isPending}
+        error={create.isError ? (create.error as Error).message : null}
+      />
     </>
   );
 }
@@ -253,7 +327,6 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
 export function TasksPanel({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   return (
     <section className="panel side-panel tasks-panel">
-      <PanelHeader compact title="Tasks" kicker="the agent's task board" />
       <QueryErrorResetBoundary>
         {({ reset }) => (
           <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="tasks" />}>

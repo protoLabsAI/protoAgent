@@ -969,6 +969,19 @@ textarea {
   padding: 0 12px;
 }
 
+/* New-task dialog form (TasksPanel) — a vertical stack of .field rows, with
+   type + priority side by side. */
+.task-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.task-create-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 /* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
 
 .field-hint {
