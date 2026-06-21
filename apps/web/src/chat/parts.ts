@@ -1,9 +1,11 @@
 import type { ChatPart, ToolCall } from "../lib/types";
 
 // Ordered-parts accumulation for a streaming assistant turn. These keep the
-// emission order of answer text and tool calls so a pre-tool preamble renders
-// above the tool cards and post-tool text below them (instead of the old layout
-// that grouped all text after all tool cards). Pure + unit-tested (parts.test.ts).
+// emission order of reasoning, answer text and tool calls so a pre-tool preamble
+// renders above the tool cards and post-tool text below them, and "thinking"
+// renders inline next to the step it precedes (instead of the old layout that
+// hoisted reasoning to the top and grouped all text after all tool cards). Pure +
+// unit-tested (parts.test.ts).
 
 /** Append a streamed text delta to the ordered parts. Extends the open text run,
  *  or starts a new one when the previous block was a tool group (so post-tool text
@@ -24,6 +26,24 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   const trimmed = text.replace(/^\s+/, "");
   if (!trimmed) return next;
   next.push({ kind: "text", text: trimmed });
+  return next;
+}
+
+/** Append a streamed reasoning ("thinking") delta to the ordered parts. Extends the
+ *  open reasoning run, or starts a new one when the previous block was text/tools — so
+ *  thinking that resumes between tool calls renders inline at that point rather than
+ *  hoisted to the top. Leading whitespace is dropped on a new run (same empty-block
+ *  guard as appendText). Always streamed, so it only ever appends. */
+export function appendReasoning(parts: ChatPart[] | undefined, text: string): ChatPart[] {
+  const next = [...(parts ?? [])];
+  const last = next[next.length - 1];
+  if (last?.kind === "reasoning") {
+    next[next.length - 1] = { kind: "reasoning", text: last.text + text };
+    return next;
+  }
+  const trimmed = text.replace(/^\s+/, "");
+  if (!trimmed) return next;
+  next.push({ kind: "reasoning", text: trimmed });
   return next;
 }
 

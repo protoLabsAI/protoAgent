@@ -40,7 +40,7 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
-import { addToolRef, appendText, toolsForGroup } from "./parts";
+import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -830,15 +830,21 @@ function ChatSessionSlot({
           );
         },
         onReasoning: (delta) => {
-          // Accumulate the streamed scratch_pad into the assistant message's
-          // collapsible reasoning block (separate from the answer text).
+          // Accumulate the streamed scratch_pad two ways: into `reasoning` (the
+          // flat block kept for history/persistence) AND into the ordered `parts`,
+          // so live turns render thinking inline at the point it occurred — between
+          // the tool calls it precedes — rather than hoisted to the top.
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
             session.id,
             latest.messages.map((message) =>
               message.id === assistantId
-                ? { ...message, reasoning: `${message.reasoning ?? ""}${delta}` }
+                ? {
+                    ...message,
+                    reasoning: `${message.reasoning ?? ""}${delta}`,
+                    parts: appendReasoning(message.parts, delta),
+                  }
                 : message,
             ),
           );
@@ -992,19 +998,28 @@ function ChatSessionSlot({
               role={message.role}
               streaming={message.status === "streaming"}
             >
-              {message.reasoning ? (
-                // Collapsible "thinking" — open while the model is still reasoning
-                // (no answer text yet), auto-collapses once the answer starts.
+              {message.reasoning && !(message.parts && message.parts.length) ? (
+                // History-loaded turns have no ordered parts — fall back to the flat
+                // collapsible "thinking" block (open while still reasoning, auto-collapses
+                // once the answer starts). Live turns render reasoning inline via parts.
                 <Reasoning surface="subtle" streaming={message.status === "streaming" && !message.content}>
                   {message.reasoning}
                 </Reasoning>
               ) : null}
               {message.parts && message.parts.length ? (
-                // Live turns: text runs and tool groups in emission order, so a pre-tool
-                // preamble renders above the tool cards and the answer below them.
-                message.parts.map((part, i) =>
+                // Live turns: reasoning, text runs and tool groups in emission order, so a
+                // pre-tool preamble renders above the cards, the answer below them, and
+                // "thinking" inline next to the step it precedes.
+                message.parts.map((part, i, arr) =>
                   part.kind === "tools" ? (
                     <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} onCancelDelegation={cancelDelegation} />
+                  ) : part.kind === "reasoning" ? (
+                    part.text.trim() ? (
+                      // Stream the animation only on the trailing run (thinking in progress).
+                      <Reasoning key={i} surface="subtle" streaming={message.status === "streaming" && i === arr.length - 1}>
+                        {part.text}
+                      </Reasoning>
+                    ) : null
                   ) : part.text.trim() ? (
                     message.role === "user" ? (
                       <span className="chat-user-text" key={i}>{part.text}</span>
