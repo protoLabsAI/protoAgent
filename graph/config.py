@@ -736,6 +736,13 @@ class LangGraphConfig:
         bare dict. Behavior is identical to the old inline ``from_yaml`` parse.
         """
         data = data or {}
+        # A top-level section present but empty/commented-out in YAML parses to
+        # None (e.g. a bare `routing:` with every key commented). The many
+        # `data.get("x", {}).get(...)` reads below would then return None and
+        # crash on `.get`. Normalize null sections to {} so editing the example —
+        # commenting a whole block out — can't break the loader. (Subsumes the
+        # per-section `or {}` guards; top-level config keys are all mappings.)
+        data = {k: ({} if v is None else v) for k, v in data.items()}
         secrets = secrets or {}
         config_dir = Path(config_dir) if config_dir is not None else Path(".")
 

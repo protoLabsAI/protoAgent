@@ -1559,6 +1559,51 @@ def _filter_nested_to_host_keys(config: dict) -> tuple[dict, list[str]]:
     return host_only, dropped
 
 
+def _prune_shadowing_agent_keys(host_only: dict) -> list[str]:
+    """Delete the just-saved host-scoped keys from the AGENT leaf so the host
+    default actually wins.
+
+    A host-console save writes the box-shared host file, but the agent leaf
+    (``langgraph-config.yaml``) sits ABOVE the host layer in the ADR 0047
+    cascade (agent > host > app). An agent-layer copy of the same key — almost
+    always an unmodified seed from ``langgraph-config.example.yaml`` — silently
+    shadows the host value the operator just set on the Host console, so the
+    edit appears to "reset". On a host save we therefore remove those keys from
+    the agent leaf; the effective value then resolves from the host file.
+
+    ``host_only`` is the nested dict of host-scoped leaves written to the host
+    file. Returns the dotted paths cleared (for the operator message); empty
+    when nothing shadowed."""
+    import graph.config_io as _cio
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+
+    leaf = _cio.CONFIG_YAML_PATH  # resolved at call time (honors a repoint)
+    if not Path(leaf).exists():
+        return []  # no agent leaf on disk → nothing can shadow; don't seed one
+    doc = load_yaml_doc(leaf)
+    removed: list[str] = []
+
+    def _walk(node: Any, keys: Any, prefix: str) -> None:
+        if not isinstance(node, dict) or not isinstance(keys, dict):
+            return
+        for k, v in list(keys.items()):
+            if k not in node:
+                continue
+            dotted = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict) and isinstance(node.get(k), dict):
+                _walk(node[k], v, dotted)
+                if not node[k]:  # parent map emptied by the prune → drop it too
+                    del node[k]
+            else:
+                del node[k]
+                removed.append(dotted)
+
+    _walk(doc, host_only, "")
+    if removed:
+        save_yaml_doc(doc, leaf)
+    return removed
+
+
 @_serialized_config_write
 def _apply_settings_changes(
     config: dict | None = None,
@@ -1609,6 +1654,15 @@ def _apply_settings_changes(
                 strip_secrets_from_doc(doc)  # belt-and-suspenders: never a secret on host
                 save_yaml_doc(doc, hp)
                 messages.append("host config saved")
+                # The agent leaf outranks the host file (ADR 0047 agent > host),
+                # so a leftover agent-layer copy of the same key would shadow the
+                # value just set — clear it so the host default takes effect.
+                cleared = _prune_shadowing_agent_keys(host_only)
+                if cleared:
+                    messages.append(
+                        "cleared shadowing agent override(s) so the host value wins: "
+                        + ", ".join(sorted(cleared))
+                    )
             except Exception as e:
                 log.exception("[config] host YAML write failed")
                 return False, [f"host config write: {e}"]

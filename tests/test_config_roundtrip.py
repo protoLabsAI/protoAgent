@@ -819,6 +819,17 @@ def test_plugins_sources_empty_section_is_empty_list(tmp_path):
     assert cfg.plugins_sources_allow == []
 
 
+def test_null_top_level_section_falls_back_to_defaults(tmp_path):
+    """A whole section commented out parses to `routing: null`; the loader must
+    treat it as absent (use defaults), not crash on `None.get(...)`. Guards the
+    example, which a user edits by commenting blocks out."""
+    path = _write_yaml(tmp_path, "model:\nrouting:\ngoal:\n")  # all three null
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.api_base == "http://gateway:4000/v1"  # model.* defaults
+    assert cfg.routing_fallback_models == []  # routing.* defaults
+    assert cfg.goal_enabled is True  # goal.* defaults
+
+
 def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
     """N6 (2026-06-10 prod-readiness audit): config_to_dict emitted only
     plugins.{enabled, dir}, dropping `disabled` + `sources.allow`. The YAML file

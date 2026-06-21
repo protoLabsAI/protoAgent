@@ -216,6 +216,63 @@ def test_host_layer_save_writes_host_config(tmp_path, monkeypatch):
     assert cfg.model_name == "box-default-model"
 
 
+def test_host_save_clears_shadowing_agent_key(tmp_path, monkeypatch):
+    """A host save deletes a leftover agent-layer copy of the same key so the host
+    value actually wins (agent > host in the cascade) — without touching unrelated
+    agent-scoped keys. Reproduces the 'Host edit keeps resetting' bug."""
+    import yaml as _yaml
+
+    from server.agent_init import _apply_settings_changes
+
+    leaf = _point_config_at(tmp_path, monkeypatch)
+    hp = _host_file(tmp_path, monkeypatch)
+    _no_reload(monkeypatch)
+
+    # Agent leaf carries a stale api_base (a seed shadow) alongside an agent-scoped key.
+    leaf.write_text("model:\n  api_base: http://stale-agent-gw/v1\n  temperature: 0.5\n")
+
+    ok, messages = _apply_settings_changes(
+        config={"model": {"api_base": "http://new-host-gw/v1"}}, layer="host"
+    )
+    assert ok
+
+    # Host file got the new value.
+    assert _yaml.safe_load(hp.read_text())["model"]["api_base"] == "http://new-host-gw/v1"
+
+    # The shadowing agent key is gone; the unrelated agent-scoped key survives.
+    agent_doc = _yaml.safe_load(leaf.read_text())
+    assert "api_base" not in agent_doc["model"]
+    assert agent_doc["model"]["temperature"] == 0.5
+
+    # The clearing is surfaced to the operator.
+    assert any("model.api_base" in m for m in messages)
+
+    # Effective value now resolves from the host file, not the stale shadow.
+    assert LangGraphConfig.from_yaml(str(leaf)).api_base == "http://new-host-gw/v1"
+
+
+def test_host_save_prunes_emptied_parent_map(tmp_path, monkeypatch):
+    """When clearing the only key under a nested map leaves it empty, the now-empty
+    parent map is pruned too (no dangling ``model: {}`` in the agent leaf)."""
+    import yaml as _yaml
+
+    from server.agent_init import _apply_settings_changes
+
+    leaf = _point_config_at(tmp_path, monkeypatch)
+    _host_file(tmp_path, monkeypatch)
+    _no_reload(monkeypatch)
+
+    # model.api_base is the sole agent-leaf key; goal.enabled is unrelated.
+    leaf.write_text("model:\n  api_base: http://stale/v1\ngoal:\n  enabled: true\n")
+
+    ok, _ = _apply_settings_changes(config={"model": {"api_base": "http://new/v1"}}, layer="host")
+    assert ok
+
+    agent_doc = _yaml.safe_load(leaf.read_text())
+    assert "model" not in agent_doc  # emptied parent pruned
+    assert agent_doc["goal"]["enabled"] is True  # untouched
+
+
 def test_host_layer_refuses_secret(tmp_path, monkeypatch):
     """D5: a secret-typed key (model.api_key) is stripped/refused on the host layer —
     the host file is non-secret only."""
