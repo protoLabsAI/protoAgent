@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-06-21
+
 ### Changed
 - **The agent's task board is now "tasks", not "beads."** The in-process board — the
   console panel *and* the agent's task tools — was never the real `br` beads: it's a

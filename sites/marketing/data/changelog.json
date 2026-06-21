@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.66.0",
+    "date": "2026-06-21",
+    "changes": [
+      "The agent's task board is now \"tasks\", not \"beads.\"",
+      "Create a task from a dialog.",
+      "Dropped the dead br fallback from the core task board."
+    ]
+  },
+  {
     "version": "v0.65.0",
     "date": "2026-06-21",
     "changes": [
