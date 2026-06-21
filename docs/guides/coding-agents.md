@@ -54,10 +54,12 @@ Any agent that speaks ACP works — just point `command`/`args` at it:
 
 ```yaml
 delegates:
-  - { name: proto,       type: acp, command: proto,       args: ["--acp"],            workdir: ~/dev/my-repo }
-  - { name: claude-code, type: acp, command: claude-code, args: [],                   workdir: ~/dev/my-repo }   # alias → claude-agent-acp
-  - { name: codex,       type: acp, command: codex,       args: ["acp"],              workdir: ~/dev/my-repo }
-  - { name: gemini,      type: acp, command: gemini, args: ["--experimental-acp"],            workdir: ~/dev/my-repo }
+  - { name: proto,       type: acp, command: proto,       args: ["--acp"],              workdir: ~/dev/my-repo }
+  - { name: claude-code, type: acp, command: claude-code, args: [],                     workdir: ~/dev/my-repo }   # alias → claude-agent-acp
+  - { name: codex,       type: acp, command: codex-acp,   args: [],                     workdir: ~/dev/my-repo }   # @zed-industries/codex-acp adapter (codex has no native ACP)
+  - { name: opencode,    type: acp, command: opencode,    args: ["acp"],                workdir: ~/dev/my-repo }
+  - { name: copilot,     type: acp, command: copilot,     args: ["--acp"],              workdir: ~/dev/my-repo }
+  - { name: gemini,      type: acp, command: gemini,      args: ["--experimental-acp"], workdir: ~/dev/my-repo }
 ```
 
 The binary must be installed and on the `PATH` of the process running protoAgent.
@@ -78,6 +80,19 @@ probe will tell you so.
 > nested inside another Claude Code session** (`Error: Claude Code cannot be launched
 > inside another Claude Code session`). Run protoAgent from a normal shell / the
 > desktop app — not from within a `claude` session — when using the Claude Code agent.
+> (If you must run nested, strip `CLAUDECODE` + `CLAUDE_CODE_*` from protoAgent's
+> environment at launch — e.g. `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT …`.)
+
+**Codex has no native ACP mode either.** Recent `codex` CLI (≥ 0.13x) dropped the
+`acp` subcommand — it speaks **MCP** natively, not ACP, so `command: codex, args:
+["acp"]` no longer works (the probe fails). Drive it through the
+[`@zed-industries/codex-acp`](https://www.npmjs.com/package/@zed-industries/codex-acp)
+adapter: install it (`npm i -g @zed-industries/codex-acp`) → `command: codex-acp`, or
+run it zero-install with `command: npx, args: ["-y", "@zed-industries/codex-acp"]` (the
+form the [ACP-runtime](/guides/acp-runtime) and [MCP](/guides/mcp) guides use).
+
+**opencode** (`opencode acp`) and **GitHub Copilot CLI** (`copilot --acp`) ship native
+ACP servers — point `command`/`args` straight at them, no adapter needed.
 
 ## Use it
 
