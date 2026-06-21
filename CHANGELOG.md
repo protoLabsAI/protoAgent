@@ -11,13 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Schedule view: open a job to read the full prompt + edit it in place.** Clicking a
+  scheduled job now opens a detail dialog with the full (un-truncated) prompt, the
+  human-readable + raw schedule, next/last fire, timezone and id. An Edit mode changes the
+  prompt and/or schedule via a new atomic `PUT /api/scheduler/jobs/{id}` — id, created_at
+  and last_fire are preserved and next_fire is recomputed — instead of a cancel-then-re-add.
+  (#1277, #1278)
+- **Chat: reasoning renders inline, in emission order.** "Thinking" now interleaves with the
+  answer text and tool calls (reason → tool → reason → answer) instead of being hoisted into
+  a single block at the top of the turn. (#1276)
+
+### Changed
+- **Deleting a scheduled job confirms first.** The Schedule view's row trash button and the
+  detail dialog's Delete now summon a confirmation dialog (naming the job) instead of deleting
+  on a single click. (#1280)
+
+### Removed
+- **Removed the Workstacean scheduler backend.** The bundled sqlite `LocalScheduler` is now
+  the only backend; the opt-in remote adapter and its `SCHEDULER_BACKEND=workstacean` /
+  `WORKSTACEAN_*` env vars are gone (stale vars are ignored). The A2A cost-v1 / effect-domain
+  extension is unaffected — its wire URIs stay `proto-labs.ai`-branded. (#1278, #1279)
+
 ### Fixed
 - **Chat: assistant text and tool calls render in emission order.** A pre-tool preamble
   ("let me look that up") used to render *after* the tool cards because the message
   grouped all text below all tool cards; it now renders above them with the answer
   below (interleaved render blocks). The server also flushes buffered answer text before
   a tool frame, so the preamble reaches the console first — making the in-place streaming
-  visible as it arrives rather than appearing to land after the tools.
+  visible as it arrives rather than appearing to land after the tools. (#1272)
+- **Settings: Host-console edits stop "resetting."** A host-scoped field saved on the Host
+  console (e.g. the gateway base URL) was silently shadowed by an unmodified copy seeded into
+  the agent layer, so it appeared to reset. A host save now clears the shadowing agent-layer
+  key, the example config no longer seeds those fields, and a fully-commented-out config
+  section no longer crashes the loader. (#1273)
+- **ACP: `load_skill` works through the operator sidecar.** The operator MCP server — a
+  separate process exposing this agent's tools to an ACP brain — built every store except the
+  skills index, so `load_skill` returned "Skills index is not available." even when the prompt
+  listed the skill. It now builds the index like the host process. (#1274)
+- **Chat: no stray gap between tool calls.** A whitespace-only delta the model emitted between
+  two tool calls rendered an empty block and split the tool group into separate cards; it's now
+  dropped, keeping consecutive calls grouped. (#1275)
 
 ## [0.64.3] - 2026-06-20
 
