@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-06-21
+
 ### Added
 - **Schedule view: open a job to read the full prompt + edit it in place.** Clicking a
   scheduled job now opens a detail dialog with the full (un-truncated) prompt, the
