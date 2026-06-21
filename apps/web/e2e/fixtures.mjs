@@ -286,6 +286,16 @@ function scenarioFor(prompt) {
       output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
       answer: "Fetched example.com.",
     };
+  if (t.includes("PREAMBLE"))
+    // Pre-tool narration (`preText`) streams as an answer artifact BEFORE the tool —
+    // it must render ABOVE the tool card, with the final answer BELOW it (ordering fix).
+    return {
+      preText: "Let me look that up. ",
+      name: "web_search",
+      input: { query: "agent client protocol" },
+      output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
+      answer: "Found it — Agent Client Protocol.",
+    };
   if (t.includes("SUBAGENT"))
     return {
       answer: "Delegated research to a subagent and summarized.",
@@ -380,6 +390,20 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
     wrap({ kind: "task", id: taskId, contextId, status: { state: "submitted" }, artifacts: [] }),
     statusFrame("working…", null),
   ];
+  // Pre-tool answer text (ordering scenario) — streamed as an artifact BEFORE the
+  // tool frames, mirroring the backend flushing buffered text before a tool frame.
+  if (scenario.preText) {
+    frames.push(
+      wrap({
+        kind: "artifact-update",
+        taskId,
+        contextId,
+        artifact: { artifactId: taskId, parts: [{ kind: "text", text: scenario.preText }] },
+        append: true,
+        lastChunk: false,
+      }),
+    );
+  }
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));

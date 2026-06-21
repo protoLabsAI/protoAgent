@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Chat: assistant text and tool calls render in emission order.** A pre-tool preamble
+  ("let me look that up") used to render *after* the tool cards because the message
+  grouped all text below all tool cards; it now renders above them with the answer
+  below (interleaved render blocks). The server also flushes buffered answer text before
+  a tool frame, so the preamble reaches the console first — making the in-place streaming
+  visible as it arrives rather than appearing to land after the tools.
+
 ## [0.64.3] - 2026-06-20
 
 ### Changed

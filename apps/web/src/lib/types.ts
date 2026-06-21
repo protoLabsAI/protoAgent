@@ -403,12 +403,25 @@ export type BackgroundJobDTO = {
 // rendered inline by the curated chat component registry.
 export type ComponentSpec = { component: string; props: Record<string, unknown> };
 
+// An ordered render block of an assistant turn (bug-fix: preserve text↔tool order).
+// A run of answer text, or a group of consecutive top-level tool calls, in emission
+// order — so a pre-tool preamble renders ABOVE the tool cards and post-tool text
+// below them. `ids` reference the canonical entries in `ChatMessage.toolCalls`, so
+// live status + subagent nesting stay in one place (resolved at render).
+export type ChatPart =
+  | { kind: "text"; text: string }
+  | { kind: "tools"; ids: string[] };
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   toolCalls?: ToolCall[];
   components?: ComponentSpec[];
+  /** Ordered render blocks (text runs + tool groups) built during streaming so the
+   *  text/tool-call order is preserved. Absent on history-loaded messages, which fall
+   *  back to the grouped reasoning→toolCalls→content layout. */
+  parts?: ChatPart[];
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;

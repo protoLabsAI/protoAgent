@@ -346,6 +346,11 @@ class ProtoAgentExecutor(AgentExecutor):
                         await _flush_text()
 
                 elif event_type in ("tool_start", "tool_end"):
+                    # Flush any buffered preamble text BEFORE the tool frame so the
+                    # console renders pre-tool text above the tool card (ordering fix)
+                    # rather than after it — the client builds its ordered render blocks
+                    # in frame-arrival order, so text must reach it before the tool.
+                    await _flush_text()
                     if event_type == "tool_start":
                         tool_calls += 1
                     part = _tool_call_part(event_type, payload)

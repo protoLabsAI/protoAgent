@@ -40,6 +40,7 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
+import { addToolRef, appendText, toolsForGroup } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -821,6 +822,7 @@ function ChatSessionSlot({
                 ? {
                     ...message,
                     content: append ? `${message.content}${text}` : text,
+                    parts: appendText(message.parts, text, append),
                     status: "streaming",
                   }
                 : message,
@@ -851,6 +853,10 @@ function ChatSessionSlot({
               const calls = [...(message.toolCalls || [])];
               const idx = calls.findIndex((c) => c.id === evt.id);
               const now = Date.now();
+              // Ordered render blocks: a top-level tool opens/extends a tool group in
+              // emission order; children (parentId set) nest under their parent's card,
+              // so they don't get their own block.
+              let nextParts = message.parts;
               if (evt.phase === "start") {
                 // A tool that starts while a `task` is still running is a child
                 // of that subagent delegation — nest it. (Last open task wins,
@@ -868,6 +874,7 @@ function ChatSessionSlot({
                 };
                 if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
                 else calls.push(card);
+                if (card.parentId == null) nextParts = addToolRef(message.parts, evt.id);
               } else {
                 // end — flip the matching card to done/error (or create one if the
                 // start frame was missed). A failed end (e.g. a declined run_command)
@@ -878,10 +885,12 @@ function ChatSessionSlot({
                 if (idx >= 0) {
                   calls[idx] = { ...calls[idx], output: evt.output, status: endStatus, durationMs };
                 } else {
+                  // Missed start — treat as a fresh top-level call so it still renders.
                   calls.push({ id: evt.id, name: evt.name, output: evt.output, status: endStatus });
+                  nextParts = addToolRef(message.parts, evt.id);
                 }
               }
-              return { ...message, toolCalls: calls };
+              return { ...message, toolCalls: calls, parts: nextParts };
             }),
           );
         },
@@ -990,23 +999,45 @@ function ChatSessionSlot({
                   {message.reasoning}
                 </Reasoning>
               ) : null}
-              {message.toolCalls && message.toolCalls.length > 0 ? (
-                <ToolCalls calls={message.toolCalls} onCancelDelegation={cancelDelegation} />
-              ) : null}
-              {message.content
-                ? message.role === "user"
-                  ? // Literal user input — preserve newlines (markdown reflows assistant text).
-                    <span className="chat-user-text">{message.content}</span>
-                  : // assistant + system (e.g. background-completion notifications,
-                    // ADR 0050) carry markdown — render it; only the user's own input
-                    // stays literal.
-                    <Markdown>{message.content}</Markdown>
-                : message.status === "streaming"
-                    && !(message.toolCalls && message.toolCalls.length)
-                    && !(message.components && message.components.length)
-                    && !message.reasoning
-                  ? <Loader2 className="spin" size={15} />
-                  : null}
+              {message.parts && message.parts.length ? (
+                // Live turns: text runs and tool groups in emission order, so a pre-tool
+                // preamble renders above the tool cards and the answer below them.
+                message.parts.map((part, i) =>
+                  part.kind === "tools" ? (
+                    <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} onCancelDelegation={cancelDelegation} />
+                  ) : part.text ? (
+                    message.role === "user" ? (
+                      <span className="chat-user-text" key={i}>{part.text}</span>
+                    ) : (
+                      // assistant + system carry markdown; only the user's own input stays literal.
+                      <Markdown key={i}>{part.text}</Markdown>
+                    )
+                  ) : null,
+                )
+              ) : (
+                // History-loaded messages have no ordered parts — keep the grouped layout
+                // (tool cards above the text; order isn't recoverable from storage).
+                <>
+                  {message.toolCalls && message.toolCalls.length > 0 ? (
+                    <ToolCalls calls={message.toolCalls} onCancelDelegation={cancelDelegation} />
+                  ) : null}
+                  {message.content ? (
+                    message.role === "user" ? (
+                      <span className="chat-user-text">{message.content}</span>
+                    ) : (
+                      <Markdown>{message.content}</Markdown>
+                    )
+                  ) : null}
+                </>
+              )}
+              {message.status === "streaming"
+                && !(message.parts && message.parts.length)
+                && !message.content
+                && !(message.toolCalls && message.toolCalls.length)
+                && !(message.components && message.components.length)
+                && !message.reasoning
+                ? <Loader2 className="spin" size={15} />
+                : null}
               {message.components && message.components.length > 0
                 ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
                 : null}
