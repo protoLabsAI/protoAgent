@@ -457,6 +457,7 @@ def _main():
         scheduler_list=_console._operator_scheduler_list,
         scheduler_add=_console._operator_scheduler_add,
         scheduler_cancel=_console._operator_scheduler_cancel,
+        scheduler_update=_console._operator_scheduler_update,
         goal_list=_console._operator_goals_list,
         goal_clear=_console._operator_goals_clear,
         goal_set=_console._operator_goals_set,
@@ -480,11 +481,9 @@ def _main():
     _mount_plugin_routers(STATE.plugin_routers)
 
     # --- Scheduler lifecycle ------------------------------------------------
-    # The local scheduler needs an asyncio polling task; the Workstacean
-    # adapter is a no-op start/stop. Both implement the same contract so
-    # we just call through. on_event is preferred over a lifespan
-    # context manager here — the rest of the boot is sync (uvicorn.run
-    # is the only blocking call) and FastAPI fires startup/shutdown
+    # The local scheduler needs an asyncio polling task. on_event is preferred
+    # over a lifespan context manager here — the rest of the boot is sync
+    # (uvicorn.run is the only blocking call) and FastAPI fires startup/shutdown
     # around it.
     @fastapi_app.on_event("startup")
     async def _scheduler_startup() -> None:

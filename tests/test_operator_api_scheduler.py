@@ -14,10 +14,11 @@ from operator_api.routes import register_operator_routes
 
 
 class _FakeJob:
-    def __init__(self, jid, prompt, schedule):
+    def __init__(self, jid, prompt, schedule, timezone=None):
         self.id = jid
         self.prompt = prompt
         self.schedule = schedule
+        self.timezone = timezone
         self.next_fire = "2026-06-01T09:00:00+00:00"
         self.enabled = True
 
@@ -26,6 +27,7 @@ class _FakeJob:
             "id": self.id,
             "prompt": self.prompt,
             "schedule": self.schedule,
+            "timezone": self.timezone,
             "next_fire": self.next_fire,
             "enabled": self.enabled,
         }
@@ -53,6 +55,15 @@ class _FakeScheduler:
     def cancel_job(self, job_id):
         return self._jobs.pop(job_id, None) is not None
 
+    def update_job(self, job_id, prompt, schedule, *, timezone=None):
+        if schedule == "bad":
+            raise ValueError("malformed schedule")
+        if job_id not in self._jobs:
+            raise ValueError(f"no job {job_id!r} to update")
+        job = self._jobs[job_id]
+        job.prompt, job.schedule, job.timezone = prompt, schedule, timezone
+        return job
+
 
 def _client(scheduler=None):
     import asyncio
@@ -79,6 +90,16 @@ def _client(scheduler=None):
             raise RuntimeError("scheduler is not loaded")
         return {"canceled": bool(await asyncio.to_thread(sched.cancel_job, job_id))}
 
+    async def _update(job_id, req):
+        if sched is None:
+            raise RuntimeError("scheduler is not loaded")
+        if not req.get("prompt"):
+            raise ValueError("prompt is required")
+        job = await asyncio.to_thread(
+            sched.update_job, job_id, req["prompt"], req["schedule"], timezone=req.get("timezone") or None
+        )
+        return job.as_dict()
+
     register_operator_routes(
         app,
         runtime_status=lambda: {"graph_loaded": True},
@@ -88,6 +109,7 @@ def _client(scheduler=None):
         scheduler_list=_list,
         scheduler_add=_add,
         scheduler_cancel=_cancel,
+        scheduler_update=_update,
     )
     return TestClient(app)
 
@@ -117,6 +139,37 @@ def test_add_honors_job_id_and_cancel() -> None:
     assert client.get("/api/scheduler/jobs").json()["jobs"] == []
 
 
+def test_put_updates_in_place() -> None:
+    client = _client(_FakeScheduler())
+    client.post("/api/scheduler/jobs", json={"prompt": "old", "schedule": "0 9 * * *", "job_id": "j1"})
+
+    resp = client.put(
+        "/api/scheduler/jobs/j1",
+        json={"prompt": "new", "schedule": "0 17 * * 1-5", "timezone": "America/Chicago"},
+    )
+    assert resp.status_code == 200
+    job = resp.json()["job"]
+    assert job["id"] == "j1" and job["prompt"] == "new" and job["schedule"] == "0 17 * * 1-5"
+    assert job["timezone"] == "America/Chicago"
+
+    # Still one job, edited in place (not a new row).
+    listed = client.get("/api/scheduler/jobs").json()["jobs"]
+    assert len(listed) == 1 and listed[0]["id"] == "j1" and listed[0]["prompt"] == "new"
+
+
+def test_put_missing_job_is_400() -> None:
+    client = _client(_FakeScheduler())
+    resp = client.put("/api/scheduler/jobs/nope", json={"prompt": "p", "schedule": "0 9 * * *"})
+    assert resp.status_code == 400
+    assert "no job" in resp.json()["detail"]
+
+
+def test_put_malformed_schedule_is_400() -> None:
+    client = _client(_FakeScheduler())
+    client.post("/api/scheduler/jobs", json={"prompt": "p", "schedule": "0 9 * * *", "job_id": "j1"})
+    assert client.put("/api/scheduler/jobs/j1", json={"prompt": "p", "schedule": "bad"}).status_code == 400
+
+
 def test_malformed_schedule_is_400() -> None:
     client = _client(_FakeScheduler())
     resp = client.post("/api/scheduler/jobs", json={"prompt": "p", "schedule": "bad"})
@@ -142,4 +195,6 @@ def test_routes_absent_when_accessors_not_wired() -> None:
         subagent_run=lambda req: None,
         subagent_batch=lambda req: None,
     )
-    assert TestClient(app).get("/api/scheduler/jobs").status_code == 404
+    client = TestClient(app)
+    assert client.get("/api/scheduler/jobs").status_code == 404
+    assert client.put("/api/scheduler/jobs/x", json={"prompt": "p", "schedule": "0 9 * * *"}).status_code == 404

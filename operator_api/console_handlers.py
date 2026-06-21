@@ -280,6 +280,27 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
     return {"canceled": bool(canceled)}
 
 
+async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
+    import asyncio
+
+    if STATE.scheduler is None:
+        raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
+    prompt = (req.get("prompt") or "").strip()
+    schedule = (req.get("schedule") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required")
+    if not schedule:
+        raise ValueError("schedule is required")
+    job = await asyncio.to_thread(
+        STATE.scheduler.update_job,
+        job_id,
+        prompt,
+        schedule,
+        timezone=req.get("timezone") or None,
+    )
+    return job.as_dict()
+
+
 async def _operator_goals_list() -> dict:
     import asyncio
 

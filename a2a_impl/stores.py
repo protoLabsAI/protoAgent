@@ -60,7 +60,7 @@ def _parse_allowlist() -> tuple[frozenset[str], tuple]:
     """Parse the webhook allowlist env vars once per import.
 
     ``PUSH_NOTIFICATION_ALLOWED_HOSTS`` is a comma-separated list of
-    hostnames (e.g. ``workstacean,automaker-server``) that bypass the
+    hostnames (e.g. ``automaker-server,internal-hooks``) that bypass the
     SSRF check entirely — trusted internal agents on the docker
     network where every hostname resolves to an RFC1918 address by
     design.

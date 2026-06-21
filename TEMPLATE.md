@@ -198,19 +198,13 @@ See [Eval your fork](./docs/guides/evals.md) for what each case
 asserts, how the three assertion channels work, and how to add
 cases for your fork's new tools.
 
-## 9b. Scheduler — local sqlite or Workstacean
+## 9b. Scheduler — local sqlite
 
 The bundled scheduler ships three agent tools — `schedule_task`,
-`list_schedules`, `cancel_schedule` — backed by either a local
-sqlite poller or a Workstacean adapter, selected at startup via env:
+`list_schedules`, `cancel_schedule` — backed by a local sqlite poller:
 
 ```bash
-# Default: local sqlite, persists at /sandbox/scheduler/<agent_name>/jobs.db
-python -m server
-
-# Workstacean: set both and restart
-export WORKSTACEAN_API_BASE=http://your-workstacean:3000
-export WORKSTACEAN_API_KEY=...
+# Local sqlite, persists at /sandbox/scheduler/<agent_name>/jobs.db
 python -m server
 ```
 

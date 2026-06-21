@@ -153,6 +153,45 @@ class TestListAndCancel:
         assert len(gw.list_jobs()) == 1
 
 
+class TestUpdateJob:
+    def test_in_place_update_keeps_id_and_recomputes_next_fire(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        job = s.add_job("old prompt", "0 9 * * *", job_id="j1")
+        before = job.next_fire
+        out = s.update_job("j1", "new prompt", "0 17 * * 1-5", timezone="America/Chicago")
+        assert out.id == "j1"  # same job, not a new one
+        assert out.prompt == "new prompt"
+        assert out.schedule == "0 17 * * 1-5"
+        assert out.timezone == "America/Chicago"
+        assert out.next_fire != before  # recomputed from the new schedule
+        # Exactly one job remains (in-place, not cancel+re-add into a new row).
+        jobs = s.list_jobs()
+        assert len(jobs) == 1 and jobs[0].id == "j1" and jobs[0].prompt == "new prompt"
+
+    def test_update_missing_job_raises(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        with pytest.raises(ValueError, match="no job"):
+            s.update_job("nope", "p", "0 9 * * *")
+
+    def test_update_rejects_empty_prompt_and_bad_schedule_without_mutating(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        s.add_job("keep", "0 9 * * *", job_id="j1")
+        with pytest.raises(ValueError, match="prompt is required"):
+            s.update_job("j1", "  ", "0 10 * * *")
+        with pytest.raises(ValueError, match="Invalid isoformat|could not convert"):
+            s.update_job("j1", "p", "not-a-schedule")
+        # The original is untouched after either rejection.
+        assert s.list_jobs()[0].prompt == "keep" and s.list_jobs()[0].schedule == "0 9 * * *"
+
+    def test_cross_agent_update_blocked(self, tmp_path):
+        gp = _make_scheduler(tmp_path, agent="gina-personal")
+        gw = _make_scheduler(tmp_path, agent="gina-work")
+        gw_job = gw.add_job("w1", "0 9 * * *")
+        with pytest.raises(ValueError, match="no job"):
+            gp.update_job(gw_job.id, "hijack", "0 0 * * *")
+        assert gw.list_jobs()[0].prompt == "w1"  # gw's job unchanged
+
+
 # ── reschedule / delete behaviour ───────────────────────────────────────────
 
 
@@ -482,42 +521,33 @@ async def test_fire_returns_bool(tmp_path, monkeypatch):
     assert await s._fire(job) is False
 
 
-# ── backend selection: Workstacean is opt-in (local is the default) ──────────
+# ── backend selection: the bundled LocalScheduler is the only backend ────────
 
 
-def test_workstacean_is_opt_in(monkeypatch):
-    """Workstacean env vars alone must NOT switch the backend; only an explicit
-    SCHEDULER_BACKEND=workstacean does. Otherwise the default stays local."""
-    import server
-    from graph.config import LangGraphConfig
-    from scheduler import LocalScheduler, WorkstaceanScheduler
-
-    cfg = LangGraphConfig()  # scheduler_enabled defaults True
-    monkeypatch.setenv("WORKSTACEAN_API_BASE", "https://example.com")
-    monkeypatch.setenv("WORKSTACEAN_API_KEY", "k")
-    monkeypatch.delenv("SCHEDULER_BACKEND", raising=False)
-    monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
-
-    backend = server._build_scheduler(cfg)
-    assert isinstance(backend, LocalScheduler)  # env present but not opted in → local
-
-    monkeypatch.setenv("SCHEDULER_BACKEND", "workstacean")
-    backend = server._build_scheduler(cfg)
-    assert isinstance(backend, WorkstaceanScheduler)  # explicit opt-in honored
-
-
-def test_workstacean_opt_in_without_creds_falls_back_local(monkeypatch):
+def test_build_scheduler_returns_local(monkeypatch):
+    """The scheduler is always the bundled LocalScheduler (the remote Workstacean
+    backend was removed). Stale SCHEDULER_BACKEND/WORKSTACEAN_* env vars are ignored."""
     import server
     from graph.config import LangGraphConfig
     from scheduler import LocalScheduler
 
-    cfg = LangGraphConfig()
-    monkeypatch.setenv("SCHEDULER_BACKEND", "workstacean")
-    monkeypatch.delenv("WORKSTACEAN_API_BASE", raising=False)
-    monkeypatch.delenv("WORKSTACEAN_API_KEY", raising=False)
+    cfg = LangGraphConfig()  # scheduler_enabled defaults True
     monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+    # Leftover Workstacean env from an old deploy must not change anything.
+    monkeypatch.setenv("SCHEDULER_BACKEND", "workstacean")
+    monkeypatch.setenv("WORKSTACEAN_API_BASE", "https://example.com")
+    monkeypatch.setenv("WORKSTACEAN_API_KEY", "k")
 
     assert isinstance(server._build_scheduler(cfg), LocalScheduler)
+
+
+def test_build_scheduler_disabled_returns_none(monkeypatch):
+    import server
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig()
+    monkeypatch.setenv("SCHEDULER_DISABLED", "1")
+    assert server._build_scheduler(cfg) is None
 
 
 # ── A2A 1.0 loopback wire shape (#477) ───────────────────────────────────────

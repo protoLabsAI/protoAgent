@@ -33,6 +33,12 @@ class ScheduleAddRequest(BaseModel):
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
+class ScheduleUpdateRequest(BaseModel):
+    prompt: str
+    schedule: str  # 5-field cron expression OR an ISO-8601 datetime
+    timezone: str | None = None  # IANA tz for cron eval (None = UTC)
+
+
 class InboxAddRequest(BaseModel):
     text: str
     priority: str = "next"  # now | next | later
@@ -180,6 +186,7 @@ def register_operator_routes(
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     scheduler_cancel: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    scheduler_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     goal_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     goal_clear: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
     goal_set: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -372,6 +379,15 @@ def register_operator_routes(
         async def _scheduler_add(req: ScheduleAddRequest):
             try:
                 return {"job": await scheduler_add(_model_payload(req))}
+            except Exception as exc:
+                raise _http_error(exc) from exc
+
+    if scheduler_update is not None:
+
+        @app.put("/api/scheduler/jobs/{job_id}")
+        async def _scheduler_update(job_id: str, req: ScheduleUpdateRequest):
+            try:
+                return {"job": await scheduler_update(job_id, _model_payload(req))}
             except Exception as exc:
                 raise _http_error(exc) from exc
 

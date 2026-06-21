@@ -111,20 +111,14 @@ instance-scoped via `PROTOAGENT_INSTANCE`.
 
 ## Scheduler
 
-The bundled scheduler is enabled by default. See [Schedule future work](/guides/scheduler) and [Configuration § scheduler](/reference/configuration#scheduler) for the full guide. **Backend selection** is env-driven; **enable/disable** lives in YAML (`middleware.scheduler`) so the drawer can toggle without a restart.
+The bundled scheduler is enabled by default. See [Schedule future work](/guides/scheduler) and [Configuration § scheduler](/reference/configuration#scheduler) for the full guide. **Enable/disable** lives in YAML (`middleware.scheduler`) so the drawer can toggle without a restart.
 
 | Variable | Default | What |
 |---|---|---|
-| `SCHEDULER_BACKEND` | `local` | Set to `workstacean` to **opt in** to the remote `WorkstaceanScheduler` (also requires the `WORKSTACEAN_*` vars below). Any other value / unset → the bundled `LocalScheduler`. |
-| `WORKSTACEAN_API_BASE` | (unset) | Workstacean base URL. Used only when `SCHEDULER_BACKEND=workstacean`; on its own it no longer switches the backend. |
-| `WORKSTACEAN_API_KEY` | (unset) | Auth token sent as `X-API-Key` to Workstacean's `/publish`. Required (with the base) when opting in to Workstacean. |
-| `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
-| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
-| `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
-| `SCHEDULER_FIRE_TIMEOUT_S` | `600` | Local backend: how long a fire waits for the turn (`message/send` blocks until the turn is terminal). Must exceed a real turn — too low false-fails long turns. Fires run off the poll loop, so this doesn't stall the cadence. |
+| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
+| `SCHEDULER_FIRE_TIMEOUT_S` | `600` | How long a fire waits for the turn (`message/send` blocks until the turn is terminal). Must exceed a real turn — too low false-fails long turns. Fires run off the poll loop, so this doesn't stall the cadence. |
 | `SCHEDULER_DISABLED` | (unset) | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |
-
-> **protoLabs operators**: the fleet's Workstacean lives on the `ava` node. `WORKSTACEAN_API_KEY` is in the org's secrets manager under `secret-management → workstacean`.
 
 ## Tracing (optional)
 
@@ -157,7 +151,7 @@ When unset, all origins are accepted but a WARNING is logged at startup. When se
 
 | Variable | Default | What |
 |---|---|---|
-| `PUSH_NOTIFICATION_ALLOWED_HOSTS` | (empty) | Comma-separated hostnames that bypass the private-IP check when accepting webhook URLs. Example: `workstacean,automaker-server`. |
+| `PUSH_NOTIFICATION_ALLOWED_HOSTS` | (empty) | Comma-separated hostnames that bypass the private-IP check when accepting webhook URLs. Example: `automaker-server,internal-hooks`. |
 | `PUSH_NOTIFICATION_ALLOWED_CIDRS` | (empty) | Comma-separated CIDR blocks explicitly allowed. Example: `10.0.0.0/8,172.16.0.0/12`. |
 
 Without these set, the handler rejects webhook URLs that resolve to private / loopback / link-local IPs — defends against SSRF where a client registers `http://169.254.169.254/...` or `http://10.0.0.1/...` as a callback.

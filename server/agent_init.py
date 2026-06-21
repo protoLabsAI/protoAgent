@@ -169,10 +169,8 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # the worker subagent — the store is still cheap to construct.
     STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
 
-    # Scheduler — local sqlite by default, swaps to a WorkstaceanScheduler
-    # automatically when WORKSTACEAN_API_BASE + WORKSTACEAN_API_KEY env
-    # vars are set. Both backends share the same agent-tool surface
-    # (schedule_task / list_schedules / cancel_schedule).
+    # Scheduler — the bundled local sqlite backend (or None when disabled).
+    # Agent-tool surface: schedule_task / list_schedules / cancel_schedule.
     STATE.scheduler = _build_scheduler(STATE.graph_config)
 
     # Plugins — drop-in packages (tools + bundled skills + surfaces/routes +
@@ -1099,14 +1097,8 @@ def _stop_scheduler_async(backend: "SchedulerBackend") -> None:
 
 
 def _build_scheduler(config) -> "SchedulerBackend | None":
-    """Return the active scheduler backend, or ``None`` when disabled.
-
-    **The bundled ``LocalScheduler`` (sqlite) is the default.** The remote
-    ``WorkstaceanScheduler`` is **opt-in**: it's used only when
-    ``SCHEDULER_BACKEND=workstacean`` is set *and* ``WORKSTACEAN_API_BASE`` +
-    ``WORKSTACEAN_API_KEY`` are present. Having the Workstacean env vars alone
-    no longer switches the backend — local stays the default unless explicitly
-    opted in.
+    """Return the scheduler backend (the bundled sqlite ``LocalScheduler``), or
+    ``None`` when scheduling is disabled.
 
     Returns ``None`` when explicitly disabled via ``SCHEDULER_DISABLED=1``
     so a fork can ship without a scheduler at all.
@@ -1130,32 +1122,6 @@ def _build_scheduler(config) -> "SchedulerBackend | None":
         return None
 
     name = agent_name()
-    # Workstacean is opt-in: require an explicit SCHEDULER_BACKEND=workstacean,
-    # not merely the presence of the API env vars (default stays local).
-    workstacean_opt_in = os.environ.get("SCHEDULER_BACKEND", "").strip().lower() == "workstacean"
-    workstacean_base = os.environ.get("WORKSTACEAN_API_BASE", "").strip()
-    workstacean_key = os.environ.get("WORKSTACEAN_API_KEY", "").strip()
-    if workstacean_opt_in:
-        if workstacean_base and workstacean_key:
-            try:
-                from scheduler import WorkstaceanScheduler
-
-                return WorkstaceanScheduler(
-                    agent_name=name,
-                    base_url=workstacean_base,
-                    api_key=workstacean_key,
-                    topic_prefix=os.environ.get("WORKSTACEAN_TOPIC_PREFIX") or None,
-                )
-            except Exception as exc:
-                log.warning(
-                    "[server] WorkstaceanScheduler init failed: %s; falling back to local",
-                    exc,
-                )
-        else:
-            log.warning(
-                "[server] SCHEDULER_BACKEND=workstacean but WORKSTACEAN_API_BASE/"
-                "API_KEY missing; falling back to local scheduler",
-            )
 
     try:
         from scheduler import LocalScheduler
@@ -1302,10 +1268,6 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     #    construct now (cheap), start only after commit.
     # 3. Toggle ON, already running → reuse. Drawer saves don't tear
     #    down the polling loop.
-    #
-    # Env-driven config (WORKSTACEAN_API_BASE) only takes effect on
-    # full process restart; the YAML toggle is the canonical
-    # reload-time switch.
     scheduler_wanted = getattr(new_config, "scheduler_enabled", True)
     next_scheduler: "SchedulerBackend | None"
     pending_start: "SchedulerBackend | None" = None
