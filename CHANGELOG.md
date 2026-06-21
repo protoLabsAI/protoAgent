@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add-delegate form, schedule, the new task dialog) shipped cramped until someone
   remembered to bump it. Raised the app-wide `.pl-dialog__body` default to 24px once and
   dropped the now-redundant per-dialog overrides. Surfaces that embed a full panel
-  (Settings, theme quick-pick) keep their intentional zero padding. (#1287)
+  (Settings, theme quick-pick) keep their intentional zero padding. (#1288)
 
 ## [0.66.0] - 2026-06-21
 
