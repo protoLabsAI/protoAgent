@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.65.0",
+    "date": "2026-06-21",
+    "changes": [
+      "Schedule view: open a job to read the full prompt + edit it in place.",
+      "Chat: reasoning renders inline, in emission order.",
+      "Deleting a scheduled job confirms first.",
+      "Removed the Workstacean scheduler backend.",
+      "Chat: assistant text and tool calls render in emission order.",
+      "Settings: Host-console edits stop \"resetting.\"",
+      "ACP: load_skill works through the operator sidecar.",
+      "Chat: no stray gap between tool calls."
+    ]
+  },
+  {
     "version": "v0.64.3",
     "date": "2026-06-20",
     "changes": [
