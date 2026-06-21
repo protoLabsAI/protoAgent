@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The agent's task board is now "tasks", not "beads."** The in-process board — the
+  console panel *and* the agent's task tools — was never the real `br` beads: it's a
+  lightweight SQLite tracker with no dependency graph (the real `br` DAG lives in the
+  opt-in `project_board` plugin). It's renamed throughout to end the confusion: the
+  console **"Beads" panel → "Tasks"**, the API `/api/beads/*` → `/api/tasks/*`, and the
+  agent tools `beads_create`/`beads_list`/`beads_update`/`beads_close` →
+  `task_create`/`task_list`/`task_update`/`task_close`. New issue ids are `task-N`
+  (existing `bd-N` ids keep working). **Breaking** if you called the old API paths or
+  tool names. (#1283)
+- **Create a task from a dialog.** The Tasks panel's always-visible inline create form is
+  replaced by a "New task" action that opens a dialog (title · type · priority ·
+  description), so the board stays the focus. (#1284)
+
+### Removed
+- **Dropped the dead `br` fallback from the core task board.** It was a remote `br`
+  adapter that only bound for forks not wiring the in-process store; the core is now
+  purely the in-process store. Forks wanting real `br` use the `project_board` plugin
+  (which already wraps it). (#1283)
+
 ## [0.65.0] - 2026-06-21
 
 ### Added
