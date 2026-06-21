@@ -75,7 +75,7 @@ a dirty tree on main. Summarize per project (flowing / stalled / blocked), then
 
 - **Summon via A2A** — Roxy is reached over the A2A endpoint (`message/send` /
   `message/stream`); set an `auth.token` so inbound is authenticated.
-- **The Workstacean bus** — protoWorkstacean dispatches to Roxy as an A2A agent
+- **An external dispatcher** — any A2A planner can dispatch to Roxy as an A2A agent
   (it already speaks the `cost-v1`/`confidence-v1` extensions Roxy emits).
 - **Scheduled sweeps** — a periodic `schedule_task` (or an external cron hitting
   A2A) fires a "sweep all projects" turn; the skill + persona do the rest.

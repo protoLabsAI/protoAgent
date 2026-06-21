@@ -18,7 +18,7 @@ Shape how the agent's loop behaves — standing goals, timers, middleware hooks,
 | Guide | When to read |
 |---|---|
 | [Goal mode](/guides/goal-mode) | You want the agent to pursue a standing goal across turns, not just answer one-shot |
-| [Schedule future work](/guides/scheduler) | You want the agent to defer tasks to itself ("remind me tomorrow", recurring sweeps) — local sqlite or Workstacean-backed |
+| [Schedule future work](/guides/scheduler) | You want the agent to defer tasks to itself ("remind me tomorrow", recurring sweeps) — bundled local sqlite |
 | [Middleware](/guides/middleware) | You want pre/post hooks on the agent turn (plugin-contributed) |
 | [Run on a coding agent (ACP runtime)](/guides/acp-runtime) | You want an external coding agent (proto/Codex/Claude/Copilot/OpenCode) to *be* the runtime brain, with protoAgent as the shell |
 

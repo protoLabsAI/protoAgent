@@ -27,7 +27,7 @@ Every terminal task carries a DataPart with token usage and duration:
 
 Captured by the `on_chat_model_end` handler in `_chat_langgraph_stream`. Requires `stream_usage=True` on the ChatOpenAI client — the template sets this in `graph/llm.py`.
 
-**Consumers** (like Workstacean's A2AExecutor) extract this DataPart onto `result.data` and record per-(agent, skill) samples. The consumer keys on the `skill` ID from the card, so skill IDs must be stable.
+**Consumers** (any A2A executor) extract this DataPart onto `result.data` and record per-(agent, skill) samples. The consumer keys on the `skill` ID from the card, so skill IDs must be stable.
 
 `costUsd` **is** emitted: `pricing.py::cost_usd` derives it from the model's rates and the captured `usage`, and it rides this DataPart (and the telemetry store). Consumers still tolerate a missing/zero `costUsd` (unknown model → no rate) and can recompute from `usage` themselves.
 
@@ -90,7 +90,7 @@ Declares a human-in-the-loop **approval policy** per skill: `autonomous` (run wi
 **Direction**: declared by this agent
 **Declared on card**: no (template has no mutating skills)
 
-Advertises per-skill world-state mutations so Workstacean's L1 planner can rank your agent against goals that target those state selectors.
+Advertises per-skill world-state mutations so a planner can rank your agent against goals that target those state selectors.
 
 ```json
 {
@@ -123,7 +123,7 @@ Only declare effects that actually mutate shared state. Over-declaring confuses 
 
 **Pair with runtime emission**: if you declare an effect, emit a matching `worldstate-delta-v1` DataPart when the tool succeeds at runtime — yield a `delta` event from the tool and the executor (`a2a_executor.py`) accumulates them onto the terminal artifact. Divergence between declared and observed mutations breaks the planner's scoring model.
 
-See `docs/extensions/effect-domain-v1` in the [protoWorkstacean repo](https://github.com/protoLabsAI/protoWorkstacean) for the full spec.
+The fields above define the full `effect-domain-v1` shape (a proto-labs A2A extension).
 
 ## `worldstate-delta-v1`
 
