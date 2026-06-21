@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addToolRef, appendText, toolsForGroup } from "./parts";
+import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
 
 describe("appendText", () => {
   it("starts a run, then appends deltas to it", () => {
@@ -46,6 +46,46 @@ describe("appendText", () => {
       { kind: "tools", ids: ["a"] },
       { kind: "text", text: "Here's the answer" },
     ]);
+  });
+});
+
+describe("appendReasoning", () => {
+  it("extends the open reasoning run on consecutive deltas", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "Let me ");
+    p = appendReasoning(p, "think");
+    expect(p).toEqual([{ kind: "reasoning", text: "Let me think" }]);
+  });
+
+  it("interleaves reasoning between tools (reason · tool · reason · answer)", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "First I'll search");
+    p = addToolRef(p, "web_search");
+    p = appendReasoning(p, "Now I'll read it"); // resumes thinking after the tool — inline
+    p = addToolRef(p, "fetch_url");
+    p = appendText(p, "Here's the answer", true);
+    expect(p).toEqual([
+      { kind: "reasoning", text: "First I'll search" },
+      { kind: "tools", ids: ["web_search"] },
+      { kind: "reasoning", text: "Now I'll read it" },
+      { kind: "tools", ids: ["fetch_url"] },
+      { kind: "text", text: "Here's the answer" },
+    ]);
+  });
+
+  it("starts a fresh reasoning run after text/tools, trimming leading whitespace", () => {
+    let p: ChatPart[] | undefined = [{ kind: "tools", ids: ["a"] }];
+    p = appendReasoning(p, "\n\nreconsidering");
+    expect(p).toEqual([
+      { kind: "tools", ids: ["a"] },
+      { kind: "reasoning", text: "reconsidering" },
+    ]);
+  });
+
+  it("skips a pure-whitespace reasoning delta after a tool group", () => {
+    let p: ChatPart[] | undefined = [{ kind: "tools", ids: ["a"] }];
+    p = appendReasoning(p, "\n");
+    expect(p).toEqual([{ kind: "tools", ids: ["a"] }]);
   });
 });
 
