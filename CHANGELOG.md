@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Dialogs no longer render their content cramped flush to the body edge.** The shared
+  DS dialog defaulted to a tight 16px body padding, and roomier dialogs (MCP catalog,
+  New-skill) each hand-added a 24px override — so every newly-converted dialog (the
+  add-delegate form, schedule, the new task dialog) shipped cramped until someone
+  remembered to bump it. Raised the app-wide `.pl-dialog__body` default to 24px once and
+  dropped the now-redundant per-dialog overrides. Surfaces that embed a full panel
+  (Settings, theme quick-pick) keep their intentional zero padding. (#1287)
+
 ## [0.66.0] - 2026-06-21
 
 ### Changed

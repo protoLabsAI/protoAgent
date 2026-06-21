@@ -652,13 +652,17 @@ select:disabled {
   line-height: 1.5;
 }
 
-/* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
-   self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
-/* A bit more breathing room than the DS default (16px) — the full-width search +
-   multi-column card grid feel cramped flush to the body edge. */
-.mcp-catalog-dialog .pl-dialog__body {
+/* Roomier dialog body padding than the bare DS default (16px). Content dialogs —
+   forms, card pickers, the full-width search + multi-column grids — read as cramped
+   flush to the body edge, so the app-wide default is 24px. Dialogs that embed a full
+   surface override back to padding:0 at higher specificity (.settings-overlay /
+   .theme-quick-dialog). Loads after the DS overlays.css, so equal specificity wins. */
+.pl-dialog__body {
   padding: var(--pl-space-6, 24px);
 }
+
+/* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
+   self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
 /* Browse (grid) view: pin the dialog to a tall, consistent height and let the card
    grid fill the space below the search/filter controls instead of capping the grid
    short and leaving dead space under it. The configure step keeps its content height. */
@@ -1902,9 +1906,9 @@ textarea {
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
 
-/* New/Edit skill dialog (PlaybooksSurface) — roomier than the DS default + a little
-   more space between fields than the knowledge inline form it grew out of. */
-.skill-dialog .pl-dialog__body { padding: var(--pl-space-6, 24px); }
+/* New/Edit skill dialog (PlaybooksSurface) — a little more space between fields than
+   the knowledge inline form it grew out of. (Body padding is the app-wide
+   .pl-dialog__body default now.) */
 .skill-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* The trailing action row gets a little separation from the fields above it. */
 .skill-form > .knowledge-chunk-form-row:last-child { margin-top: 4px; }
