@@ -55,8 +55,7 @@ mcp>=1.2
 ddgs>=9.0
 beautifulsoup4>=4.12
 
-# Scheduler (scheduler/local.py — cron expression parsing for the
-# bundled local backend; the Workstacean adapter doesn't need this)
+# Scheduler (scheduler/local.py — cron expression parsing)
 croniter>=2.0
 
 # Fleet supervisor (graph/fleet/supervisor.py — cross-process lock around the

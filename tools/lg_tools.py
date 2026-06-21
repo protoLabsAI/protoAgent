@@ -570,15 +570,13 @@ def _build_memory_tools(knowledge_store) -> list:
 
 # ── scheduler tools ──────────────────────────────────────────────────────────
 #
-# Three tools that bind to either the local sqlite-backed scheduler or
-# the Workstacean adapter — the agent loop sees one stable surface and
-# never has to know which backend is wired up.
+# Three tools that bind to the local sqlite-backed scheduler — the agent loop
+# sees one stable surface over the SchedulerBackend protocol.
 #
 # Multi-agent safety: the underlying backend is constructed in
 # ``server.py`` with the active ``AGENT_NAME`` baked in. add_job /
 # list_jobs / cancel_job all filter by that name so two protoAgent
-# instances on the same machine (or sharing one Workstacean install)
-# never see each other's jobs.
+# instances on the same machine never see each other's jobs.
 
 
 def _build_scheduler_tools(scheduler) -> list:
@@ -653,10 +651,6 @@ def _build_scheduler_tools(scheduler) -> list:
 
         Returns one job per line with id, next-fire timestamp, and a
         prompt preview. Returns ``"No scheduled jobs."`` when empty.
-
-        Backends that delegate state to a remote scheduler (e.g. the
-        Workstacean adapter) may return an empty list even when jobs
-        exist — query the remote scheduler directly to see those.
         """
         jobs = await asyncio.to_thread(scheduler.list_jobs)
         if not jobs:

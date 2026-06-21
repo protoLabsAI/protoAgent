@@ -1,8 +1,8 @@
-"""Scheduler protocol — the contract every backend honors.
+"""Scheduler protocol — the contract the backend honors.
 
-Both ``LocalScheduler`` and ``WorkstaceanScheduler`` implement this
-shape. The agent-facing tools in ``tools/lg_tools.py`` only see the
-protocol; swapping backends is a server.py-level decision.
+``LocalScheduler`` implements this shape; the agent-facing tools in
+``tools/lg_tools.py`` only see the protocol, so it stays a clean seam for an
+alternative backend a fork might add.
 """
 
 from __future__ import annotations
@@ -21,9 +21,8 @@ class Job:
     ``"0 9 * * 1-5"``) or an ISO-8601 datetime for one-shot fires
     (e.g. ``"2026-05-01T15:00:00+00:00"``). Backends auto-detect.
 
-    ``agent_name`` namespaces the job — one Workstacean install or
-    shared sqlite path can serve N protoAgent instances without
-    cross-firing.
+    ``agent_name`` namespaces the job — a shared sqlite path can serve N
+    protoAgent instances without cross-firing.
     """
 
     id: str
@@ -48,14 +47,13 @@ class Job:
 
 
 class SchedulerBackend(Protocol):
-    """The minimum surface every backend implements.
+    """The minimum surface a backend implements.
 
     Methods are sync because the agent tools wrap them in their own
-    async functions; backends that need to do async I/O (httpx in
-    Workstacean's case) handle it internally.
+    async functions; a backend that needs async I/O handles it internally.
     """
 
-    name: str  # short label for logs / agent-facing strings: "local", "workstacean"
+    name: str  # short label for logs / agent-facing strings: "local"
 
     def add_job(
         self,
@@ -81,6 +79,22 @@ class SchedulerBackend(Protocol):
         """Remove a job. Returns ``True`` if a row was deleted."""
         ...
 
+    def update_job(
+        self,
+        job_id: str,
+        prompt: str,
+        schedule: str,
+        *,
+        timezone: str | None = None,
+    ) -> Job:
+        """Edit an existing job in place: replace its ``prompt`` / ``schedule`` /
+        ``timezone`` and recompute the next fire. Returns the updated ``Job``.
+
+        Atomic from the operator's view (vs cancel-then-re-add): the id, created_at
+        and last_fire are preserved. Raises ``ValueError`` if no such job exists or
+        the schedule/timezone is malformed."""
+        ...
+
     def list_jobs(self) -> list[Job]:
         """All jobs visible to the calling agent. Implementations are
         responsible for filtering by ``agent_name`` so multi-agent
@@ -88,8 +102,8 @@ class SchedulerBackend(Protocol):
         ...
 
     async def start(self) -> None:
-        """Start any background polling. No-op for backends that don't
-        need it (Workstacean dispatches and forgets)."""
+        """Start any background polling. No-op for a backend that doesn't
+        need it."""
         ...
 
     async def stop(self) -> None:

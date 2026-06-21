@@ -308,14 +308,11 @@ function ScheduleBody() {
     onSettled: invalidate,
   });
   const cancel = useMutation({ mutationFn: (id: string) => api.cancelSchedule(id), onSettled: invalidate });
-  // No in-place update endpoint (add rejects a duplicate id), so an edit is a
-  // cancel-then-re-add of the same id. Client-validated first (prompt + schedule
-  // non-empty) so the re-add rarely fails after the cancel.
+  // Atomic in-place edit (PUT) — id / created_at / last_fire preserved, next_fire
+  // recomputed server-side; a bad schedule 400s without touching the job.
   const edit = useMutation({
-    mutationFn: async ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone?: string } }) => {
-      await api.cancelSchedule(id);
-      return api.addSchedule({ ...body, job_id: id });
-    },
+    mutationFn: ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone?: string } }) =>
+      api.updateSchedule(id, body),
     onSuccess: () => setDetailId(null),
     onSettled: invalidate,
   });

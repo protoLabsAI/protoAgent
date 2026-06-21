@@ -1,8 +1,7 @@
 """LocalScheduler — bundled sqlite + asyncio backend.
 
-The default scheduler when no protoWorkstacean install is configured.
-Every protoAgent instance gets a private ``jobs.db`` namespaced by
-``AGENT_NAME`` so spinning up gina-personal alongside gina-work
+The scheduler backend. Every protoAgent instance gets a private ``jobs.db``
+namespaced by ``AGENT_NAME`` so spinning up gina-personal alongside gina-work
 doesn't cross-fire prompts.
 
 Architecture:
@@ -19,10 +18,9 @@ Architecture:
 - One-shot ISO schedules are deleted after firing. Cron schedules
   reschedule via croniter.
 - On startup: any job whose ``next_fire`` is in the past but within a
-  24h window fires immediately (BFCL-style "missed fires" recovery,
-  matching Workstacean's behaviour). Older missed fires are
-  rescheduled forward without firing — better than waking the agent
-  to a flood of stale prompts after a long downtime.
+  24h window fires immediately ("missed fires" recovery). Older missed
+  fires are rescheduled forward without firing — better than waking the
+  agent to a flood of stale prompts after a long downtime.
 """
 
 from __future__ import annotations
@@ -45,7 +43,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_DIR = "/sandbox/scheduler"
 _POLL_INTERVAL_S = 1.0
-_MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h — matches Workstacean
+_MISSED_FIRE_WINDOW_S = 24 * 60 * 60  # 24h
 
 
 # Owner-lock interlock (ADR 0004): one live instance owns a given jobs.db. Two
@@ -335,6 +333,37 @@ class LocalScheduler:
         except sqlite3.DatabaseError as exc:
             log.warning("[scheduler] cancel_job failed: %s", exc)
             return False
+        finally:
+            db.close()
+
+    def update_job(
+        self,
+        job_id: str,
+        prompt: str,
+        schedule: str,
+        *,
+        timezone: str | None = None,
+    ) -> Job:
+        if not prompt or not prompt.strip():
+            raise ValueError("scheduler: prompt is required")
+        # Validate + recompute the next fire from the new schedule (raises on a bad
+        # cron/tz) BEFORE touching the row, so a malformed edit leaves the job intact.
+        next_fire = _compute_next_fire(schedule, tz=timezone)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                "UPDATE jobs SET prompt = ?, schedule = ?, timezone = ?, next_fire = ? "
+                "WHERE id = ? AND agent_name = ?",
+                (prompt, schedule, timezone, next_fire, job_id, self.agent_name),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"no job {job_id!r} to update")
+            db.commit()
+            row = db.execute(
+                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            ).fetchone()
+            return _row_to_job(row)
         finally:
             db.close()
 

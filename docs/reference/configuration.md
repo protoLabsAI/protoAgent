@@ -109,7 +109,7 @@ Adding a new subagent name to the YAML requires matching entries in `graph/subag
 | `knowledge` | `true` | Inject retrieved knowledge into state before LLM calls. Backed by the bundled `KnowledgeStore` (sqlite + FTS5). Set `false` for a stateless agent. |
 | `audit` | `true` | Append every tool call to `/sandbox/audit/audit.jsonl`. |
 | `memory` | `true` | Persist a reasoning-stripped session summary at terminal turn / session end (read back as `<prior_sessions>` by the knowledge middleware). |
-| `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite, or `WorkstaceanScheduler` when env vars are set). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
+| `scheduler` | `true` | Wire the bundled scheduler backend (local sqlite). Drops the `schedule_task` / `list_schedules` / `cancel_schedule` tools from the agent loop when `false`. Has the same effect as `SCHEDULER_DISABLED=1` — but `middleware.scheduler: false` is the canonical opt-out (drawer/wizard editable, survives restarts), while the env var is a runtime escape hatch for fleet operators who can't edit YAML in the moment. |
 | `enforcement` | `false` | Opt-in safety gate that blocks tool calls **before** they execute (see `enforcement` block below). **YAML / code seam — not surfaced in the console**, since it's a no-op until a deny list, rate limit, or predicate is configured. |
 
 ## `enforcement`
@@ -469,9 +469,6 @@ Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) s
 
 | Env var | Default | What |
 |---|---|---|
-| `WORKSTACEAN_API_BASE` | unset | When set together with `WORKSTACEAN_API_KEY`, swaps the bundled local scheduler for the `WorkstaceanScheduler` HTTP adapter. |
-| `WORKSTACEAN_API_KEY` | unset | Auth token sent as `X-API-Key` to Workstacean's `/publish`. |
-| `WORKSTACEAN_TOPIC_PREFIX` | `cron.<agent_name>` | Override the bus topic the adapter fires on, when your Workstacean install uses a different convention. |
-| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Local backend: parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
 | `SCHEDULER_DISABLED` | unset | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

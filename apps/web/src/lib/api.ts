@@ -849,6 +849,13 @@ export const api = {
     });
   },
 
+  updateSchedule(jobId: string, body: { prompt: string; schedule: string; timezone?: string }) {
+    return request<{ job: ScheduledJob }>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PUT",
+      body,
+    });
+  },
+
   cancelSchedule(jobId: string) {
     return request<{ canceled: boolean }>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, {
       method: "DELETE",

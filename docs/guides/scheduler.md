@@ -2,16 +2,13 @@
 
 protoAgent ships a scheduler so the agent can defer tasks to itself —
 "remind me about X tomorrow", "every Monday morning summarize last
-week's logs", "at 3pm check the deploy". Two backends ship by default;
-the agent-facing tool surface is identical regardless of which one is
-active.
+week's logs", "at 3pm check the deploy". The bundled `LocalScheduler`
+(sqlite + asyncio) is the one backend.
 
 ## When to read this
 
 - You want forks (or your own multiple agents) to support reminders,
   recurring sweeps, or any "do this later" intent.
-- You're running protoWorkstacean and want scheduled fires to flow
-  through the existing bus.
 - You're spinning up multiple protoAgent instances on one box and
   need scheduling state to stay isolated per agent.
 
@@ -30,94 +27,71 @@ scheduling moment when the task fires, so write the prompt as a fresh
 turn ("review last week's pipeline incidents and post a summary",
 not "do that thing we discussed").
 
-## Backend selection
+## Enabling / disabling
 
-`server/agent_init.py::_build_scheduler` picks at startup:
+`server/agent_init.py::_build_scheduler` builds the bundled
+`LocalScheduler` (sqlite, asyncio polling) at startup unless scheduling
+is turned off:
 
 1. `middleware.scheduler: false` in YAML → no scheduler. The three
    tools don't ship. (Symmetric with `middleware.knowledge` /
-   `middleware.memory` — drawer/wizard editable.)
+   `middleware.memory` — drawer/wizard editable, survives restarts.)
+   This is the canonical opt-out.
 2. `SCHEDULER_DISABLED=1` env → no scheduler. Runtime escape hatch
-   for fleet operators who can't edit config.
-3. `SCHEDULER_BACKEND=workstacean` **and** `WORKSTACEAN_API_BASE` +
-   `WORKSTACEAN_API_KEY` set → **`WorkstaceanScheduler`** (opt-in).
-4. Otherwise → **`LocalScheduler`** (sqlite, asyncio polling) — the default.
+   for fleet operators who can't edit config in the moment.
 
-The bundled **`LocalScheduler` is the default**; the remote
-`WorkstaceanScheduler` is **opt-in**. Setting the Workstacean env vars alone
-no longer switches the backend — you must explicitly set
-`SCHEDULER_BACKEND=workstacean` (if you opt in without the creds, it logs and
-falls back to local). Both backends honor the same `SchedulerBackend` protocol;
-the agent loop never knows which one is wired up. The scheduler is **default
-on** — opt out via either config path above for a stateless agent.
+The scheduler is **default on** — opt out via either path above for a
+stateless agent.
 
 ```bash
-# Solo / local dev — LocalScheduler (the default).
-python -m server
-
-# Workstacean install — opt in explicitly AND set the creds.
-export SCHEDULER_BACKEND=workstacean
-export WORKSTACEAN_API_BASE=http://your-workstacean-host:3000
-export WORKSTACEAN_API_KEY=<key>
-python -m server
+python -m server   # LocalScheduler on by default
 ```
-
-> **protoLabs operators**: the fleet's Workstacean lives on the
-> `ava` node; `WORKSTACEAN_API_KEY` is in the org's secrets manager
-> under `secret-management → workstacean`. Coordinate with the team
-> for the exact URL.
 
 ## Manage from the console
 
 The agent schedules jobs via its tools, but operators can also view and manage
 them directly from the React console's **Schedule** surface — list current
-jobs, create one (a prompt + a `when` that's a cron expression or ISO
-datetime), and cancel one. It's backed by these operator-API endpoints over the
-active backend:
+jobs, open one for the full prompt + details, create, **edit in place**, and
+cancel. It's backed by these operator-API endpoints:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
-| `POST` | `/api/scheduler/jobs` | Create — `{prompt, schedule, job_id?}` → `{job}` |
+| `POST` | `/api/scheduler/jobs` | Create — `{prompt, schedule, job_id?, timezone?}` → `{job}` |
+| `PUT` | `/api/scheduler/jobs/{id}` | Edit in place — `{prompt, schedule, timezone?}` → `{job}` (id/created_at/last_fire preserved, next_fire recomputed) |
 | `DELETE` | `/api/scheduler/jobs/{id}` | Cancel → `{canceled}` |
 
-A malformed `schedule` returns `400`. With a remote backend (`WorkstaceanScheduler`),
-`list_jobs` may be empty even when jobs exist — they're managed on the bus, and
-the console notes this.
+A malformed `schedule` returns `400` and leaves the job untouched.
 
 ## Multi-agent isolation
 
 Every job is namespaced by `AGENT_NAME` so spinning up
 `gina-personal` alongside `gina-work` on the same box doesn't
-cross-fire prompts.
+cross-fire prompts: the DB path is per agent
+(`/sandbox/scheduler/<agent_name>/jobs.db`, falling back to
+`~/.protoagent/scheduler/<agent_name>/jobs.db`), every row also carries
+`agent_name`, and all reads/writes filter on it.
 
-| Backend | How it isolates |
-|---|---|
-| Local | DB path per agent: `/sandbox/scheduler/<agent_name>/jobs.db` (falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db`). Every row also carries `agent_name`; reads filter on it. |
-| Workstacean | Job IDs are prefixed `<agent_name>-...`; topics are namespaced `cron.<agent_name>.<job_id>`. One Workstacean install can serve N forks safely. |
+If you supply your own `job_id` in `schedule_task`, the id is stored
+as-is. Two agents sharing one DB path with the same user-supplied id will
+trip a primary-key collision (the second add raises a clear error). To
+avoid it, let the scheduler auto-generate (the auto-id is `<agent>-<uuid>`).
 
-If you supply your own `job_id` in `schedule_task`:
+## How firing works
 
-- Local: the id is stored as-is. Two agents sharing one DB path with
-  the same user-supplied id will trip a primary-key collision (the
-  second add raises a clear error). To avoid it, let the scheduler
-  auto-generate (the auto-id is `<agent>-<uuid>`).
-- Workstacean: the adapter prepends `<agent>-` if your id doesn't
-  already start with it, so cross-agent collisions are impossible.
+The scheduler runs an asyncio polling task on FastAPI's `startup`
+event. Once a second:
 
-## Local backend — how firing works
-
-The local scheduler runs an asyncio polling task on FastAPI's
-`startup` event. Once a second:
-
-1. Read jobs where `next_fire <= now()` and `enabled = 1`.
+1. Read jobs where `next_fire <= now()` and `enabled = 1` (skipping any
+   still firing — a slow turn won't be re-claimed mid-flight).
 2. For each due job: POST to `http://127.0.0.1:<active_port>/a2a` as
    a `message/send` with the job's prompt as the message text, routed
    into the durable **Activity thread** (`contextId: system:activity`,
    `metadata.origin: scheduler`). Bearer + X-API-Key are forwarded
    automatically.
 3. One-shot ISO jobs are deleted after firing. Cron jobs reschedule
-   forward via `croniter`.
+   forward via `croniter` (advanced the instant they're claimed, so a
+   long turn never double-fires).
 
 Going through HTTP rather than calling into the graph directly buys
 parity with real callers — the audit log, cost-v1 capture, and
@@ -136,8 +110,7 @@ On startup, jobs whose `next_fire` is in the past are inspected:
 - **Within the last 24h** — fire on the next tick (so a 5-minute
   outage doesn't lose an upcoming reminder).
 - **Older than 24h** — cron jobs roll forward to the next slot
-  without firing; one-shot jobs are dropped. This matches
-  Workstacean's recovery behaviour and avoids flooding the agent
+  without firing; one-shot jobs are dropped. Avoids flooding the agent
   with stale prompts after a long downtime.
 
 ### Persistence path
@@ -157,36 +130,6 @@ export SCHEDULER_DB_DIR=/var/data/agents
 Mount a volume at the configured path to survive container
 restarts (analogous to `audit/` and `knowledge/`).
 
-## Workstacean backend — how firing works
-
-When `WORKSTACEAN_API_BASE` and `WORKSTACEAN_API_KEY` are set, the
-adapter publishes to `POST {base}/publish` with topic
-`command.schedule` and the action wrapper Workstacean expects. See
-the [Workstacean scheduler reference](https://protolabsai.github.io/protoWorkstacean/reference/scheduler/)
-for the payload shape.
-
-When the schedule fires, Workstacean publishes the inner payload to
-`cron.<agent_name>.<job_id>`. **Workstacean does not natively dispatch
-to A2A endpoints today** — your fork needs to wire a bridge that
-subscribes to `cron.<agent_name>.*` and POSTs to the protoAgent's
-`/a2a` endpoint.
-
-### Topic prefix override
-
-If your existing Workstacean bus uses a different convention:
-
-```bash
-export WORKSTACEAN_TOPIC_PREFIX="myorg.cron.gina"
-# → topics fire on myorg.cron.gina.<job_id>
-```
-
-### `list_schedules()` returns empty under Workstacean
-
-Workstacean's `list` action publishes its response on the
-`schedule.list` topic — there's no synchronous reply on `/publish`.
-The adapter intentionally doesn't subscribe. If you need live
-introspection, query Workstacean directly or run the local backend.
-
 ## Adding a case to your eval suite
 
 The default `evals/tasks.json` doesn't include scheduler cases (the
@@ -203,6 +146,5 @@ attempts to absorb timing jitter.
 
 ## References
 
-- [Workstacean scheduler reference](https://protolabsai.github.io/protoWorkstacean/reference/scheduler/)
 - [Configuration](/reference/configuration#scheduler) — env vars
 - [Eval your fork](/guides/evals) — for the testing pattern above
