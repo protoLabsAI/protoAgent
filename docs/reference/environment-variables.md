@@ -22,7 +22,7 @@ Every env var the template reads at runtime.
 | `PROTOAGENT_CONFIG_DIR` | `<repo>/config` | Writable config root — live `langgraph-config.yaml`, `secrets.yaml`, `.setup-complete`, and the live `skills/` + `plugins/` dirs. The desktop sidecar points this at the per-user app-data dir. |
 | `PROTOAGENT_WORKSPACE` | (a `workspace` dir) | Overrides the default project root for the on-by-default fenced filesystem toolset. |
 | `PROTOAGENT_MODEL` | (unset) | Overrides `model.name` on every config load — used by `evals/sweep.py` to run one agent against many models without editing YAML. |
-| `PROTOAGENT_INSTANCE` | (unset) | Opt-in data-scoping key (ADR 0004): namespaces the knowledge/notes/beads/checkpoint stores so several agents share a backend without colliding. Seeded from `instance.id` in config. |
+| `PROTOAGENT_INSTANCE` | (unset) | Opt-in data-scoping key (ADR 0004): namespaces the knowledge/notes/tasks/checkpoint stores so several agents share a backend without colliding. Seeded from `instance.id` in config. |
 
 ## Deployment / UI tier (ADR 0010)
 
@@ -87,7 +87,7 @@ The bundled `KnowledgeStore` (sqlite + FTS5) is enabled by default. See [Configu
 
 To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_ingest`, `memory_recall`, etc.) are dropped from the agent loop when the store is disabled.
 
-## Notes, beads & goals (agent-global working stores)
+## Notes, tasks & goals (agent-global working stores)
 
 The agent's notebook, task board, and goals are **agent-global** — one
 persistent, instance-scoped store each, shared by the agent's tools and the
@@ -100,7 +100,7 @@ instance-scoped via `PROTOAGENT_INSTANCE`.
 | Variable | Default | What |
 |---|---|---|
 | `NOTES_PATH` | `/sandbox/notes/workspace.json` | The console Notes panel workspace + the `notes_*` tools. |
-| `BEADS_DB_PATH` | `/sandbox/beads/issues.db` | The in-process beads issue store (the `beads_*` tools + the console Beads panel). |
+| `TASKS_DB_PATH` | `/sandbox/tasks/issues.db` | The in-process tasks issue store (the `task_*` tools + the console Tasks panel). |
 | `GOAL_PATH` | `/sandbox/goals` | Directory of per-session goal JSON files (goal mode). |
 
 ## Audit log

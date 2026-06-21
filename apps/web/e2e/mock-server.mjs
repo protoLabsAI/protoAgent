@@ -136,9 +136,9 @@ function handleApiGet(pathname, fleet = FLEET) {
       return GOALS;
     case "/api/notes/workspace":
       return { workspace: NOTES_WORKSPACE };
-    case "/api/beads/status":
+    case "/api/tasks/status":
       return { initialized: true };
-    case "/api/beads/issues":
+    case "/api/tasks/issues":
       return {
         issues: [
           {

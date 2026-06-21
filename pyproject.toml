@@ -67,7 +67,7 @@ allow-direct-references = true
 packages = [
   "a2a_impl",
   "activity",
-  "beads",
+  "tasks",
   "enforcement",
   "evals",
   "events",

@@ -1,6 +1,6 @@
 """bd-2mf: the setup wizard's project directory is authoritative — it persists as
 ``operator.project_dir`` and ``server._resolve_operator_project_root`` honors it
-(env > configured-and-exists > default), so the console's beads/notes actually
+(env > configured-and-exists > default), so the console's tasks/notes actually
 operate in the chosen directory."""
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def test_resolver_falls_back_when_configured_dir_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
     monkeypatch.setattr(server.STATE, "graph_config", SimpleNamespace(operator_project_dir=str(missing)))
     # A configured-but-missing dir must NOT be returned (it would break every
-    # beads/notes call) — fall through to the default instead.
+    # tasks/notes call) — fall through to the default instead.
     assert server._resolve_operator_project_root() != str(missing)
 
 

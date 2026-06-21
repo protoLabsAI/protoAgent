@@ -10,7 +10,7 @@ export type CoreSurface = { id: string; label: string; icon: ReactNode };
 // pinned + always mounted), but is a valid palette/launcher "go to" target.
 export const CORE_SURFACES: CoreSurface[] = [
   { id: "chat", label: "Chat", icon: <MessageSquare size={18} /> },
-  // The Work hub (2026-06) folds the former Beads / Goals / Schedule rail surfaces into one
+  // The Work hub (2026-06) folds the former Tasks / Goals / Schedule rail surfaces into one
   // right-rail surface (Overview + Goals/Tasks/Schedule tabs). Activity is a utility-bar
   // widget; "agent" folded into Settings ▸ Workspace; "plugins" into Settings ▸ Plugins.
   { id: "work", label: "Work", icon: <LayoutDashboard size={18} /> },

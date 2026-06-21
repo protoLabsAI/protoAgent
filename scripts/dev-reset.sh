@@ -18,7 +18,7 @@ echo "Resetting dev instance '${IID}' — your prod data under ${DATA} stays unt
 rm -rf "config/${IID}"
 # Per-instance data root: ~/.protoagent/<iid>
 rm -rf "${DATA:?}/${IID}"
-# Per-store scoped leaves: ~/.protoagent/<store>/<iid>  (beads, knowledge, inbox, activity, scheduler, background, …)
+# Per-store scoped leaves: ~/.protoagent/<store>/<iid>  (tasks, knowledge, inbox, activity, scheduler, background, …)
 find "${DATA}" -mindepth 2 -maxdepth 2 -type d -name "${IID}" -exec rm -rf {} + 2>/dev/null || true
 
 echo "✓ dev instance '${IID}' wiped. Re-launch a fresh one with scripts/dev.sh."

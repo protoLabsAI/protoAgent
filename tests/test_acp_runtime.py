@@ -18,7 +18,7 @@ from runtime.context import AssembledContext
 
 
 def _cfg(**kw):
-    base = dict(agent_runtime="acp:codex", operator_mcp_tools=["beads_list"], acp_agents={})
+    base = dict(agent_runtime="acp:codex", operator_mcp_tools=["task_list"], acp_agents={})
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -60,9 +60,9 @@ def test_operator_mcp_spec_defaults_to_full_toolset():
 
 def test_operator_mcp_spec_honors_explicit_restriction():
     """A configured allowlist is honored verbatim as a *restriction* on the ACP brain."""
-    spec = operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=["beads_list", "web_search"]))
+    spec = operator_mcp_server_spec(types.SimpleNamespace(operator_mcp_tools=["task_list", "web_search"]))
     env = {e["name"]: e["value"] for e in spec["env"]}
-    assert env["OPERATOR_MCP_TOOLS"] == "beads_list,web_search"
+    assert env["OPERATOR_MCP_TOOLS"] == "task_list,web_search"
 
 
 class _FakeCtx:

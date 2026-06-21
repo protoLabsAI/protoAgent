@@ -20,8 +20,8 @@ import { Suspense, useState } from "react";
 
 import { api } from "../lib/api";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { beadsIssuesQuery, queryKeys } from "../lib/queries";
-import type { BeadsIssue } from "../lib/types";
+import { tasksQuery, queryKeys } from "../lib/queries";
+import type { Task } from "../lib/types";
 import {
   emptyIssueDraft,
   formatExactTimestamp,
@@ -34,12 +34,12 @@ import {
   issueType,
   priorityLabel,
   type IssueDraft,
-} from "./beads";
+} from "./tasks";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
 import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
 
-// The agent's task board (in-process beads store), on the TanStack Query data
+// The agent's task board (in-process tasks store), on the TanStack Query data
 // layer (ADR 0013): the issue list is a `useSuspenseQuery` (refetching while
 // mounted), create/start/close/reopen/delete are `useMutation`s that invalidate
 // it. The store is always initialized, so there's no init flow. Delete routes
@@ -52,18 +52,18 @@ type ConfirmRequest = {
   onConfirm: () => void;
 };
 
-function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
-  const { data } = useSuspenseQuery(beadsIssuesQuery());
+function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
+  const { data } = useSuspenseQuery(tasksQuery());
   const issues = data.issues;
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.beadsIssues });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
 
   const [draft, setDraft] = useState<IssueDraft>(emptyIssueDraft);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["closed"]));
 
   const create = useMutation({
     mutationFn: (d: IssueDraft) =>
-      api.createIssue({
+      api.createTask({
         title: d.title.trim(),
         type: d.type,
         priority: d.priority,
@@ -73,11 +73,11 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
     onSettled: invalidate,
   });
   const update = useMutation({
-    mutationFn: (v: { id: string; status: string }) => api.updateIssue(v.id, { status: v.status }),
+    mutationFn: (v: { id: string; status: string }) => api.updateTask(v.id, { status: v.status }),
     onSettled: invalidate,
   });
-  const close = useMutation({ mutationFn: (id: string) => api.closeIssue(id), onSettled: invalidate });
-  const remove = useMutation({ mutationFn: (id: string) => api.deleteIssue(id), onSettled: invalidate });
+  const close = useMutation({ mutationFn: (id: string) => api.closeTask(id), onSettled: invalidate });
+  const remove = useMutation({ mutationFn: (id: string) => api.deleteTask(id), onSettled: invalidate });
 
   const busy = create.isPending || update.isPending || close.isPending || remove.isPending;
 
@@ -88,10 +88,10 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
       return next;
     });
 
-  const askDelete = (issue: BeadsIssue) =>
+  const askDelete = (issue: Task) =>
     confirm({
       title: `Delete ${issue.id}?`,
-      message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the beads store.`,
+      message: `${issue.title ? `"${issue.title}"` : "This issue"} will be permanently deleted from the tasks store.`,
       confirmLabel: "Delete",
       onConfirm: () => remove.mutate(issue.id),
     });
@@ -149,7 +149,7 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
         ) : null}
       </form>
 
-      <ScrollArea className="issue-list" role="region" aria-label="Beads tasks" tabIndex={0}>
+      <ScrollArea className="issue-list" role="region" aria-label="Tasks tasks" tabIndex={0}>
         {issues.length === 0 ? (
           <Empty icon={<Boxes />} description="No issues yet — add one above, or the agent will." />
         ) : (
@@ -250,15 +250,15 @@ function BeadsBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   );
 }
 
-export function BeadsPanel({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
+export function TasksPanel({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   return (
-    <section className="panel side-panel beads-panel">
-      <PanelHeader compact title="Beads" kicker="the agent's task board" />
+    <section className="panel side-panel tasks-panel">
+      <PanelHeader compact title="Tasks" kicker="the agent's task board" />
       <QueryErrorResetBoundary>
         {({ reset }) => (
-          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="beads" />}>
-            <Suspense fallback={<PanelSkeleton label="Loading beads…" />}>
-              <BeadsBody confirm={confirm} />
+          <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="tasks" />}>
+            <Suspense fallback={<PanelSkeleton label="Loading tasks…" />}>
+              <TasksBody confirm={confirm} />
             </Suspense>
           </ErrorBoundary>
         )}

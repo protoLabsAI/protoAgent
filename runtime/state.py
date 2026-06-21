@@ -35,7 +35,7 @@ class AppState:
     a2a_task_engine: Any = None
     a2a_push_engine: Any = None  # push-config store engine — for the orphan sweep (ADR 0051)
     inbox_store: Any = None
-    beads_store: Any = None
+    tasks_store: Any = None
     storm_guard: Any = None
     activity_log: Any = None
     # MCP servers (ADR 0001) + plugin contributions (ADR 0018/0019).

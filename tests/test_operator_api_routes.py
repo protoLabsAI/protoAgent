@@ -6,27 +6,24 @@ from fastapi.testclient import TestClient
 from operator_api.routes import register_operator_routes
 
 
-class _Beads:
-    def status(self, project_path: str):
-        return {"initialized": True, "project_path": project_path}
+class _FakeTaskStore:
+    """The in-process task store the routes' adapter wraps — agent-global, no
+    project scope (so project_path is ignored)."""
 
-    def init(self, project_path: str, prefix=None):
-        return {"initialized": True, "prefix": prefix}
+    def list(self, include_closed: bool = True):
+        return [{"id": "task-1", "title": "x", "status": "open"}]
 
-    def list(self, project_path: str):
-        return [{"id": "bd-1", "project_path": project_path}]
+    def create(self, title, *, description="", priority=2, issue_type="task", assignee=""):
+        return {"id": "task-2", "title": title, "issue_type": issue_type, "priority": priority}
 
-    def create(self, project_path: str, issue):
-        return {"id": "bd-2", "title": issue["title"], "project_path": project_path}
+    def update(self, issue_id, **fields):
+        return {"id": issue_id, **fields}
 
-    def update(self, project_path: str, issue_id: str, update):
-        return {"id": issue_id, "status": update["status"], "project_path": project_path}
+    def close(self, issue_id, reason=None):
+        return {"id": issue_id, "status": "closed", "close_reason": reason}
 
-    def close(self, project_path: str, issue_id: str, reason=None):
-        return {"id": issue_id, "status": "closed", "reason": reason}
-
-    def delete(self, project_path: str, issue_id: str):
-        return {"deleted": issue_id, "project_path": project_path}
+    def delete(self, issue_id):
+        return True
 
 
 def _client(*, run=None):
@@ -44,23 +41,14 @@ def _client(*, run=None):
         subagent_list=lambda: [{"name": "researcher"}],
         subagent_run=run or default_run,
         subagent_batch=batch,
-        beads_service=_Beads(),
+        tasks_store=_FakeTaskStore(),
     )
     return TestClient(app)
 
 
-class _FakeBeadsStore:
-    """In-process agent-global store (no project scope) — what server.py wires
-    when available, so the routes use the adapter that ignores project_path."""
-
-    def list(self):
-        return [{"id": "bd-1"}]
-
-
-def test_beads_store_route_ignores_project_path() -> None:
-    """With an in-process store wired, beads endpoints don't require a
-    project_path (regression: an unconfigured agent bound the CLI service and
-    returned 400 'project_path is required')."""
+def test_tasks_store_route_ignores_project_path() -> None:
+    """The in-process store adapter ignores project_path — tasks endpoints don't
+    require one (the board is agent-global)."""
     app = FastAPI()
     register_operator_routes(
         app,
@@ -68,12 +56,12 @@ def test_beads_store_route_ignores_project_path() -> None:
         subagent_list=lambda: [],
         subagent_run=lambda req: "",
         subagent_batch=lambda req: "",
-        beads_store=_FakeBeadsStore(),  # in-process → agent-global adapter
+        tasks_store=_FakeTaskStore(),
     )
     client = TestClient(app)
     # no project_path supplied — must not 400
-    assert client.get("/api/beads/status").json() == {"initialized": True}
-    assert client.get("/api/beads/issues").status_code == 200
+    assert client.get("/api/tasks/status").json() == {"initialized": True}
+    assert client.get("/api/tasks/issues").status_code == 200
 
 
 def test_operator_routes_return_expected_shapes(tmp_path) -> None:
@@ -95,30 +83,20 @@ def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     )
     assert batch.json()["output"] == "batch:2"
 
-    notes_path = str(tmp_path)
-    assert client.get("/api/beads/status", params={"project_path": notes_path}).json() == {
-        "initialized": True,
-        "project_path": notes_path,
-    }
+    # The in-process adapter ignores project_path (the board is agent-global).
+    assert client.get("/api/tasks/status").json() == {"initialized": True}
     assert (
-        client.post(
-            "/api/beads/issues",
-            json={"project_path": notes_path, "title": "Task"},
-        ).json()["issue"]["id"]
-        == "bd-2"
+        client.post("/api/tasks/issues", json={"title": "Task"}).json()["issue"]["id"] == "task-2"
     )
     assert client.patch(
-        "/api/beads/issues/bd-1",
-        json={"project_path": notes_path, "status": "in_progress"},
-    ).json()["issue"] == {"id": "bd-1", "status": "in_progress", "project_path": notes_path}
+        "/api/tasks/issues/task-1",
+        json={"status": "in_progress"},
+    ).json()["issue"] == {"id": "task-1", "status": "in_progress"}
     assert client.post(
-        "/api/beads/issues/bd-1/close",
-        json={"project_path": notes_path, "reason": "done"},
-    ).json()["issue"] == {"id": "bd-1", "status": "closed", "reason": "done"}
-    assert client.delete(
-        "/api/beads/issues/bd-1",
-        params={"project_path": notes_path},
-    ).json() == {"deleted": "bd-1", "project_path": notes_path}
+        "/api/tasks/issues/task-1/close",
+        json={"reason": "done"},
+    ).json()["issue"] == {"id": "task-1", "status": "closed", "close_reason": "done"}
+    assert client.delete("/api/tasks/issues/task-1").json() == {"deleted": True}
 
 
 def test_operator_routes_map_value_errors_to_400() -> None:

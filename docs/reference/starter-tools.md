@@ -7,13 +7,13 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 - One **render tool** — `show_component` — emits a structured component (table, key-value, timeline, …) that the console renders inline in chat ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)), instead of formatting it as prose.
 - Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
-- Four **beads tools** — `beads_create`, `beads_list`, `beads_update`, `beads_close` — the agent's in-process planning board, bridged to the console Beads panel. Bound when a beads store is present (default in `server/agent_init.py`).
+- Four **tasks tools** — `task_create`, `task_list`, `task_update`, `task_close` — the agent's in-process planning board, bridged to the console Tasks panel. Bound when a tasks store is present (default in `server/agent_init.py`).
 - One **inbox tool** — `check_inbox` — bound to the durable inbound inbox (ADR 0003) when configured; pulls stimuli pushed to `POST /api/inbox`.
 - One **goal tool** — `set_goal` — sets a standing, plugin-verified goal for the session ([ADR 0028](/adr/0028-plugin-goal-verifiers); goal mode is **always on**). See [Goal mode](/guides/goal-mode).
 - Three **curation tools** — `recent_activity`, `list_skills`, `save_skill` — let the agent review what it's recently done and manage its own skill library; they also back the scheduled `/dream` (memory consolidation) and `/distill` (workflow→skill) passes ([ADR 0054](/adr/0054-dream-distill-curation-subagents)).
 - The **`search_tools`** meta-tool — added only when deferred-tool disclosure is on ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)); the agent calls it to load tools that aren't in the per-call base set.
 
-`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None, goal_enabled=False)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; `set_goal` rides `goal_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`.
+`get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None, goal_enabled=False)` is the registry; the conditional groups above are included only when their backend is passed (all are constructed by default in `server/agent_init.py`; opt out via `middleware.knowledge: false` / `middleware.scheduler: false`). The render + curation tools are unconditional; `set_goal` rides `goal_enabled`. To **drop** a core tool without editing this function, list it in `tools.disabled`.
 
 ## Plugin-provided tools (not in `get_all_tools`)
 
@@ -273,7 +273,7 @@ Then append it to the keyless tool list in `get_all_tools()` — keep the two co
 
 ```python
 # Illustrative — the real signature is
-# get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None)
+# get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None)
 def get_all_tools(knowledge_store=None, scheduler=None, **backends):
     tools = [current_time, calculator, web_search, fetch_url, my_tool]
     if knowledge_store is not None:

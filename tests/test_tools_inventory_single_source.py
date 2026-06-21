@@ -69,7 +69,7 @@ def test_pre_setup_fallback_without_a_graph(monkeypatch):
     monkeypatch.setattr(rs.STATE, "knowledge_store", None, raising=False)
     monkeypatch.setattr(rs.STATE, "scheduler", None, raising=False)
     monkeypatch.setattr(rs.STATE, "inbox_store", None, raising=False)
-    monkeypatch.setattr(rs.STATE, "beads_store", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "tasks_store", None, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
     monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
 

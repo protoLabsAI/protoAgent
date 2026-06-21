@@ -42,7 +42,7 @@ export type Surface =
   | "chat" | "activity" | "studio" | "knowledge" | "plugins" | "settings" | (string & {});
 // `notes` is no longer a built-in right panel — it's the first-party `notes` plugin
 // (keyed `plugin:notes:<view>`), so it falls under the open `(string & {})` arm.
-export type RightPanel = "beads" | "goals" | (string & {}); // + plugin:<id>:<viewId>
+export type RightPanel = "tasks" | "goals" | (string & {}); // + plugin:<id>:<viewId>
 // Two sections (ADR 0059 D4): "local" = Installed (+ advanced install-from-URL),
 // "market" = Discover. (Keys kept for persisted-state compat; the old "download"
 // tab is gone — a stale persisted value falls back to Installed.)
@@ -215,10 +215,10 @@ export function migrateUiState(persisted: unknown): unknown {
       const noPlug = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => x !== "plugins") : []);
       rest.railOrder = { left: noPlug(ro7.left), right: noPlug(ro7.right), bottom: noPlug(ro7.bottom) };
     }
-    // v11 (2026-06): Beads + Goals + Schedule folded into the unified "work" hub. Prune the
+    // v11 (2026-06): Tasks + Goals + Schedule folded into the unified "work" hub. Prune the
     // three old ids from every dock + the quick-bar; add "work" to the right rail if the
     // layout has none of them placed; retarget a default-active right panel that pointed at one.
-    const FOLDED = new Set(["beads", "goals", "schedule"]);
+    const FOLDED = new Set(["tasks", "goals", "schedule"]);
     const ro8 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
     if (ro8) {
       const drop = (arr?: string[]) => (Array.isArray(arr) ? arr.filter((x) => !FOLDED.has(x)) : []);
@@ -228,7 +228,7 @@ export function migrateUiState(persisted: unknown): unknown {
       if (![...left, ...right, ...bottom].includes("work")) right = [...right, "work"];
       rest.railOrder = { left, right, bottom };
     }
-    if (rest.rightPanel === "beads" || rest.rightPanel === "goals") rest.rightPanel = "work";
+    if (rest.rightPanel === "tasks" || rest.rightPanel === "goals") rest.rightPanel = "work";
     // v12 (2026-06): Settings moved off the rail into a utility-bar pill (the settings
     // dialog). Prune "settings" from every dock + the quick-bar — it's no longer a surface.
     const ro9 = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[] } | undefined;
@@ -351,7 +351,7 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 12, // …v10 Plugins→Settings section · v11 Beads+Goals+Schedule→Work hub · v12 Settings→utility pill (prune rail id)
+      version: 12, // …v10 Plugins→Settings section · v11 Tasks+Goals+Schedule→Work hub · v12 Settings→utility pill (prune rail id)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).

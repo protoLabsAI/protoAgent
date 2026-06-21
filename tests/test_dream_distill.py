@@ -53,14 +53,14 @@ def test_curation_tools_present_and_subagents_registered():
 def test_subagent_allowlists_resolve_against_full_toolset(tmp_path):
     """Every tool a dream/distill run names must exist in the full set the
     out-of-graph runner builds — otherwise it silently degrades (the class of
-    bug where distill's `beads_create` vanished because the runner didn't pass
-    `beads_store`)."""
+    bug where distill's `task_create` vanished because the runner didn't pass
+    `tasks_store`)."""
     from graph.subagents.config import DISTILL_CONFIG, DREAM_CONFIG
 
     # Mirror run_manual_subagent's tool set with every store wired.
     ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
 
-    class _Beads:  # builders only need a truthy object; methods are call-time.
+    class _Tasks:  # builders only need a truthy object; methods are call-time.
         pass
 
     names = {
@@ -69,7 +69,7 @@ def test_subagent_allowlists_resolve_against_full_toolset(tmp_path):
             knowledge_store=ks,
             scheduler=None,
             inbox_store=None,
-            beads_store=_Beads(),
+            tasks_store=_Tasks(),
             goal_enabled=False,
         )
     }

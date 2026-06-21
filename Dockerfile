@@ -19,10 +19,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# beads_rust (`br`) — the agent-first issue tracker the operator console's
-# beads panel and the setup wizard's "Initialize beads" shell out to. It must
-# be present in the image so beads init genuinely works rather than failing at
-# runtime. We pull a pinned, checksum-verified prebuilt binary instead of
+# beads_rust (`br`) — the DAG-aware issue tracker the optional `project_board`
+# plugin shells out to. The core task board is in-process (no `br`); this binary
+# is kept in the image so the opt-in plugin works out of the box rather than
+# failing at runtime. We pull a pinned, checksum-verified prebuilt binary instead of
 # installing the Rust toolchain, keeping the slim base small. dpkg's amd64 /
 # arm64 map straight onto the release asset arch names; bump BEADS_VERSION to
 # upgrade. Source: https://github.com/Dicklesworthstone/beads_rust

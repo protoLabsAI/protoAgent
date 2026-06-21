@@ -57,7 +57,7 @@ re-commit it.
 **Instance scoping (ADR 0004).** The default/prod instance is `config/` + `~/.protoagent`
 on `:7870`; the sandbox dev instance (`scripts/dev.sh`, `PROTOAGENT_INSTANCE=dev`) is
 `config/dev/` + `~/.protoagent/{dev,*/dev}` on `:7871`, seeded from your default config but
-with separate chat/beads/knowledge. Use the dev instance for feature testing.
+with separate chat/tasks/knowledge. Use the dev instance for feature testing.
 `scripts/dev-reset.sh` wipes only the sandbox.
 
 ## Forking note

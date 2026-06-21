@@ -48,7 +48,7 @@ inventory by source) · **MCP** (servers) · **Subagents** (the delegate roster)
 **Skills** (the skill index) · **Middleware** (per-turn graph middleware).
 
 The **right sidebar** holds the agent's working state + triggers — **Goals** (standing
-conditions, set in chat with `/goal`) · **Beads** (its task board) · **Schedule**
+conditions, set in chat with `/goal`) · **Tasks** (its task board) · **Schedule**
 (cron/one-off fires), plus **Notes** (its notebook, which ships as the `notes` plugin).
 
 In a [fleet](/guides/fleet), the console is slug-routed (`/app/agent/<id>/`) and the hub
@@ -109,11 +109,11 @@ the connection; producers `bus.publish(...)` and every connected console receive
 ## Working memory & the filesystem fence
 
 The agent's stores are **agent-global** — one instance-scoped store each, shared by the
-agent's tools and the console (no per-project selector). Beads lives at `$BEADS_DB_PATH`;
+agent's tools and the console (no per-project selector). Tasks lives at `$BEADS_DB_PATH`;
 notes ship as the `notes` plugin (`/api/plugins/notes/note`).
 
 `operator.allowed_dirs` in `langgraph-config.yaml` is the **filesystem security fence**
-for the agent's file/shell tools (unrelated to notes/beads): the repo root is always
+for the agent's file/shell tools (unrelated to notes/tasks): the repo root is always
 allowed; add other roots, or set the working dir in the setup wizard's Workspace step.
 Out-of-allowlist paths are rejected before any I/O (`..` and symlinks resolved before the
 containment check).

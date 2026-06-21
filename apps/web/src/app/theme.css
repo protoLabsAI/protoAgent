@@ -1121,7 +1121,7 @@ textarea {
 /* Live event-stream indicator (ADR 0003) — moved to src/inbox/inbox.css (#832). */
 
 /* Workflows surface — moved to src/workflows/workflows.css (#832), except
-   .workflow-failed below which is shared (BeadsPanel renders it too). */
+   .workflow-failed below which is shared (TasksPanel renders it too). */
 .workflow-failed {
   margin: 0 12px;
   color: var(--danger, #ff6b6b);
@@ -1309,7 +1309,7 @@ textarea {
 
 /* Goals side-panel — .goals-list + .goal-row* moved to src/goals/goals.css (#832).
    The .issue-* / .setup-overlay rules below belong to other surfaces
-   (BeadsPanel, ChatSurface, SetupWizard) and stay shared here. */
+   (TasksPanel, ChatSurface, SetupWizard) and stay shared here. */
 
 .issue-group {
   min-width: 0;
@@ -1450,7 +1450,7 @@ textarea {
   gap: 6px;
 }
 
-/* .empty-state / .empty-state.stacked retired (#832) — BeadsPanel + ChatSurface
+/* .empty-state / .empty-state.stacked retired (#832) — TasksPanel + ChatSurface
    now render the DS <Empty> (.pl-empty--slotted). */
 
 .setup-overlay {

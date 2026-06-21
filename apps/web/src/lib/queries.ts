@@ -7,7 +7,7 @@ import { api } from "./api";
 // stable and hierarchical so a mutation can invalidate a whole subtree.
 export const queryKeys = {
   goals: ["goals"] as const,
-  beadsIssues: ["beads", "issues"] as const,
+  tasks: ["tasks", "issues"] as const,
   workflows: ["workflows"] as const,
   subagents: ["subagents"] as const,
   tools: ["tools"] as const,
@@ -51,12 +51,12 @@ export const goalsQuery = () =>
     refetchInterval: 5_000,
   });
 
-// The agent's task board (in-process beads store — always available). Refetches
+// The agent's task board (in-process tasks store — always available). Refetches
 // while mounted so the panel tracks issues the agent files/closes mid-turn.
-export const beadsIssuesQuery = () =>
+export const tasksQuery = () =>
   queryOptions({
-    queryKey: queryKeys.beadsIssues,
-    queryFn: () => api.beadsIssues(),
+    queryKey: queryKeys.tasks,
+    queryFn: () => api.tasks(),
     refetchInterval: 5_000,
   });
 

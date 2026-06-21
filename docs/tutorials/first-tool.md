@@ -35,11 +35,11 @@ async def git_sha(short: bool = True) -> str:
 Then register it in `get_all_tools()` at the bottom of the same file:
 
 ```python
-def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, beads_store=None):
+def get_all_tools(knowledge_store=None, scheduler=None, inbox_store=None, tasks_store=None):
     tools = [current_time, calculator, web_search, fetch_url, ask_human, request_user_input]
     tools.append(git_sha)   # ← new
     # ... the function then extends `tools` with github/notes/memory/scheduler/
-    #     inbox/beads/peer tools and applies the `tools.disabled` denylist.
+    #     inbox/tasks/peer tools and applies the `tools.disabled` denylist.
     return tools
 ```
 

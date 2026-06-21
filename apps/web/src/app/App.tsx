@@ -242,7 +242,7 @@ export function App() {
   const quickBar = useUI((s) => s.quickBar);
   const setRailOrder = useUI((s) => s.setRailOrder);
   const [live, setLive] = useState(false);
-  // Shared custom confirm for destructive actions (notes/beads delete).
+  // Shared custom confirm for destructive actions (notes/tasks delete).
   const [confirmState, setConfirmState] = useState<
     null | { title: string; message?: string; confirmLabel?: string; onConfirm: () => void }
   >(null);
@@ -286,7 +286,7 @@ export function App() {
   // an iframe of the page the plugin serves. PR1 thin vertical — PR2 generalizes
   // the rail into a full registry.
   // A plugin view declares its placement: "rail" (default — a left-rail surface) or
-  // "right" (a right-sidebar panel, alongside Notes/Beads/Goals/Schedule — ADR 0026).
+  // "right" (a right-sidebar panel, alongside Notes/Tasks/Goals/Schedule — ADR 0026).
   const allDeclaredViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) =>
@@ -535,7 +535,7 @@ export function App() {
 
   function renderSurface(id: string): ReactNode {
     switch (id) {
-      // The Work hub (2026-06) folds Goals + Tasks(Beads) + Schedule into one right-rail
+      // The Work hub (2026-06) folds Goals + Tasks(Tasks) + Schedule into one right-rail
       // surface (Overview + tabs). It owns those three panels now — no standalone surfaces.
       case "work":
         return <WorkPanel confirm={setConfirmState} />;
@@ -590,7 +590,7 @@ export function App() {
   const leftMembers = railSurfaces("left").map((s) => s.id);
   const rightMembers = railSurfaces("right").map((s) => s.id);
   const leftActive = leftMembers.includes(surface) ? surface : (leftMembers[0] ?? "chat");
-  const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "beads");
+  const rightActive = rightMembers.includes(rightPanel) ? rightPanel : (rightMembers[0] ?? "tasks");
   // Bottom dock active surface (mirror left/right) — clamp to a member of the bottom dock.
   const bottomMembers = railSurfaces("bottom").map((s) => s.id);
   const bottomActive = bottomMembers.includes(bottomPanel) ? bottomPanel : (bottomMembers[0] ?? "");

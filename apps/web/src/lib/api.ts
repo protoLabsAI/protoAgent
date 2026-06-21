@@ -4,7 +4,7 @@ import type {
   AgentConfig,
   Archetype,
   BackgroundJobDTO,
-  BeadsIssue,
+  Task,
   ChatMessage,
   ComponentSpec,
   ConfigPayload,
@@ -280,7 +280,7 @@ export class ApiError extends Error {
  *     `activate` is still spawning it) or its hub proxy (booting, not bound).
  *   - A fetch that threw before any response (no ApiError status): the LOCAL desktop
  *     sidecar isn't bound to its port yet during the ~12s first-launch boot. WKWebView
- *     surfaces this as `TypeError: Load failed` — which is exactly why the beads/notes
+ *     surfaces this as `TypeError: Load failed` — which is exactly why the tasks/notes
  *     panels showed "Load failed" and had to be reloaded on a fresh desktop start.
  *  A genuinely-down backend just keeps the panels in their loading state until the
  *  shell's boot-gate ("isn't responding") takes over — same as before. */
@@ -1300,37 +1300,37 @@ export const api = {
     return { state, text: textFromTerminalTask(task) };
   },
 
-  // Beads are agent-global (one persistent store) — no project scope. (Notes moved
+  // Tasks are agent-global (one persistent store) — no project scope. (Notes moved
   // to the first-party `notes` plugin, ADR 0034 S4 — it owns its own data route.)
-  beadsStatus() {
-    return request<{ initialized: boolean }>("/api/beads/status");
+  tasksStatus() {
+    return request<{ initialized: boolean }>("/api/tasks/status");
   },
 
-  initBeads() {
-    return request<{ initialized: boolean; already_initialized?: boolean }>("/api/beads/init", {
+  initTasks() {
+    return request<{ initialized: boolean; already_initialized?: boolean }>("/api/tasks/init", {
       method: "POST",
       body: {},
     });
   },
 
-  beadsIssues() {
-    return request<{ issues: BeadsIssue[] }>("/api/beads/issues");
+  tasks() {
+    return request<{ issues: Task[] }>("/api/tasks/issues");
   },
 
-  createIssue(issue: {
+  createTask(issue: {
     title: string;
     type?: string;
     priority?: number;
     description?: string;
     assignee?: string;
   }) {
-    return request<{ issue: BeadsIssue }>("/api/beads/issues", {
+    return request<{ issue: Task }>("/api/tasks/issues", {
       method: "POST",
       body: { ...issue },
     });
   },
 
-  updateIssue(
+  updateTask(
     issueId: string,
     update: {
       title?: string;
@@ -1341,22 +1341,22 @@ export const api = {
       assignee?: string;
     },
   ) {
-    return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}`, {
+    return request<{ issue: Task }>(`/api/tasks/issues/${encodeURIComponent(issueId)}`, {
       method: "PATCH",
       body: { ...update },
     });
   },
 
-  closeIssue(issueId: string, reason?: string) {
-    return request<{ issue: BeadsIssue }>(`/api/beads/issues/${encodeURIComponent(issueId)}/close`, {
+  closeTask(issueId: string, reason?: string) {
+    return request<{ issue: Task }>(`/api/tasks/issues/${encodeURIComponent(issueId)}/close`, {
       method: "POST",
       body: { reason },
     });
   },
 
-  deleteIssue(issueId: string) {
+  deleteTask(issueId: string) {
     return request<{ deleted?: string; project_path?: string }>(
-      `/api/beads/issues/${encodeURIComponent(issueId)}`,
+      `/api/tasks/issues/${encodeURIComponent(issueId)}`,
       { method: "DELETE" },
     );
   },

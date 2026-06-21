@@ -20,7 +20,7 @@ def _cfg(tools):
 @pytest.fixture(autouse=True)
 def _bare_state(monkeypatch):
     # No stores → get_all_tools returns just the keyless core tools; no plugin tools.
-    for attr in ("knowledge_store", "scheduler", "inbox_store", "beads_store"):
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
         monkeypatch.setattr(STATE, attr, None, raising=False)
     monkeypatch.setattr(STATE, "plugin_tools", [], raising=False)
 
@@ -54,7 +54,7 @@ def test_boot_stores_builds_skills_index(tmp_path, monkeypatch):
         "_build_plugins",
         lambda config, existing_tools=None: types.SimpleNamespace(tools=[], skill_dirs=[], meta={}),
     )
-    monkeypatch.setattr(STATE, "beads_store", object(), raising=False)  # skip real BeadsStore
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # skip real TaskStore
     monkeypatch.setattr(STATE, "skills_index", None, raising=False)
 
     cfg = _cfg([])

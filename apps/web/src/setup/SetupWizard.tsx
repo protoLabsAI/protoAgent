@@ -30,9 +30,9 @@ type Step = "welcome" | "agent" | "brain" | "finish";
 
 // Two former steps were dropped — they're all sensible defaults a new user shouldn't
 // have to reason about; the values flow straight through finishSetup:
-//   • Workspace (project dir / allowed dirs / knowledge db / top-K / beads-init):
+//   • Workspace (project dir / allowed dirs / knowledge db / top-K / tasks-init):
 //     blank project dir = the protoAgent dir, blank knowledge db = default location,
-//     top-K 5, no beads init (do that from the Beads view when there's a board).
+//     top-K 5, no tasks init (do that from the Tasks view when there's a board).
 //   • Tools (middleware toggles + researcher turns): all middleware on, 40 turns —
 //     tune later in Settings.
 const steps: Step[] = ["welcome", "agent", "brain", "finish"];
@@ -60,7 +60,7 @@ type WizardState = {
   knowledgePath: string;
   knowledgeTopK: number;
   allowedDirs: string;
-  initBeads: boolean;
+  initTasks: boolean;
 };
 
 function defaultState(): WizardState {
@@ -87,7 +87,7 @@ function defaultState(): WizardState {
     knowledgePath: "",
     knowledgeTopK: 5,
     allowedDirs: "",
-    initBeads: false,
+    initTasks: false,
   };
 }
 
@@ -121,7 +121,7 @@ function hydrateState(payload: ConfigPayload): WizardState {
     knowledgePath: config.knowledge.db_path || "",
     knowledgeTopK: Number(config.knowledge.top_k ?? 5),
     allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
-    initBeads: false,
+    initTasks: false,
   };
 }
 
@@ -319,7 +319,7 @@ export function SetupWizard({
       }
       // The project you're setting up should be operable, so fold its path
       // into the allowlist automatically — otherwise picking a project path
-      // outside the (empty) allowlist silently makes beads/notes unusable
+      // outside the (empty) allowlist silently makes tasks/notes unusable
       // for it. Extra dirs from the textarea are merged and de-duped.
       const allowedDirs = Array.from(
         new Set(
@@ -354,7 +354,7 @@ export function SetupWizard({
             top_k: Number(state.knowledgeTopK),
           },
           operator: {
-            // The project dir is authoritative — the server's beads/notes root
+            // The project dir is authoritative — the server's tasks/notes root
             // resolves to it (server._resolve_operator_project_root reads
             // operator.project_dir). Blank = the protoAgent dir. It's also folded
             // into allowed_dirs above so it's always operable.
@@ -371,10 +371,10 @@ export function SetupWizard({
         setError(response.message);
         return;
       }
-      // The beads store is agent-global and always ready, so this is a no-op
+      // The tasks store is agent-global and always ready, so this is a no-op
       // confirmation now (kept so the setup step still feels acknowledged).
-      if (state.initBeads) {
-        await api.initBeads();
+      if (state.initTasks) {
+        await api.initTasks();
       }
       // Plan C: if the chosen archetype carries a plugin bundle (e.g. Project
       // Manager → pm-stack), install it into THIS host on finish — so the new user

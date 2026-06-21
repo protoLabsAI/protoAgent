@@ -332,7 +332,7 @@ DISTILL_CONFIG = SubagentConfig(
     description=(
         "Workflow packaging pass. Reviews recent work for repeated, manual "
         "workflows worth turning into reusable skills. Auto-creates only the "
-        "high-confidence, clearly-missing ones; proposes the rest as beads for "
+        "high-confidence, clearly-missing ones; proposes the rest as tasks for "
         "review. Run on demand (/distill) or schedule it. Conservative — creates "
         "nothing if nothing has actually been repeated."
     ),
@@ -347,7 +347,7 @@ conservative; a near-duplicate or speculative skill is worse than none.
   has a stable procedure and a clear stopping condition, and no existing skill
   already covers it. `save_skill` is additive-only — it refuses to overwrite, so
   you can never clobber an existing skill.
-- **Propose** everything else with `beads_create` (issue_type "task", a clear
+- **Propose** everything else with `task_create` (issue_type "task", a clear
   title + a description citing the evidence and the suggested skill shape). Use
   this for promising-but-thinner candidates, anything that would EXTEND an
   existing skill, or anything sensitive/ambiguous. A human reviews these.
@@ -372,7 +372,7 @@ You run unsupervised on a schedule, so when in doubt, PROPOSE rather than create
    per the output policy above. Drop anything an existing skill already covers.
 4. Act on the shortlist: `save_skill` for the high-confidence missing ones
    (focused name, an imperative one-line description that makes it discoverable,
-   a procedure body, and the tools it uses); `beads_create` for the rest.
+   a procedure body, and the tools it uses); `task_create` for the rest.
 5. If nothing has actually been repeated, create and propose nothing. "Distilled
    nothing — no repeated workflow worth packaging" is a correct, successful
    outcome. Never manufacture a skill to justify the run.
@@ -391,7 +391,7 @@ proposed (with bead ids) + what you skipped and why. Deliberation in
         "memory_recall",
         "list_skills",
         "save_skill",
-        "beads_create",
+        "task_create",
     ],
     max_turns=30,
 )

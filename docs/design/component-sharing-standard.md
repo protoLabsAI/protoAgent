@@ -95,7 +95,7 @@ themeable, on-brand, and safe to share across the console + every plugin remote.
   app logic; only the rendered `Menu` primitive is shared (the console wires `onContextMenu` →
   `menuRef.open({x,y})`).
 - **App-specific rendering.** The markdown renderer, chat tool-renderers, the slash-command menu, the
-  setup wizard flow, the workflow-builder canvas, and domain rows (activity/inbox/beads) are *not* DS
+  setup wizard flow, the workflow-builder canvas, and domain rows (activity/inbox/tasks) are *not* DS
   candidates — they stay local.
 
 ---

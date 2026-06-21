@@ -6,7 +6,7 @@
 # Uses PROTOAGENT_INSTANCE scoping (ADR 0004): the dev instance gets its own config
 # + data leaves under the same homes, SEEDED from the default's config on first run
 # (so it boots with your gateway already configured — no re-setup wizard) but with
-# FRESH, separate chat / beads / knowledge / checkpoint data. Your default instance
+# FRESH, separate chat / tasks / knowledge / checkpoint data. Your default instance
 # (config/ + ~/.protoagent, port 7870) is left completely untouched.
 #
 #   scripts/dev.sh                 # → PROTOAGENT_INSTANCE=dev on http://127.0.0.1:7871

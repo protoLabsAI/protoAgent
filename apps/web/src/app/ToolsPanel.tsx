@@ -16,7 +16,7 @@ import { StagePanel } from "./ErrorBoundary";
 
 // Subsystem ordering — General leads; integrations next; plugin/MCP last.
 const CATEGORY_ORDER = [
-  "General", "GitHub", "Notes", "Memory", "Scheduler", "Inbox", "Beads", "Goals",
+  "General", "GitHub", "Notes", "Memory", "Scheduler", "Inbox", "Tasks", "Goals",
   "Delegation", "Workflows", "Discovery", "Plugin", "MCP",
 ];
 

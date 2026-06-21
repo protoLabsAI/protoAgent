@@ -6,15 +6,15 @@ import type { LucideIcon } from "lucide-react";
 
 import { StagePanel } from "./ErrorBoundary";
 import { GoalsPanel } from "./GoalsPanel";
-import { BeadsPanel } from "./BeadsPanel";
+import { TasksPanel } from "./TasksPanel";
 import { SchedulePanel } from "../schedule/SchedulePanel";
-import { beadsIssuesQuery, goalsQuery, schedulesQuery } from "../lib/queries";
-import type { BeadsIssue, GoalState, ScheduledJob } from "../lib/types";
+import { tasksQuery, goalsQuery, schedulesQuery } from "../lib/queries";
+import type { Task, GoalState, ScheduledJob } from "../lib/types";
 
 import "./work.css";
 
 type WorkTab = "overview" | "goals" | "tasks" | "schedule";
-type Confirm = ComponentProps<typeof BeadsPanel>["confirm"];
+type Confirm = ComponentProps<typeof TasksPanel>["confirm"];
 
 const TABS: { id: WorkTab; label: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -26,7 +26,7 @@ const TABS: { id: WorkTab; label: string; icon: LucideIcon }[] = [
 /**
  * The agent's WORK hub (2026-06) — one right-rail surface consolidating the three "what's
  * the agent doing" panels: what it's steering toward (Goals), the concrete backlog
- * (Tasks/Beads), and timed runs (Schedule), with a glanceable Overview roll-up on top. The
+ * (Tasks/Tasks), and timed runs (Schedule), with a glanceable Overview roll-up on top. The
  * Goals/Tasks/Schedule tabs reuse the standalone panels verbatim; only the Overview is new.
  */
 export function WorkPanel({ confirm }: { confirm: Confirm }) {
@@ -46,7 +46,7 @@ export function WorkPanel({ confirm }: { confirm: Confirm }) {
       ) : tab === "goals" ? (
         <GoalsPanel />
       ) : tab === "tasks" ? (
-        <BeadsPanel confirm={confirm} />
+        <TasksPanel confirm={confirm} />
       ) : (
         <SchedulePanel />
       )}
@@ -58,7 +58,7 @@ const normStatus = (s: string | undefined) => (s ?? "").toLowerCase().replace(/[
 
 function WorkOverview({ onJump }: { onJump: (t: WorkTab) => void }) {
   const goals = useSuspenseQuery(goalsQuery()).data.goals;
-  const issues = useSuspenseQuery(beadsIssuesQuery()).data.issues;
+  const issues = useSuspenseQuery(tasksQuery()).data.issues;
   const jobs = useSuspenseQuery(schedulesQuery()).data.jobs;
 
   const activeGoals = goals.filter(
@@ -97,7 +97,7 @@ function WorkOverview({ onJump }: { onJump: (t: WorkTab) => void }) {
         onOpen={() => onJump("tasks")}
         empty="No open tasks"
       >
-        {[...inProgress, ...ready].slice(0, 5).map((i: BeadsIssue) => (
+        {[...inProgress, ...ready].slice(0, 5).map((i: Task) => (
           <li className="work-row" key={i.id}>
             <span className="work-row-title">{i.title}</span>
             <span className="work-row-meta">{i.id}</span>

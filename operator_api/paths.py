@@ -24,7 +24,7 @@ def resolve_project_path(
     When ``allowed_dirs`` is provided, the resolved path must be equal to
     or nested under one of those directories. This is the operator-console
     sandbox: the React client sends a free-text ``project_path``, so the
-    server — not the client — decides which directories beads/notes may
+    server — not the client — decides which directories tasks/notes may
     touch. ``None`` means "no allowlist configured" and stays permissive
     so non-operator callers and tests keep the old behavior.
 

@@ -233,10 +233,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     STATE.inbox_store = _build_inbox_store(STATE.graph_config)
     if STATE.activity_log is None:
         STATE.activity_log = _build_activity_log(STATE.graph_config)
-    from beads import BeadsStore
+    from tasks import TaskStore
 
-    if STATE.beads_store is None:  # may have been created early (pre-setup) for the routes
-        STATE.beads_store = BeadsStore()  # in-process issue tracker (Sprint B), instance-scoped
+    if STATE.tasks_store is None:  # may have been created early (pre-setup) for the routes
+        STATE.tasks_store = TaskStore()  # in-process issue tracker (Sprint B), instance-scoped
     if STATE.storm_guard is None:
         from inbox import StormGuard
 
@@ -256,7 +256,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         late_tool_factories=STATE.plugin_late_tool_factories,
         checkpointer=STATE.checkpointer,
         inbox_store=STATE.inbox_store,
-        beads_store=STATE.beads_store,
+        tasks_store=STATE.tasks_store,
         background_mgr=STATE.background_mgr,
     )
 

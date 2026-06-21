@@ -45,7 +45,7 @@ re-sync cleanly. Until the variable is set, releases won't fire (intentional).
 
 The starter tools ship by default: `current_time`, `calculator`, `web_search`,
 `fetch_url` (keyless general) plus the memory, scheduler, notes, GitHub, and
-beads tools.
+tasks tools.
 
 - **Drop** the ones you don't want via config — list them under `tools.disabled`
   in `config/langgraph-config.yaml` (live-reloadable). No `get_all_tools()` edit.

@@ -11,8 +11,6 @@ from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from operator_api.beads import BeadsCommandError, BeadsService
-
 
 class SubagentRunRequest(BaseModel):
     session_id: str = "manual-subagent"
@@ -46,13 +44,13 @@ class InboxAddRequest(BaseModel):
     dedup_key: str = ""
 
 
-class BeadsInitRequest(BaseModel):
-    project_path: str = ""  # ignored — the beads store is agent-global
+class TaskInitRequest(BaseModel):
+    project_path: str = ""  # ignored — the tasks store is agent-global
     prefix: str | None = None
 
 
-class BeadsCreateRequest(BaseModel):
-    project_path: str = ""  # ignored — the beads store is agent-global
+class TaskCreateRequest(BaseModel):
+    project_path: str = ""  # ignored — the tasks store is agent-global
     title: str
     type: str = "task"
     priority: int = 2
@@ -60,8 +58,8 @@ class BeadsCreateRequest(BaseModel):
     assignee: str | None = None
 
 
-class BeadsUpdateRequest(BaseModel):
-    project_path: str = ""  # ignored — the beads store is agent-global
+class TaskUpdateRequest(BaseModel):
+    project_path: str = ""  # ignored — the tasks store is agent-global
     title: str | None = None
     description: str | None = None
     status: str | None = None
@@ -70,8 +68,8 @@ class BeadsUpdateRequest(BaseModel):
     assignee: str | None = None
 
 
-class BeadsCloseRequest(BaseModel):
-    project_path: str = ""  # ignored — the beads store is agent-global
+class TaskCloseRequest(BaseModel):
+    project_path: str = ""  # ignored — the tasks store is agent-global
     reason: str | None = None
 
 
@@ -119,8 +117,6 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, BeadsCommandError):
-        return HTTPException(status_code=500, detail=str(exc))
     return HTTPException(status_code=500, detail=str(exc))
 
 
@@ -130,11 +126,10 @@ def _model_payload(model: BaseModel) -> dict[str, Any]:
     return model.dict()
 
 
-class _BeadsStoreAdapter:
-    """Adapts the in-process ``BeadsStore`` (Sprint B) to the BeadsService method
-    shape the beads routes call. ``project_path`` is ignored — the store is a
-    single instance-scoped board the agent + console share (no `br` CLI, no
-    per-project ``.beads/``)."""
+class _TaskStoreAdapter:
+    """Adapts the in-process ``TaskStore`` to the method shape the task routes
+    call. ``project_path`` is ignored — the store is a single instance-scoped
+    board the agent + console share."""
 
     def __init__(self, store: Any):
         self._s = store
@@ -180,8 +175,7 @@ def register_operator_routes(
     tools_list: Callable[[], dict[str, Any]] = lambda: {"tools": [], "count": 0},
     subagent_run: Callable[[dict[str, Any]], Awaitable[str]],
     subagent_batch: Callable[[dict[str, Any]], Awaitable[str]],
-    beads_service: BeadsService | None = None,
-    beads_store: Any | None = None,
+    tasks_store: Any | None = None,
     allowed_dirs: Callable[[], list[str]] | None = None,
     scheduler_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     scheduler_add: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -202,17 +196,12 @@ def register_operator_routes(
     """Register React operator-console routes on a FastAPI app.
 
     ``allowed_dirs`` is an accessor returning the directories the operator
-    console may read/write (beads + notes). It's a callable, not a static
+    console may read/write (tasks + notes). It's a callable, not a static
     list, so it re-reads live config after a settings reload. Injected
     services keep their own allowlist; it only wires the defaults.
     """
-    # Prefer the in-process store (Sprint B) — the agent + console share one
-    # instance-scoped board; the `br` CLI service stays as a fallback for forks.
-    beads = (
-        _BeadsStoreAdapter(beads_store)
-        if beads_store is not None
-        else (beads_service or BeadsService(allowed_dirs=allowed_dirs))
-    )
+    # The agent + console share one instance-scoped task board (in-process store).
+    task_svc = _TaskStoreAdapter(tasks_store)
 
     @app.get("/api/runtime/status")
     async def _runtime_status():
@@ -307,56 +296,56 @@ def register_operator_routes(
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.get("/api/beads/status")
-    async def _beads_status(project_path: str = ""):
+    @app.get("/api/tasks/status")
+    async def _tasks_status(project_path: str = ""):
         try:
-            return await asyncio.to_thread(beads.status, project_path)
+            return await asyncio.to_thread(task_svc.status, project_path)
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.post("/api/beads/init")
-    async def _beads_init(req: BeadsInitRequest):
+    @app.post("/api/tasks/init")
+    async def _tasks_init(req: TaskInitRequest):
         try:
-            return await asyncio.to_thread(beads.init, req.project_path, req.prefix)
+            return await asyncio.to_thread(task_svc.init, req.project_path, req.prefix)
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.get("/api/beads/issues")
-    async def _beads_list(project_path: str = ""):
+    @app.get("/api/tasks/issues")
+    async def _tasks_list(project_path: str = ""):
         try:
-            issues = await asyncio.to_thread(beads.list, project_path)
+            issues = await asyncio.to_thread(task_svc.list, project_path)
             return {"issues": issues}
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.post("/api/beads/issues")
-    async def _beads_create(req: BeadsCreateRequest):
+    @app.post("/api/tasks/issues")
+    async def _tasks_create(req: TaskCreateRequest):
         try:
-            issue = await asyncio.to_thread(beads.create, req.project_path, _model_payload(req))
+            issue = await asyncio.to_thread(task_svc.create, req.project_path, _model_payload(req))
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.patch("/api/beads/issues/{issue_id}")
-    async def _beads_update(issue_id: str, req: BeadsUpdateRequest):
+    @app.patch("/api/tasks/issues/{issue_id}")
+    async def _tasks_update(issue_id: str, req: TaskUpdateRequest):
         try:
-            issue = await asyncio.to_thread(beads.update, req.project_path, issue_id, _model_payload(req))
+            issue = await asyncio.to_thread(task_svc.update, req.project_path, issue_id, _model_payload(req))
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.post("/api/beads/issues/{issue_id}/close")
-    async def _beads_close(issue_id: str, req: BeadsCloseRequest):
+    @app.post("/api/tasks/issues/{issue_id}/close")
+    async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         try:
-            issue = await asyncio.to_thread(beads.close, req.project_path, issue_id, req.reason)
+            issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @app.delete("/api/beads/issues/{issue_id}")
-    async def _beads_delete(issue_id: str, project_path: str = ""):
+    @app.delete("/api/tasks/issues/{issue_id}")
+    async def _tasks_delete(issue_id: str, project_path: str = ""):
         try:
-            return await asyncio.to_thread(beads.delete, project_path, issue_id)
+            return await asyncio.to_thread(task_svc.delete, project_path, issue_id)
         except Exception as exc:
             raise _http_error(exc) from exc
 

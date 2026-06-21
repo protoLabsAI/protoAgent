@@ -124,10 +124,10 @@ _TOOL_CATEGORY = {
     "list_schedules": "Scheduler",
     "cancel_schedule": "Scheduler",
     "check_inbox": "Inbox",
-    "beads_create": "Beads",
-    "beads_list": "Beads",
-    "beads_update": "Beads",
-    "beads_close": "Beads",
+    "task_create": "Tasks",
+    "task_list": "Tasks",
+    "task_update": "Tasks",
+    "task_close": "Tasks",
     "set_goal": "Goals",
     "task": "Delegation",
     "task_batch": "Delegation",
@@ -198,7 +198,7 @@ def _operator_tools_list():
             STATE.knowledge_store,
             scheduler=STATE.scheduler,
             inbox_store=STATE.inbox_store,
-            beads_store=STATE.beads_store,
+            tasks_store=STATE.tasks_store,
             goal_enabled=bool(getattr(cfg, "goal_enabled", False)) if cfg else False,
         )
         for t in core:

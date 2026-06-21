@@ -1,7 +1,7 @@
-// Beads issue helpers — shared by the BeadsPanel and (historically) App.
-// Pure presentation/derivation logic over the BeadsIssue shape.
+// Tasks issue helpers — shared by the TasksPanel and (historically) App.
+// Pure presentation/derivation logic over the Task shape.
 
-import type { BeadsIssue } from "../lib/types";
+import type { Task } from "../lib/types";
 import type { StatusTone } from "./StatusPill";
 
 export type IssueDraft = {
@@ -20,11 +20,11 @@ export const emptyIssueDraft: IssueDraft = {
 
 const issueStatusOrder = ["in_progress", "open", "blocked", "deferred", "closed"];
 
-export function issueStatus(issue: BeadsIssue) {
+export function issueStatus(issue: Task) {
   return issue.status || "open";
 }
 
-export function issueType(issue: BeadsIssue) {
+export function issueType(issue: Task) {
   return issue.issue_type || issue.type || "task";
 }
 
@@ -39,7 +39,7 @@ export function issueStatusTone(status: string): StatusTone {
   return "muted";
 }
 
-export function priorityLabel(priority: BeadsIssue["priority"]) {
+export function priorityLabel(priority: Task["priority"]) {
   if (priority === undefined || priority === null || priority === "") return "P-";
   const value = String(priority);
   return value.toUpperCase().startsWith("P") ? value.toUpperCase() : `P${value}`;
@@ -91,8 +91,8 @@ export function issueGroupId(status: string) {
   return `issue-group-${status.replace(/[^a-z0-9_-]/gi, "-")}`;
 }
 
-export function groupIssues(issues: BeadsIssue[]) {
-  const buckets = new Map<string, BeadsIssue[]>();
+export function groupIssues(issues: Task[]) {
+  const buckets = new Map<string, Task[]>();
   for (const issue of issues) {
     const status = issueStatus(issue);
     const bucket = buckets.get(status);

@@ -78,7 +78,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | POST | `/api/inbox/{item_id}/deliver` | Deliver an inbox item to the agent |
 | GET | `/api/events` | Server-sent event stream (console live updates) |
 | POST | `/api/events/publish` | Publish an event to the bus |
-| GET · POST · PATCH · DELETE | `/api/beads/...` | Beads issue store (status, init, issues CRUD, close) |
+| GET · POST · PATCH · DELETE | `/api/tasks/...` | Tasks issue store (status, init, issues CRUD, close) |
 
 ## Config, setup & settings
 

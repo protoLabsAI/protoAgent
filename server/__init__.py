@@ -100,7 +100,7 @@ def _resolve_operator_project_root() -> str:
     In a source checkout this is the repo root (``__file__``'s dir). But in a
     PyInstaller-frozen sidecar (the desktop app) ``__file__`` lives inside the
     ephemeral ``_MEIxxxx`` onefile extraction dir — which doesn't persist and
-    isn't a real workspace, so the console's project-scoped APIs (notes/beads)
+    isn't a real workspace, so the console's project-scoped APIs (notes/tasks)
     fail with "project_path does not exist". Resolve a stable, writable dir
     instead: an explicit ``PROTOAGENT_PROJECT_DIR`` wins; else (when frozen) the
     per-user app dir the desktop already provides via ``PROTOAGENT_CONFIG_DIR``,
@@ -110,7 +110,7 @@ def _resolve_operator_project_root() -> str:
         return str(Path(env).expanduser().resolve())
     # Operator-chosen project dir from config (setup wizard / Settings). Only
     # honored when it actually exists — a configured-but-missing path would break
-    # every beads/notes call, so fall through to the safe default instead.
+    # every tasks/notes call, so fall through to the safe default instead.
     cfg_obj = getattr(STATE, "graph_config", None)
     configured = str(getattr(cfg_obj, "operator_project_dir", "") or "").strip() if cfg_obj else ""
     if configured:
@@ -432,16 +432,16 @@ def _main():
     from operator_api.routes import register_operator_routes
     from operator_api.telemetry_routes import register_telemetry_routes
 
-    # The in-process beads store is agent-global + graph-independent, but it's
+    # The in-process tasks store is agent-global + graph-independent, but it's
     # otherwise created in _init_langgraph_agent (which only runs once setup is
     # complete). For a fresh, unconfigured agent (first launch, before the wizard)
-    # ensure it exists now — otherwise the beads routes bind the CLI fallback
+    # ensure it exists now — otherwise the tasks routes bind the CLI fallback
     # service that raises "project_path is required" (the agent-global adapter
     # ignores project_path). Reused by _init_langgraph_agent later.
-    if STATE.beads_store is None:
-        from beads import BeadsStore
+    if STATE.tasks_store is None:
+        from tasks import TaskStore
 
-        STATE.beads_store = BeadsStore()
+        STATE.tasks_store = TaskStore()
 
     # Console handler bodies live in operator_api/console_handlers.py (ADR 0023
     # phase 3); _main just wires them to their routes.
@@ -452,7 +452,7 @@ def _main():
         tools_list=_console._operator_tools_list,
         subagent_run=_console._operator_subagent_run,
         subagent_batch=_console._operator_subagent_batch,
-        beads_store=STATE.beads_store,
+        tasks_store=STATE.tasks_store,
         allowed_dirs=_console._operator_allowed_dirs,
         scheduler_list=_console._operator_scheduler_list,
         scheduler_add=_console._operator_scheduler_add,

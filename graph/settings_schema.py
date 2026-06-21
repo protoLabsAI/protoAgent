@@ -532,7 +532,7 @@ FIELDS: list[Field] = [
         "Project directory",
         "string",
         "Identity",
-        "Working directory for the console's beads/notes (and the agent's "
+        "Working directory for the console's tasks/notes (and the agent's "
         "default project). Always allowed. Blank = the protoAgent directory.",
     ),
     Field(
@@ -541,7 +541,7 @@ FIELDS: list[Field] = [
         "Allowed project dirs",
         "string_list",
         "Identity",
-        "Extra directories the beads/notes APIs may touch, beyond the project "
+        "Extra directories the tasks/notes APIs may touch, beyond the project "
         "directory and protoAgent (which are always allowed).",
     ),
     Field(

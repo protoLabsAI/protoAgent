@@ -1,6 +1,6 @@
 """The operator console's default project root must resolve to a real, stable
 dir — never PyInstaller's ephemeral _MEIxxxx onefile extraction dir (which broke
-notes/beads in the frozen desktop sidecar with "project_path does not exist")."""
+notes/tasks in the frozen desktop sidecar with "project_path does not exist")."""
 
 from __future__ import annotations
 

@@ -3,7 +3,7 @@
 Exposes THIS agent's tool registry — core tools + plugin ``register_tools`` tools —
 as a single MCP server, so any MCP client (Claude Desktop, Cursor) or an ACP
 coding-agent runtime (mounted via ``session/new`` ``mcpServers``) can *operate* the
-instance: read/write notes & beads, recall/ingest memory, run workflows, delegate to
+instance: read/write notes & tasks, recall/ingest memory, run workflows, delegate to
 subagents, set goals, schedule work — whatever you allowlist.
 
 Design (ADR 0033 D3 + D5):
@@ -43,7 +43,7 @@ def _boot_stores_only(config):
     """Wire just the stores + plugins the tools need — no graph, no background loops.
 
     Safe to run as a sidecar against the same data dir as a live instance (reads/writes
-    the same notes/beads/knowledge — that's the point); WAL + busy_timeout cover concurrency.
+    the same notes/tasks/knowledge — that's the point); WAL + busy_timeout cover concurrency.
     """
     import server.agent_init as ai
     from tools.lg_tools import get_all_tools
@@ -52,10 +52,10 @@ def _boot_stores_only(config):
     STATE.knowledge_store = ai._build_knowledge_store(config)
     STATE.scheduler = ai._build_scheduler(config)
     STATE.inbox_store = ai._build_inbox_store(config)
-    if STATE.beads_store is None:
-        from beads import BeadsStore
+    if STATE.tasks_store is None:
+        from tasks import TaskStore
 
-        STATE.beads_store = BeadsStore()
+        STATE.tasks_store = TaskStore()
 
     plugins = ai._build_plugins(
         config,
@@ -89,7 +89,7 @@ def operator_tools(config):
             STATE.knowledge_store,
             scheduler=STATE.scheduler,
             inbox_store=STATE.inbox_store,
-            beads_store=STATE.beads_store,
+            tasks_store=STATE.tasks_store,
             goal_enabled=bool(getattr(config, "goal_enabled", False)),
         )
     )

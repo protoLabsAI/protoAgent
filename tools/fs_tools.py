@@ -166,7 +166,7 @@ def build_fs_tools(config) -> list:
 
     @tool
     def find_files(project: str, pattern: str = "**/*") -> str:
-        """Glob for files in a managed project (e.g. '**/*.py', '.beads/*.jsonl')."""
+        """Glob for files in a managed project (e.g. '**/*.py', '.tasks/*.jsonl')."""
         try:
             root = registry.resolve(project, ".")
         except ValueError as exc:

@@ -155,7 +155,7 @@ class AcpClient:
         # path from the client cache key so reattach is keyed to launch+policy+cwd.
         self.session_id_path = session_id_path
         # MCP servers mounted into the ACP session (ADR 0033) — how the coding agent
-        # gets protoAgent's operator tools (notes/beads/goals/…) over `session/new`.
+        # gets protoAgent's operator tools (notes/tasks/goals/…) over `session/new`.
         self.mcp_servers = list(mcp_servers or [])
         # Permission resolver: ``(request_params) -> optionId | None`` (None ⇒
         # cancel/deny). Defaults to ``_auto_allow`` — the coding agent self-governs

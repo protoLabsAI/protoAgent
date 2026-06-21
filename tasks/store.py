@@ -1,9 +1,9 @@
-"""In-process beads issue store (Sprint B).
+"""In-process tasks issue store (Sprint B).
 
 A small SQLite-backed issue tracker the server owns — the agent's planning/task
-surface and the console's Beads panel both read/write it. Instance-scoped
+surface and the console's Tasks panel both read/write it. Instance-scoped
 (``paths.scope_leaf``) so several agents don't share one board. No `br` CLI, no
-per-project `.beads/` directory.
+per-project `.tasks/` directory.
 
 Issue shape (the fields the console + tools use):
   id, title, description, status, priority, issue_type, assignee,
@@ -21,7 +21,7 @@ from typing import Any
 
 from infra.paths import scope_leaf
 
-DEFAULT_DB_PATH = "/sandbox/beads/issues.db"
+DEFAULT_DB_PATH = "/sandbox/tasks/issues.db"
 
 # Open lifecycle states (closed is terminal). Mirrors the console's
 # issueStatusOrder; `tombstone` is intentionally absent (we hard-delete).
@@ -34,17 +34,17 @@ def _now() -> str:
 
 
 def _resolve_db_path(db_path: str | None) -> Path:
-    """``BEADS_DB_PATH`` env → constructor arg → default. Falls back from a
-    non-writable ``/sandbox`` to ``~/.protoagent`` for local dev, then
-    instance-scoped — same shape as the knowledge store."""
-    raw = os.environ.get("BEADS_DB_PATH") or db_path or DEFAULT_DB_PATH
+    """``TASKS_DB_PATH`` (or legacy ``BEADS_DB_PATH``) env → constructor arg →
+    default. Falls back from a non-writable ``/sandbox`` to ``~/.protoagent`` for
+    local dev, then instance-scoped — same shape as the knowledge store."""
+    raw = os.environ.get("TASKS_DB_PATH") or os.environ.get("BEADS_DB_PATH") or db_path or DEFAULT_DB_PATH
     p = Path(raw).expanduser()
     if str(p).startswith("/sandbox") and not Path("/sandbox").is_dir():
-        p = Path.home() / ".protoagent" / "beads" / "issues.db"
+        p = Path.home() / ".protoagent" / "tasks" / "issues.db"
     return scope_leaf(p)
 
 
-class BeadsStore:
+class TaskStore:
     """SQLite-backed issue tracker. Thread-safe via a single lock (the server
     runs one process; contention is low)."""
 
@@ -85,9 +85,13 @@ class BeadsStore:
         return self._conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
 
     def _next_id(self) -> str:
-        rows = self._conn.execute("SELECT id FROM issues WHERE id LIKE 'bd-%'").fetchall()
-        nums = [int(r["id"][3:]) for r in rows if r["id"][3:].isdigit()]
-        return f"bd-{(max(nums) + 1) if nums else 1}"
+        # New ids use the `task-` prefix; legacy `bd-` ids (pre beads→tasks rename)
+        # are still read so numbering stays monotonic on an existing board.
+        rows = self._conn.execute(
+            "SELECT id FROM issues WHERE id LIKE 'task-%' OR id LIKE 'bd-%'"
+        ).fetchall()
+        nums = [int(n) for r in rows if (n := r["id"].split("-", 1)[-1]).isdigit()]
+        return f"task-{(max(nums) + 1) if nums else 1}"
 
     @staticmethod
     def _norm_status(status: str | None) -> str:

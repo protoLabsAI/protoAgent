@@ -23,7 +23,7 @@ The console is a **dual-rail shell** (ADR 0035): an icon rail → swappable surf
 | **Agent** | Identity · Settings · Tools · MCP · Subagents · Skills · Middleware | `IdentityPanel`, `SettingsCategory`, `ToolsPanel`, `McpPanel`, `SubagentsPanel`, `PlaybooksSurface`, `MiddlewarePanel` | 7-tab hub — the densest surface. |
 | **Plugins** | Local · Market · Download | `plugins/PluginsSurface`, `settings/PluginsSection` | |
 | **Settings** | (SETTINGS_TABS categories) | `settings/SettingsSurface`, `SettingsCategory`, `OverviewPanel`, `DelegatesSection` | Form-heavy. |
-| **Beads** | — | `app/BeadsPanel` | Right-rail panel by default. |
+| **Tasks** | — | `app/TasksPanel` | Right-rail panel by default. |
 | **Goals** | — | `app/GoalsPanel` | |
 | **Schedule** | — | `schedule/SchedulePanel` | |
 
@@ -175,7 +175,7 @@ Every reusable widget class was cross-referenced against installed `@protolabsai
 
 - **DS gap → filed:** Menu (#131), PanelHeader (#132), Tabs icon+badge (#133), ScrollArea parity (#134), Button variants (#135), Skeleton (#136). AppShell (rail shell / resize-handle / mobile-drawer) held for live coordination.
 - **Covered by 0.4.0 → adopt, not filed:** Button (default/primary), Badge (chips/priorities/states), StatusDot (dots), Card (all `*-card`), Dialog (confirm/schedule/mcp-add modals), Drawer (mobile), Field/Input/Textarea/Select/Switch/Checkbox (all form rows), Callout (panel-error/settings-banner/errors), Stat/Stats (metrics), Table (telemetry/lists), Tooltip (89 native `title=`), Spinner (`.spin`/loaders), Empty (empty-states), Divider, Kbd, Prose.
-- **App-specific → stays local:** markdown renderer, chat tool-renderers (`.tool-*`), chat tabs (closeable/editable sessions), slash command menu (`.slash-*` — chat autocomplete), setup wizard stepper (`.setup-*` — one-off onboarding), workflow builder canvas, plugin-iframe host, intro splash, activity/inbox/beads domain rows. `.segmented` (2 uses) → suggested as a `Tabs variant="segmented"` on #133.
+- **App-specific → stays local:** markdown renderer, chat tool-renderers (`.tool-*`), chat tabs (closeable/editable sessions), slash command menu (`.slash-*` — chat autocomplete), setup wizard stepper (`.setup-*` — one-off onboarding), workflow builder canvas, plugin-iframe host, intro splash, activity/inbox/tasks domain rows. `.segmented` (2 uses) → suggested as a `Tabs variant="segmented"` on #133.
 
 **Conclusion:** the DS gap surface is closed at #131–#136 + AppShell-held. Everything else the console needs is either already in 0.4.0 (an adoption sweep, task #68) or legitimately app-specific.
 

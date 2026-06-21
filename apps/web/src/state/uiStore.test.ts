@@ -84,14 +84,14 @@ describe("migrateUiState", () => {
     expect(out.quickBar).toEqual(["chat", "knowledge"]);
   });
 
-  // v11 (2026-06): Beads + Goals + Schedule folded into the unified "work" hub.
-  it("folds beads/goals/schedule into the 'work' hub", () => {
+  // v11 (2026-06): Tasks + Goals + Schedule folded into the unified "work" hub.
+  it("folds tasks/goals/schedule into the 'work' hub", () => {
     const out = migrateUiState({
-      railOrder: { left: ["chat", "schedule", "knowledge"], right: ["beads", "goals"], bottom: [] },
-      rightPanel: "beads",
-      quickBar: ["chat", "beads", "knowledge"],
+      railOrder: { left: ["chat", "schedule", "knowledge"], right: ["tasks", "goals"], bottom: [] },
+      rightPanel: "tasks",
+      quickBar: ["chat", "tasks", "knowledge"],
     }) as { railOrder: { left: string[]; right: string[]; bottom: string[] }; rightPanel: string; quickBar: string[] };
-    for (const id of ["beads", "goals", "schedule"]) {
+    for (const id of ["tasks", "goals", "schedule"]) {
       expect(out.railOrder.left).not.toContain(id);
       expect(out.railOrder.right).not.toContain(id);
       expect(out.quickBar).not.toContain(id);
@@ -145,7 +145,7 @@ describe("reconcilePluginViews", () => {
   const seed = (left: string[], right: string[], bottom: string[] = []) =>
     useUI.setState({ railOrder: { left, right, bottom } });
 
-  beforeEach(() => seed(["chat", "plugin:doom:panel"], ["beads", "plugin:board:board", "notes"]));
+  beforeEach(() => seed(["chat", "plugin:doom:panel"], ["tasks", "plugin:board:board", "notes"]));
 
   it("keeps a moved view at its persisted side and position despite its declared side", () => {
     // board's manifest says right→ but suppose the operator dragged doom to the left
@@ -155,13 +155,13 @@ describe("reconcilePluginViews", () => {
       { id: "plugin:board:board", side: "right" },
     ]);
     expect(useUI.getState().railOrder.left).toEqual(["chat", "plugin:doom:panel"]);
-    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes"]);
+    expect(useUI.getState().railOrder.right).toEqual(["tasks", "plugin:board:board", "notes"]);
   });
 
   it("keeps mid-rail positions (no prune/re-append shuffle)", () => {
     useUI.getState().reconcilePluginViews([{ id: "plugin:board:board", side: "right" }, { id: "plugin:doom:panel", side: "left" }]);
-    // board stays BETWEEN beads and notes — not re-appended to the bottom.
-    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes"]);
+    // board stays BETWEEN tasks and notes — not re-appended to the bottom.
+    expect(useUI.getState().railOrder.right).toEqual(["tasks", "plugin:board:board", "notes"]);
   });
 
   it("appends a NEW view at its declared side", () => {
@@ -170,19 +170,19 @@ describe("reconcilePluginViews", () => {
       { id: "plugin:board:board", side: "right" },
       { id: "plugin:browser:panel", side: "right" },
     ]);
-    expect(useUI.getState().railOrder.right).toEqual(["beads", "plugin:board:board", "notes", "plugin:browser:panel"]);
+    expect(useUI.getState().railOrder.right).toEqual(["tasks", "plugin:board:board", "notes", "plugin:browser:panel"]);
   });
 
   it("prunes a view absent from a non-empty set, leaving core surfaces alone", () => {
     useUI.getState().reconcilePluginViews([{ id: "plugin:doom:panel", side: "left" }]);
     expect(useUI.getState().railOrder.left).toEqual(["chat", "plugin:doom:panel"]);
-    expect(useUI.getState().railOrder.right).toEqual(["beads", "notes"]);
+    expect(useUI.getState().railOrder.right).toEqual(["tasks", "notes"]);
   });
 
   it("prunes everything on an empty set — why the caller must gate on loaded", () => {
     useUI.getState().reconcilePluginViews([]);
     expect(useUI.getState().railOrder.left).toEqual(["chat"]);
-    expect(useUI.getState().railOrder.right).toEqual(["beads", "notes"]);
+    expect(useUI.getState().railOrder.right).toEqual(["tasks", "notes"]);
   });
 });
 

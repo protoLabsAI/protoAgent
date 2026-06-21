@@ -29,7 +29,7 @@ agent_runtime: acp:proto         # native (default) | acp:<agent>
 # list specific tools to clamp the brain, or omit it entirely for everything. (`execute_code`
 # is excluded from the default set — the coding agent has its own; add it by name to override.)
 # operator_mcp:
-#   tools: [memory_recall, memory_ingest, beads_create, beads_list, notes_read, run_workflow]
+#   tools: [memory_recall, memory_ingest, task_create, task_list, notes_read, run_workflow]
 
 # Optional — override an agent's launch command (defaults shown).
 # acp:
@@ -58,7 +58,7 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
    we don't resend the world each turn, which keeps the agent's own prompt caching intact.
 3. **Tools** — protoAgent's operator tools are published as an MCP server (see
    [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server)) and **mounted into
-   the ACP session** (`session/new` `mcpServers`). The coding agent calls `beads_create`,
+   the ACP session** (`session/new` `mcpServers`). The coding agent calls `task_create`,
    `memory_recall`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
    to the chat as **tool cards** (`tool_start`/`tool_end`), the same as the native runtime.
 4. **Drive** — the agent reasons + acts; protoAgent returns the result on its A2A/chat surface.
@@ -71,7 +71,7 @@ One stateful ACP session is kept **per conversation thread** and reused across t
 > **Prefer protoAgent's tools for state.** A coding agent has its *own* todo/memory tools
 > (e.g. proto's `TaskCreate`) and will reach for them by default — state that then vanishes
 > with its session. The persona file steers it to use the `protoagent-operator` tools
-> (`beads_create`, `memory_ingest`, `set_goal`, …) for anything that must **persist** in
+> (`task_create`, `memory_ingest`, `set_goal`, …) for anything that must **persist** in
 > protoAgent — and they're available **by default** (the full toolset rides the bus; clamp
 > it with `operator_mcp.tools` only if you want to restrict the brain).
 

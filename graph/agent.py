@@ -298,8 +298,8 @@ async def run_manual_subagent(
     """
     # Mirror the lead graph's tool set so a subagent run OUTSIDE the lead's
     # `task` tool (slash `/distill`, scheduled `/dream`, the console fan-out) sees
-    # the same tools — otherwise allowlisted names like `beads_create` (distill's
-    # propose path) silently degrade. inbox/beads come from STATE (not threaded
+    # the same tools — otherwise allowlisted names like `task_create` (distill's
+    # propose path) silently degrade. inbox/tasks come from STATE (not threaded
     # through every caller); goal mode from config.
     from runtime.state import STATE
 
@@ -307,7 +307,7 @@ async def run_manual_subagent(
         knowledge_store,
         scheduler=scheduler,
         inbox_store=STATE.inbox_store,
-        beads_store=STATE.beads_store,
+        tasks_store=STATE.tasks_store,
         goal_enabled=getattr(config, "goal_enabled", False),
     )
     if extra_tools:
@@ -644,7 +644,7 @@ def create_agent_graph(
     include_subagents: bool = True,
     checkpointer=None,
     inbox_store=None,
-    beads_store=None,
+    tasks_store=None,
     background_mgr=None,
 ):
     """Create the protoAgent LangGraph agent.
@@ -669,7 +669,7 @@ def create_agent_graph(
         knowledge_store,
         scheduler=scheduler,
         inbox_store=inbox_store,
-        beads_store=beads_store,
+        tasks_store=tasks_store,
         # Thread the goal flag so the agent-facing set_goal tool (ADR 0028) is
         # actually BOUND, not just advertised. Without this it defaults False and
         # set_goal silently never reaches the model (it stayed in /api/tools,

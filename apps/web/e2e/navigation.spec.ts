@@ -24,7 +24,7 @@ test("Studio lands directly on Workflows (Run tab removed — run is a chat gest
   await expect(page.locator(".pl-tabs").getByRole("tab", { name: "Run", exact: true })).toHaveCount(0);
 });
 
-// The Work hub (2026-06) consolidates the former Beads / Goals / Schedule rail surfaces
+// The Work hub (2026-06) consolidates the former Tasks / Goals / Schedule rail surfaces
 // into one right-rail "Work" surface with Overview · Goals · Tasks · Schedule tabs.
 // Work is the default-active right panel, so it's already open — clicking its rail icon
 // when active would TOGGLE it closed, so only click when it's not the active surface.
@@ -51,11 +51,11 @@ test("Work → Goals tab lists active goals", async ({ page }) => {
   await expect(page.getByText("All tests pass")).toBeVisible();
 });
 
-test("Work → Tasks tab lists beads issues (query-backed)", async ({ page }) => {
-  // The tab is labeled "Tasks" but the panel content is still Beads (TanStack Query /
+test("Work → Tasks tab lists tasks issues (query-backed)", async ({ page }) => {
+  // The tab is labeled "Tasks" but the panel content is still Tasks (TanStack Query /
   // Suspense, ADR 0013) — folded into the Work hub.
   await openWorkTab(page, "Tasks");
-  await expect(page.getByRole("heading", { name: "Beads" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(page.getByText("Wire the telemetry rollup")).toBeVisible();
 });
 

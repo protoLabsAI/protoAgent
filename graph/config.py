@@ -628,14 +628,14 @@ class LangGraphConfig:
     )
 
     # Operator-console directory allowlist — the extra directories the
-    # React console's beads/notes APIs may read and write. The protoAgent
+    # React console's tasks/notes APIs may read and write. The protoAgent
     # repo root is always allowed implicitly (it's the default project);
     # add other project roots here to operate on them. Empty = repo root
     # only. The client sends a free-text project path, so this server-side
     # list — not the UI — is the security boundary. See operator_api/paths.
     operator_allowed_dirs: list[str] = field(default_factory=list)
 
-    # The operator console's working directory — where its beads/notes live, and
+    # The operator console's working directory — where its tasks/notes live, and
     # the agent's default project. Set in the setup wizard / Settings. Blank =
     # the resolver's default (PROTOAGENT_PROJECT_DIR env, else the protoAgent
     # dir). Read by ``server._resolve_operator_project_root``; always allowed.

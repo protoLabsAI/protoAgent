@@ -18,7 +18,7 @@ TypeScript is the console.
   sandboxed instance via `PROTOAGENT_INSTANCE=dev` (ADR 0004 scoping) on `:7871` —
   its own `config/dev/` + `~/.protoagent/{dev,*/dev}` data, **seeded from your
   default config** (boots with your gateway, no re-setup) but with fresh, separate
-  chat/beads/knowledge. The default instance (`config/` + `~/.protoagent`, `:7870`)
+  chat/tasks/knowledge. The default instance (`config/` + `~/.protoagent`, `:7870`)
   is untouched. `scripts/dev-reset.sh` wipes just the sandbox. Use this for feature
   testing instead of the default instance.
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is

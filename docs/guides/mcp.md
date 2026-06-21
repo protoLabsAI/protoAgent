@@ -175,14 +175,14 @@ server with one tool (`echo__echo`).
 
 The reverse direction (ADR 0033): publish this agent's own tools as an MCP server, so any
 MCP client — Claude Desktop, Cursor, or an ACP coding-agent runtime — can **operate the
-instance** (read/write notes & beads, recall/ingest memory, run workflows, delegate to
+instance** (read/write notes & tasks, recall/ingest memory, run workflows, delegate to
 subagents, set goals, schedule work). It's **opt-in + allowlist-gated** — only the tools you
 name are exposed:
 
 ```yaml
 operator_mcp:
   enabled: true
-  tools: [memory_recall, memory_ingest, beads_list, beads_create, notes_read, run_workflow]
+  tools: [memory_recall, memory_ingest, task_list, task_create, notes_read, run_workflow]
 ```
 
 Run it standalone:
@@ -208,7 +208,7 @@ its operator tools to that brain via the MCP server above, mounted into the ACP 
 ```yaml
 agent_runtime: acp:proto         # native (default) | acp:<agent>
 operator_mcp:
-  tools: [memory_recall, memory_ingest, beads_create, beads_list, notes_read, run_workflow]
+  tools: [memory_recall, memory_ingest, task_create, task_list, notes_read, run_workflow]
 # acp:                           # optional — override an agent's launch command
 #   agents:
 #     codex: { command: npx, args: ["-y", "@zed-industries/codex-acp"] }
@@ -216,7 +216,7 @@ operator_mcp:
 
 With this set, each turn is driven by the coding agent: protoAgent assembles the context
 (a cacheable persona prefix sent once, then per-turn deltas — ADR 0033 D5), the agent reasons
-+ uses its own tools, and reaches back into protoAgent's notes/beads/memory/workflows through
++ uses its own tools, and reaches back into protoAgent's notes/tasks/memory/workflows through
 the mounted operator MCP server. Defaults are `native` (the built-in LangGraph loop), so this
 is inert until you opt in. Each agent needs its CLI installed + authenticated on the host.
 

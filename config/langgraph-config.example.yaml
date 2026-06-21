@@ -260,7 +260,7 @@ tools:
   #   enabled: false
   #   keep: []
 
-# React operator console — the beads/notes APIs accept a project path from
+# React operator console — the tasks/notes APIs accept a project path from
 # the (free-text) UI, so the server, not the client, decides which
 # directories they may touch. The protoAgent repo root is always allowed;
 # add any other project roots you operate on here. Empty = repo root only.
