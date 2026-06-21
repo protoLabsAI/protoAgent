@@ -86,3 +86,41 @@ test("the detail dialog edits prompt + schedule, gated until something changes",
   await page.getByTestId("schedule-detail-schedule").fill("0 8 * * 1-5");
   await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
 });
+
+test("the row delete button confirms first — Cancel keeps the job", async ({ page }) => {
+  await gotoSchedule(page);
+  // The row's trash no longer deletes on one click; it summons a ConfirmDialog.
+  await page.getByRole("button", { name: "Delete job" }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete scheduled job?" });
+  await expect(confirm).toBeVisible();
+  // The confirm names what's being deleted (human schedule + prompt).
+  await expect(confirm).toContainText("every day at");
+  await expect(confirm).toContainText("Summarize overnight activity");
+  // Cancel aborts — dialog closes, the job row is still there.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByTestId("schedule-row-job-1")).toBeVisible();
+});
+
+test("Escape aborts the delete confirm; confirming fires it", async ({ page }) => {
+  await gotoSchedule(page);
+  await page.getByRole("button", { name: "Delete job" }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete scheduled job?" });
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape"); // click-outside / Esc cancels (no delete)
+  await expect(confirm).toBeHidden();
+  await expect(page.getByTestId("schedule-row-job-1")).toBeVisible();
+
+  // Re-open and actually confirm → the dialog closes (the cancel mutation fires).
+  await page.getByRole("button", { name: "Delete job" }).click();
+  await confirm.getByRole("button", { name: "Delete" }).click();
+  await expect(confirm).toBeHidden();
+});
+
+test("the detail dialog's Delete also routes through the confirm", async ({ page }) => {
+  await gotoSchedule(page);
+  await page.getByTestId("schedule-row-job-1").click();
+  await page.getByTestId("schedule-detail-delete").click();
+  // The detail dialog's Delete opens the same confirm (no immediate delete).
+  await expect(page.getByRole("dialog", { name: "Delete scheduled job?" })).toBeVisible();
+});

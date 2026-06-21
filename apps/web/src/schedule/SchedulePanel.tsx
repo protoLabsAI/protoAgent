@@ -2,7 +2,7 @@ import "./schedule.css";
 
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog } from "@protolabsai/ui/overlays";
 import {
   useMutation,
   useQueryClient,
@@ -297,8 +297,10 @@ function ScheduleBody() {
   const backend = data.backend;
   const [modalOpen, setModalOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
-  // Track the open job by id so it follows live refetches (and closes if it's deleted).
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Track jobs by id so they follow live refetches (and the dialogs close if deleted).
   const detailJob = jobs.find((j) => j.id === detailId) ?? null;
+  const confirmJob = jobs.find((j) => j.id === confirmDeleteId) ?? null;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.schedules });
 
@@ -350,8 +352,8 @@ function ScheduleBody() {
                     {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
                   </span>
                 </button>
-                <Button icon variant="ghost" type="button" onClick={() => cancel.mutate(job.id)}
-                        disabled={busy} title="Cancel job">
+                <Button icon variant="ghost" type="button" onClick={() => setConfirmDeleteId(job.id)}
+                        disabled={busy} title="Delete job">
                   <Trash2 size={16} />
                 </Button>
               </div>
@@ -372,10 +374,25 @@ function ScheduleBody() {
         job={detailJob}
         onClose={() => { setDetailId(null); edit.reset(); }}
         onSave={(id, body) => edit.mutate({ id, body })}
-        onDelete={(id) => cancel.mutate(id, { onSuccess: () => setDetailId(null) })}
+        onDelete={(id) => setConfirmDeleteId(id)}
         busy={busy}
         error={edit.isError ? errMsg(edit.error) : null}
       />
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        title="Delete scheduled job?"
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (confirmDeleteId) cancel.mutate(confirmDeleteId, { onSuccess: () => setDetailId(null) });
+          setConfirmDeleteId(null);
+        }}
+        onClose={() => setConfirmDeleteId(null)}
+      >
+        {confirmJob
+          ? `"${describeSchedule(confirmJob.schedule)}" — ${confirmJob.prompt.length > 80 ? `${confirmJob.prompt.slice(0, 80)}…` : confirmJob.prompt}. It will stop firing and be removed. This can't be undone.`
+          : undefined}
+      </ConfirmDialog>
     </>
   );
 }
