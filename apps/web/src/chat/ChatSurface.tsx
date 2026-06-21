@@ -40,7 +40,7 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
-import { addToolRef, appendText, toolsForGroup } from "./parts";
+import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -838,7 +838,11 @@ function ChatSessionSlot({
             session.id,
             latest.messages.map((message) =>
               message.id === assistantId
-                ? { ...message, reasoning: `${message.reasoning ?? ""}${delta}` }
+                ? {
+                    ...message,
+                    reasoning: `${message.reasoning ?? ""}${delta}`,
+                    parts: appendReasoning(message.parts, delta),
+                  }
                 : message,
             ),
           );
@@ -992,18 +996,27 @@ function ChatSessionSlot({
               role={message.role}
               streaming={message.status === "streaming"}
             >
-              {message.reasoning ? (
-                // Collapsible "thinking" — open while the model is still reasoning
-                // (no answer text yet), auto-collapses once the answer starts.
+              {message.reasoning && !(message.parts && message.parts.length) ? (
+                // History-loaded messages: one collapsed "thinking" block. Live turns
+                // render each step's reasoning inline as a part (below), so the model's
+                // thinking shows *between* the tool calls.
                 <Reasoning surface="subtle" streaming={message.status === "streaming" && !message.content}>
                   {message.reasoning}
                 </Reasoning>
               ) : null}
               {message.parts && message.parts.length ? (
-                // Live turns: text runs and tool groups in emission order, so a pre-tool
-                // preamble renders above the tool cards and the answer below them.
+                // Live turns: reasoning blocks, text runs and tool groups in emission
+                // order — so the model's thinking and a pre-tool preamble render above the
+                // tool cards, and later reasoning + the answer below them.
                 message.parts.map((part, i) =>
-                  part.kind === "tools" ? (
+                  part.kind === "reasoning" ? (
+                    part.text ? (
+                      // Collapsed by default; the latest block stays open while streaming.
+                      <Reasoning key={i} surface="subtle" streaming={message.status === "streaming" && i === message.parts!.length - 1}>
+                        {part.text}
+                      </Reasoning>
+                    ) : null
+                  ) : part.kind === "tools" ? (
                     <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} onCancelDelegation={cancelDelegation} />
                   ) : part.text ? (
                     message.role === "user" ? (

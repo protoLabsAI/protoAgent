@@ -367,26 +367,31 @@ async def _run_turn_stream(
             # before the call is fully formed or executed — so the UI shows
             # "<tool> · running" instead of a bare loading wheel. Keyed by the
             # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
+            # Emit this chunk's reasoning + answer text BEFORE its tool-call tokens, so
+            # the console orders the model's thinking/preamble ABOVE the tool card it
+            # precedes (each tool-loop step's scratch_pad → a reasoning block between the
+            # tool cards). The client builds its render blocks in frame-arrival order.
+            if hasattr(chunk, "content") and chunk.content:
+                accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                # Stream the scratch_pad reasoning on its own channel — a collapsible
+                # "thinking" view in the console (never folded into the answer text). The
+                # scratch_pad precedes <output> in the model's text, so emit it first.
+                reasoning = stream_visible_reasoning(accumulated_raw)
+                if len(reasoning) > reasoned_len:
+                    yield ("reasoning", reasoning[reasoned_len:])
+                    reasoned_len = len(reasoning)
+                # Stream only the user-facing <output> region, token by token — never the
+                # scratch_pad. The terminal artifact (extract_output) reconciles any
+                # partial tail held back here.
+                visible = stream_visible_output(accumulated_raw)
+                if len(visible) > streamed_len:
+                    yield ("text", visible[streamed_len:])
+                    streamed_len = len(visible)
             for tcc in getattr(chunk, "tool_call_chunks", None) or []:
                 tcid, tcname = tcc.get("id"), tcc.get("name")
                 if tcid and tcname and tcid not in announced_tools:
                     announced_tools.add(tcid)
                     yield ("tool_start", {"id": tcid, "name": tcname, "input": ""})
-            if hasattr(chunk, "content") and chunk.content:
-                accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                # Stream only the user-facing <output> region, token by token —
-                # never the scratch_pad. The terminal artifact (extract_output)
-                # reconciles any partial tail held back here.
-                visible = stream_visible_output(accumulated_raw)
-                if len(visible) > streamed_len:
-                    yield ("text", visible[streamed_len:])
-                    streamed_len = len(visible)
-                # Stream the scratch_pad reasoning on its own channel — a collapsible
-                # "thinking" view in the console (never folded into the answer text).
-                reasoning = stream_visible_reasoning(accumulated_raw)
-                if len(reasoning) > reasoned_len:
-                    yield ("reasoning", reasoning[reasoned_len:])
-                    reasoned_len = len(reasoning)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             # Finalize each tool card with its full args, keyed by the tool_call id.

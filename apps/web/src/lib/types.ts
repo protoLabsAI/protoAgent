@@ -410,6 +410,7 @@ export type ComponentSpec = { component: string; props: Record<string, unknown> 
 // live status + subagent nesting stay in one place (resolved at render).
 export type ChatPart =
   | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string }
   | { kind: "tools"; ids: string[] };
 
 export type ChatMessage = {

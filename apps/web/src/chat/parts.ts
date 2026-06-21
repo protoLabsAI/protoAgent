@@ -20,6 +20,22 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   return next;
 }
 
+/** Append a streamed reasoning ("thinking") delta to the ordered parts. Extends the
+ *  open reasoning run, or starts a new one when the previous block was a tool group
+ *  (so each tool-loop step's scratch_pad renders as its own collapsible block between
+ *  the tool cards). A fresh run drops the leading separator the server joins steps
+ *  with. */
+export function appendReasoning(parts: ChatPart[] | undefined, text: string): ChatPart[] {
+  const next = [...(parts ?? [])];
+  const last = next[next.length - 1];
+  if (last?.kind === "reasoning") {
+    next[next.length - 1] = { kind: "reasoning", text: last.text + text };
+    return next;
+  }
+  next.push({ kind: "reasoning", text: text.replace(/^\s+/, "") });
+  return next;
+}
+
 /** Record a new TOP-LEVEL tool call in emission order: extend the current tool
  *  group if the last block is one, else open a new group after the preceding text.
  *  Child calls (parentId set) don't open a block — they nest under their parent's

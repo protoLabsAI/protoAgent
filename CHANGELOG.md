@@ -11,13 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Chat: assistant text and tool calls render in emission order.** A pre-tool preamble
-  ("let me look that up") used to render *after* the tool cards because the message
-  grouped all text below all tool cards; it now renders above them with the answer
-  below (interleaved render blocks). The server also flushes buffered answer text before
-  a tool frame, so the preamble reaches the console first — making the in-place streaming
-  visible as it arrives rather than appearing to land after the tools.
+### Changed
+- **Chat: reasoning, text, and tool calls render in emission order.** Assistant turns now
+  show the model's thinking *between* tool calls: each tool-loop step's scratch_pad renders
+  as its own collapsible reasoning block, interleaved with the tool cards and the answer
+  (`reasoning → tool · tool → reasoning → answer`) — instead of grouping all reasoning into
+  one block at the top and all tool cards above all the answer text. A pre-tool preamble
+  ("let me look that up") now sits above the tool card it precedes. The server emits each
+  chunk's reasoning/text before its tool frame (and flushes buffered text before a tool),
+  so the console builds the blocks in the right order and streams them in place.
 
 ## [0.64.3] - 2026-06-20
 

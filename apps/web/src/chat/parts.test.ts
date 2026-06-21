@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { addToolRef, appendText, toolsForGroup } from "./parts";
+import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
 
 describe("appendText", () => {
   it("starts a run, then appends deltas to it", () => {
@@ -58,6 +58,36 @@ describe("addToolRef", () => {
       { kind: "text", text: "mid" },
       { kind: "tools", ids: ["b"] },
     ]);
+  });
+});
+
+describe("appendReasoning", () => {
+  it("extends the open reasoning run on each delta", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "Thinking");
+    p = appendReasoning(p, " about it");
+    expect(p).toEqual([{ kind: "reasoning", text: "Thinking about it" }]);
+  });
+
+  it("starts a NEW reasoning block after a tool (one per step), trimming the join separator", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "step 1 thinking");
+    p = addToolRef(p, "t1");
+    p = appendReasoning(p, "\n\nstep 2 thinking"); // server joins steps with a blank line
+    expect(p).toEqual([
+      { kind: "reasoning", text: "step 1 thinking" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "reasoning", text: "step 2 thinking" },
+    ]);
+  });
+
+  it("interleaves reasoning · tools · reasoning · answer in emission order", () => {
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "let me search");
+    p = addToolRef(p, "web");
+    p = appendReasoning(p, "\n\nnow I know");
+    p = appendText(p, "Here's the answer.", true);
+    expect(p.map((x) => x.kind)).toEqual(["reasoning", "tools", "reasoning", "text"]);
   });
 });
 
