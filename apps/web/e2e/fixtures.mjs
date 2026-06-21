@@ -146,11 +146,13 @@ export const SCHEDULER_JOBS = {
   jobs: [
     {
       id: "job-1",
-      prompt: "Summarize overnight activity",
+      prompt:
+        "Summarize overnight activity across all repos, then post the digest to the team channel and open issues for anything that needs follow-up before standup.",
       schedule: "0 9 * * *",
       agent_name: "protoAgent",
       enabled: true,
       next_fire: "2026-05-30T09:00:00Z",
+      timezone: "America/Chicago",
     },
   ],
 };

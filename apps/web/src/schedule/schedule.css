@@ -51,3 +51,59 @@
   font-size: 12px;
 }
 .schedule-preview .muted { color: var(--fg-muted, #71717a); }
+
+/* A job row's content is a button so the whole row opens the detail dialog; it must
+   look like the plain .subagent-row > div content (grid, no button chrome). */
+.schedule-row-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.schedule-row-open:hover strong { color: var(--accent, #9b87f2); }
+.schedule-row-open strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.schedule-row-open span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Detail dialog: a label/value grid + the full (un-truncated) prompt. */
+.schedule-detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.schedule-detail-grid dt { color: var(--fg-muted, #71717a); }
+.schedule-detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.schedule-detail-grid code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-raised, #131316);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.schedule-detail-grid .muted { color: var(--fg-muted, #71717a); }
+.schedule-detail-promptbody {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+}

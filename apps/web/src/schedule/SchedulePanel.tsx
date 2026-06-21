@@ -8,8 +8,8 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { CalendarClock, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
 import { RefreshButton } from "../app/ui-kit";
@@ -17,6 +17,7 @@ import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, schedulesQuery } from "../lib/queries";
+import type { ScheduledJob } from "../lib/types";
 import {
   buildOnce,
   buildRepeat,
@@ -179,12 +180,125 @@ function ScheduleModal({
   );
 }
 
+// Click a job row to open this — read the FULL prompt + every field, or flip to Edit
+// to change the prompt / schedule. The backend has no in-place update (add errors on a
+// duplicate id), so Save is a cancel-then-re-add of the same id (done by the parent).
+function ScheduleDetailDialog({
+  job,
+  onClose,
+  onSave,
+  onDelete,
+  busy,
+  error,
+}: {
+  job: ScheduledJob | null;
+  onClose: () => void;
+  onSave: (id: string, body: { prompt: string; schedule: string; timezone?: string }) => void;
+  onDelete: (id: string) => void;
+  busy: boolean;
+  error?: string | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [schedule, setSchedule] = useState("");
+  // Re-seed the editable fields whenever a different job is opened; always start in view mode.
+  useEffect(() => {
+    setPrompt(job?.prompt ?? "");
+    setSchedule(job?.schedule ?? "");
+    setEditing(false);
+  }, [job]);
+
+  if (!job) return null;
+  const preview = describeSchedule(schedule);
+  const dirty = prompt.trim() !== job.prompt || schedule.trim() !== job.schedule;
+  const canSave = !!prompt.trim() && !!schedule.trim() && dirty && !busy;
+
+  return (
+    <Dialog
+      open={!!job}
+      onClose={onClose}
+      title={<><CalendarClock size={16} /> {editing ? "Edit schedule" : "Scheduled job"}</>}
+      width="min(560px, 94vw)"
+      className="schedule-dialog"
+      footer={
+        editing ? (
+          <>
+            <Button type="button" onClick={() => setEditing(false)} disabled={busy}>Cancel</Button>
+            <Button
+              type="button"
+              variant="primary"
+              disabled={!canSave}
+              data-testid="schedule-detail-save"
+              onClick={() => onSave(job.id, { prompt: prompt.trim(), schedule: schedule.trim(), timezone: job.timezone || undefined })}
+            >
+              Save changes
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button type="button" onClick={onClose}>Close</Button>
+            <Button type="button" variant="ghost" data-testid="schedule-detail-delete"
+                    onClick={() => onDelete(job.id)} disabled={busy} title="Delete job">
+              <Trash2 size={16} /> Delete
+            </Button>
+            <Button type="button" variant="primary" data-testid="schedule-detail-edit"
+                    onClick={() => setEditing(true)} disabled={busy}>
+              <Pencil size={16} /> Edit
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="schedule-form" data-testid="schedule-detail">
+        {error ? <p className="settings-status">Couldn't save: {error}</p> : null}
+        {editing ? (
+          <>
+            <label className="field">
+              <span>When it runs (cron expression, or an ISO date for one-off)</span>
+              <Input value={schedule} onChange={(e) => setSchedule(e.target.value)}
+                     data-testid="schedule-detail-schedule" />
+            </label>
+            <p className="schedule-preview">
+              {preview
+                ? <>Runs <strong>{preview}</strong> <code>{schedule}</code>{job.timezone ? <span className="muted"> · {job.timezone}</span> : null}</>
+                : <span className="muted">Enter a cron expression or an ISO date</span>}
+            </p>
+            <label className="field">
+              <span>Prompt (delivered to the agent when it fires)</span>
+              <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={6}
+                        data-testid="schedule-detail-prompt" />
+            </label>
+          </>
+        ) : (
+          <dl className="schedule-detail-grid">
+            <dt>Schedule</dt>
+            <dd>
+              {describeSchedule(job.schedule)} <code>{job.schedule}</code>
+              {job.timezone ? <span className="muted"> · {job.timezone}</span> : null}
+            </dd>
+            {job.next_fire ? (<><dt>Next fire</dt><dd>{job.next_fire}</dd></>) : null}
+            {job.last_fire ? (<><dt>Last fire</dt><dd>{job.last_fire}</dd></>) : null}
+            {job.created_at ? (<><dt>Created</dt><dd>{job.created_at}</dd></>) : null}
+            <dt>Job id</dt>
+            <dd><code>{job.id}</code></dd>
+            <dt>Prompt</dt>
+            <dd className="schedule-detail-promptbody" data-testid="schedule-detail-promptbody">{job.prompt}</dd>
+          </dl>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 function ScheduleBody() {
   const queryClient = useQueryClient();
   const { data, isFetching, refetch } = useSuspenseQuery(schedulesQuery());
   const jobs = data.jobs;
   const backend = data.backend;
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  // Track the open job by id so it follows live refetches (and closes if it's deleted).
+  const detailJob = jobs.find((j) => j.id === detailId) ?? null;
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.schedules });
 
@@ -194,7 +308,18 @@ function ScheduleBody() {
     onSettled: invalidate,
   });
   const cancel = useMutation({ mutationFn: (id: string) => api.cancelSchedule(id), onSettled: invalidate });
-  const busy = add.isPending || cancel.isPending;
+  // No in-place update endpoint (add rejects a duplicate id), so an edit is a
+  // cancel-then-re-add of the same id. Client-validated first (prompt + schedule
+  // non-empty) so the re-add rarely fails after the cancel.
+  const edit = useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone?: string } }) => {
+      await api.cancelSchedule(id);
+      return api.addSchedule({ ...body, job_id: id });
+    },
+    onSuccess: () => setDetailId(null),
+    onSettled: invalidate,
+  });
+  const busy = add.isPending || cancel.isPending || edit.isPending;
 
   return (
     <>
@@ -218,7 +343,8 @@ function ScheduleBody() {
           {jobs.length ? (
             jobs.map((job) => (
               <div className="subagent-row" key={job.id}>
-                <div>
+                <button type="button" className="schedule-row-open" onClick={() => setDetailId(job.id)}
+                        data-testid={`schedule-row-${job.id}`} title="Open details">
                   <strong>{job.id}</strong>
                   <span>
                     {describeSchedule(job.schedule)}
@@ -226,7 +352,7 @@ function ScheduleBody() {
                     {" · "}
                     {job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt}
                   </span>
-                </div>
+                </button>
                 <Button icon variant="ghost" type="button" onClick={() => cancel.mutate(job.id)}
                         disabled={busy} title="Cancel job">
                   <Trash2 size={16} />
@@ -245,6 +371,14 @@ function ScheduleBody() {
       </div>
 
       <ScheduleModal open={modalOpen} onClose={() => setModalOpen(false)} onAdd={(b) => add.mutate(b)} busy={busy} />
+      <ScheduleDetailDialog
+        job={detailJob}
+        onClose={() => { setDetailId(null); edit.reset(); }}
+        onSave={(id, body) => edit.mutate({ id, body })}
+        onDelete={(id) => cancel.mutate(id, { onSuccess: () => setDetailId(null) })}
+        busy={busy}
+        error={edit.isError ? errMsg(edit.error) : null}
+      />
     </>
   );
 }
