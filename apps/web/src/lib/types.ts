@@ -341,6 +341,8 @@ export type ScheduledJob = {
   next_fire?: string | null;
   last_fire?: string | null;
   enabled?: boolean;
+  /** IANA tz the cron is evaluated in (recurring jobs only); null/absent = UTC. */
+  timezone?: string | null;
 };
 
 export type Subagent = {

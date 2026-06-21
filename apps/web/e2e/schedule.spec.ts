@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 // you — calendar for one-off, presets for recurring, raw cron as the escape hatch —
 // with a live plain-English preview. (No hand-written cron required.)
 
-async function openScheduleModal(page) {
+async function gotoSchedule(page) {
   await page.goto("/app/", { waitUntil: "load" });
   // Schedule folded into the Work hub (2026-06): the right-rail Work surface, Schedule tab.
   // Work is the default-active right panel; in the narrow panel the DS responsive Tabs
@@ -13,6 +13,10 @@ async function openScheduleModal(page) {
   const cls = (await workBtn.getAttribute("class")) ?? "";
   if (!cls.includes("--active")) await workBtn.click();
   await page.locator(".pl-tabs__select").first().selectOption("schedule");
+}
+
+async function openScheduleModal(page) {
+  await gotoSchedule(page);
   await page.getByTestId("schedule-new").click();
   await expect(page.getByTestId("schedule-modal")).toBeVisible();
 }
@@ -51,4 +55,34 @@ test("submit is gated until prompt + schedule are set", async ({ page }) => {
   await expect(page.getByTestId("schedule-submit")).toBeDisabled(); // no prompt yet
   await page.getByTestId("schedule-prompt").fill("Run the daily brief");
   await expect(page.getByTestId("schedule-submit")).toBeEnabled();
+});
+
+test("clicking a job opens a detail dialog with the FULL (un-truncated) prompt", async ({ page }) => {
+  await gotoSchedule(page);
+  // The row only shows a truncated prompt + delete; clicking it pops the full detail.
+  await page.getByTestId("schedule-row-job-1").click();
+  const detail = page.getByTestId("schedule-detail");
+  await expect(detail).toBeVisible();
+  // The full prompt (longer than the 80-char row truncation) is shown in full.
+  await expect(page.getByTestId("schedule-detail-promptbody")).toContainText(
+    "open issues for anything that needs follow-up before standup",
+  );
+  // Schedule (human + raw cron), timezone and id are all surfaced.
+  await expect(detail).toContainText("every day at");
+  await expect(detail).toContainText("0 9 * * *");
+  await expect(detail).toContainText("America/Chicago");
+  await expect(detail).toContainText("job-1");
+});
+
+test("the detail dialog edits prompt + schedule, gated until something changes", async ({ page }) => {
+  await gotoSchedule(page);
+  await page.getByTestId("schedule-row-job-1").click();
+  await page.getByTestId("schedule-detail-edit").click();
+  // Edit fields are pre-filled with the current values.
+  await expect(page.getByTestId("schedule-detail-schedule")).toHaveValue("0 9 * * *");
+  await expect(page.getByTestId("schedule-detail-prompt")).toHaveValue(/Summarize overnight activity/);
+  // Save is gated until a real change.
+  await expect(page.getByTestId("schedule-detail-save")).toBeDisabled();
+  await page.getByTestId("schedule-detail-schedule").fill("0 8 * * 1-5");
+  await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
 });
