@@ -7,13 +7,16 @@
 # registered in ``tools/lg_tools.py``.
 
 model:
-  provider: openai
-  # Default LiteLLM gateway alias. Set an alias called ``protolabs/reasoning``
-  # (or whatever you rename it to) in your gateway config pointing at the
-  # real model — swapping the model becomes a gateway edit, not a code
-  # change in the fork.
-  name: protolabs/reasoning
-  api_base: http://gateway:4000/v1
+  # provider / name / api_base are HOST-scoped (ADR 0047) — box-wide defaults set
+  # on the Host console (Settings ▸ Host ▸ Model & Routing) or in host-config.yaml,
+  # NOT here. Uncommenting them in this agent layer would shadow the host value
+  # (agent > host in the cascade), so a Host-console edit would appear to "reset".
+  # The App defaults (shown below) already apply; uncomment ONLY to pin a per-agent
+  # override that should deliberately outrank the box default.
+  #   provider: openai
+  #   name: protolabs/reasoning        # LiteLLM gateway alias → swapping the model
+  #                                    # is a gateway edit, not a fork code change
+  #   api_base: http://gateway:4000/v1
   api_key: ""  # falls back to OPENAI_API_KEY env
   temperature: 0.2
   max_tokens: 32768  # 32k — required headroom for the Qwen models we run
@@ -220,10 +223,13 @@ checkpoint:
 #     through a coding agent instead of a gateway model — same for goal.eval_model
 #     and compaction.model. (The main brain itself is selected via agent_runtime.)
 #   fallback_models: on a primary error, retry on each in order. Empty = none.
-routing:
-  # aux_model: protolabs/fast
-  fallback_models: []
-  #  - claude-haiku-4-5
+# routing.aux_model / routing.fallback_models are HOST-scoped (ADR 0047) — set on
+# the Host console (Settings ▸ Host ▸ Model & Routing) or host-config.yaml, NOT here
+# (an agent-layer copy would shadow the host value). App default = none on both.
+# routing:
+#   aux_model: protolabs/fast
+#   fallback_models:
+#    - claude-haiku-4-5
 
 # Goal mode — route the goal verifier to a cheaper model with `eval_model`
 # (else it uses routing.aux_model, else the main model).
