@@ -249,6 +249,118 @@ def stream_visible_reasoning(raw: str) -> str:
     return "\n\n".join(chunks)
 
 
+# Compiled openers for the incremental streaming views below. The lookbehind skips a
+# backticked mention (matching the pure functions); `Pattern.search(raw, pos)` keeps the
+# FULL string visible to the lookbehind, so backing the search start up by the tag length
+# catches a tag that straddles a chunk boundary without a slice false-positive.
+_OUTPUT_OPEN_RE = re.compile(r"(?<!`)<output>", re.IGNORECASE)
+_REASONING_OPEN_RE = re.compile(r"(?<!`)<(?:scratch_pad|think)>", re.IGNORECASE)
+
+
+class StreamingOutputView:
+    """Incremental, amortized-O(total) equivalent of :func:`stream_visible_output`.
+
+    ``stream_visible_output`` re-scans the ENTIRE accumulated text every chunk, so a turn
+    streaming N chars over ~N chunks costs O(N²) (#1310). This keeps the same contract —
+    feed it the monotonically growing accumulated raw, get the full visible-so-far back —
+    but only looks at the newly-appended tail in the common cases:
+
+      * before ``<output>`` opens, it scans only the tail for the opener (the
+        ``<scratch_pad>`` is never re-scanned), returning ``""`` meanwhile;
+      * once ``<output>`` is open with no ``<`` in the output region (the steady
+        answer-body stream), it just appends the delta.
+
+    Anything ambiguous — a ``<`` that may begin ``</output>`` / ``<think>`` /
+    ``<confidence>`` / a partial tag, or the closed state — falls back to the
+    authoritative ``stream_visible_output``, the oracle the equivalence test pins this
+    against. Construct one per turn; call :meth:`update` per chunk.
+    """
+
+    __slots__ = ("_opened", "_fast", "_prev_len", "_visible")
+
+    def __init__(self) -> None:
+        self._opened = False
+        self._fast = False
+        self._prev_len = 0
+        self._visible = ""
+
+    def update(self, raw: str) -> str:
+        delta_start = self._prev_len
+        self._prev_len = len(raw)
+        # Steady answer-body stream: open, unclosed, no `<` in the region — the visible
+        # simply grows by a delta that adds no tag-significant character.
+        if self._fast and "<" not in raw[delta_start:]:
+            self._visible += raw[delta_start:]
+            return self._visible
+        # Pre-output: scan only the tail for the opener (never re-scan the scratch_pad).
+        if not self._opened:
+            start = max(0, delta_start - 8)  # catch a "<output>" split across the boundary
+            if _OUTPUT_OPEN_RE.search(raw, start) is None:
+                return ""  # still in scratch_pad — nothing user-facing yet
+            self._opened = True
+        # Authoritative recompute (close / <think> / partial-tag handling), then decide
+        # whether the next chunks can take the fast path.
+        self._visible = stream_visible_output(raw)
+        m = _OUTPUT_OPEN_RE.search(raw)
+        self._fast = m is not None and "<" not in raw[m.end() :]
+        return self._visible
+
+
+class StreamingReasoningView:
+    """Incremental, amortized-O(total) equivalent of :func:`stream_visible_reasoning`.
+
+    Same idea as :class:`StreamingOutputView` for the hidden "thinking" stream: only the
+    open trailing reasoning block grows on a plain delta (closed blocks are committed and
+    not re-joined; ``str.strip`` scans only end-whitespace, not the whole body). A ``<``
+    (a block open/close, a nested or partial tag) drops to the authoritative
+    ``stream_visible_reasoning`` — the oracle the equivalence test pins this against.
+    """
+
+    __slots__ = ("_opened", "_fast", "_prev_len", "_committed", "_open_raw", "_visible")
+
+    def __init__(self) -> None:
+        self._opened = False
+        self._fast = False
+        self._prev_len = 0
+        self._committed = ""  # joined, stripped bodies of CLOSED reasoning blocks
+        self._open_raw = ""  # raw body of the open trailing block (fast mode only)
+        self._visible = ""
+
+    def _join(self, body: str) -> str:
+        if not body:
+            return self._committed
+        if not self._committed:
+            return body
+        return self._committed + "\n\n" + body
+
+    def update(self, raw: str) -> str:
+        delta_start = self._prev_len
+        self._prev_len = len(raw)
+        # Steady deliberation: inside one open trailing block, delta adds no tag char —
+        # extend that block's body and re-join.
+        if self._fast and "<" not in raw[delta_start:]:
+            self._open_raw += raw[delta_start:]
+            self._visible = self._join(self._open_raw.strip())
+            return self._visible
+        # Pre-reasoning: cheap tail-scan for the first scratch_pad/think opener.
+        if not self._opened:
+            start = max(0, delta_start - 13)  # catch a "<scratch_pad>" split across the boundary
+            if _REASONING_OPEN_RE.search(raw, start) is None:
+                return ""
+            self._opened = True
+        # Authoritative recompute, then refresh fast-mode state.
+        self._visible = stream_visible_reasoning(raw)
+        self._committed = "\n\n".join(b for m in _REASONING_BLOCK_RE.finditer(raw) if (b := m.group(2).strip()))
+        tail = _REASONING_OPEN_TAIL_RE.search(raw)
+        if tail is not None and "<" not in tail.group(2):
+            self._open_raw = tail.group(2)
+            self._fast = True
+        else:
+            self._open_raw = ""
+            self._fast = False
+        return self._visible
+
+
 def extract_confidence(text: str) -> tuple[float | None, str | None]:
     """Parse an optional self-reported ``<confidence>`` (and explanation).
 

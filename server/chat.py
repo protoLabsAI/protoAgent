@@ -21,11 +21,11 @@ from typing import Any
 
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
+    StreamingOutputView,
+    StreamingReasoningView,
     extract_confidence,
     extract_output,
     is_dropped_scratch_turn,
-    stream_visible_output,
-    stream_visible_reasoning,
 )
 from runtime.state import STATE
 
@@ -308,6 +308,11 @@ async def _run_turn_stream(
     accumulated_raw = ""
     streamed_len = 0  # chars of visible <output> already emitted as text frames
     reasoned_len = 0  # chars of scratch_pad reasoning already emitted (live thinking)
+    # Incremental views: same visible-so-far as stream_visible_output/_reasoning, but
+    # they scan only the new tail instead of re-running regexes over the whole
+    # accumulated text every chunk — turning the per-turn O(N²) rescan into ~O(N) (#1310).
+    out_view = StreamingOutputView()
+    reason_view = StreamingReasoningView()
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
@@ -377,13 +382,13 @@ async def _run_turn_stream(
                 # Stream only the user-facing <output> region, token by token —
                 # never the scratch_pad. The terminal artifact (extract_output)
                 # reconciles any partial tail held back here.
-                visible = stream_visible_output(accumulated_raw)
+                visible = out_view.update(accumulated_raw)
                 if len(visible) > streamed_len:
                     yield ("text", visible[streamed_len:])
                     streamed_len = len(visible)
                 # Stream the scratch_pad reasoning on its own channel — a collapsible
                 # "thinking" view in the console (never folded into the answer text).
-                reasoning = stream_visible_reasoning(accumulated_raw)
+                reasoning = reason_view.update(accumulated_raw)
                 if len(reasoning) > reasoned_len:
                     yield ("reasoning", reasoning[reasoned_len:])
                     reasoned_len = len(reasoning)

@@ -15,8 +15,14 @@ terminal ``extract_output`` reconciles any held-back tail. Both are covered.
 
 from __future__ import annotations
 
+import random
+
+import pytest
+
 from graph.output_format import (
     OUTPUT_FORMAT_INSTRUCTIONS,
+    StreamingOutputView,
+    StreamingReasoningView,
     _strip_reasoning,
     extract_output,
     stream_visible_output,
@@ -310,3 +316,63 @@ def test_stream_visible_is_monotonic_prefix():
     assert seen == "Hello world"
     # The terminal extractor agrees with the final streamed text.
     assert extract_output(raw) == "Hello world"
+
+
+# ── incremental streaming views == the pure functions (oracle equivalence, #1310) ──
+# StreamingOutputView / StreamingReasoningView only scan the new tail per chunk, so they
+# must return EXACTLY what the (O(N²)) pure functions return at every growing prefix.
+# These pin the fast incremental paths to the proven pure implementations.
+
+_STREAM_CASES = [
+    "",
+    "no tags at all, just a bare answer",
+    "<scratch_pad>thinking</scratch_pad><output>Hello world</output>",
+    "<scratch_pad>plan the work</scratch_pad><output>answer with a < b and c > d comparison</output>",
+    "<output>partial answer with no closing tag yet",  # orphan open (max_tokens truncation)
+    "<scratch_pad>step 1</scratch_pad><scratch_pad>step 2</scratch_pad><output>done</output>",  # multi scratch
+    "<output>before<think>leaked provider reasoning</think>after</output>",  # think inside output
+    "<output>x</output><confidence>0.9</confidence>",
+    "<scratch_pad>reasoning that mentions `<output>` in backticks</scratch_pad><output>the real answer</output>",
+    "<think>provider think block</think><output>ok</output>",
+    "<output>```python\nxs: list[int] = []\nif a < b and c > d:\n    pass\n```\ndone</output>",  # code: many < >
+    "<output>trailing partial close </outp",  # partial </output> at the very end
+    "<output>answer</output>\n<confidence>0.8</confidence>\n<confidence_explanation>why it scored</confidence_explanation>",
+    "<scratch_pad>only reasoning, model never opened output and stopped</scratch_pad>",
+    "<scratch_pad>a</scratch_pad><output>one</output>more raw<output>two</output>",  # second (ignored) output
+]
+
+
+@pytest.mark.parametrize("text", _STREAM_CASES)
+@pytest.mark.parametrize("chunk", [1, 2, 3, 5, 7, 13, 50])
+def test_streaming_output_view_matches_pure(text, chunk):
+    view = StreamingOutputView()
+    for i in range(chunk, len(text) + chunk, chunk):
+        prefix = text[:i]
+        assert view.update(prefix) == stream_visible_output(prefix), f"mismatch at prefix {prefix!r}"
+
+
+@pytest.mark.parametrize("text", _STREAM_CASES)
+@pytest.mark.parametrize("chunk", [1, 2, 3, 5, 7, 13, 50])
+def test_streaming_reasoning_view_matches_pure(text, chunk):
+    view = StreamingReasoningView()
+    for i in range(chunk, len(text) + chunk, chunk):
+        prefix = text[:i]
+        assert view.update(prefix) == stream_visible_reasoning(prefix), f"mismatch at prefix {prefix!r}"
+
+
+def test_streaming_views_match_pure_under_random_fuzz():
+    """Random documents from a tag-heavy alphabet, chunked at random offsets — the
+    incremental views must equal the pure functions at every step (catches boundary /
+    holdback / whitespace edges the curated cases miss)."""
+    rng = random.Random(1310)
+    alphabet = ["<output>", "</output>", "<scratch_pad>", "</scratch_pad>", "<think>", "</think>",
+                "<confidence>", "</confidence>", "`", "<", ">", " ", "\n", "a", "b", "x", "word"]
+    for _ in range(300):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        out_view, reason_view = StreamingOutputView(), StreamingReasoningView()
+        pos = 0
+        while pos < len(text):
+            pos = min(len(text), pos + rng.randint(1, 6))
+            prefix = text[:pos]
+            assert out_view.update(prefix) == stream_visible_output(prefix), f"output mismatch: {prefix!r}"
+            assert reason_view.update(prefix) == stream_visible_reasoning(prefix), f"reasoning mismatch: {prefix!r}"
