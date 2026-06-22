@@ -11,7 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Per-agent ACP launch overrides are honored.** `acp.agents.<name>.{command,args}` is
+  now parsed (it was silently dropped — `LangGraphConfig` had no `acp_agents` field), so an
+  `agent_runtime: acp:<agent>` turn launches the locally-installed adapter you configured
+  (`claude-agent-acp`, `codex-acp`) instead of always falling back to the `npx -y …` fetch
+  default — faster cold start, no per-spawn network dependency (ADR 0033). (#1289)
+
 ### Fixed
+- **ACP delegate health probe is `initialize`-only — it no longer opens a session every
+  120s.** The prober ran a full `session/new`/`session/load` against every ACP delegate on
+  a timer despite documenting itself as side-effect-free; it now runs only the `initialize`
+  round-trip (`AcpClient.handshake()`). The ACP launch env also strips the inherited
+  `CLAUDECODE` / `CLAUDE_CODE_*` markers so a spawned Claude backend doesn't refuse to start
+  "inside another Claude Code session", and the round-trip (initialize → session/prompt →
+  request_permission) is now logged so an idle freeze is diagnosable. (#1301)
+- **macOS desktop app finds Homebrew/nvm/Volta/asdf-installed binaries.** A Finder/Dock
+  launch inherits only `launchd`'s minimal PATH, so `npx` and ACP adapters were invisible
+  and a `delegate_to` coding-agent launch failed with `binary not on PATH`. The bundled
+  server is now launched with the user's real login-shell PATH, and the delegate Test probe
+  resolves the command against the same merged PATH the spawn uses. (#1302)
+- **Workspace port assignment skips OS-occupied ports.** `_pick_port` now bind-probes
+  `127.0.0.1` and scans a bounded range, skipping ports held by *unrelated* processes (a dev
+  server, another fork on `:7871`) instead of handing out an already-bound port that killed
+  the spawned agent with `EADDRINUSE`. (#1290)
+- **The per-agent theme is instance-scoped.** `theme.json` now lands under
+  `config/<instance>/` like config/secrets/setup, so a `PROTOAGENT_INSTANCE` sandbox no
+  longer shares — and clobbers — the default instance's theme (ADR 0042). (#1294)
+- **The browser tab favicon + `theme-color` follow the active per-agent theme.** Switching
+  agents recolors the tab favicon and PWA/mobile browser chrome to the agent's accent
+  instead of always showing the brand default (ADR 0042). (#1297)
 - **ACP coding-agent subprocesses no longer leak as orphaned processes.** `delegate_to`
   and the delegate health prober spawn CLI coding agents (`codex-acp`, `claude-agent-acp`,
   …) over ACP, but teardown signalled only the direct child — the backend each adapter
@@ -30,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remembered to bump it. Raised the app-wide `.pl-dialog__body` default to 24px once and
   dropped the now-redundant per-dialog overrides. Surfaces that embed a full panel
   (Settings, theme quick-pick) keep their intentional zero padding. (#1288)
+
+### Docs
+- **Coding-agents guide: Codex needs the `codex-acp` adapter.** Documented that recent
+  `codex` CLI dropped the native `acp` subcommand (it speaks MCP), so it must be driven
+  through `@zed-industries/codex-acp`. (#1287)
 
 ## [0.66.0] - 2026-06-21
 
