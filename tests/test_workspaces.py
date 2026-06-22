@@ -11,6 +11,10 @@ from graph.workspaces import manager
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    # Make port selection machine-independent: treat every port as OS-free, so _pick_port
+    # exercises only the registry logic (the OS probe is covered by its own test below —
+    # otherwise these assertions depend on whatever's listening on the test host).
+    monkeypatch.setattr(manager, "_port_is_free", lambda port: True)
     return tmp_path / "ws"
 
 
@@ -36,6 +40,21 @@ def test_new_ls_run_rm(root):
         manager.create("alpha")  # display-name collision
 
     assert "workspace" in manager.remove("alpha")["removed"] and not ws.exists()
+
+
+def test_pick_port_skips_os_occupied(root, monkeypatch):
+    """_pick_port skips a port held by an UNRELATED process (not just fleet-known ones), so
+    a spawned agent doesn't die with EADDRINUSE (the pokemonAgent-on-:7871 collision)."""
+    # 7871 is "occupied" by something outside the fleet registry → must be skipped.
+    monkeypatch.setattr(manager, "_port_is_free", lambda port: port != 7871)
+    assert manager.create("alpha")["port"] == 7872
+
+
+def test_pick_port_raises_when_range_saturated(root, monkeypatch):
+    """A fully-occupied range fails loudly instead of looping forever."""
+    monkeypatch.setattr(manager, "_port_is_free", lambda port: False)
+    with pytest.raises(manager.WorkspaceError):
+        manager.create("alpha")
 
 
 def test_rename_changes_display_not_id(root):

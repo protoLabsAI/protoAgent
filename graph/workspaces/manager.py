@@ -135,6 +135,26 @@ def _port_base() -> int:
     return PORT_BASE
 
 
+def _port_is_free(port: int) -> bool:
+    """True if 127.0.0.1:<port> can be bound right now — i.e. nothing (fleet OR an
+    unrelated process) is already listening.
+
+    ``_pick_port`` used to consider only fleet-registered ports, so it could hand out a
+    port already held by an UNRELATED instance (a dev server, another protoAgent fork on
+    the conventional :7871) — the spawned agent then died with ``EADDRINUSE`` at bind.
+    Probing the OS closes that gap. Best-effort: any bind failure reads as 'not free' (the
+    safe choice — skip it). A TOCTOU window remains between this check and the agent's own
+    bind, but it eliminates the common, durable collision."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
@@ -148,10 +168,13 @@ def _pick_port(explicit: int | None) -> int:
             used.add(int(STATE.active_port))
     except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
         pass
-    p = _port_base() + 1
-    while p in used:
-        p += 1
-    return p
+    base = _port_base() + 1
+    # Skip registry-known ports AND OS-occupied ones (an unrelated process on the port).
+    # Bounded scan so a saturated range fails loudly instead of looping forever.
+    for p in range(base, base + 1000):
+        if p not in used and _port_is_free(p):
+            return p
+    raise WorkspaceError(f"no free port in {base}..{base + 999} — too many agents, or the range is occupied")
 
 
 _CONFIG_TEMPLATE = """\
