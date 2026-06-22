@@ -54,6 +54,17 @@ before the PR, not after. CI is the merge gate; a red PR is wasted cycles.
 If a change is genuinely test-free (docs, config, pure refactor), say so
 explicitly in the PR description — but that is the exception, not the default.
 
+## Filing issues
+
+Issues are gated too — but only **flagged**, never blocked. The silent
+`issue-gate` workflow (`.github/workflows/issue-gate.yml`) labels any issue
+missing the required structure with **`needs-info`** (no comment) and removes it
+once you edit the issue to conform. Use the **Bug** / **Enhancement** issue forms
+— their required fields match the gate; a free-form issue needs at least a
+*Problem / What's-wrong* section, plus repro + evidence (bugs) or a
+proposed-direction / acceptance (enhancements). Intentional free-form → add the
+`gate-exempt` label. Full checklist: **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
+
 ---
 
 ## House rules & gotchas that bite

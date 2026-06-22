@@ -1,0 +1,92 @@
+name: Issue gate
+
+# Validates every opened/edited issue against the issue standard (CONTRIBUTING.md).
+# Non-conforming issues get the `needs-info` label and NOTHING else — the gate is
+# silent (never comments) and never closes. Editing an issue to conform removes the
+# label automatically. Issues labeled `gate-exempt` are skipped (maintainer escape).
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  issues: write
+
+concurrency:
+  group: issue-gate-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const GATE_LABEL = 'needs-info';
+            const EXEMPT_LABEL = 'gate-exempt';
+
+            const issue = context.payload.issue;
+            const num = issue.number;
+            const body = issue.body || '';
+            const labels = (issue.labels || [])
+              .map(l => (typeof l === 'string' ? l : l.name).toLowerCase());
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({ ...context.repo, name });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({ ...context.repo, name, color, description });
+                } else { throw e; }
+              }
+            }
+
+            // Make both gate labels available in the picker (idempotent).
+            await ensureLabel(GATE_LABEL, 'fbca04',
+              'Issue is missing required sections — see CONTRIBUTING.md (silent issue gate).');
+            await ensureLabel(EXEMPT_LABEL, 'c5def5',
+              'Intentional free-form issue — skipped by the issue gate.');
+
+            if (labels.includes(EXEMPT_LABEL)) {
+              core.info(`#${num} is ${EXEMPT_LABEL}; skipping gate.`);
+              return;
+            }
+
+            // A "section" is a markdown heading (#..######) or a bold line (**…**).
+            const lines = body.split('\n');
+            const hasSection = (re) => lines.some(line => {
+              const m = line.match(/^\s*(?:#{1,6}\s+|\*\*\s*)(.+?)(?:\s*\*\*)?\s*$/);
+              return m && re.test(m[1]);
+            });
+
+            const text = body.replace(/\s+/g, ' ').trim();
+            const longEnough = text.length >= 80;
+            const hasProblem = hasSection(/problem|what'?s? wrong|motivation|background|context|summary/i);
+            const hasRepro = hasSection(/repro|reproduce|steps|evidence|expected|actual|observed/i);
+            const hasProposal = hasSection(/propos|solution|approach|direction|fix|design/i);
+            const hasAcceptance = hasSection(/acceptance|done when|success criteria|definition of done/i);
+
+            const missing = [];
+            if (!longEnough) missing.push('a substantive description (>= 80 chars)');
+            if (!hasProblem) missing.push('a Problem / What-is-wrong / Motivation section');
+            if (labels.includes('bug') && !hasRepro)
+              missing.push('Steps to reproduce / Evidence / Expected-vs-actual (bug)');
+            if (labels.includes('enhancement') && !hasProposal && !hasAcceptance)
+              missing.push('a Proposed-direction or Acceptance section (enhancement)');
+
+            const conforms = missing.length === 0;
+            const hasGate = labels.includes(GATE_LABEL);
+
+            if (conforms && hasGate) {
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: num, name: GATE_LABEL,
+              }).catch(() => {});
+              core.info(`#${num} now conforms; removed ${GATE_LABEL}.`);
+            } else if (!conforms && !hasGate) {
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: num, labels: [GATE_LABEL],
+              });
+              core.warning(`#${num} missing: ${missing.join('; ')} -> labeled ${GATE_LABEL} (silent).`);
+            } else {
+              core.info(`#${num} unchanged (conforms=${conforms}, labeled=${hasGate}).`);
+            }
