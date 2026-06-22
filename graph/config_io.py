@@ -161,6 +161,15 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
 _BASE_SETUP_MARKER = _LIVE_CONFIG_DIR / ".setup-complete"
 SETUP_MARKER_PATH = _config_scope(_BASE_SETUP_MARKER)
 
+# Per-agent console theme (ADR 0042). Like the config/secrets/setup-marker above,
+# it's a config-dir-relative store, so it MUST be instance-scoped too — otherwise
+# co-located instances that differ only by PROTOAGENT_INSTANCE (the default + the
+# scripts/dev.sh sandbox) share one theme.json and clobber each other's theme.
+# `_config_scope` keeps the explicit-PROTOAGENT_CONFIG_DIR carve-out (fleet member /
+# desktop sidecar: already the isolated leaf, don't double-scope).
+_BASE_THEME_JSON = _LIVE_CONFIG_DIR / "theme.json"
+THEME_JSON_PATH = _config_scope(_BASE_THEME_JSON)
+
 
 # ---------------------------------------------------------------------------
 # YAML round-trip

@@ -18,9 +18,11 @@ log = logging.getLogger("protoagent.server")
 
 
 def _theme_path():
-    from graph.config_io import _live_config_dir
+    # Instance-scoped (ADR 0004), same as config/secrets — co-located instances
+    # (default + scripts/dev.sh sandbox) must not share one theme.json.
+    from graph.config_io import THEME_JSON_PATH
 
-    return _live_config_dir() / "theme.json"
+    return THEME_JSON_PATH
 
 
 def register_theme_routes(app) -> None:
