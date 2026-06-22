@@ -170,7 +170,7 @@ class _TaskStoreAdapter:
 def register_operator_routes(
     app,
     *,
-    runtime_status: Callable[[], dict[str, Any]],
+    runtime_status: Callable[[], dict[str, Any] | Awaitable[dict[str, Any]]],
     subagent_list: Callable[[], list[dict[str, Any]]],
     tools_list: Callable[[], dict[str, Any]] = lambda: {"tools": [], "count": 0},
     subagent_run: Callable[[dict[str, Any]], Awaitable[str]],
@@ -205,7 +205,11 @@ def register_operator_routes(
 
     @app.get("/api/runtime/status")
     async def _runtime_status():
-        return runtime_status()
+        # The console handler is async (it offloads the per-poll `ps` co-location
+        # probe off the loop, #875); accept a plain dict too so sync test doubles
+        # and forks that wire a sync accessor keep working.
+        res = runtime_status()
+        return await res if asyncio.iscoroutine(res) else res
 
     @app.get("/api/subagents")
     async def _subagents():
