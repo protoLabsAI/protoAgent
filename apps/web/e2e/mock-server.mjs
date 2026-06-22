@@ -279,6 +279,18 @@ async function handleA2AStream(req, res, body) {
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
+  // A turn a spec can HOLD OPEN: stream only the opening frames (so the surface
+  // enters its "streaming" / steering state) and never the terminal frame, until
+  // the client disconnects. Lets the mid-turn steering ✕-cancel e2e (#1103) keep a
+  // turn running deterministically instead of racing the ~40ms-gapped frames.
+  if (/hold the turn open/i.test(prompt)) {
+    for (const frame of frames.slice(0, 2)) {
+      res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    await new Promise((resolve) => req.on("close", resolve));
+    return res.end();
+  }
   for (const frame of frames) {
     // CRLF frame separator — the a2a-sdk emits SSE with `\r\n\r\n`, not `\n\n`.
     // The mock must mirror that so this e2e exercises the real wire shape: an
@@ -392,6 +404,11 @@ const server = createServer(async (req, res) => {
     if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {
       const body = await readBody(req);
       return sendJson(res, { ok: true, id: body.id ?? null, pending: 0 });
+    }
+    // Mid-turn steering cancel (the ✕ on a queued bubble) — dequeue still-queued.
+    // `removed: true` is the happy path the #1103 e2e drives (cancel before drain).
+    if (/^\/api\/chat\/sessions\/[^/]+\/steer\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+      return sendJson(res, { removed: true, pending: 0 });
     }
     if (pathname === "/api/knowledge/attach" && req.method === "POST") {
       // Chat attachment upload (#1002) — multipart, so DON'T JSON-parse the body.
