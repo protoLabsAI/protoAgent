@@ -16,9 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shelled out to `ps` (the per-poll co-location + fleet version-skew probes) and the
   inbox/activity console handlers ran sync SQLite reads/writes directly on the loop; both
   are now offloaded via `asyncio.to_thread`, matching the scheduler/goals handlers and the
-  startup-path co-location check. The inbox and activity stores also gained age-based
-  retention pruning wired into the hourly prune loop (`inbox`/`activity` `retention_days`,
-  default 90) so they can't grow unbounded like telemetry/checkpoints already prune. (#875)
+  startup-path co-location check. (#875)
 - **The Docker image now serves the React console and stays in dep-lockstep with
   pyproject.** A new node builder stage builds `apps/web/dist` and copies it into the
   runtime image, so `-e PROTOAGENT_UI=console` actually mounts `/app` instead of silently
