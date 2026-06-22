@@ -128,6 +128,12 @@ frozen build bundles the `plugins/` tree and `--collect-all`s `tools`/`websocket
 plugin, ADR 0058, can only import what's bundled). Signed macOS DMG / Linux AppImage+deb /
 Windows NSIS artifacts + an in-app updater ship from the desktop-build CI on release tags.
 
+On macOS, `spawn_sidecar` augments the sidecar's `PATH` with the user's login-shell `PATH`
+(via `$SHELL -ilc`, plus the Homebrew/local fallbacks) before spawning. A Finder/Dock launch
+otherwise inherits only `launchd`'s minimal `PATH`, so `npx`/`node`/ACP coding-agent adapters
+would be invisible and a `delegate_to` ACP launch would fail with `binary not on PATH`
+([#1299](https://github.com/protoLabsAI/protoAgent/issues/1299)).
+
 ## Testing the console
 
 A Playwright smoke suite (`apps/web/e2e/`) drives the **built** SPA against a deterministic
