@@ -15,6 +15,8 @@ import dataclasses
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from graph.config import LangGraphConfig, SubagentDef
 from graph.config_io import (
     apply_updates_to_yaml,
@@ -23,6 +25,18 @@ from graph.config_io import (
 )
 
 EXAMPLE_PATH = "config/langgraph-config.example.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_installed_plugins(monkeypatch):
+    """Freeze the CORE config surface, independent of whatever plugins a dev has installed.
+
+    ``from_yaml`` resolves ``plugin_config`` by DISCOVERING installed plugins (ADR 0019),
+    and ``config_to_dict`` reflects it — so a dev with any plugin under ``config/plugins/``
+    (dev-local, gitignored state) gets extra sections and these goldens spuriously fail,
+    while CI (no plugins installed) is green. Plugin-config resolution has its own tests;
+    here we pin it empty so the golden means the same thing everywhere."""
+    monkeypatch.setattr("graph.config._resolve_plugin_config", lambda *a, **k: {})
 
 
 # ---------------------------------------------------------------------------
