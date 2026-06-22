@@ -88,6 +88,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "fleet_max_warm": 0,
     "fleet_port_base": 7870,
     "fleet_warm_grace_seconds": 0,
+    "github_default_repo": "",
     "goal_enabled": True,
     "goal_eval_model": "",
     "goal_max_iterations": 8,
@@ -220,6 +221,9 @@ CONFIG_TO_DICT_GOLDEN = {
             "max": 0,
             "grace_seconds": 0,
         },
+    },
+    "github": {
+        "default_repo": "",
     },
     "goal": {
         "enabled": True,
@@ -423,6 +427,8 @@ EMITTED_ATTRS = {
     "compaction_trigger",
     "compaction_keep_messages",
     "compaction_model",
+    # github.*
+    "github_default_repo",
     # goal.*
     "goal_enabled",
     "goal_max_iterations",

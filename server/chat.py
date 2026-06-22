@@ -685,6 +685,18 @@ async def _chat_langgraph_stream(
                     yield ("done", reply)
                     return
 
+            # Issue control command (/issue ...) short-circuits the turn: file a
+            # GitHub issue. User-only by design — it is NOT an agent tool, so the
+            # model can't create issues autonomously (mirrors /goal).
+            from tools.gh_issue import parse_issue_control
+
+            issue_reply = await parse_issue_control(
+                message, default_repo=getattr(STATE.graph_config, "github_default_repo", "")
+            )
+            if issue_reply is not None:
+                yield ("done", issue_reply)
+                return
+
             # Workflow slash command (/<workflow-name> …) short-circuits the turn:
             # run the recipe and return its output. Each step renders its own
             # tool card (gather → angles → brief) so a multi-step workflow shows
@@ -1017,6 +1029,16 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                 reply = await STATE.goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
+
+            # Issue control command (/issue ...) short-circuits — file a GitHub
+            # issue (user-only; never an agent tool). See the streaming path.
+            from tools.gh_issue import parse_issue_control
+
+            issue_reply = await parse_issue_control(
+                message, default_repo=getattr(STATE.graph_config, "github_default_repo", "")
+            )
+            if issue_reply is not None:
+                return [{"role": "assistant", "content": issue_reply}]
 
             # Workflow slash command (/<workflow-name> …) short-circuits the turn.
             parsed = _parse_workflow_command(message)
