@@ -955,7 +955,14 @@ export function App() {
                   type="button"
                   className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
                   onClick={() => setLeftCollapsed(!leftCollapsed)}
-                  title={leftCollapsed ? "Show left panel" : "Hide left panel"}
+                  disabled={leftMembers.length === 0}
+                  title={
+                    leftMembers.length === 0
+                      ? "No panels in the left rail"
+                      : leftCollapsed
+                        ? "Show left panel"
+                        : "Hide left panel"
+                  }
                   aria-label="Toggle left panel"
                   data-testid="toggle-left"
                 >
@@ -965,7 +972,14 @@ export function App() {
                   type="button"
                   className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
                   onClick={() => setRightCollapsed(!rightCollapsed)}
-                  title={rightCollapsed ? "Show side panel" : "Hide side panel"}
+                  disabled={rightMembers.length === 0}
+                  title={
+                    rightMembers.length === 0
+                      ? "No panels in the right rail"
+                      : rightCollapsed
+                        ? "Show side panel"
+                        : "Hide side panel"
+                  }
                   aria-label="Toggle side panel"
                   data-testid="toggle-right"
                 >

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Empty-rail panel toggles fully disable.** The utility-bar left/right panel-toggle buttons are now greyed out and non-interactive when their rail holds no views (matching the bottom-dock toggle), instead of appearing active but doing nothing when clicked. (#1234)
+
 ## [0.67.0] - 2026-06-22
 
 ### Added
