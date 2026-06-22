@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **ACP coding-agent subprocesses no longer leak as orphaned processes.** `delegate_to`
+  and the delegate health prober spawn CLI coding agents (`codex-acp`, `claude-agent-acp`,
+  …) over ACP, but teardown signalled only the direct child — the backend each adapter
+  spawns reparented to init and survived — and `dispatch` awaited a *pooled* client that
+  it never reaped on cancel, so stopping a turn left the agent running ("I stopped the
+  main thread and the delegate didn't stop"). Over days these piled up to hundreds of
+  `ppid 1` orphans holding ~20 GB. Now the agent is spawned in its own process group and
+  teardown SIGTERM→SIGKILLs the whole group; `dispatch` hard-kills + drops the pooled
+  client synchronously on cancel; the `_start` handshake self-reaps if it fails or is
+  cancelled mid-flight (the prober's probe-timeout path); and a shutdown hook drains every
+  pooled client so a server stop strands nothing.
 - **Dialogs no longer render their content cramped flush to the body edge.** The shared
   DS dialog defaulted to a tight 16px body padding, and roomier dialogs (MCP catalog,
   New-skill) each hand-added a 24px override — so every newly-converted dialog (the

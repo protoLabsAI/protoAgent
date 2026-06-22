@@ -362,7 +362,13 @@ class AcpAdapter(Adapter):
                 placeholder="proto",
                 help="Binary on PATH that speaks ACP (e.g. proto). For Claude Code use `claude-code` — an alias for the claude-agent-acp adapter.",
             ),
-            FieldSpec("args", "Args", "args", placeholder="--acp", help="Launch args (e.g. --acp). Leave empty for claude-code."),
+            FieldSpec(
+                "args",
+                "Args",
+                "args",
+                placeholder="--acp",
+                help="Launch args (e.g. --acp). Leave empty for claude-code.",
+            ),
             FieldSpec(
                 "workdir",
                 "Workdir",
@@ -438,7 +444,7 @@ class AcpAdapter(Adapter):
 
     async def dispatch(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         # Reuse the ADR 0024 ACP client + by-kind permission policy.
-        from plugins.coding_agent import _client_for, _make_permission
+        from plugins.coding_agent import _client_for, _drop_client, _make_permission
         from plugins.coding_agent.acp_client import AcpError
 
         spec = self._spec(d)
@@ -446,6 +452,15 @@ class AcpAdapter(Adapter):
         client._permission = _make_permission(spec)
         try:
             return await client.prompt(query, timeout=timeout or d.timeout_s)
+        except asyncio.CancelledError:
+            # The turn was stopped (operator hit stop, or an orchestrator watchdog
+            # fired). The client is POOLED, so without this its subprocess keeps
+            # running detached — exactly "I stopped the main thread and the delegate
+            # didn't stop". Drop it from the pool + SIGKILL the agent tree NOW
+            # (synchronous, no awaits — we're mid-cancellation) before re-raising.
+            _drop_client(spec)
+            client.kill_now()
+            raise
         except AcpError as exc:
             raise DelegateError(str(exc))
 

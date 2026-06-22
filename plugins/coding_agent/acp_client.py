@@ -26,10 +26,12 @@ Surface:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
+import signal
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -204,6 +206,12 @@ class AcpClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, **(self.env or {})},
+                # Put the agent in its OWN session/process group so teardown can kill
+                # the WHOLE tree (the adapter *and* the backend it spawns). Without
+                # this, terminate() signals only the adapter; its child reparents to
+                # init and leaks — the codex-acp / claude-agent-acp orphan pile that
+                # piled up to ~20 GB. POSIX-only (start_new_session ⇒ setsid()).
+                start_new_session=True,
                 # Raise the per-line buffer ceiling — ACP messages exceed the 64 KB
                 # default and would otherwise raise LimitOverrunError (kills the turn).
                 limit=_STDOUT_LINE_LIMIT,
@@ -211,10 +219,18 @@ class AcpClient:
         except FileNotFoundError as exc:
             raise AcpError(f"agent binary not found: {self.command!r} (is it installed and on PATH?)") from exc
 
-        self._reader_task = asyncio.create_task(self._read_loop())
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
-        await self._initialize()
-        await self._open_session()
+        # The subprocess now exists. If the handshake raises OR the caller's wait_for
+        # cancels us mid-initialize (the health prober's 45s probe timeout), reap the
+        # tree we just spawned instead of leaking it — close() is idempotent.
+        try:
+            self._reader_task = asyncio.create_task(self._read_loop())
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
+            await self._initialize()
+            await self._open_session()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.close()
+            raise
         logger.info(
             "[acp/%s] up (pid=%s, session=%s, cwd=%s)",
             self.name,
@@ -223,32 +239,61 @@ class AcpClient:
             self.cwd,
         )
 
+    @staticmethod
+    def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
+        """Send ``sig`` to the subprocess's whole process GROUP (the agent plus the
+        backend it spawned), falling back to the bare process if the group is already
+        gone. Synchronous syscall + swallows ProcessLookup, so it's safe to call from
+        a teardown/cancel path where the event loop won't run our coroutines."""
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.send_signal(sig)
+
+    def kill_now(self) -> None:
+        """Synchronously SIGKILL the agent's whole process group — no awaits, so it's
+        safe from a CancelledError handler where awaiting cleanup would itself be
+        cancelled. The zombie is reaped later by ``proc.wait()`` / the child watcher.
+        Use this on the hard-stop path (operator stops the turn); ``close()`` is the
+        graceful one."""
+        proc = self._proc
+        if proc and proc.returncode is None:
+            self._signal_group(proc, signal.SIGKILL)
+        for task in (self._reader_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+
     async def close(self) -> None:
-        """Cancel the I/O tasks and reap the subprocess. Crucially this ``await``s
+        """Cancel the I/O tasks and reap the subprocess TREE. Crucially this ``await``s
         ``proc.wait()`` so the child is reaped *while the loop is alive* — without
         it the subprocess transport lingers and its ``__del__`` fires after the loop
         closes ("Event loop is closed"), and the stderr-drain task leaks.
 
         Sends a best-effort ``session/close`` first — the graceful, spec-aligned
-        shutdown (and what matters if an agent ever serves multiple sessions per
-        process) before the SIGTERM that actually frees this one-process-per-session."""
-        await self._close_session()
+        shutdown — then SIGTERM→SIGKILL the agent's whole PROCESS GROUP, not just the
+        direct child, so the backend it spawned dies with it instead of reparenting to
+        init. The kill is a synchronous syscall, so even if this runs on a cancelled
+        task the tree still dies."""
+        with contextlib.suppress(Exception):
+            await self._close_session()
         for task in (self._reader_task, self._stderr_task):
             if task and not task.done():
                 task.cancel()
         proc = self._proc
         if proc and proc.returncode is None:
+            self._signal_group(proc, signal.SIGTERM)
             try:
-                proc.terminate()
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                try:
-                    proc.kill()
+                self._signal_group(proc, signal.SIGKILL)
+                with contextlib.suppress(Exception):
                     await proc.wait()
-                except ProcessLookupError:
-                    pass
-            except ProcessLookupError:
-                pass
+            except asyncio.CancelledError:
+                # We're being torn down — guarantee the tree is dead, then let the
+                # cancellation propagate (don't swallow it).
+                self._signal_group(proc, signal.SIGKILL)
+                raise
         # Close the subprocess transport too, so its pipe transports don't linger to
         # a post-loop-close GC — reaping the process (above) leaves the stdin write-
         # pipe transport open, whose __del__ then fires "Event loop is closed".

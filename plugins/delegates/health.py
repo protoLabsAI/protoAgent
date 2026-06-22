@@ -79,3 +79,12 @@ async def stop() -> None:
     if _task and not _task.done():
         _task.cancel()
     _task = None
+    # Server shutdown: reap every pooled ACP client so dispatch agents don't strand
+    # as init-reparented orphans. (This surface's stop() is the delegates plugin's
+    # process-scoped shutdown hook.)
+    try:
+        from plugins.coding_agent import close_all
+
+        await close_all()
+    except Exception:  # noqa: BLE001 — shutdown reap is best-effort
+        log.exception("[delegates/health] reaping ACP clients on shutdown failed")
