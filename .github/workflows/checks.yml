@@ -151,8 +151,37 @@ jobs:
         # the uiStore persist migration). Fast — runs before the heavier
         # Playwright path so a reducer regression fails the job early.
         run: npm run test:unit --workspace @protoagent/web
-      - name: Install Playwright chromium
-        run: npm --workspace @protoagent/web exec -- playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Install Playwright browser + deps
+        # The chromium binary is the slow ~100MB CDN download that intermittently
+        # stalled ~10min until the job-level orphan-kill fired (#1167). Cache it keyed
+        # on the Playwright version (skips the download entirely on a hit — only the
+        # fast apt system-deps run then), and hard-cap each attempt with `timeout` so
+        # a stalled download fails fast and retries instead of hanging the whole job.
+        timeout-minutes: 8
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            cmd="playwright install-deps chromium"   # binary cached → apt deps only
+          else
+            cmd="playwright install --with-deps chromium"
+          fi
+          for attempt in 1 2 3; do
+            if timeout 240 npm --workspace @protoagent/web exec -- $cmd; then
+              exit 0
+            fi
+            echo "::warning::playwright install attempt $attempt stalled/failed; retrying…"
+            sleep 5
+          done
+          echo "::error::playwright install failed after 3 attempts"
+          exit 1
       - name: Run E2E smoke (built SPA vs mock backend)
         # Builds the web app, then drives it with Playwright against the
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,

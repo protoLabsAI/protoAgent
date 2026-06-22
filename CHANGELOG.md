@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   startup-path co-location check. The inbox and activity stores also gained age-based
   retention pruning wired into the hourly prune loop (`inbox`/`activity` `retention_days`,
   default 90) so they can't grow unbounded like telemetry/checkpoints already prune. (#875)
+- **The Docker image now serves the React console and stays in dep-lockstep with
+  pyproject.** A new node builder stage builds `apps/web/dist` and copies it into the
+  runtime image, so `-e PROTOAGENT_UI=console` actually mounts `/app` instead of silently
+  404'ing (`.dockerignore` no longer drops the workspace manifests the build needs); the
+  server now warns loudly when the `console` tier is requested but the console build is
+  absent. A new `tests/test_requirements_core_sync.py` guard fails CI if
+  `requirements-core.txt` (what the image installs) misses any core `pyproject`
+  dependency — it had silently lost `pypdf`, `youtube-transcript-api`, and
+  `markdown-it-py`, now restored. (#874)
 
 ## [0.67.0] - 2026-06-22
 
