@@ -799,8 +799,23 @@ def _main():
     mount_ds_plugin_kit(fastapi_app, web_dist_dir)
 
     # The console SPA (/app) — console/full tiers only; 'none' (members/headless) skip it.
-    if ui != "none" and mount_react_app(fastapi_app, web_dist_dir):
-        log.info("React operator console mounted at /app")
+    if ui != "none":
+        if mount_react_app(fastapi_app, web_dist_dir):
+            log.info("React operator console mounted at /app")
+        else:
+            # The console tier was requested but the build output is missing — /app
+            # would silently 404 (the #874 footgun: a no-Node Docker image, or a
+            # source checkout that never ran `npm run build`). Warn LOUDLY with the
+            # exact fix instead of a single quiet log line.
+            log.warning(
+                "--ui %s requested but the React console build is missing at %s — "
+                "/app will 404. Build it with `npm ci && npm run build --workspace "
+                "@protoagent/web` (or use a Docker image built from the multi-stage "
+                "Dockerfile, which builds it for you). Use `--ui none` to run headless "
+                "without the console.",
+                ui,
+                web_dist_dir,
+            )
 
     # --- Static + PWA assets (skipped in 'none') ---------------------------
     if ui != "none" and static_dir.exists():

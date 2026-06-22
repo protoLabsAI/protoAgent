@@ -63,3 +63,11 @@ croniter>=2.0
 # via Gradio → huggingface_hub; the lean tiers must declare it (the #426 class).
 filelock>=3.12
 zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)
+
+# Document ingestion engine (ADR 0021) — light pure-Python extractors. Declared
+# in pyproject [project.dependencies] (the source of truth); mirrored here so the
+# Docker image (which installs from this file) matches. tests/test_requirements_core_sync.py
+# fails CI if these two lists drift again (the #874 dep-drift class).
+pypdf>=4.0                    # PDF → text
+youtube-transcript-api>=1.0   # YouTube captions → text (1.x instance API)
+markdown-it-py>=3.0           # Markdown → HTML for the `docs` plugin reader view (server-side, offline)
