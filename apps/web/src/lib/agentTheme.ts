@@ -52,10 +52,50 @@ export function applyAgentTheme(theme: unknown, animate = true) {
   }
 }
 
+// The tab favicon — mirrors apps/web/public/protolabs-icon-outline.svg, with the stroke
+// color injected at runtime. A static favicon SVG can't read the page's CSS vars (browsers
+// render it in an isolated context where `currentColor` resolves to black), so we rebuild a
+// data-URI whenever the theme changes. Keep the geometry in sync with the source asset.
+const faviconSvg = (color: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="protoLabs">` +
+  `<g transform="translate(224, 32) scale(-8, 8)" fill="none" stroke="${color}" stroke-width="2" ` +
+  `stroke-linecap="round" stroke-linejoin="round">` +
+  `<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/>` +
+  `<path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>` +
+  `</g></svg>`;
+
+/** Point the tab favicon + `<meta name="theme-color">` at the active theme's accent
+ *  (`--pl-color-accent`), so an agent/theme switch (ADR 0042) reaches the browser chrome
+ *  too — otherwise the tab stays the frozen brand default while the rest of the console
+ *  repaints. Fail-safe: bails if the var doesn't resolve, leaving the static default. */
+export function syncBrowserChrome() {
+  if (typeof document === "undefined") return;
+  const accent = getComputedStyle(root()).getPropertyValue("--pl-color-accent").trim();
+  if (!accent) return;
+
+  let icon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+  if (!icon) {
+    icon = document.createElement("link");
+    icon.rel = "icon";
+    document.head.appendChild(icon);
+  }
+  icon.type = "image/svg+xml";
+  icon.href = `data:image/svg+xml,${encodeURIComponent(faviconSvg(accent))}`;
+
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.appendChild(meta);
+  }
+  meta.content = accent;
+}
+
 // Broadcast a single `protoagent:theme` window event whenever the document's theme changes —
 // applyAgentTheme (switch/save/reset) AND the ThemePanel's live picker edits both mutate the
 // root's `style`/`data-theme`, so one MutationObserver catches everything. PluginView listens
-// and re-posts the theme to its iframe, so embedded plugin views repaint live too (ADR 0026/0042).
+// and re-posts the theme to its iframe, so embedded plugin views repaint live too (ADR 0026/0042);
+// the same hook keeps the tab favicon + theme-color on the active accent.
 let _watching = false;
 export function watchThemeChanges() {
   if (_watching || typeof window === "undefined") return;
@@ -63,9 +103,13 @@ export function watchThemeChanges() {
   let raf = 0;
   const fire = () => {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => window.dispatchEvent(new Event("protoagent:theme")));
+    raf = requestAnimationFrame(() => {
+      syncBrowserChrome();
+      window.dispatchEvent(new Event("protoagent:theme"));
+    });
   };
   new MutationObserver(fire).observe(root(), { attributes: true, attributeFilter: ["style", "data-theme"] });
+  syncBrowserChrome(); // initial sync — covers a theme applied before the observer was wired
 }
 
 /** The panel's current blob (what "Save to this agent" PUTs), or null if untouched. */
