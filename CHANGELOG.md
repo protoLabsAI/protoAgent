@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`scripts/reset.sh` — factory-reset the default (prod) instance from the CLI.** Wipes
+  the prod instance's data + local config back to a clean slate so the next boot runs the
+  setup wizard (for testing the fresh-user flow). Safe on a multi-instance machine: every
+  *other* instance (any `~/.protoagent/<name>` with an `.instance-uid`, the dev sandbox,
+  fleet members) and every scoped `<store>/<instance>` leaf is preserved — only prod's
+  unscoped DBs + direct files are removed; tracked `config/` files are `git checkout`-
+  restored, gitignored local config deleted. `--dry-run` prints the exact plan;
+  `--keep-secrets` / `--include-dev` / `--backup` / `--force` / `--yes`. No in-app reset
+  (deliberately CLI-only). (#1159)
+
 ### Changed
 - **The Goals and Tasks panels refresh on a bus push instead of polling every 5s.** Both
   panels held a 5s `refetchInterval`; now the goal store publishes `goal.changed` (on

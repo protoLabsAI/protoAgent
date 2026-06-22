@@ -21,6 +21,17 @@ TypeScript is the console.
   chat/tasks/knowledge. The default instance (`config/` + `~/.protoagent`, `:7870`)
   is untouched. `scripts/dev-reset.sh` wipes just the sandbox. Use this for feature
   testing instead of the default instance.
+- **Factory-reset the default instance:** `scripts/reset.sh` wipes the **prod**
+  instance's data + local config back to a clean slate (next boot runs the setup
+  wizard) — for testing the fresh-user flow via CLI (there is no in-app reset).
+  **Always `scripts/reset.sh --dry-run` first** to read the plan. It's safe on a
+  multi-instance machine: every *other* instance (any `~/.protoagent/<name>` with an
+  `.instance-uid`, the dev sandbox, fleet members) and every scoped
+  `<store>/<instance>` leaf is preserved — only prod's unscoped DBs + the direct
+  files in shared store dirs are removed; tracked `config/` files are `git checkout`-
+  restored, gitignored local config deleted. Flags: `--yes`, `--backup`,
+  `--keep-secrets` (keep gateway creds), `--include-dev`, `--force` (stop a bound
+  server first).
 - **Python deps:** managed with `uv` (`pyproject.toml [project.dependencies]` is
   the source of truth; `uv.lock` is tracked). `uv sync` to install.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
