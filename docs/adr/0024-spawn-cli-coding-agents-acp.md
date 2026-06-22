@@ -20,6 +20,15 @@ lifecycle:
   launch signature), `session/close` on teardown, real `protocolVersion`
   negotiation (closes if the agent counters with an unsupported version), and
   `agent_thought_chunk` surfaced as the reasoning trace.
+- **#1296 / #1300** — launch + probe hardening. The ACP launch env now **strips the
+  nested-Claude markers** (`CLAUDECODE` / `CLAUDE_CODE_*`) so a `claude-agent-acp`
+  backend doesn't hit the "inside another Claude Code session" guard when protoAgent
+  itself runs inside a Claude session (the dogfooding case); the round-trip
+  (`initialize` → session → `session/prompt` → `request_permission`) is now logged so
+  an idle freeze is diagnosable. A new `AcpClient.handshake()` runs **`initialize`
+  only** (no `session/new`/`session/load`), and the delegate health prober uses it —
+  so a status probe is genuinely cheap + side-effect-free instead of opening a real
+  session every 120s.
 
 Validated end-to-end against both `proto --acp` and Claude Code (via
 `@zed-industries/claude-code-acp`) — the client is agent-agnostic. See the

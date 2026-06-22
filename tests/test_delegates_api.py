@@ -128,15 +128,15 @@ def test_test_endpoint_acp_probe(client, monkeypatch):
 
     from plugins.coding_agent.acp_client import AcpClient
 
-    # The acp probe now does a real ACP `initialize` handshake (#1116), so mock it —
-    # the python exe is on PATH + /tmp exists, but it doesn't speak ACP for real.
+    # The acp probe does a real ACP `initialize`-only handshake (#1116/#1300), so mock
+    # it — the python exe is on PATH + /tmp exists, but it doesn't speak ACP for real.
     async def _ok(self):
         self._protocol_version = 1
 
     async def _noop(self):
         pass
 
-    monkeypatch.setattr(AcpClient, "_ensure_started", _ok)
+    monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
     r = client.post(
         "/api/delegates/test", json={"name": "t", "type": "acp", "command": sys.executable, "workdir": "/tmp"}
@@ -170,7 +170,7 @@ def test_test_endpoint_probes_saved_delegate_by_name(client, monkeypatch):
     async def _noop(self):
         pass
 
-    monkeypatch.setattr(AcpClient, "_ensure_started", _ok)
+    monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
     client.post("/api/delegates", json={"name": "proto", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
     r = client.post("/api/delegates/test", json={"name": "proto", "type": "acp"})

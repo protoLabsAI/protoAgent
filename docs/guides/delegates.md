@@ -26,7 +26,10 @@ MCP, and Subagents). The panel:
 - **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
   marker, a **live health dot** (a background prober probes each delegate
   periodically — green reachable / red down / grey not-yet-checked), and a per-row
-  **Test** button for an on-demand probe;
+  **Test** button for an on-demand probe. For an `acp` (coding-agent) delegate the
+  probe runs only the ACP `initialize` handshake — **not** a session — so it's cheap
+  and side-effect-free, never opening a thread against the agent on a timer
+  ([#1300](https://github.com/protoLabsAI/protoAgent/issues/1300));
 - **adds** one via a **type picker** (A2A agent / Model endpoint / Coding agent)
   and a form generated from each type's field schema;
 - **edits / deletes** existing ones; secrets you enter are routed to

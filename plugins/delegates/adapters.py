@@ -488,13 +488,17 @@ class AcpAdapter(Adapter):
         return await forget_session(self._spec(d))
 
     async def probe(self, d: Delegate) -> dict:
-        """Reachability check for the panel's Test button.
+        """Reachability check for the panel's Test button (also the periodic health
+        prober's per-delegate check).
 
         Does a REAL ACP `initialize` handshake (spawn the command, complete the
-        protocol handshake, close — no session/prompt), so a launch command that's
-        on PATH and workdir-valid but doesn't actually speak ACP FAILS the probe
-        instead of showing green (issue #1116 — the old PATH+workdir check passed
-        `command: claude` while every dispatch failed with an opaque `agent exited`).
+        protocol handshake, close) — and NOTHING more: no `session/new`, no
+        `session/load`, no `session/prompt`. So a launch command that's on PATH and
+        workdir-valid but doesn't actually speak ACP FAILS the probe instead of
+        showing green (issue #1116 — the old PATH+workdir check passed `command:
+        claude` while every dispatch failed with an opaque `agent exited`), while a
+        probe stays genuinely cheap + side-effect-free: it never opens a session every
+        120s the way the old `_ensure_started` path did (#1300).
         """
         import asyncio
         import os
@@ -522,13 +526,14 @@ class AcpAdapter(Adapter):
         if not os.path.isdir(wd):
             return {"ok": False, "error": f"workdir does not exist: {wd}"}
 
-        # Real handshake. `_ensure_started` spawns the agent and runs ACP `initialize`
-        # (it does NOT open a session), so it's a cheap, side-effect-free liveness check.
+        # Real handshake — `handshake()` spawns the agent and runs ACP `initialize`
+        # ONLY (no session/new, no session/load), so it's a cheap, genuinely
+        # side-effect-free liveness check (#1300).
         from plugins.coding_agent.acp_client import AcpClient
 
         client = AcpClient(command=d.command, args=d.args, cwd=wd, env=(d.env or None), name=d.name)
         try:
-            await asyncio.wait_for(client._ensure_started(), timeout=45)
+            await asyncio.wait_for(client.handshake(), timeout=45)
         except asyncio.TimeoutError:
             return {"ok": False, "error": f"ACP handshake timed out — does {d.command!r} speak ACP?"}
         except Exception as exc:  # noqa: BLE001 — spawn/handshake failure → tool-visible string

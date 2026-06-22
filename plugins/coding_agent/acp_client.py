@@ -112,6 +112,31 @@ _STDOUT_LINE_LIMIT = 32 * 1024 * 1024  # 32 MB
 # resolved auth (ACP `AUTH_REQUIRED`). The client surfaces an actionable message.
 AUTH_REQUIRED = -32000
 
+# Env markers Claude Code sets so a nested `claude` can detect "am I already running
+# inside another Claude Code session?". When protoAgent's own server was launched from
+# within a Claude Code session (the dogfooding case), these are inherited — and the
+# claude-agent-acp backend we spawn then hits the *"cannot be launched inside another
+# Claude Code session"* guard, evicting + respawning every ~2 min with zero progress
+# and no surfaced error (#1296). Stripped from the ACP launch env: ``CLAUDECODE`` plus
+# the whole ``CLAUDE_CODE_*`` family (SESSION_ID / CHILD_SESSION / EXECPATH / ENTRYPOINT
+# / …). Harmless for non-Claude agents (proto/codex don't read them).
+_NESTED_CLAUDE_ENV_EXACT = frozenset({"CLAUDECODE"})
+_NESTED_CLAUDE_ENV_PREFIX = "CLAUDE_CODE_"
+
+
+def _launch_env(extra: dict[str, str] | None) -> dict[str, str]:
+    """Build the subprocess environment for an ACP agent: the server's own ``os.environ``
+    with the nested-Claude markers stripped (see above), then the delegate's ``env``
+    overlaid last — so an operator who *deliberately* sets one of these in the delegate
+    env still wins."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _NESTED_CLAUDE_ENV_EXACT and not k.startswith(_NESTED_CLAUDE_ENV_PREFIX)
+    }
+    env.update(extra or {})
+    return env
+
 
 class AcpError(Exception):
     """Any ACP transport / protocol failure. The caller speaks the message.
@@ -189,12 +214,26 @@ class AcpClient:
     # -- lifecycle -----------------------------------------------------------
 
     async def _ensure_started(self) -> None:
+        """Start the agent for a real dispatch: spawn + ``initialize`` + open the
+        session (reattach or new). Idempotent — a no-op when already up."""
         async with self._start_lock:
             if self._proc is not None and self._proc.returncode is None:
                 return
             await self._start()
 
-    async def _start(self) -> None:
+    async def handshake(self) -> None:
+        """Start the agent for a *liveness check only*: spawn + run the ACP
+        ``initialize`` round-trip and STOP — no ``session/new``, no ``session/load``,
+        no session state touched. The genuinely cheap, side-effect-free probe the
+        health prober wants (#1300; the old probe went through ``_ensure_started``,
+        which also opened a real session every 120s). The caller ``close()``s it.
+        Idempotent — a no-op when already up."""
+        async with self._start_lock:
+            if self._proc is not None and self._proc.returncode is None:
+                return
+            await self._start(open_session=False)
+
+    async def _start(self, *, open_session: bool = True) -> None:
         if not Path(self.cwd).is_dir():
             raise AcpError(f"workdir does not exist: {self.cwd}")
         try:
@@ -205,7 +244,10 @@ class AcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, **(self.env or {})},
+                # Strip the inherited nested-Claude markers (CLAUDECODE / CLAUDE_CODE_*)
+                # so a spawned Claude backend doesn't refuse to launch "inside another
+                # Claude Code session" (#1296); the delegate's env is overlaid last.
+                env=_launch_env(self.env),
                 # Put the agent in its OWN session/process group so teardown can kill
                 # the WHOLE tree (the adapter *and* the backend it spawns). Without
                 # this, terminate() signals only the adapter; its child reparents to
@@ -226,7 +268,10 @@ class AcpClient:
             self._reader_task = asyncio.create_task(self._read_loop())
             self._stderr_task = asyncio.create_task(self._drain_stderr())
             await self._initialize()
-            await self._open_session()
+            # The probe path (handshake) stops here — a liveness check must NOT open a
+            # session. A real dispatch opens (reattaches or news) the session.
+            if open_session:
+                await self._open_session()
         except BaseException:
             with contextlib.suppress(Exception):
                 await self.close()
@@ -434,8 +479,18 @@ class AcpClient:
         method = msg.get("method")
         rid = msg.get("id")
         if method == "session/request_permission":
+            params = msg.get("params") or {}
             resolver = self._permission or self._auto_allow
-            option_id = resolver(msg.get("params") or {})
+            option_id = resolver(params)
+            # Trace the decision — a permission the resolver can't answer (→ cancelled)
+            # can leave the agent blocked, a prime suspect for the idle freeze (#1296).
+            kind = str(((params.get("toolCall") or {}).get("kind") or "")).lower()
+            logger.info(
+                "[acp/%s] request_permission kind=%s → %s",
+                self.name,
+                kind or "?",
+                "selected" if option_id else "cancelled",
+            )
             outcome = {"outcome": "selected", "optionId": option_id} if option_id else {"outcome": "cancelled"}
             await self._respond(rid, {"outcome": outcome})
         else:
@@ -580,6 +635,16 @@ class AcpClient:
                     f"client so their ACP versions match."
                 )
             self._protocol_version = negotiated
+        # Log the handshake outcome so the ACP round-trip (initialize → session →
+        # prompt → permission → result) is traceable from the server log — an idle
+        # freeze with no diagnostics is the hard-to-debug half of #1296.
+        logger.info(
+            "[acp/%s] initialize OK (protocol v%s, loadSession=%s, authMethods=%d)",
+            self.name,
+            self._protocol_version,
+            bool(self._agent_capabilities.get("loadSession")),
+            len(self._auth_methods),
+        )
 
     async def _open_session(self) -> None:
         """Reattach the persisted session when possible, else start a fresh one.
@@ -698,6 +763,13 @@ class AcpClient:
         self._on_tool = tool_callback
         self._on_text = text_callback
         self._on_thought = thought_callback
+        logger.info(
+            "[acp/%s] → session/prompt (session=%s, %d chars, timeout=%ss)",
+            self.name,
+            self._session_id,
+            len(text),
+            int(timeout),
+        )
         try:
             result = await self._request(
                 "session/prompt",

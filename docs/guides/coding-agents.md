@@ -76,12 +76,16 @@ don't have to know the incantation. (The older `@zed-industries/claude-code-acp`
 `command: claude` directly does **not** work — `claude` isn't an ACP server, and the
 probe will tell you so.
 
-> **Caveat:** the adapter launches the `claude` binary, which **refuses to start
-> nested inside another Claude Code session** (`Error: Claude Code cannot be launched
-> inside another Claude Code session`). Run protoAgent from a normal shell / the
-> desktop app — not from within a `claude` session — when using the Claude Code agent.
-> (If you must run nested, strip `CLAUDECODE` + `CLAUDE_CODE_*` from protoAgent's
-> environment at launch — e.g. `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT …`.)
+> **Nested Claude:** the adapter launches the `claude` binary, which **refuses to
+> start nested inside another Claude Code session** (`Error: Claude Code cannot be
+> launched inside another Claude Code session`). protoAgent now **strips the
+> nested-session markers** (`CLAUDECODE` and the whole `CLAUDE_CODE_*` family) from
+> the ACP launch env automatically ([#1296](https://github.com/protoLabsAI/protoAgent/issues/1296)),
+> so launching protoAgent from *within* a `claude` session — the dogfooding case —
+> works without the manual `env -u …` dance. (Partial strips were the footgun: missing
+> just one of `CLAUDE_CODE_SESSION_ID` / `CLAUDE_CODE_ENTRYPOINT` / … still tripped the
+> guard, so the agent respawned every ~2 min with no surfaced error.) A value you set
+> explicitly in the delegate `env` still wins.
 
 **Codex has no native ACP mode either.** Recent `codex` CLI (≥ 0.13x) dropped the
 `acp` subcommand — it speaks **MCP** natively, not ACP, so `command: codex, args:
@@ -141,9 +145,10 @@ Action kinds come from the ACP request (`toolCall.kind`: `read` / `edit` /
 
 ### Environment
 
-The subprocess **inherits protoAgent's environment** (plus any per-delegate `env`).
-Run protoAgent under an account whose ambient credentials you're willing to lend the
-coding agent, or scope the `workdir` to a throwaway checkout.
+The subprocess **inherits protoAgent's environment** (plus any per-delegate `env`),
+**minus** the nested-Claude markers (`CLAUDECODE` / `CLAUDE_CODE_*`) — see the caveat
+above. Run protoAgent under an account whose ambient credentials you're willing to lend
+the coding agent, or scope the `workdir` to a throwaway checkout.
 
 ## How it works
 
