@@ -89,3 +89,27 @@ test("the bottom-panel toggle sits with the layout buttons, gated until a surfac
   // Disabled by default — nothing is docked at the bottom (railOrder.bottom is empty).
   await expect(toggleBottom).toBeDisabled();
 });
+
+// #1234: each rail toggle is gated on whether its rail holds any views — the same
+// gate the bottom toggle already had, extended to left/right. In the default layout
+// the left rail (chat/knowledge) and right rail (work + the boardy "scratch" right
+// panel) are populated, so their toggles stay ENABLED and interactive; only the
+// empty bottom dock is disabled. This pins that the gate doesn't over-disable a
+// populated rail. (An empty left/right rail can't be seeded in this harness — the
+// on-mount core self-heal re-adds chat/work and the mock's right-placed plugin view
+// re-seeds the right rail — so the disabled state is covered for the bottom dock
+// above and verified visually for left/right per the PR.)
+test("populated left/right rail toggles stay enabled and interactive (#1234)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const toggleLeft = page.getByTestId("toggle-left");
+  const toggleRight = page.getByTestId("toggle-right");
+  await expect(toggleLeft).toBeEnabled();
+  await expect(toggleRight).toBeEnabled();
+  // Still toggles the right column (proves the gate left an enabled rail interactive).
+  const right = page.locator(".pl-appshell__col--right");
+  await expect(right).toBeVisible();
+  await toggleRight.click();
+  await expect(right).toHaveCount(0);
+  await toggleRight.click();
+  await expect(right).toBeVisible();
+});

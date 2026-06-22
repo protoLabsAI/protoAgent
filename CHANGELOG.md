@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Empty-rail panel toggles fully disable.** The utility-bar left/right panel-toggle buttons are now greyed out and non-interactive when their rail holds no views (matching the bottom-dock toggle), instead of appearing active but doing nothing when clicked. (#1234)
 - **Console-poll handlers no longer block the event loop.** `GET /api/runtime/status`
   shelled out to `ps` (the per-poll co-location + fleet version-skew probes) and the
   inbox/activity console handlers ran sync SQLite reads/writes directly on the loop; both

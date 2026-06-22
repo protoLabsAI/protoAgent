@@ -106,9 +106,16 @@
   cursor: pointer;
 }
 
-.util-btn:hover {
+.util-btn:not(:disabled):hover {
   background: var(--bg-elevated, #1a1a1f);
   color: var(--fg);
+}
+
+/* Fully disabled toggle (#1234): the rail/dock it controls has no views, so the
+   button is greyed out and non-interactive (no hover feedback, no pointer). */
+.util-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .util-btn svg {
