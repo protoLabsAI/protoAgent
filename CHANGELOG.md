@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Mid-stream output rendering no longer rescans the whole response on every chunk.**
+  The chat stream recomputed the visible `<output>` (and the live reasoning view) by
+  re-running regexes over the *entire* accumulated text per token chunk — O(N²) over a
+  turn. New incremental `StreamingOutputView` / `StreamingReasoningView` scan only the
+  newly-appended tail (a cheap pre-`<output>` scan, then fast-append in the steady
+  answer body), falling back to the authoritative parser on any tag boundary; an
+  equivalence + fuzz test pins them byte-for-byte to the original functions. (#1310)
 - **Empty-rail panel toggles fully disable.** The utility-bar left/right panel-toggle buttons are now greyed out and non-interactive when their rail holds no views (matching the bottom-dock toggle), instead of appearing active but doing nothing when clicked. (#1234)
 - **Console-poll handlers no longer block the event loop.** `GET /api/runtime/status`
   shelled out to `ps` (the per-poll co-location + fleet version-skew probes) and the
