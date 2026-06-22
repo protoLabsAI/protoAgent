@@ -41,23 +41,22 @@ export const archetypesQuery = () =>
     queryFn: () => api.archetypes(),
   });
 
-// Goals the agent works toward (goal mode). Lives in the right sidebar and
-// refetches every 5s while mounted — the agent advances/clears goals mid-turn,
-// so the panel should track that without a manual refresh.
+// Goals the agent works toward (goal mode). Lives in the right sidebar; the panel
+// invalidates this on the `goal.changed` bus push (the agent set/advances/clears goals
+// mid-turn) instead of a 5s poll (#1310) — same pattern as the inbox.
 export const goalsQuery = () =>
   queryOptions({
     queryKey: queryKeys.goals,
     queryFn: () => api.goals(),
-    refetchInterval: 5_000,
   });
 
-// The agent's task board (in-process tasks store — always available). Refetches
-// while mounted so the panel tracks issues the agent files/closes mid-turn.
+// The agent's task board (in-process tasks store — always available). The panel
+// invalidates this on the `task.changed` bus push (issues the agent files/closes
+// mid-turn) instead of a 5s poll (#1310).
 export const tasksQuery = () =>
   queryOptions({
     queryKey: queryKeys.tasks,
     queryFn: () => api.tasks(),
-    refetchInterval: 5_000,
   });
 
 // Registered workflow recipes + the subagent registry — config, not live, so no

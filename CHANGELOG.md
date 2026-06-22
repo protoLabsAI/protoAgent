@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The Goals and Tasks panels refresh on a bus push instead of polling every 5s.** Both
+  panels held a 5s `refetchInterval`; now the goal store publishes `goal.changed` (on
+  set/advance/clear) and the task store publishes `task.changed` (on create/update/
+  close/delete), and the panels invalidate off those `/api/events` pushes — the same
+  pattern the inbox panel already used. Live updates are now immediate (the agent files a
+  task → it appears at once) and steady-state polling is gone. (#1310)
+
 ### Fixed
 - **Mid-stream output rendering no longer rescans the whole response on every chunk.**
   The chat stream recomputed the visible `<output>` (and the live reasoning view) by

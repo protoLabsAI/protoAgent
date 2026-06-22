@@ -113,3 +113,31 @@ def test_operator_adapter_maps_to_store(store):
     a.close("/x", "task-1", "shipped")
     assert store.get("task-1")["status"] == "closed"
     assert a.delete("/x", "task-1") == {"deleted": True}
+
+
+def test_mutations_publish_task_changed(store, monkeypatch):
+    """create/update/close/delete push `task.changed` so the console Tasks panel
+    invalidates live instead of polling every 5s (#1310)."""
+    from graph.plugins import host
+
+    events: list[tuple] = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    issue = store.create("do a thing")
+    store.update(issue["id"], status="in_progress")
+    store.close(issue["id"])
+    assert store.delete(issue["id"]) is True
+    assert [(t, d["action"]) for t, d in events] == [
+        ("task.changed", "created"),
+        ("task.changed", "updated"),
+        ("task.changed", "closed"),
+        ("task.changed", "deleted"),
+    ]
+
+
+def test_delete_missing_does_not_publish(store, monkeypatch):
+    from graph.plugins import host
+
+    events: list[tuple] = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    assert store.delete("bd-404") is False
+    assert events == []  # nothing deleted → no event

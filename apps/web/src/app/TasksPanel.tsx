@@ -21,6 +21,7 @@ import {
 import { Suspense, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
+import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { tasksQuery, queryKeys } from "../lib/queries";
 import type { Task } from "../lib/types";
@@ -42,10 +43,11 @@ import { ScrollArea } from "@protolabsai/ui/data";
 import { StatusPill } from "./StatusPill";
 
 // The agent's task board (in-process tasks store), on the TanStack Query data
-// layer (ADR 0013): the issue list is a `useSuspenseQuery` (refetching while
-// mounted), create/start/close/reopen/delete are `useMutation`s that invalidate
-// it. The store is always initialized, so there's no init flow. Delete routes
-// through the App-owned confirm dialog via the `confirm` prop.
+// layer (ADR 0013): the issue list is a `useSuspenseQuery` that invalidates on the
+// `task.changed` bus push (the agent files/closes issues mid-turn) instead of
+// polling; create/start/close/reopen/delete are `useMutation`s that invalidate it.
+// The store is always initialized, so there's no init flow. Delete routes through
+// the App-owned confirm dialog via the `confirm` prop.
 
 type ConfirmRequest = {
   title: string;
@@ -163,6 +165,10 @@ function TasksBody({ confirm }: { confirm: (req: ConfirmRequest) => void }) {
   const issues = data.issues;
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.tasks });
+
+  // Live: the agent created/closed/updated an issue mid-turn — refresh off the
+  // `task.changed` bus push instead of polling every 5s (#1310), like the inbox panel.
+  useEffect(() => onServerEvent("task.changed", invalidate), [queryClient]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["closed"]));

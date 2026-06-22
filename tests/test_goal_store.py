@@ -82,3 +82,26 @@ def test_resolve_base_is_instance_scoped(monkeypatch, tmp_path):
     # No instance id → unscoped (single-instance back-compat).
     monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     assert goal_store._resolve_base() == tmp_path
+
+
+def test_set_and_clear_publish_goal_changed(tmp_path, monkeypatch):
+    """A goal write/clear pushes `goal.changed` on the bus so the console Goals panel
+    invalidates live instead of polling every 5s (#1310)."""
+    from graph.plugins import host
+
+    events: list[tuple] = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    store = GoalStore(tmp_path)
+    store.set(GoalState(session_id="s1", condition="x"))
+    assert store.clear("s1") is True
+    assert [t for t, _ in events] == ["goal.changed", "goal.changed"]
+    assert events[0][1]["session_id"] == "s1"
+
+
+def test_clear_missing_does_not_publish(tmp_path, monkeypatch):
+    from graph.plugins import host
+
+    events: list[tuple] = []
+    monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
+    assert GoalStore(tmp_path).clear("nope") is False
+    assert events == []  # nothing was cleared → no event

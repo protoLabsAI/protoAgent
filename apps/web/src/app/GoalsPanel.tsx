@@ -9,10 +9,11 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 
 import { api } from "../lib/api";
 import { ago } from "../lib/format";
+import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { goalsQuery, queryKeys } from "../lib/queries";
 import { ErrorBoundary, PanelError, PanelSkeleton } from "./ErrorBoundary";
@@ -42,6 +43,13 @@ function GoalsList() {
     mutationFn: (sessionId: string) => api.clearGoal(sessionId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),
   });
+
+  // Live: the agent set/advanced/cleared a goal mid-turn — refresh off the `goal.changed`
+  // bus push instead of polling every 5s (#1310), the same pattern as the inbox panel.
+  useEffect(
+    () => onServerEvent("goal.changed", () => void queryClient.invalidateQueries({ queryKey: queryKeys.goals })),
+    [queryClient],
+  );
 
   if (!goals.length) {
     return (

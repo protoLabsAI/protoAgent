@@ -21,6 +21,19 @@ from typing import Any
 
 from infra.paths import scope_leaf
 
+
+def _publish(topic: str, data: dict) -> None:
+    """Best-effort bus push so the console Tasks panel can invalidate live on a change
+    instead of polling every 5s (#1310). No-op when the host hasn't wired a publisher
+    (unit tests / standalone use); a bus hiccup must never break a task write."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(topic, data)
+    except Exception:  # noqa: BLE001
+        pass
+
 DEFAULT_DB_PATH = "/sandbox/tasks/issues.db"
 
 # Open lifecycle states (closed is terminal). Mirrors the console's
@@ -136,6 +149,7 @@ class TaskStore:
                 ),
             )
             self._conn.commit()
+            _publish("task.changed", {"id": issue_id, "action": "created"})
             return dict(self._row(issue_id))
 
     def list(self, *, include_closed: bool = True) -> list[dict[str, Any]]:
@@ -176,6 +190,7 @@ class TaskStore:
             vals.append(_now())
             self._conn.execute(f"UPDATE issues SET {', '.join(sets)} WHERE id = ?", (*vals, issue_id))
             self._conn.commit()
+            _publish("task.changed", {"id": issue_id, "action": "updated"})
             return dict(self._row(issue_id))
 
     def close(self, issue_id: str, reason: str | None = None) -> dict[str, Any]:
@@ -190,10 +205,13 @@ class TaskStore:
                 (now, reason or "", now, issue_id),
             )
             self._conn.commit()
+            _publish("task.changed", {"id": issue_id, "action": "closed"})
             return dict(self._row(issue_id))
 
     def delete(self, issue_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute("DELETE FROM issues WHERE id = ?", (issue_id,))
             self._conn.commit()
+            if cur.rowcount > 0:
+                _publish("task.changed", {"id": issue_id, "action": "deleted"})
             return cur.rowcount > 0

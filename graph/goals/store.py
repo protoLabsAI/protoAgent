@@ -20,6 +20,19 @@ from graph.goals.types import GoalState
 log = logging.getLogger(__name__)
 
 
+def _publish(topic: str, data: dict) -> None:
+    """Best-effort bus push so the console Goals panel can invalidate live on a change
+    instead of polling every 5s (#1310). No-op when the host hasn't wired a publisher
+    (unit tests / standalone use); a bus hiccup must never break a goal write."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish:
+            HOST.publish(topic, data)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _resolve_base() -> Path:
     # Per-instance scoping (ADR 0004): namespace by PROTOAGENT_INSTANCE so two
     # agents on one machine don't share a goals dir — without this, scheduled /
@@ -116,6 +129,7 @@ class GoalStore:
                 json.dump(state.to_dict(), fh, indent=2, default=str)
             os.rename(tmp_path, path)
             tmp_path = None
+            _publish("goal.changed", {"session_id": state.session_id})
         except OSError as exc:
             log.error("[goal] write failed for session %s: %s", state.session_id, exc)
         finally:
@@ -133,6 +147,7 @@ class GoalStore:
         path = self._path(session_id)
         try:
             path.unlink()
+            _publish("goal.changed", {"session_id": session_id})
             return True
         except FileNotFoundError:
             return False

@@ -98,9 +98,12 @@ async def test_finish_emits_goal_event_on_the_bus(tmp_path):
         c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
         c.set_goal_safe("s", "reach target", {"type": "plugin", "check": "p:always"})
         await c.evaluate("s", last_text="done")
-        assert events and events[0][0] == "goal.achieved"
-        assert events[0][1]["condition"] == "reach target"
-        assert events[0][1]["status"] == "achieved"
+        # goal.achieved is broadcast on finish — alongside the lightweight goal.changed
+        # store pushes (#1310), so find it rather than assume it's first.
+        achieved = [d for t, d in events if t == "goal.achieved"]
+        assert achieved, f"goal.achieved not on the bus: {[t for t, _ in events]}"
+        assert achieved[0]["condition"] == "reach target"
+        assert achieved[0]["status"] == "achieved"
     finally:
         HOST.publish = orig
         set_plugin_verifiers({})
