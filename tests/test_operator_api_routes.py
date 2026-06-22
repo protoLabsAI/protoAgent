@@ -64,6 +64,26 @@ def test_tasks_store_route_ignores_project_path() -> None:
     assert client.get("/api/tasks/issues").status_code == 200
 
 
+def test_runtime_status_accepts_async_accessor() -> None:
+    """The real console handler is async (#875 offloads the per-poll `ps`
+    co-location probe off the loop); the route must await a coroutine accessor
+    while still accepting a plain-dict (sync) one for forks/test doubles."""
+    app = FastAPI()
+
+    async def _async_status():
+        return {"graph_loaded": True, "async": True}
+
+    register_operator_routes(
+        app,
+        runtime_status=_async_status,
+        subagent_list=lambda: [],
+        subagent_run=lambda req: "",
+        subagent_batch=lambda req: "",
+        tasks_store=_FakeTaskStore(),
+    )
+    assert TestClient(app).get("/api/runtime/status").json() == {"graph_loaded": True, "async": True}
+
+
 def test_operator_routes_return_expected_shapes(tmp_path) -> None:
     client = _client()
 

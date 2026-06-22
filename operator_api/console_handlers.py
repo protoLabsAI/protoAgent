@@ -47,24 +47,30 @@ def _operator_allowed_dirs() -> list[str]:
     return list(dict.fromkeys(roots))
 
 
-def _operator_runtime_status():
+async def _operator_runtime_status():
+    import asyncio
+
     # Live co-location check (#706) — re-evaluated per poll so the shell banner
     # appears/clears as siblings come and go. Quiet (empty `.instances/`) costs one
     # is_dir(); the `ps` guard only runs when sibling heartbeats actually exist.
+    # The probe shells out to `ps` per sibling, so it's offloaded off the event
+    # loop (#875) — matching the startup-path co-location check in server._main.
     from infra.paths import colocation_warning, instance_uid, package_version
 
     try:
-        warnings = [w for w in (colocation_warning(),) if w]
+        warn = await asyncio.to_thread(colocation_warning)
+        warnings = [warn] if warn else []
     except Exception:  # noqa: BLE001 — status must never raise
         warnings = []
     # Fleet version skew (version-coherence P2) — also live + self-clearing: a
     # member that survived an app update keeps running the OLD binary until
     # restarted; banner it the same way as a co-located sibling. Inside a member
-    # the scoped fleet.json is empty, so this no-ops.
+    # the scoped fleet.json is empty, so this no-ops. It probes sibling liveness
+    # (a `ps` shell-out under the hood), so it's offloaded off the loop too (#875).
     try:
         from graph.fleet import supervisor as _sup
 
-        skew = _sup.version_skew_warning()
+        skew = await asyncio.to_thread(_sup.version_skew_warning)
         if skew:
             warnings.append(skew)
     except Exception:  # noqa: BLE001 — status must never raise
@@ -341,7 +347,13 @@ async def _operator_activity_list() -> dict:
     with origin/trigger/priority — plus the thread's message history from the
     checkpointer (for the continue view). The console renders the feed and
     opens the thread on demand."""
-    entries = STATE.activity_log.recent(limit=100) if STATE.activity_log is not None else []
+    import asyncio
+
+    # recent() is sync sqlite — offload it off the loop (#875), mirroring the
+    # scheduler/goals handlers above.
+    entries = (
+        await asyncio.to_thread(STATE.activity_log.recent, 100) if STATE.activity_log is not None else []
+    )
     messages: list[dict] = []
     if STATE.checkpointer is not None:
         thread_id = f"a2a:{ACTIVITY_CONTEXT}"
@@ -439,9 +451,13 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
 async def _operator_inbox_add(payload: dict) -> dict:
     """Ingest an inbound item (ADR 0003). now-priority fires an Activity turn;
     others queue for check_inbox. Dedup is handled by the store."""
+    import asyncio
+
     if STATE.inbox_store is None:
         raise RuntimeError("inbox not loaded; finish setup first")
-    item = STATE.inbox_store.add(
+    # add() is sync sqlite — offload it off the loop (#875).
+    item = await asyncio.to_thread(
+        STATE.inbox_store.add,
         payload.get("text", ""),
         priority=payload.get("priority", "next") or "next",
         source=payload.get("source", "") or "",
@@ -465,16 +481,20 @@ async def _operator_inbox_add(payload: dict) -> dict:
         # re-surfaced by the next check_inbox (bd-jus). A FAILED fire stays pending
         # so check_inbox remains the fallback delivery path for it.
         try:
-            STATE.inbox_store.mark_delivered([item["id"]])
+            await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])
         except Exception:  # noqa: BLE001 — best-effort; a missed mark just re-surfaces
             log.warning("[inbox] could not mark fired now-item %s delivered", item.get("id"))
     return {"ok": True, "item": item, "fired": fired}
 
 
 async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
+    import asyncio
+
     if STATE.inbox_store is None:
         return {"items": []}
-    items = STATE.inbox_store.list(
+    # list() is sync sqlite — offload it off the loop (#875).
+    items = await asyncio.to_thread(
+        STATE.inbox_store.list,
         priority_floor=floor or "later",
         include_delivered=include_delivered,
         limit=200,
@@ -483,9 +503,13 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
 
 
 async def _operator_inbox_deliver(item_id: int) -> dict:
+    import asyncio
+
     if STATE.inbox_store is None:
         raise RuntimeError("inbox not loaded; finish setup first")
-    return {"ok": True, "delivered": STATE.inbox_store.mark_delivered([item_id])}
+    # mark_delivered() is sync sqlite — offload it off the loop (#875).
+    delivered = await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item_id])
+    return {"ok": True, "delivered": delivered}
 
 
 def _operator_chat_commands() -> dict:

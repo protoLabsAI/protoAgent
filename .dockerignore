@@ -41,9 +41,15 @@ tests/
 
 # Docs site — VitePress builds to gh-pages, not into the container
 docs/
+
+# node_modules NEVER enter the build context — the web-builder stage runs a fresh
+# `npm ci` and the python runtime installs via pip, so a host's node_modules would
+# only bloat the context and risk leaking platform-specific binaries.
 node_modules/
-package.json
-package-lock.json
+# NOTE: package.json / package-lock.json are deliberately NOT excluded — the
+# web-builder stage COPYs them to run `npm ci` and build the React console
+# (apps/web/dist). Re-excluding them breaks that stage (the #874 console-never-
+# ships bug). They're harmless in the runtime image (Python ignores them).
 
 # Seccomp profile — Docker reads this on the host at runtime
 # (via docker-compose security_opt), NOT from inside the image

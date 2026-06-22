@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Empty-rail panel toggles fully disable.** The utility-bar left/right panel-toggle buttons are now greyed out and non-interactive when their rail holds no views (matching the bottom-dock toggle), instead of appearing active but doing nothing when clicked. (#1234)
+- **Console-poll handlers no longer block the event loop.** `GET /api/runtime/status`
+  shelled out to `ps` (the per-poll co-location + fleet version-skew probes) and the
+  inbox/activity console handlers ran sync SQLite reads/writes directly on the loop; both
+  are now offloaded via `asyncio.to_thread`, matching the scheduler/goals handlers and the
+  startup-path co-location check. (#875)
+- **The Docker image now serves the React console and stays in dep-lockstep with
+  pyproject.** A new node builder stage builds `apps/web/dist` and copies it into the
+  runtime image, so `-e PROTOAGENT_UI=console` actually mounts `/app` instead of silently
+  404'ing (`.dockerignore` no longer drops the workspace manifests the build needs); the
+  server now warns loudly when the `console` tier is requested but the console build is
+  absent. A new `tests/test_requirements_core_sync.py` guard fails CI if
+  `requirements-core.txt` (what the image installs) misses any core `pyproject`
+  dependency — it had silently lost `pypdf`, `youtube-transcript-api`, and
+  `markdown-it-py`, now restored. (#874)
 
 ## [0.67.0] - 2026-06-22
 
