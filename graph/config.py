@@ -544,6 +544,12 @@ class LangGraphConfig:
     # LangGraph loop (default). "acp:<agent>" (e.g. "acp:codex", "acp:claude") = an
     # external coding agent drives the turn over ACP, mounting the operator MCP bus.
     agent_runtime: str = "native"
+    # ACP launch overrides (ADR 0033) — per-agent ``{command, args}`` from the YAML
+    # ``acp.agents`` block, e.g. ``acp: {agents: {claude: {command: claude-agent-acp}}}``.
+    # ``runtime.acp_runtime.adapter_for`` reads this to override the built-in default
+    # adapter (an ``npx -y …`` fetch) with a locally-installed binary. Empty = use the
+    # defaults. Not a settings-UI field — an advanced, machine-local launch knob.
+    acp_agents: dict = field(default_factory=dict)
 
     # Plugins — drop-in packages (manifest + register()) that contribute tools
     # and bundled skills. Run IN-PROCESS with the agent's privileges, so a
@@ -753,6 +759,7 @@ class LangGraphConfig:
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
         operator_mcp = data.get("operator_mcp", {})
+        acp = data.get("acp", {}) or {}
         plugins = data.get("plugins", {})
         identity = data.get("identity", {})
         # `or {}` (not a default arg): a section present but empty/commented in
@@ -887,6 +894,7 @@ class LangGraphConfig:
             operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
             operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
             agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
+            acp_agents=dict(acp.get("agents", {}) or {}),
             plugins_enabled=list(plugins.get("enabled", []) or []),
             plugins_disabled=list(plugins.get("disabled", []) or []),
             plugins_dir=plugins.get("dir", cls.plugins_dir),

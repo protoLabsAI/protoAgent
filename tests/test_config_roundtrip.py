@@ -36,6 +36,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "a2a_description": "",
     "a2a_require_routable_url": False,
     "a2a_skills": [],
+    "acp_agents": {},
     "agent_runtime": "native",
     "api_base": "http://gateway:4000/v1",
     "audit_middleware": True,

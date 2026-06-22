@@ -231,6 +231,15 @@ checkpoint:
 #   fallback_models:
 #    - claude-haiku-4-5
 
+# ACP runtime adapters (ADR 0033) — only relevant when `agent_runtime: acp:<agent>` (or
+# an `acp:<agent>` aux/eval/compaction model) routes a turn through a coding agent. Each
+# agent has a built-in default launch command (an `npx -y …` fetch); override it here to
+# point at a locally-installed binary (faster cold-start, no network). `args` optional.
+# acp:
+#   agents:
+#     claude: { command: claude-agent-acp, args: [] }   # use the installed adapter, not npx
+#     codex:  { command: codex-acp,        args: [] }
+
 # Goal mode — route the goal verifier to a cheaper model with `eval_model`
 # (else it uses routing.aux_model, else the main model).
 goal:
