@@ -123,6 +123,28 @@ async def test_acp_probe_ok_on_successful_handshake(monkeypatch):
     assert res["ok"] is True and "handshake OK" in res["detail"]
 
 
+async def test_acp_probe_resolves_command_against_delegate_env_path(monkeypatch):
+    # The probe must resolve the command against the SAME PATH the real spawn uses —
+    # the delegate's env PATH overlaid on the process PATH — so a command reachable
+    # only via the delegate env doesn't red-X the Test button while the spawn would
+    # actually find it (#1299 probe-vs-spawn disagreement).
+    import shutil
+
+    seen: dict = {}
+
+    def fake_which(cmd, path=None):
+        seen["path"] = path
+        return None  # force the not-on-PATH branch (so we never spawn a real process)
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+    d = ADAPTERS["acp"].parse(
+        {"name": "x", "type": "acp", "command": "npx", "workdir": "/tmp", "env": {"PATH": "/custom/bin"}}
+    )
+    res = await ADAPTERS["acp"].probe(d)
+    assert res["ok"] is False and "not on PATH" in res["error"]
+    assert seen["path"] == "/custom/bin"  # resolved against the delegate's env PATH
+
+
 def test_secret_value_wins_then_env(monkeypatch):
     assert _secret({"token": "explicit"}, "token", "credentialsEnv") == "explicit"
     monkeypatch.setenv("MY_TOK", "fromenv")

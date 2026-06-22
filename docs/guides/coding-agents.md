@@ -66,6 +66,20 @@ The binary must be installed and on the `PATH` of the process running protoAgent
 The delegates panel's **Test** button performs a real ACP `initialize` handshake — so
 a wrong launch command **fails the probe** instead of showing green (it's not just a
 missing-binary check). A misconfigured delegate surfaces at Test, not at first dispatch.
+The probe resolves the command against the **same** PATH the spawn uses — the process
+PATH with the delegate's `env` PATH overlaid — so probe and dispatch never disagree.
+
+::: warning macOS desktop app & `PATH`
+A GUI app launched from Finder/Dock/`launchd` inherits only `launchd`'s minimal `PATH`
+(`/usr/bin:/bin:/usr/sbin:/sbin`), **not** your login-shell `PATH` — so Homebrew
+(`/opt/homebrew/bin`), nvm, Volta, and asdf installs (where `npx`/`node`/ACP adapters
+live) are invisible, and a `command: npx` delegate fails with `binary not on PATH`
+([#1299](https://github.com/protoLabsAI/protoAgent/issues/1299)). The desktop build now
+hands the bundled server your real login-shell `PATH`, so this works out of the box.
+If you still hit it (an unusual shell setup), either set an **absolute** `command`
+(`/opt/homebrew/bin/npx`) or add a `PATH` to the delegate **`env`** — both pass the
+probe too. The web app (terminal-launched server) is unaffected.
+:::
 
 **Claude Code has no native ACP mode.** Drive it through the
 [`claude-agent-acp`](https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp)

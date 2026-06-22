@@ -33,6 +33,59 @@ fn pick_free_port() -> u16 {
 #[derive(Default)]
 struct SidecarProcess(Mutex<Option<CommandChild>>);
 
+/// Split a `:`-delimited PATH string and append each new, non-empty dir to `entries`,
+/// preserving order and skipping duplicates.
+#[cfg(target_os = "macos")]
+fn dedup_push_path(entries: &mut Vec<String>, raw: &str) {
+    for dir in raw.split(':') {
+        if !dir.is_empty() && !entries.iter().any(|e| e == dir) {
+            entries.push(dir.to_string());
+        }
+    }
+}
+
+/// Ask the user's interactive login shell for its `PATH`
+/// (`$SHELL -ilc 'printf %s "$PATH"'`). `None` if `$SHELL` is unknown, the shell
+/// errors, or it returns nothing — callers fall back to a fixed prefix.
+#[cfg(target_os = "macos")]
+fn login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = std::process::Command::new(&shell)
+        .args(["-ilc", "printf %s \"$PATH\""])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// The PATH to hand the bundled sidecar on macOS. A GUI app launched from
+/// Finder/Dock/`launchd` only inherits `launchd`'s minimal PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew (`/opt/homebrew/bin`), nvm, Volta,
+/// and asdf bin dirs — where `npx`, `node`, and ACP coding-agent adapters live — are
+/// invisible to the server, and a delegate launch command like `npx` fails with
+/// "binary not on PATH" (#1299). Compose: the login-shell PATH (covers nvm/Volta/asdf),
+/// then the common Homebrew/local dirs (belt-and-suspenders if shell resolution failed),
+/// then whatever the process already inherited (never drop a dir that already worked).
+#[cfg(target_os = "macos")]
+fn augmented_sidecar_path() -> String {
+    let mut entries: Vec<String> = Vec::new();
+    if let Some(shell_path) = login_shell_path() {
+        dedup_push_path(&mut entries, &shell_path);
+    }
+    dedup_push_path(&mut entries, "/opt/homebrew/bin:/usr/local/bin");
+    if let Ok(existing) = std::env::var("PATH") {
+        dedup_push_path(&mut entries, &existing);
+    }
+    entries.join(":")
+}
+
 /// Launch the bundled protoAgent server (console UI tier) as a sidecar.
 ///
 /// The frozen binary is read-only, so its writable state (live config,
@@ -60,7 +113,8 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         }
     };
     let port_arg = port.to_string();
-    let command = command
+    #[allow(unused_mut)] // `mut` is only used on the macOS PATH branch below.
+    let mut command = command
         // The desktop renders the React operator console, so run the server in
         // its 'console' UI tier (API + A2A + console, no Gradio) — ADR 0010.
         // (Was the now-deprecated --headless / PROTOAGENT_HEADLESS alias.)
@@ -70,6 +124,14 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         // onefile's child process otherwise outlives us, holding its port).
         .env("PROTOAGENT_PARENT_PID", std::process::id().to_string())
         .env("PROTOAGENT_CONFIG_DIR", config_dir.to_string_lossy().to_string());
+
+    // A Finder/Dock/launchd launch strips PATH down to launchd's minimal set, hiding
+    // Homebrew/nvm/Volta/asdf — so delegate launch commands (`npx`, ACP adapters) fail
+    // with "binary not on PATH" (#1299). Hand the sidecar the user's real PATH.
+    #[cfg(target_os = "macos")]
+    {
+        command = command.env("PATH", augmented_sidecar_path());
+    }
 
     let (mut rx, child) = match command.spawn() {
         Ok(pair) => pair,

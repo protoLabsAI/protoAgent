@@ -515,7 +515,14 @@ class AcpAdapter(Adapter):
                     "command: claude-code (an alias) or claude-agent-acp."
                 ),
             }
-        if not shutil.which(d.command):
+        # Resolve the command against the SAME PATH the real spawn will use — the
+        # delegate's env PATH overlaid on the process PATH — not just os.environ.
+        # The actual ACP launch merges d.env (acp_client `_launch_env`/`env=…`), so a
+        # delegate that supplies its own PATH (or runs under the desktop app's
+        # augmented PATH) would spawn fine, yet the probe's bare `shutil.which` still
+        # red-X'd it. Probe and spawn now agree on where to look (#1299).
+        merged_path = (d.env or {}).get("PATH") or os.environ.get("PATH")
+        if not shutil.which(d.command, path=merged_path):
             if os.path.basename(d.command) == "claude-agent-acp":
                 return {
                     "ok": False,
