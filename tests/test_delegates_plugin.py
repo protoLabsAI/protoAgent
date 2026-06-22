@@ -98,7 +98,7 @@ async def test_acp_probe_fails_when_handshake_fails(monkeypatch):
     async def _noop(self):
         pass
 
-    monkeypatch.setattr(AcpClient, "_ensure_started", _boom)
+    monkeypatch.setattr(AcpClient, "handshake", _boom)
     monkeypatch.setattr(AcpClient, "close", _noop)
     d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
     res = await ADAPTERS["acp"].probe(d)
@@ -116,7 +116,7 @@ async def test_acp_probe_ok_on_successful_handshake(monkeypatch):
     async def _noop(self):
         pass
 
-    monkeypatch.setattr(AcpClient, "_ensure_started", _ok)
+    monkeypatch.setattr(AcpClient, "handshake", _ok)
     monkeypatch.setattr(AcpClient, "close", _noop)
     d = ADAPTERS["acp"].parse({"name": "x", "type": "acp", "command": sys.executable, "workdir": "/tmp"})
     res = await ADAPTERS["acp"].probe(d)

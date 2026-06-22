@@ -131,6 +131,74 @@ async def test_close_reaps_the_subprocess(fake_agent, tmp_path):
     assert client._stderr_task is not None and client._stderr_task.done()  # not leaked
 
 
+# ── handshake-only liveness check + launch-env hygiene ────────────────────────
+
+# Records (to a marker) every CLAUDECODE / CLAUDE_CODE_* var visible in its env at
+# initialize time, so a test can prove the launch env stripped the inherited ones.
+_ENV_PROBE_AGENT = r"""
+import sys, json, os
+MARKER = os.environ.get("ENV_MARKER", "")
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        leaked = sorted(k for k in os.environ if k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"))
+        if MARKER:
+            with open(MARKER, "w") as fh:
+                fh.write(json.dumps(leaked))
+        send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"protocolVersion": 1}})
+"""
+
+
+async def test_handshake_runs_initialize_without_opening_a_session(fake_agent, tmp_path):
+    """handshake() runs ONLY the ACP initialize round-trip — no session/new or
+    session/load — so the health prober's liveness check is genuinely
+    side-effect-free (#1300). The process is up and initialize negotiated, but no
+    session id was ever assigned."""
+    client = AcpClient(sys.executable, [str(fake_agent)], cwd=str(tmp_path), name="probe")
+    try:
+        await client.handshake()
+        assert client._proc is not None and client._proc.returncode is None  # up
+        assert client._protocol_version == 1  # initialize completed
+        assert client._session_id is None  # but NO session was opened
+    finally:
+        await client.close()
+
+
+async def test_launch_env_strips_inherited_nested_claude_markers(tmp_path, monkeypatch):
+    """The ACP launch env strips the inherited CLAUDECODE / CLAUDE_CODE_* markers so a
+    spawned Claude backend doesn't refuse to launch "inside another Claude Code
+    session" (#1296) — but a value explicitly set in the delegate env still wins."""
+    script = tmp_path / "env_agent.py"
+    script.write_text(_ENV_PROBE_AGENT, encoding="utf-8")
+    marker = tmp_path / "env.marker"
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-sess")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    client = AcpClient(
+        sys.executable,
+        [str(script)],
+        cwd=str(tmp_path),
+        name="env",
+        # ENV_MARKER survives (not a CLAUDE_CODE_* var); the explicit CHILD_SESSION
+        # overlays the (stripped) inherited markers and must reach the child.
+        env={"ENV_MARKER": str(marker), "CLAUDE_CODE_CHILD_SESSION": "keepme"},
+    )
+    try:
+        await client.handshake()
+    finally:
+        await client.close()
+    leaked = json.loads(marker.read_text(encoding="utf-8"))
+    assert leaked == ["CLAUDE_CODE_CHILD_SESSION"]  # inherited stripped, explicit kept
+
+
 async def test_acp_client_readonly_policy_denies_edit(fake_agent, tmp_path):
     # A readonly policy must reject the fake's `edit` permission request — the
     # client picks the reject_once option, which the fake echoes back.
