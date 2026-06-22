@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-06-22
+
 ### Added
 - **Per-agent ACP launch overrides are honored.** `acp.agents.<name>.{command,args}` is
   now parsed (it was silently dropped — `LangGraphConfig` had no `acp_agents` field), so an

@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.67.0",
+    "date": "2026-06-22",
+    "changes": [
+      "Per-agent ACP launch overrides are honored.",
+      "ACP delegate health probe is initialize-only — it no longer opens a session every 120s.",
+      "macOS desktop app finds Homebrew/nvm/Volta/asdf-installed binaries.",
+      "Workspace port assignment skips OS-occupied ports.",
+      "The per-agent theme is instance-scoped.",
+      "The browser tab favicon + theme-color follow the active per-agent theme.",
+      "ACP coding-agent subprocesses no longer leak as orphaned processes.",
+      "Dialogs no longer render their content cramped flush to the body edge.",
+      "Coding-agents guide: Codex needs the codex-acp adapter."
+    ]
+  },
+  {
     "version": "v0.66.0",
     "date": "2026-06-21",
     "changes": [
