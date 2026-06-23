@@ -253,9 +253,16 @@ async def web_search(query: str, max_results: int = 5) -> str:
     except ImportError:
         return "Error: the 'ddgs' package is not installed. Add `ddgs>=9.0` to requirements.txt and rebuild the image."
 
-    try:
+    # ddgs.text() is a SYNCHRONOUS network call — running it inline would block the asyncio
+    # event loop for the whole search. Under a fan-out (e.g. task_batch's parallel
+    # researchers) those blocking searches serialise on the loop and starve everything else,
+    # incl. the cancel/tasks API. Offload to a worker thread so the loop stays responsive.
+    def _run_search() -> list:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+            return list(ddgs.text(query, max_results=max_results))
+
+    try:
+        results = await asyncio.to_thread(_run_search)
     except Exception as e:
         return f"Error: DuckDuckGo search failed: {e}"
 
@@ -343,7 +350,10 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     ctype = (resp.headers.get("content-type") or "").lower()
 
     if "html" in ctype or content.lstrip().startswith(b"<"):
-        text = _extract_text_from_html(content)
+        # BeautifulSoup parsing of up to _MAX_FETCH_BYTES (2MB) is CPU-heavy and synchronous;
+        # inline it would block the event loop per fetch. Offload to a thread so concurrent
+        # fetches (and the rest of the server) keep making progress.
+        text = await asyncio.to_thread(_extract_text_from_html, content)
     else:
         try:
             text = content.decode(resp.encoding or "utf-8", errors="replace")
