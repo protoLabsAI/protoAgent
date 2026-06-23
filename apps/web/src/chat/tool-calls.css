@@ -17,50 +17,8 @@
   white-space: normal;
 }
 
-/* TEMPORARY — mirrors the proposed DS `.pl-toolcard-summary*` (protoContent#292).
-   The summary chip folds a run of SETTLED cards into one expandable row so the active
-   card stays prominent. Delete this block once `@protolabsai/ui` ships the primitive
-   (its styles.css bundle then supplies these same rules) and ToolCardSummary.tsx swaps
-   to the DS import. */
-.pl-toolcard-summary {
-  min-width: 0;
-}
-.pl-toolcard-summary__head {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 9px;
-  /* Reads as a card even at rest — solid border + raised fill always visible (#1319). */
-  background: var(--pl-color-bg-raised);
-  border: var(--pl-border-width) solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  color: var(--pl-color-fg-muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.pl-toolcard-summary__head:hover {
-  color: var(--pl-color-fg);
-}
-.pl-toolcard-summary__text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pl-toolcard-summary--error .pl-toolcard-summary__text {
-  color: var(--pl-color-status-error);
-}
-.pl-toolcard-summary__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pl-space-2);
-  margin-top: 6px;
-}
+/* The summary-chip frame (`.pl-toolcard-summary*`) is the DS `ToolCardSummary` — styled
+   by the `@protolabsai/ui` styles bundle imported in main.tsx (ships ≥0.47.1). */
 
 /* `task → researcher` — the subagent type in the delegation card header. */
 .tool-subagent {

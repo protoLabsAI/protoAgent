@@ -12,10 +12,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
+import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabsai/ui/tool-card";
 
 import type { ToolCall } from "../lib/types";
-import { ToolCardSummary } from "./ToolCardSummary";
 import { ToolValue } from "./tool-renderers";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
