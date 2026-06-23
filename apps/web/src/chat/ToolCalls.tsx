@@ -84,9 +84,8 @@ export function ToolCalls({
       top.push(call);
     }
   }
-  const running = top.filter((c) => c.status === "running");
   const settled = top.filter((c) => c.status !== "running");
-  const failedCount = settled.filter((c) => c.status === "error").length;
+  const failedCount = top.filter((c) => c.status === "error").length;
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it.
@@ -99,30 +98,30 @@ export function ToolCalls({
     />
   );
 
-  // The folded summary chip — a running total of the whole block (running + settled), with
-  // the finished cards inside it.
-  const chip = (count: number) => (
+  // The folded summary chip — the block's running total, with the given finished cards inside.
+  const chip = (count: number, folded: ToolCall[]) => (
     <ToolCardSummary
       count={count}
       label={count === 1 ? "tool" : "tools"}
       status={failedCount > 0 ? "error" : "done"}
       failedCount={failedCount || undefined}
     >
-      {settled.map(group)}
+      {folded.map(group)}
     </ToolCardSummary>
   );
 
-  // PINNED SPOTLIGHT (live turn): the active card(s) sit in a fixed-height slot that never
-  // collapses as tools cycle (`.tool-spotlight` reserves one row), and everything finished
-  // folds into the chip below. So the block holds a stable height for the whole turn — the
-  // column doesn't bounce as cards pop in and out; a finishing tool just crossfades from
-  // the slot into the chip. The chip is the running total, so it's present from the first
-  // finished tool onward.
+  // LIVE TURN: keep the MOST-RECENT tool in the spotlight slot until a newer one replaces
+  // it — so the slot is never empty (no blank gap between tools, or during the answer tail
+  // after the last tool finishes). Everything older folds into the running-total chip; a
+  // new tool crossfades into the slot and the previous one drops into the chip.
   if (streaming) {
+    if (top.length === 0) return null;
+    const current = top[top.length - 1];
+    const folded = top.slice(0, -1);
     return (
       <ToolCardList className="tool-calls">
-        <div className="tool-spotlight">{running.map(group)}</div>
-        {settled.length > 0 && chip(top.length)}
+        <div className="tool-spotlight">{group(current)}</div>
+        {folded.length > 0 && chip(top.length, folded)}
       </ToolCardList>
     );
   }
@@ -130,7 +129,7 @@ export function ToolCalls({
   // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
   // "1 tool" chip); a real fan-out (≥2) stays folded.
   if (settled.length >= 2) {
-    return <ToolCardList className="tool-calls">{chip(settled.length)}</ToolCardList>;
+    return <ToolCardList className="tool-calls">{chip(settled.length, settled)}</ToolCardList>;
   }
   return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
 }
