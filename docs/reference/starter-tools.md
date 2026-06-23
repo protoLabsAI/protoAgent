@@ -4,7 +4,7 @@ The default tool set (from `tools/lg_tools.py::get_all_tools`):
 
 - Four keyless general-purpose tools — `current_time`, `calculator`, `web_search`, `fetch_url` — that work without any state.
 - Two **HITL tools** — `ask_human` (a free-text question) and `request_user_input` (a structured multi-step form) — pause the turn (A2A `input-required`) for the operator and resume with their answer (lead-agent only).
-- One **render tool** — `show_component` — emits a structured component (table, key-value, timeline, …) that the console renders inline in chat ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)), instead of formatting it as prose.
+- _(The **render tool** `show_component` — inline structured components, [ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering) — is **temporarily disabled** pending a design pass; see [issue #1323](https://github.com/protoLabsAI/protoAgent/issues/1323). The codec + console renderer remain.)_
 - Four **memory tools** — `memory_ingest`, `memory_recall`, `memory_list`, `memory_stats` — bound to the bundled `KnowledgeStore` (sqlite + FTS5, see [Configuration](/reference/configuration#knowledge)). Omitted when no store.
 - Three **scheduler tools** — `schedule_task`, `list_schedules`, `cancel_schedule` — bound to the bundled scheduler backend (local sqlite, see [Schedule future work](/guides/scheduler)). Omitted when no scheduler.
 - Four **tasks tools** — `task_create`, `task_list`, `task_update`, `task_close` — the agent's in-process planning board, bridged to the console Tasks panel. Bound when a tasks store is present (default in `server/agent_init.py`).
