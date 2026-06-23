@@ -259,6 +259,55 @@ const MARKDOWN_ANSWER = [
   "```",
 ].join("\n");
 
+// A full-surface markdown smoke doc — exercises EVERY construct the chat renderer must
+// handle so we can eyeball the whole brand/style surface in one turn (and feed concrete
+// gaps to protoContent#297/#298). Kept in sync with scratch markdown-smoke.md.
+const MARKDOWN_SMOKE_ANSWER = [
+  "# H1 — Markdown smoke test",
+  "",
+  "## H2 heading",
+  "### H3 heading",
+  "",
+  "A paragraph with **bold**, *italic*, `inline code`, ~~strike~~, and a [link](https://example.com).",
+  "",
+  "> A blockquote.",
+  "> > Nested blockquote.",
+  "",
+  "- Unordered item",
+  "  - Nested item",
+  "- Item with `code`",
+  "",
+  "1. Ordered item",
+  "2. Second item",
+  "",
+  "- [ ] Open task",
+  "- [x] Done task",
+  "",
+  "Inline math $E = mc^2$ and a block:",
+  "",
+  "$$a^2 + b^2 = c^2$$",
+  "",
+  "```ts",
+  "export const add = (a: number, b: number): number => a + b;",
+  "```",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  A[Start] --> B[End]",
+  "```",
+  "",
+  "| Column A | Column B | Numeric |",
+  "| -------- | -------- | ------: |",
+  "| alpha    | first    |    1024 |",
+  "| beta     | second   |    2048 |",
+  "",
+  "![alt text](https://example.com/image.png)",
+  "",
+  "---",
+  "",
+  "Final paragraph after a horizontal rule.",
+].join("\n");
+
 const DEFAULT_SEARCH_OUTPUT = [
   "8 result(s) for 'AI coding agents latest news':",
   "1. First Result — https://example.com/a",
@@ -359,6 +408,9 @@ function scenarioFor(prompt) {
       streamChunks: ["Testing ", "catches bugs ", "before users do."],
       answer: "Testing catches bugs before users do.",
     };
+  if (t.includes("MARKDOWN_SMOKE"))
+    // Pure markdown render (no tool card — `events: []`) of the full-surface smoke doc.
+    return { events: [], answer: MARKDOWN_SMOKE_ANSWER };
   if (t.includes("MARKDOWN"))
     return { name: "web_search", input: { query: "md" }, output: DEFAULT_SEARCH_OUTPUT, answer: MARKDOWN_ANSWER };
   return { name: "web_search", input: { max_results: 8, query: "AI coding agents latest news" }, output: DEFAULT_SEARCH_OUTPUT, answer: "Done — found 8 results." };
