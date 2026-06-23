@@ -63,6 +63,7 @@ export function ToolCalls({
   calls,
   streaming = false,
   flat = false,
+  spotlight = false,
   onCancelDelegation,
 }: {
   calls: ToolCall[];
@@ -72,6 +73,11 @@ export function ToolCalls({
   /** Render every card plainly — no spotlight, no fold chip. For use INSIDE the WorkBlock,
    *  where the whole reason→tool timeline is already folded behind one disclosure. */
   flat?: boolean;
+  /** Spotlight ONLY the most-recent tool, in a single slot with a STABLE identity — the
+   *  card updates in place (name/status/output swap) as tools advance instead of remounting
+   *  per tool. Without this, a rapid fan-out (e.g. task_batch's many children) strobes: each
+   *  new id remounts the card, replaying its mount animation and flashing the prior output. */
+  spotlight?: boolean;
   /** Abort a running top-level `task` delegation by its tool-call id (Tier 2). When
    *  omitted, no Stop affordance renders (e.g. historical/finished messages). */
   onCancelDelegation?: (id: string) => void;
@@ -119,6 +125,26 @@ export function ToolCalls({
     return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
   }
 
+  // A single, identity-STABLE slot holding only the most-recent tool. The fixed key keeps
+  // React updating one card in place as the current tool changes, so a fast fan-out advances
+  // smoothly instead of remounting (and strobing) on every new tool id.
+  if (spotlight) {
+    if (top.length === 0) return null;
+    const current = top[top.length - 1];
+    return (
+      <ToolCardList className="tool-calls">
+        <div className="tool-spotlight">
+          <ToolGroup
+            key="__spotlight__"
+            call={current}
+            childrenByParent={childrenByParent}
+            onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+          />
+        </div>
+      </ToolCardList>
+    );
+  }
+
   // LIVE TURN: keep the MOST-RECENT tool in the spotlight slot until a newer one replaces
   // it — so the slot is never empty (no blank gap between tools, or during the answer tail
   // after the last tool finishes). Everything older folds into the running-total chip; a
@@ -129,7 +155,16 @@ export function ToolCalls({
     const folded = top.slice(0, -1);
     return (
       <ToolCardList className="tool-calls">
-        <div className="tool-spotlight">{group(current)}</div>
+        {/* Stable key: the slot updates in place as the current tool advances (no remount
+            strobe — see the `spotlight` prop note). */}
+        <div className="tool-spotlight">
+          <ToolGroup
+            key="__spotlight__"
+            call={current}
+            childrenByParent={childrenByParent}
+            onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+          />
+        </div>
         {folded.length > 0 && chip(top.length, folded)}
       </ToolCardList>
     );

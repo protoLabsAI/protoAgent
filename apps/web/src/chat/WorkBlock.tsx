@@ -61,7 +61,7 @@ export function WorkBlock({
       </ToolCard>
       {spotlightIds.length > 0 ? (
         <div className="work-spotlight">
-          <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} flat />
+          <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} spotlight />
         </div>
       ) : null}
     </div>
