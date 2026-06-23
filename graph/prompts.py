@@ -13,9 +13,9 @@ Composes the system prompt from, in order:
 5. Operator guidelines (the template ships neutral defaults — override
    in your fork to encode domain behavior like "verify, don't trust"
    or "always end with a PASS/WARN/FAIL verdict").
-6. Response format (``<scratch_pad>`` / ``<output>`` protocol, parsed
-   by ``graph/output_format.py`` and routed server-side so scratch
-   content never reaches consumers).
+
+The model answers naturally; its reasoning streams natively (the gateway's
+``reasoning_content``), so there is no ``<scratch_pad>``/``<output>`` text protocol.
 
 When forking, the main thing to edit is the operator guidelines block
 — that's where you encode how the agent behaves in its specific
@@ -24,7 +24,6 @@ domain.
 
 from pathlib import Path
 
-from graph.output_format import OUTPUT_FORMAT_INSTRUCTIONS
 from graph.subagents.config import SUBAGENT_REGISTRY
 
 
@@ -101,13 +100,9 @@ def build_system_prompt(
   do NOT call a status tool in a loop to wait it out; that burns the whole
   turn. Call `wait(seconds, then=…)` to yield and be re-triggered when it's
   ready (it ends the turn and resumes you with `then`).
-- Keep internal deliberation in `<scratch_pad>`; put only the
-  user-facing answer in `<output>` — the handler parses these tags and
-  never forwards scratch content to consumers.
+- Answer directly and naturally. Your reasoning is streamed separately (native
+  reasoning), so think freely — don't narrate your deliberation in the answer.
 """)
-
-    # 5. Response format (scratch_pad + output tags — parsed server-side)
-    parts.append(OUTPUT_FORMAT_INSTRUCTIONS)
 
     return "\n\n".join(parts)
 
@@ -190,11 +185,9 @@ def _build_subagent_section() -> str:
 def build_subagent_prompt(agent_name: str, workspace: str = "/sandbox") -> str:
     """Build system prompt for a specific subagent.
 
-    Subagents' return values are parsed by the lead agent, so they use
-    the same ``<scratch_pad>`` / ``<output>`` protocol — keeps the
-    pipeline uniform and lets ``OutputFilter`` handle subagent output
-    identically to top-level streaming.
+    Subagents answer naturally (no `<scratch_pad>`/`<output>` protocol); their final
+    message content is the result the lead agent reads. Reasoning streams natively.
     """
     config = SUBAGENT_REGISTRY.get(agent_name)
     base = config.system_prompt if config else "You are a subagent. Complete the delegated task efficiently."
-    return f"{base}\n\n{OUTPUT_FORMAT_INSTRUCTIONS}"
+    return base

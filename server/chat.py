@@ -21,8 +21,6 @@ from typing import Any
 
 from graph.output_format import (
     DROPPED_SCRATCH_KICKER,
-    StreamingOutputView,
-    StreamingReasoningView,
     extract_confidence,
     extract_output,
     is_dropped_scratch_turn,
@@ -305,14 +303,7 @@ async def _run_turn_stream(
     from observability import metrics
     from observability import pricing
 
-    accumulated_raw = ""
-    streamed_len = 0  # chars of visible <output> already emitted as text frames
-    reasoned_len = 0  # chars of scratch_pad reasoning already emitted (live thinking)
-    # Incremental views: same visible-so-far as stream_visible_output/_reasoning, but
-    # they scan only the new tail instead of re-running regexes over the whole
-    # accumulated text every chunk — turning the per-turn O(N²) rescan into ~O(N) (#1310).
-    out_view = StreamingOutputView()
-    reason_view = StreamingReasoningView()
+    accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
@@ -386,21 +377,20 @@ async def _run_turn_stream(
                         "tool_start",
                         {"id": tcid, "name": tcname, "input": "", **({"parentId": parent_tool_id} if parent_tool_id else {})},
                     )
+            # Native reasoning: the model's REAL thinking, streamed on its own channel.
+            # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
+            # additional_kwargs; reasoning chunks carry NO `content`, so this is checked
+            # independently of the answer below. Rendered live as a collapsible "thinking"
+            # view — it never enters the answer text (so it can't leak to storage either).
+            native_reasoning = (getattr(chunk, "additional_kwargs", None) or {}).get("reasoning_content")
+            if native_reasoning:
+                yield ("reasoning", native_reasoning if isinstance(native_reasoning, str) else str(native_reasoning))
+            # The answer is the model's content, streamed directly — no <scratch_pad>/<output>
+            # protocol. (extract_output at the terminal still strips any stray legacy tag.)
             if hasattr(chunk, "content") and chunk.content:
-                accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
-                # Stream only the user-facing <output> region, token by token —
-                # never the scratch_pad. The terminal artifact (extract_output)
-                # reconciles any partial tail held back here.
-                visible = out_view.update(accumulated_raw)
-                if len(visible) > streamed_len:
-                    yield ("text", visible[streamed_len:])
-                    streamed_len = len(visible)
-                # Stream the scratch_pad reasoning on its own channel — a collapsible
-                # "thinking" view in the console (never folded into the answer text).
-                reasoning = reason_view.update(accumulated_raw)
-                if len(reasoning) > reasoned_len:
-                    yield ("reasoning", reasoning[reasoned_len:])
-                    reasoned_len = len(reasoning)
+                text = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                accumulated_raw += text
+                yield ("text", text)
         elif kind == "on_chat_model_end":
             output = event.get("data", {}).get("output")
             # Finalize each tool card with its full args, keyed by the tool_call id.

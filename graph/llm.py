@@ -18,6 +18,26 @@ log = logging.getLogger(__name__)
 _GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
 
 
+class _ReasoningChatOpenAI(ChatOpenAI):
+    """ChatOpenAI that surfaces the gateway's NATIVE reasoning stream.
+
+    The base class deliberately drops the non-OpenAI ``reasoning_content`` delta field
+    ("Use a provider-specific subclass" — its own docstring); DeepSeek and most reasoning
+    models routed through our LiteLLM gateway emit it token-by-token. We lift it into the
+    message's ``additional_kwargs`` so the chat stream can render the model's REAL thinking
+    in real time, instead of a prompted ``<scratch_pad>`` narration.
+    """
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+        if gen is not None:
+            choices = chunk.get("choices") or []
+            reasoning = (choices[0].get("delta") or {}).get("reasoning_content") if choices else None
+            if reasoning:
+                gen.message.additional_kwargs["reasoning_content"] = reasoning
+        return gen
+
+
 def _build_llm_kwargs(config: LangGraphConfig) -> dict:
     """Assemble the ChatOpenAI kwargs from config (extracted for testing)."""
     api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -134,7 +154,7 @@ def create_llm(
     # caches per (model, effort) so the rebuild is paid once.
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
-    return ChatOpenAI(**kwargs)
+    return _ReasoningChatOpenAI(**kwargs)
 
 
 def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
