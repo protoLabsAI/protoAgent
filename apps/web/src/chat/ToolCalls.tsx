@@ -10,10 +10,12 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 
 import type { ToolCall } from "../lib/types";
+import { ToolCardSummary } from "./ToolCardSummary";
 import { ToolValue } from "./tool-renderers";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
@@ -25,6 +27,29 @@ function iconFor(name: string): LucideIcon {
   if (name === "task") return Network; // subagent delegation
   if (name.startsWith("memory")) return Database;
   return Wrench;
+}
+
+/** Header label for a card. A `task` delegation surfaces WHICH subagent it ran
+ *  (`task → researcher`), read from the call's args, so the roster is visible at a
+ *  glance without expanding. The subagent type rides in `input` from the start frame,
+ *  so it shows while the delegation is still running; falls back to the bare name until
+ *  the args parse. */
+function cardLabel(call: ToolCall): ReactNode {
+  if (call.name !== "task" || !call.input) return call.name;
+  try {
+    const args = JSON.parse(call.input) as { subagent_type?: unknown };
+    const sub = args.subagent_type;
+    if (typeof sub === "string" && sub) {
+      return (
+        <>
+          task <span className="tool-subagent">→ {sub}</span>
+        </>
+      );
+    }
+  } catch {
+    /* args not valid JSON yet (mid-stream) — fall back to the bare name */
+  }
+  return call.name;
 }
 
 /**
@@ -56,19 +81,40 @@ export function ToolCalls({
       top.push(call);
     }
   }
+  // Spotlight the active work: running top-level cards render in full; finished ones
+  // fold into a single expandable summary chip ("N tools"), so a fan-out turn doesn't
+  // bury the answer under a wall of cards. "Settled" is the card's own status — a
+  // running subagent `task` stays full so its nested children stay visible. Once the
+  // turn ends nothing is running, so the whole run collapses into the chip.
+  const running = top.filter((c) => c.status === "running");
+  const settled = top.filter((c) => c.status !== "running");
+  const failedCount = settled.filter((c) => c.status === "error").length;
+
+  // Only TOP-LEVEL groups get the cancel callback — a delegation is always a top-level
+  // `task`; its nested children (the subagent's own tools) aren't independently
+  // cancellable. Settled cards can't be cancelled either, so the chip's groups drop it.
+  const group = (call: ToolCall, cancellable: boolean) => (
+    <ToolGroup
+      key={call.id}
+      call={call}
+      childrenByParent={childrenByParent}
+      onCancelDelegation={cancellable ? onCancelDelegation : undefined}
+    />
+  );
+
   return (
     <ToolCardList className="tool-calls">
-      {top.map((call) => (
-        // Only TOP-LEVEL groups get the cancel callback — a delegation is always a
-        // top-level `task`; its nested children (the subagent's own tools) aren't
-        // independently cancellable, so recursion drops `onCancelDelegation`.
-        <ToolGroup
-          key={call.id}
-          call={call}
-          childrenByParent={childrenByParent}
-          onCancelDelegation={onCancelDelegation}
-        />
-      ))}
+      {running.map((call) => group(call, true))}
+      {settled.length > 0 && (
+        <ToolCardSummary
+          count={settled.length}
+          label={settled.length === 1 ? "tool" : "tools"}
+          status={failedCount > 0 ? "error" : "done"}
+          failedCount={failedCount || undefined}
+        >
+          {settled.map((call) => group(call, false))}
+        </ToolCardSummary>
+      )}
     </ToolCardList>
   );
 }
@@ -136,7 +182,7 @@ function ToolGroup({
 
   return (
     <ToolCard
-      name={call.name}
+      name={cardLabel(call)}
       status={call.status}
       icon={<Icon size={13} />}
       duration={call.durationMs}

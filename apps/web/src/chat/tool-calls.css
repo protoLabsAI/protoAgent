@@ -17,6 +17,56 @@
   white-space: normal;
 }
 
+/* TEMPORARY — mirrors the proposed DS `.pl-toolcard-summary*` (protoContent#292).
+   The summary chip folds a run of SETTLED cards into one expandable row so the active
+   card stays prominent. Delete this block once `@protolabsai/ui` ships the primitive
+   (its styles.css bundle then supplies these same rules) and ToolCardSummary.tsx swaps
+   to the DS import. */
+.pl-toolcard-summary {
+  min-width: 0;
+}
+.pl-toolcard-summary__head {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  background: none;
+  border: var(--pl-border-width) solid transparent;
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pl-toolcard-summary__head:hover {
+  background: var(--pl-color-bg-raised);
+  border-color: var(--pl-color-border);
+}
+.pl-toolcard-summary__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-toolcard-summary--error .pl-toolcard-summary__text {
+  color: var(--pl-color-status-error);
+}
+.pl-toolcard-summary__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  margin-top: 6px;
+}
+
+/* `task → researcher` — the subagent type in the delegation card header. */
+.tool-subagent {
+  color: var(--pl-color-fg-muted);
+}
+
 /* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
    (.pl-toolcard__actions) as a compact, error-toned text button — quiet until
    hover so a long delegation reads as "running" first, "abortable" on intent. */
