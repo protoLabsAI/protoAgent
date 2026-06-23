@@ -653,13 +653,22 @@ FIELDS: list[Field] = [
     ),
     # ── GitHub ─────────────────────────────────────────────────────────────────
     Field(
+        "github.repos",
+        "github_repos",
+        "Repos for /issue",
+        "string_list",
+        "GitHub",
+        "Repos (owner/name, one per line) offered as a quick-toggle dropdown in the "
+        "New-issue dialog. Pairs with the portfolio manager's many-repo setup.",
+    ),
+    Field(
         "github.default_repo",
         "github_default_repo",
         "Default repo for /issue",
         "string",
         "GitHub",
-        "Target repo (owner/name) the user-only /issue command files into when no "
-        "--repo is given. Blank = require --repo each time (or the GITHUB_DEFAULT_REPO env).",
+        "Preselected repo (owner/name) for the dialog + the /issue command's default when "
+        "no --repo is given. Blank = the first repo above (or require --repo / GITHUB_DEFAULT_REPO).",
     ),
 ]
 
@@ -742,6 +751,10 @@ _SECTION_CATEGORY = {
     "Middleware": "System",
     "Runtime": "System",
     "Telemetry": "System",
+    # GitHub — the /issue command's repo list + default (Settings → System). Not a
+    # plugin section, so it must map to a category SettingsCategoryPanel renders
+    # (else it'd default to "Plugins", which only shows installed-plugin config).
+    "GitHub": "System",
     # Host box-runtime knobs (ADR 0047 D8), regrouped (bd-2zb) from one "Fleet" lump
     # into Network / Discovery / Keep-warm. All System category so the host-scoped
     # fields surface in Settings ▸ Host / App ▸ Host config (which renders the host

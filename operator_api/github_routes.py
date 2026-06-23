@@ -26,22 +26,33 @@ def _default_repo() -> str:
     return getattr(cfg, "github_default_repo", "") or ""
 
 
+def _repos() -> list[str]:
+    """The configured repo picker list (``github.repos``)."""
+    from runtime.state import STATE
+
+    cfg = getattr(STATE, "graph_config", None)
+    return [str(r).strip() for r in (getattr(cfg, "github_repos", []) or []) if str(r).strip()]
+
+
 def register_github_routes(app) -> None:
     import re
     import shutil
 
     from fastapi import Body
 
-    from tools.gh_issue import IssueRequest, file_issue, labels_for, resolve_repo
+    from tools.gh_issue import IssueRequest, effective_default_repo, file_issue, labels_for, resolve_repo
 
     _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
     @app.get("/api/github/config")
     async def _github_config():
-        """Defaults the New-issue dialog prefills: the effective default repo
-        (config ⊕ env) and whether the ``gh`` CLI is installed."""
+        """Defaults the New-issue dialog prefills: the repo picker list, the
+        effective default repo (default ⊕ first-in-list ⊕ env), and whether the
+        ``gh`` CLI is installed."""
+        repos = _repos()
         return {
-            "default_repo": resolve_repo(None, _default_repo()) or "",
+            "repos": repos,
+            "default_repo": resolve_repo(None, effective_default_repo(_default_repo(), repos)) or "",
             "gh_available": shutil.which("gh") is not None,
         }
 
@@ -54,7 +65,7 @@ def register_github_routes(app) -> None:
             kind = "generic"
         title = (body.get("title") or "").strip()
         issue_body = (body.get("body") or "").strip()
-        repo = resolve_repo(body.get("repo"), _default_repo())
+        repo = resolve_repo(body.get("repo"), effective_default_repo(_default_repo(), _repos()))
         labels = labels_for(kind, [str(x) for x in (body.get("labels") or [])])
         dry_run = bool(body.get("dry_run"))
 

@@ -35,7 +35,9 @@ def test_config_reports_gh_availability(client):
     with patch("shutil.which", return_value="/usr/bin/gh"):
         r = client.get("/api/github/config")
     assert r.status_code == 200
-    assert r.json()["gh_available"] is True
+    body = r.json()
+    assert body["gh_available"] is True
+    assert "repos" in body and isinstance(body["repos"], list)
 
 
 def test_create_happy_path(client):

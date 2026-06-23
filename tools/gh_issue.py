@@ -136,6 +136,19 @@ def resolve_repo(explicit: str | None, default_repo: str = "") -> str | None:
     )
 
 
+def effective_default_repo(default_repo: str, repos: list[str] | None = None) -> str:
+    """The preselected default repo for the dialog + the ``/issue`` command: the
+    explicit ``github.default_repo`` if set, else the first entry in the
+    ``github.repos`` picker list, else ``""`` (env still applies via
+    ``resolve_repo``). Keeps the command and the dialog agreeing on the default."""
+    if (default_repo or "").strip():
+        return default_repo.strip()
+    for r in repos or []:
+        if (r or "").strip():
+            return r.strip()
+    return ""
+
+
 async def file_issue(req: IssueRequest) -> dict:
     """Validate ``req`` against the gate rules, then create the issue via ``gh``
     (or, for ``dry_run``, report what would be filed). Returns a structured

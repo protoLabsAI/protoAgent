@@ -880,7 +880,7 @@ export const api = {
   // prefills the dialog (default repo + whether `gh` is installed); `createIssue`
   // shares the server's tools.gh_issue path with the chat /issue command.
   githubConfig() {
-    return request<{ default_repo: string; gh_available: boolean }>("/api/github/config");
+    return request<{ repos: string[]; default_repo: string; gh_available: boolean }>("/api/github/config");
   },
 
   createIssue(body: {

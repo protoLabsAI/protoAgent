@@ -688,10 +688,14 @@ async def _chat_langgraph_stream(
             # Issue control command (/issue ...) short-circuits the turn: file a
             # GitHub issue. User-only by design — it is NOT an agent tool, so the
             # model can't create issues autonomously (mirrors /goal).
-            from tools.gh_issue import parse_issue_control
+            from tools.gh_issue import effective_default_repo, parse_issue_control
 
             issue_reply = await parse_issue_control(
-                message, default_repo=getattr(STATE.graph_config, "github_default_repo", "")
+                message,
+                default_repo=effective_default_repo(
+                    getattr(STATE.graph_config, "github_default_repo", ""),
+                    getattr(STATE.graph_config, "github_repos", []),
+                ),
             )
             if issue_reply is not None:
                 yield ("done", issue_reply)
@@ -1032,10 +1036,14 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
 
             # Issue control command (/issue ...) short-circuits — file a GitHub
             # issue (user-only; never an agent tool). See the streaming path.
-            from tools.gh_issue import parse_issue_control
+            from tools.gh_issue import effective_default_repo, parse_issue_control
 
             issue_reply = await parse_issue_control(
-                message, default_repo=getattr(STATE.graph_config, "github_default_repo", "")
+                message,
+                default_repo=effective_default_repo(
+                    getattr(STATE.graph_config, "github_default_repo", ""),
+                    getattr(STATE.graph_config, "github_repos", []),
+                ),
             )
             if issue_reply is not None:
                 return [{"role": "assistant", "content": issue_reply}]

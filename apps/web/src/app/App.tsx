@@ -29,6 +29,7 @@ import {
   // (dashboards, data, comms, dev, finance, space/fleet, AI) find a fitting glyph.
   Bot,
   Brain,
+  Bug,
   Code,
   Coins,
   Compass,
@@ -73,10 +74,11 @@ import { Splash, BootGate } from "@protolabsai/ui/splash";
 import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
-import { useAnyChatStreaming } from "../chat/chat-store";
+import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
+import { NewIssueDialog } from "../chat/NewIssueDialog";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { AppDrawer } from "./AppDrawer";
@@ -253,6 +255,9 @@ export function App() {
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
+  const newIssueOpen = useUI((s) => s.newIssueOpen);
+  const openNewIssue = useUI((s) => s.openNewIssue);
+  const closeNewIssue = useUI((s) => s.closeNewIssue);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
@@ -897,16 +902,30 @@ export function App() {
                 {/* Settings (far left, 2026-06 consolidation) — opens the one settings dialog
                     (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer + ⌘K
                     deep-links can open it too via the store flag (openGlobalSettings). */}
-                <button
-                  type="button"
-                  className="util-btn"
-                  aria-label="Settings"
-                  title="Settings"
-                  data-testid="settings-widget"
-                  onClick={() => openGlobalSettings()}
-                >
-                  <Settings2 size={14} />
-                </button>
+                <Tooltip label="Settings — model, plugins, knowledge & more">
+                  <button
+                    type="button"
+                    className="util-btn"
+                    aria-label="Settings"
+                    data-testid="settings-widget"
+                    onClick={() => openGlobalSettings()}
+                  >
+                    <Settings2 size={14} />
+                  </button>
+                </Tooltip>
+                {/* File a GitHub issue (the /issue command's form). Same store flag the
+                    chat `/issue` slash command opens, so there's one dialog (mounted below). */}
+                <Tooltip label="File a GitHub issue — opens the New-issue form">
+                  <button
+                    type="button"
+                    className="util-btn"
+                    aria-label="File a GitHub issue"
+                    data-testid="new-issue-widget"
+                    onClick={() => openNewIssue()}
+                  >
+                    <Bug size={14} />
+                  </button>
+                </Tooltip>
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3), the
                     inbox, and the read-only Activity feed — each a pill with a hover info
                     popover + a click dialog. */}
@@ -934,57 +953,66 @@ export function App() {
             }
             end={
               <>
-                <button
-                  type="button"
-                  className={`util-btn ${bottomCollapsed ? "is-off" : ""}`}
-                  onClick={() => setBottomCollapsed(!bottomCollapsed)}
-                  disabled={!bottomActive}
-                  title={
+                <Tooltip
+                  label={
                     bottomActive
                       ? bottomCollapsed
                         ? "Show bottom panel"
                         : "Hide bottom panel"
                       : "No bottom panel — move a surface to the bottom dock"
                   }
-                  aria-label="Toggle bottom panel"
-                  data-testid="toggle-bottom"
                 >
-                  <PanelBottom size={14} />
-                </button>
-                <button
-                  type="button"
-                  className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
-                  onClick={() => setLeftCollapsed(!leftCollapsed)}
-                  disabled={leftMembers.length === 0}
-                  title={
+                  <button
+                    type="button"
+                    className={`util-btn ${bottomCollapsed ? "is-off" : ""}`}
+                    onClick={() => setBottomCollapsed(!bottomCollapsed)}
+                    disabled={!bottomActive}
+                    aria-label="Toggle bottom panel"
+                    data-testid="toggle-bottom"
+                  >
+                    <PanelBottom size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip
+                  label={
                     leftMembers.length === 0
                       ? "No panels in the left rail"
                       : leftCollapsed
                         ? "Show left panel"
                         : "Hide left panel"
                   }
-                  aria-label="Toggle left panel"
-                  data-testid="toggle-left"
                 >
-                  <PanelLeft size={14} />
-                </button>
-                <button
-                  type="button"
-                  className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
-                  onClick={() => setRightCollapsed(!rightCollapsed)}
-                  disabled={rightMembers.length === 0}
-                  title={
+                  <button
+                    type="button"
+                    className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
+                    onClick={() => setLeftCollapsed(!leftCollapsed)}
+                    disabled={leftMembers.length === 0}
+                    aria-label="Toggle left panel"
+                    data-testid="toggle-left"
+                  >
+                    <PanelLeft size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip
+                  label={
                     rightMembers.length === 0
                       ? "No panels in the right rail"
                       : rightCollapsed
                         ? "Show side panel"
                         : "Hide side panel"
                   }
-                  aria-label="Toggle side panel"
-                  data-testid="toggle-right"
                 >
-                  <PanelRight size={14} />
-                </button>
+                  <button
+                    type="button"
+                    className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
+                    onClick={() => setRightCollapsed(!rightCollapsed)}
+                    disabled={rightMembers.length === 0}
+                    aria-label="Toggle side panel"
+                    data-testid="toggle-right"
+                  >
+                    <PanelRight size={14} />
+                  </button>
+                </Tooltip>
               </>
             }
           />
@@ -1038,6 +1066,28 @@ export function App() {
       open={globalSettingsOpen}
       section={globalSettingsSection}
       onClose={closeGlobalSettings}
+    />
+    {/* New GitHub issue dialog — store-driven, so the util-bar bug action and the chat
+        `/issue` slash command share one mount. On success, drop a note in the current chat. */}
+    <NewIssueDialog
+      open={newIssueOpen}
+      onClose={closeNewIssue}
+      onFiled={(note) => {
+        const snap = chatStore.getSnapshot();
+        const sid = snap.currentSessionId;
+        if (!sid) return;
+        const base = snap.sessions.find((s) => s.id === sid)?.messages ?? [];
+        chatStore.updateMessages(sid, [
+          ...base,
+          {
+            id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            role: "assistant",
+            content: note,
+            createdAt: Date.now(),
+            status: "done",
+          },
+        ]);
+      }}
     />
     </>
   );

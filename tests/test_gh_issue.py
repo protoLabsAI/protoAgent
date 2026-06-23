@@ -11,10 +11,20 @@ from unittest.mock import patch
 import pytest
 
 from tools.gh_issue import (
+    effective_default_repo,
     is_issue_command,
     missing_sections,
     parse_issue_control,
 )
+
+
+def test_effective_default_repo():
+    # explicit default wins; else first non-blank in the list; else ""
+    assert effective_default_repo("o/r", ["a/b", "c/d"]) == "o/r"
+    assert effective_default_repo("", ["a/b", "c/d"]) == "a/b"
+    assert effective_default_repo("", ["  ", "c/d"]) == "c/d"
+    assert effective_default_repo("", []) == ""
+    assert effective_default_repo("  ", None) == ""
 
 _GOOD_BUG = (
     "/issue Scroll dead in delegate modal --bug --repo o/r\n"

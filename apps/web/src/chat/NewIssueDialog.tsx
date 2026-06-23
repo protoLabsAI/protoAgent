@@ -1,11 +1,15 @@
 import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
-import { Bug, Github, Loader2, Send } from "lucide-react";
+import { Bug, Github, Loader2, Send, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../lib/api";
 import { buildBody, EMPTY_FIELDS, type Fields, isComplete, type Kind } from "./issueBody";
+
+// Sentinel option that switches the repo picker to a free-text field for a
+// one-off repo not in the configured list.
+const CUSTOM_REPO = "__custom__";
 
 /**
  * The console UX for the user-only `/issue` command: a form that files a GitHub
@@ -25,12 +29,14 @@ export function NewIssueDialog({
   const [repo, setRepo] = useState("");
   const [title, setTitle] = useState("");
   const [fields, setFields] = useState<Fields>(EMPTY_FIELDS);
+  const [repos, setRepos] = useState<string[]>([]);
   const [defaultRepo, setDefaultRepo] = useState("");
+  const [customRepo, setCustomRepo] = useState(false);
   const [ghAvailable, setGhAvailable] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset + prefill (default repo, gh availability) each time the dialog opens.
+  // Reset + prefill (repo list, default, gh availability) each time it opens.
   useEffect(() => {
     if (!open) return;
     setKind("bug");
@@ -41,12 +47,23 @@ export function NewIssueDialog({
     api
       .githubConfig()
       .then((c) => {
+        setRepos(c.repos);
         setDefaultRepo(c.default_repo);
-        setRepo(c.default_repo);
+        setRepo(c.default_repo || c.repos[0] || "");
+        // No configured repos at all → start in free-text mode.
+        setCustomRepo(c.repos.length === 0 && !c.default_repo);
         setGhAvailable(c.gh_available);
       })
       .catch(() => {});
   }, [open]);
+
+  // Dropdown options: the default first, then the configured list, de-duped.
+  const repoOptions = useMemo(() => {
+    const out: string[] = [];
+    if (defaultRepo) out.push(defaultRepo);
+    for (const r of repos) if (r && !out.includes(r)) out.push(r);
+    return out;
+  }, [repos, defaultRepo]);
 
   const set = (k: keyof Fields) => (e: { target: { value: string } }) =>
     setFields((f) => ({ ...f, [k]: e.target.value }));
@@ -130,12 +147,64 @@ export function NewIssueDialog({
           </label>
           <label className="field">
             <span>Repo (owner/name)</span>
-            <Input
-              value={repo}
-              onChange={(e) => setRepo(e.target.value)}
-              placeholder={defaultRepo || "owner/name"}
-              data-testid="issue-create-repo"
-            />
+            {repoOptions.length > 0 && !customRepo ? (
+              <DropdownSelect
+                value={repo}
+                onValueChange={(v) => {
+                  if (v === CUSTOM_REPO) {
+                    setCustomRepo(true);
+                    setRepo("");
+                  } else {
+                    setRepo(v);
+                  }
+                }}
+                aria-label="Repo"
+                options={[
+                  ...repoOptions.map((r) => ({ value: r, label: r })),
+                  { value: CUSTOM_REPO, label: "Custom…" },
+                ]}
+              />
+            ) : repoOptions.length > 0 ? (
+              // Custom mode (a list exists): free-text + an inline × to return to
+              // the dropdown — kept on the same row so the field doesn't shift.
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Input
+                  autoFocus
+                  value={repo}
+                  onChange={(e) => setRepo(e.target.value)}
+                  placeholder="owner/name"
+                  data-testid="issue-create-repo"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  aria-label="Back to repo list"
+                  title="Back to repo list"
+                  onClick={() => {
+                    setCustomRepo(false);
+                    setRepo(defaultRepo || repos[0] || "");
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    background: "none",
+                    border: "none",
+                    padding: 4,
+                    cursor: "pointer",
+                    color: "var(--fg-muted)",
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              // No configured list at all → plain free-text (nothing to go back to).
+              <Input
+                value={repo}
+                onChange={(e) => setRepo(e.target.value)}
+                placeholder={defaultRepo || "owner/name"}
+                data-testid="issue-create-repo"
+              />
+            )}
           </label>
         </div>
         <label className="field">

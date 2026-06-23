@@ -1,11 +1,15 @@
 # File GitHub issues (`/issue`)
 
-Type `/issue` in chat to file a GitHub issue straight from the console. It's a
-**user-only control command** — like [`/goal`](/guides/goal-mode), it short-circuits
-the turn and is handled by the server. It is deliberately **not** an agent tool, so
-the agent can't open issues on its own (the read-only GitHub tools in the
-`github` plugin stay agent-facing; *creating* an issue is a write you keep in your
-own hands).
+File a GitHub issue straight from the console — two ways, one backend path:
+
+- the **`/issue` chat command** (type it, or pick it from the slash menu), and
+- the **🐛 bug button** in the utility bar (bottom-left, next to Settings), which
+  opens a **form dialog**.
+
+It's **user-only** — like [`/goal`](/guides/goal-mode) the command short-circuits the
+turn and is handled by the server; it is deliberately **not** an agent tool, so the
+agent can't open issues on its own (the read-only GitHub tools in the `github` plugin
+stay agent-facing; *creating* an issue is a write you keep in your own hands).
 
 ## Syntax
 
@@ -53,15 +57,30 @@ If a required section is missing, nothing is filed — the command replies with 
 missing and a ready-to-fill scaffold. Run `/issue <title> --bug` with no body to get the
 scaffold up front.
 
+## The form dialog
+
+The 🐛 button (and picking `/issue` from the slash menu) opens a form: **Type**
+(Bug/Enhancement), **Repo**, **Title**, and the type-specific section fields. It
+assembles a body with the exact headings the gate checks, so a dialog-filed issue
+always conforms; on success it drops a `✓ Filed … <url>` note in the current chat.
+
+The **Repo** field is a quick-toggle dropdown of your configured repos (see below),
+with a **Custom…** option that swaps in a free-text box (an inline **×** returns you
+to the list) for a one-off repo.
+
 ## Which repo
 
-The target repo is resolved, in order:
+Configure the repos under **Settings ▸ System ▸ GitHub**:
 
-1. an explicit `--repo owner/name`;
-2. **Settings ▸ GitHub ▸ Default repo for /issue** (`github.default_repo`);
-3. the `GITHUB_DEFAULT_REPO` (or `GH_REPO`) environment variable.
+- **Repos for /issue** (`github.repos`) — the `owner/name` list shown in the dialog's
+  dropdown. Pairs with the [portfolio manager](/guides/portfolio)'s many-repo setup.
+- **Default repo for /issue** (`github.default_repo`) — the preselected one (and the
+  command's default). Blank = the first repo in the list.
 
-If none is set, the command asks for `--repo` rather than guess — no silent misrouting.
+For a single issue the target is resolved, in order: an explicit `--repo owner/name`
+(or the dialog's Repo field) › the default above › the first configured repo › the
+`GITHUB_DEFAULT_REPO` / `GH_REPO` env var. If none is set the command asks for `--repo`
+rather than guess — no silent misrouting.
 
 ## Auth
 
