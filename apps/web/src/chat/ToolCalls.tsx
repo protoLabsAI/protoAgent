@@ -135,8 +135,11 @@ export function ToolCalls({
   return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
 }
 
-/** A tool card plus, when it's a subagent `task`, its nested child tool cards.
- *  Subagent nesting rides the DS `ToolCard` `nested` prop (indented child rail). */
+/** A tool card. For a subagent `task`, its child tool cards collapse INSIDE the card's
+ *  body (revealed on expand) and the header shows a running count
+ *  ("task → researcher · 3 tools"). Keeping them in the collapsible body — not the DS
+ *  always-on `nested` rail — is what lets the card hold a STABLE one-row height while the
+ *  subagent works, instead of growing a rail and then collapsing when it folds. */
 function ToolGroup({
   call,
   childrenByParent,
@@ -147,21 +150,19 @@ function ToolGroup({
   onCancelDelegation?: (id: string) => void;
 }) {
   const kids = childrenByParent.get(call.id);
-  const nested = kids?.length
+  const nestedCards = kids?.length
     ? kids.map((kid) => (
         // Children inherit no cancel callback — they aren't independent delegations.
         <ToolGroup key={kid.id} call={kid} childrenByParent={childrenByParent} />
       ))
     : undefined;
 
-  // Collapsed by default and stays put — the header row (icon, name, status) is
-  // the stable at-a-glance view; expanding is an explicit, sticky choice so the
-  // message doesn't reflow as tools start and finish. Pass `children` only when
-  // there's detail so the DS gives us the disabled-caret behavior for empty cards
-  // (the DS gates `hasBody` on `children != null`, so a no-detail card omits it).
+  // Collapsed by default; expanding reveals the args/result AND the subagent's nested
+  // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
+  // state instead of always-on — so the header row stays a stable height as kids stream in).
   const Icon = iconFor(call.name);
   const body =
-    call.input || call.output ? (
+    call.input || call.output || nestedCards ? (
       <>
         {call.input ? (
           <ToolSection label="input" copyText={call.input}>
@@ -173,6 +174,7 @@ function ToolGroup({
             <ToolValue raw={call.output} role="output" tool={call.name} />
           </ToolSection>
         ) : null}
+        {nestedCards ? <div className="pl-toolcard__children">{nestedCards}</div> : null}
       </>
     ) : undefined;
 
@@ -196,13 +198,28 @@ function ToolGroup({
       </button>
     ) : undefined;
 
+  // A running count of the subagent's tools, in the header — so a collapsed delegation
+  // reads "task → researcher · 3 tools" at a glance without expanding.
+  const kidCount = kids?.length ?? 0;
+  const name =
+    kidCount > 0 ? (
+      <>
+        {cardLabel(call)}
+        <span className="tool-nested-count">
+          {" · "}
+          {kidCount} {kidCount === 1 ? "tool" : "tools"}
+        </span>
+      </>
+    ) : (
+      cardLabel(call)
+    );
+
   return (
     <ToolCard
-      name={cardLabel(call)}
+      name={name}
       status={call.status}
       icon={<Icon size={13} />}
       duration={call.durationMs}
-      nested={nested}
       actions={actions}
     >
       {body}
