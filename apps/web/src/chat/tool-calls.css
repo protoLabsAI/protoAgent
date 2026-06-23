@@ -50,6 +50,30 @@
   overflow: auto;
 }
 
+/* WorkBlock — folds an agentic turn's whole reason→tool timeline behind ONE disclosure so
+   the final answer leads the message. Expand to replay the timeline. */
+.work-block {
+  margin: 0 0 0.6em;
+}
+.work-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+}
+/* Inside the timeline the nested tool lists + reasoning cards stack on the flex gap, not
+   their own bottom margins. */
+.work-timeline .tool-calls,
+.work-timeline .reasoning-card {
+  margin: 0;
+}
+.work-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--pl-color-fg-muted);
+}
+
 /* Spotlight: while the turn streams, the slot holds the MOST-RECENT tool — kept up until a
    newer one replaces it (so it's never empty: no blank gap between tools or during the
    answer tail). The next tool crossfades in; the previous one drops into the chip below. */

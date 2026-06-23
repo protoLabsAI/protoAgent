@@ -62,12 +62,16 @@ function cardLabel(call: ToolCall): ReactNode {
 export function ToolCalls({
   calls,
   streaming = false,
+  flat = false,
   onCancelDelegation,
 }: {
   calls: ToolCall[];
   /** The turn is still live. Keeps the spotlight slot reserved for the whole turn so the
    *  layout doesn't bounce in the gap between one tool finishing and the next starting. */
   streaming?: boolean;
+  /** Render every card plainly — no spotlight, no fold chip. For use INSIDE the WorkBlock,
+   *  where the whole reason→tool timeline is already folded behind one disclosure. */
+  flat?: boolean;
   /** Abort a running top-level `task` delegation by its tool-call id (Tier 2). When
    *  omitted, no Stop affordance renders (e.g. historical/finished messages). */
   onCancelDelegation?: (id: string) => void;
@@ -109,6 +113,11 @@ export function ToolCalls({
       {folded.map(group)}
     </ToolCardSummary>
   );
+
+  // Inside the WorkBlock: just the plain cards, in order (the timeline is already folded).
+  if (flat) {
+    return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
+  }
 
   // LIVE TURN: keep the MOST-RECENT tool in the spotlight slot until a newer one replaces
   // it — so the slot is never empty (no blank gap between tools, or during the answer tail

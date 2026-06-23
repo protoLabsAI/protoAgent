@@ -24,7 +24,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import type { ChatMessage, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
+import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -38,6 +38,7 @@ import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { ReasoningCard } from "./ReasoningCard";
+import { WorkBlock } from "./WorkBlock";
 import { useUI } from "../state/uiStore";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
@@ -1013,26 +1014,50 @@ function ChatSessionSlot({
                 <ReasoningCard text={message.reasoning} streaming={message.status === "streaming" && !message.content} />
               ) : null}
               {message.parts && message.parts.length ? (
-                // Live turns: reasoning, text runs and tool groups in emission order, so a
-                // pre-tool preamble renders above the cards, the answer below them, and
-                // "thinking" inline next to the step it precedes.
-                message.parts.map((part, i, arr) =>
-                  part.kind === "tools" ? (
-                    <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={message.status === "streaming"} onCancelDelegation={cancelDelegation} />
-                  ) : part.kind === "reasoning" ? (
-                    part.text.trim() ? (
-                      // Collapsed reasoning card; the spinner runs only on the trailing run.
-                      <ReasoningCard key={i} text={part.text} streaming={message.status === "streaming" && i === arr.length - 1} />
-                    ) : null
-                  ) : part.text.trim() ? (
-                    message.role === "user" ? (
-                      <span className="chat-user-text" key={i}>{part.text}</span>
+                (() => {
+                  // Fold the intermediate reason→tool timeline behind ONE WorkBlock so the
+                  // answer leads — but ONLY when the turn interleaves reasoning WITH tools (the
+                  // forever-stack case). Tool-only / reasoning-only turns keep their inline
+                  // cards; a plain turn is just the answer. The "answer" is the trailing run of
+                  // text parts; everything before it is the work. User messages carry only text.
+                  const parts = message.parts!;
+                  let split = parts.length;
+                  while (split > 0 && parts[split - 1].kind === "text") split--;
+                  const workParts = parts.slice(0, split);
+                  const answerParts = parts.slice(split);
+                  const hasTools = workParts.some((p) => p.kind === "tools");
+                  const hasReasoning = workParts.some((p) => p.kind === "reasoning");
+                  const renderText = (part: ChatPart, key: string) =>
+                    part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
+                      <span className="chat-user-text" key={key}>{part.text}</span>
                     ) : (
-                      // assistant + system carry markdown; only the user's own input stays literal.
-                      <Markdown key={i}>{part.text}</Markdown>
-                    )
-                  ) : null,
-                )
+                      <Markdown key={key}>{part.text}</Markdown>
+                    );
+                  const renderInline = (part: ChatPart, i: number) =>
+                    part.kind === "tools" ? (
+                      <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={message.status === "streaming"} onCancelDelegation={cancelDelegation} />
+                    ) : part.kind === "reasoning" ? (
+                      part.text.trim() ? (
+                        <ReasoningCard key={i} text={part.text} streaming={message.status === "streaming" && i === workParts.length - 1} />
+                      ) : null
+                    ) : (
+                      renderText(part, `w${i}`)
+                    );
+                  return (
+                    <>
+                      {hasTools && hasReasoning ? (
+                        <WorkBlock
+                          parts={workParts}
+                          toolCalls={message.toolCalls}
+                          streaming={message.status === "streaming" && answerParts.length === 0}
+                        />
+                      ) : (
+                        workParts.map(renderInline)
+                      )}
+                      {answerParts.map((part, i) => renderText(part, `a${i}`))}
+                    </>
+                  );
+                })()
               ) : (
                 // History-loaded messages have no ordered parts — keep the grouped layout
                 // (tool cards above the text; order isn't recoverable from storage).
