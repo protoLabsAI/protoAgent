@@ -322,6 +322,11 @@ async def _run_turn_stream(
     ):
         kind = event.get("event", "")
         name = event.get("name", "")
+        # A subagent's events carry the delegating `task`/`task_batch` tool-call id (set
+        # as run metadata in graph.agent._run_subagent), so the console can nest the
+        # subagent's own tool cards under the delegation card BY ID — not by frame order
+        # (the delegation runs detached, so the task's on_tool_end races ahead of these).
+        parent_tool_id = (event.get("metadata") or {}).get("parent_task_id")
         # Skills are no longer auto-retrieved per turn (ADR 0060 — progressive
         # disclosure); the model loads one on demand via the `load_skill` tool,
         # which surfaces as an ordinary tool card. No `skills_loaded` event to forward.
@@ -362,6 +367,7 @@ async def _run_turn_stream(
                     "name": name,
                     "output": coerced,
                     "error": getattr(output, "status", None) == "error",
+                    **({"parentId": parent_tool_id} if parent_tool_id else {}),
                 },
             )
         elif kind == "on_chat_model_stream":
@@ -376,7 +382,10 @@ async def _run_turn_stream(
                 tcid, tcname = tcc.get("id"), tcc.get("name")
                 if tcid and tcname and tcid not in announced_tools:
                     announced_tools.add(tcid)
-                    yield ("tool_start", {"id": tcid, "name": tcname, "input": ""})
+                    yield (
+                        "tool_start",
+                        {"id": tcid, "name": tcname, "input": "", **({"parentId": parent_tool_id} if parent_tool_id else {})},
+                    )
             if hasattr(chunk, "content") and chunk.content:
                 accumulated_raw += chunk.content if isinstance(chunk.content, str) else str(chunk.content)
                 # Stream only the user-facing <output> region, token by token —
@@ -404,7 +413,12 @@ async def _run_turn_stream(
                     announced_tools.add(tcid)
                     yield (
                         "tool_start",
-                        {"id": tcid, "name": tc.get("name", ""), "input": _coerce_tool_value(tc.get("args", ""))},
+                        {
+                            "id": tcid,
+                            "name": tc.get("name", ""),
+                            "input": _coerce_tool_value(tc.get("args", "")),
+                            **({"parentId": parent_tool_id} if parent_tool_id else {}),
+                        },
                     )
             usage = getattr(output, "usage_metadata", None) if output else None
             rid = event.get("run_id")

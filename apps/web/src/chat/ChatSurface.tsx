@@ -872,9 +872,10 @@ function ChatSessionSlot({
               // so they don't get their own block.
               let nextParts = message.parts;
               if (evt.phase === "start") {
-                // A tool that starts while a `task` is still running is a child
-                // of that subagent delegation — nest it. (Last open task wins,
-                // so nested task() calls group correctly.)
+                // Nest a subagent's own tool under its `task` card. The server tags the
+                // child frame with the parent delegation's id (authoritative — works even
+                // though the task's end races AHEAD of the child); fall back to "last open
+                // task wins" only for older servers that don't send it.
                 const openTask = [...calls]
                   .reverse()
                   .find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
@@ -884,7 +885,7 @@ function ChatSessionSlot({
                   input: evt.input,
                   status: "running",
                   startedAt: now,
-                  parentId: openTask?.id,
+                  parentId: evt.parentId ?? openTask?.id,
                 };
                 if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
                 else calls.push(card);

@@ -211,12 +211,16 @@ async def _run_subagent(
     prompt: str,
     subagent_type: str,
     truncate: int | None = None,
+    parent_task_id: str | None = None,
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
     Shared by the single ``task`` tool and the concurrent ``task_batch`` tool.
     ``truncate`` (chars) bounds the returned body so a wide fan-out can't blow
     the parent context; ``None`` means unbounded (single-task path).
+    ``parent_task_id`` is the delegating ``task``/``task_batch`` tool-call id; when
+    set, every event the subagent emits is tagged with it so the console can nest
+    the subagent's own tool cards under the delegation card.
     """
     sub_config = SUBAGENT_REGISTRY.get(subagent_type)
     if not sub_config:
@@ -254,10 +258,19 @@ async def _run_subagent(
         system_prompt=build_subagent_prompt(subagent_type),
     )
 
+    # Tag every event the subagent emits with the parent delegation's tool-call id.
+    # LangChain propagates config metadata to all child runs, so the subagent's own
+    # tool frames carry `parent_task_id` — letting the console nest them under the
+    # `task` card BY ID rather than by frame ordering (the delegation runs detached
+    # via ensure_future, so its on_tool_end races AHEAD of these child frames).
+    sub_run_config: dict[str, Any] = {"recursion_limit": sub_config.max_turns}
+    if parent_task_id:
+        sub_run_config["metadata"] = {"parent_task_id": parent_task_id}
+
     try:
         result = await subagent.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
-            config={"recursion_limit": sub_config.max_turns},
+            config=sub_run_config,
         )
 
         messages = result.get("messages", [])
@@ -485,6 +498,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     prompt=prompt,
                     subagent_type=subagent_type,
                     truncate=None,
+                    parent_task_id=tool_call_id,
                 )
             )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
@@ -527,6 +541,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 prompt=prompt,
                 subagent_type=subagent_type,
                 truncate=None,
+                parent_task_id=tool_call_id,
             )
         )
         delegations.register(session_id, tool_call_id, deleg, label=description)
@@ -557,7 +572,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             delegations.unregister(session_id, tool_call_id)
 
     @tool
-    async def task_batch(tasks: list[dict]) -> str:
+    async def task_batch(tasks: list[dict], tool_call_id: Annotated[str, InjectedToolCallId] = "") -> str:
         """Delegate several independent tasks to subagents concurrently.
 
         Prefer this over multiple sequential ``task`` calls whenever the
@@ -601,6 +616,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                         prompt=prm,
                         subagent_type=spec.get("subagent_type", "researcher"),
                         truncate=truncate,
+                        parent_task_id=tool_call_id,
                     )
                 except SubagentError as e:
                     # One failed delegation is reported inline; the batch goes on.

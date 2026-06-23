@@ -310,6 +310,19 @@ function scenarioFor(prompt) {
         { id: "task-1", name: "task", phase: "end", output: "Subagent finished: found 1 result." },
       ],
     };
+  if (t.includes("NESTLATE"))
+    // Out-of-order delegation: the `task` card CLOSES before the subagent's child frames
+    // arrive (the real detached-delegation ordering). Only the explicit parentToolCallId
+    // lets the console still nest the child under the task — the timing heuristic can't.
+    return {
+      answer: "Delegated; the child frame arrived after the task closed.",
+      events: [
+        { id: "task-late", name: "task", phase: "start", input: JSON.stringify({ description: "Research", prompt: "Find it." }) },
+        { id: "task-late", name: "task", phase: "end", output: "Subagent finished." },
+        { id: "kid-late", name: "web_search", phase: "start", input: JSON.stringify({ query: "late" }), parentId: "task-late" },
+        { id: "kid-late", name: "web_search", phase: "end", output: "1 result(s) for 'late':\n1. Ex — https://example.com/x\n   snip.", parentId: "task-late" },
+      ],
+    };
   if (t.includes("FANOUT"))
     // Two INDEPENDENT top-level tool calls (no task wrapping them) → both settle, so the
     // console folds them behind a single "2 tools" summary chip (clutter cleanup).
@@ -373,6 +386,8 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
     phase: ev.phase === "start" ? "started" : "completed",
     args: ev.input,
     result: ev.output,
+    // A subagent's own tool frame carries its parent `task` id so the console nests it.
+    ...(ev.parentId ? { parentToolCallId: ev.parentId } : {}),
   });
   const statusFrame = (text, toolEvent) =>
     wrap({

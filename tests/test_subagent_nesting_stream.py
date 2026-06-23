@@ -1,22 +1,19 @@
-"""task-tool-rendering audit #4: does a subagent's OWN tool activity nest under the
-`task` card in the live stream? Drives the real `_run_turn_stream` frame emitter with a
-fake model scripting lead → task → subagent → current_time → done, and inspects the
-interleaved frame order.
+"""task-tool-rendering audit #4 (FIXED): a subagent's OWN tool activity nests under the
+`task` card in the live stream. Drives the real `_run_turn_stream` frame emitter with a
+fake model scripting lead → task → subagent → current_time → done.
 
-FINDING: the subagent's tool frames DO propagate into the parent stream (good), but the
-`task` tool's on_tool_end is emitted BEFORE them (because the delegation is detached via
-ensure_future for cancellation). The console nests by "last open task wins", which needs
-the task still running when the child starts — so the child arrives too late and renders
-as a top-level card, never nested. The nesting rail is effectively dead code for streamed
-delegations until child frames carry an explicit parent-task id. This test pins that real
-ordering so a future linkage fix trips it.
+The delegation runs detached (asyncio.ensure_future, for Tier-2 cancellation), so the
+task's on_tool_end can race ahead of the subagent's child frames — defeating the console's
+old "last open task wins" heuristic (which also mis-attributes concurrent task_batch
+delegations). The fix tags the subagent's run with the delegating task's tool-call id
+(`_run_subagent` sets it as run metadata), so every child frame carries `parentId` and the
+console nests by id, order-independent. This test asserts the linkage on the wire frames.
 """
 
 from __future__ import annotations
 
 import itertools
 import json
-from unittest.mock import patch
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -69,10 +66,13 @@ def _install(monkeypatch, messages):
     # a structured-output kicker) ends cleanly instead of exhausting the script.
     stream = itertools.chain(iter(messages), itertools.repeat(AIMessage(content="<output>done</output>")))
     fake = _ToolFake(messages=stream)
-    with patch("graph.agent.create_llm", lambda *a, **k: fake):
-        from graph.agent import create_agent_graph
+    # Persist the fake for the whole turn — the subagent builds ITS model lazily at
+    # runtime (in _run_subagent), so a patch that exits after construction would leave the
+    # subagent on the real gateway model (and miss the parent-id metadata propagation).
+    monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: fake)
+    from graph.agent import create_agent_graph
 
-        g = create_agent_graph(LangGraphConfig(), include_subagents=True, checkpointer=MemorySaver())
+    g = create_agent_graph(LangGraphConfig(), include_subagents=True, checkpointer=MemorySaver())
     monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
@@ -87,7 +87,7 @@ def _delegate(**args):
 
 
 @pytest.mark.asyncio
-async def test_subagent_tool_calls_surface_but_do_not_nest_live(monkeypatch):
+async def test_subagent_tool_calls_nest_via_explicit_parent_id(monkeypatch):
     from server.chat import _run_turn_stream
 
     _install(
@@ -103,48 +103,31 @@ async def test_subagent_tool_calls_surface_but_do_not_nest_live(monkeypatch):
         ],
     )
 
-    # Track the interleaved frame order AND, per frame, which `task` cards are still
-    # open — replaying the console's "last open task wins" nesting (ChatSurface): a
-    # child nests only if a `task` is still running when its start arrives.
+    # Capture every tool frame with its parent linkage. The fix tags a subagent's own
+    # frames with the delegating task's tool-call id (server-side), so the console nests
+    # them BY ID rather than by timing.
+    frames: list[tuple[str, str, str | None]] = []  # (kind, name, parentId)
     seq: list[tuple[str, str]] = []
-    open_tasks: set[str] = set()
-    nested_under_task = False
-    for_status: dict[str, str] = {}  # id → running/closed (dedupe the twin start frames)
     async for kind, payload in _run_turn_stream("ask the researcher the time", "s4", {"configurable": {"thread_id": "s4"}}):
         if kind not in ("tool_start", "tool_end"):
             continue
-        name, tid = payload.get("name"), payload.get("id")
-        if kind == "tool_start":
-            seq.append(("start", name))
-            if name == "task":
-                open_tasks.add(tid)
-            elif open_tasks and for_status.get(tid) is None:
-                nested_under_task = True  # a non-task tool started while a task was open
-            for_status.setdefault(tid, "running")
-        elif kind == "tool_end":
-            seq.append(("end", name))
-            open_tasks.discard(tid)
+        frames.append((kind, payload.get("name"), payload.get("parentId")))
+        seq.append(("start" if kind == "tool_start" else "end", payload.get("name")))
 
-    print(f"\n[#4] interleaved frames: {seq}")
+    print(f"\n[#4] frames: {frames}")
     starts = [n for k, n in seq if k == "start"]
     ends = [n for k, n in seq if k == "end"]
-    assert "task" in starts, f"the delegation itself should surface a card; saw {seq}"
+    assert "task" in starts, f"the delegation itself should surface a card; saw {frames}"
+    # The subagent's OWN tool call surfaces in the parent stream (propagation works)…
+    assert "current_time" in starts and "current_time" in ends, f"subagent tool didn't surface; {frames}"
 
-    # Propagation works: the subagent's OWN tool call surfaces in the parent stream.
-    assert "current_time" in starts, f"subagent's nested tool did not surface; saw {seq}"
-    assert "current_time" in ends, f"subagent's nested tool never closed; saw {seq}"
-
-    # KNOWN LIMITATION (audit #4) — the delegation runs its subagent via
-    # asyncio.ensure_future + await (for Tier-2 cancellation), which DETACHES it, so in
-    # astream_events the task's on_tool_end is emitted BEFORE the subagent's child
-    # frames. The child therefore arrives after the task card has already closed, and
-    # the console's "last open task wins" nesting can't attach it — subagent tools
-    # render as top-level cards, NOT nested under the delegation. The nesting rail
-    # (parentId / pl-toolcard__children) is effectively unreachable for streamed
-    # delegations. The real fix is to tag child frames with their parent task's
-    # tool_call_id (a delegation contextvar) so nesting is explicit, not timing-based.
-    # These assertions pin the current ordering so that fix trips this test.
-    task_end_i = seq.index(("end", "task"))
-    child_start_i = next(i for i, f in enumerate(seq) if f == ("start", "current_time"))
-    assert task_end_i < child_start_i, f"task should close before its child today; saw {seq}"
-    assert not nested_under_task, f"nesting unexpectedly worked — update this test + audit; saw {seq}"
+    # …and EVERY child frame carries the parent delegation's tool-call id ("t1"), so the
+    # console nests it under the `task` card BY ID — order-independent. (The delegation
+    # runs detached via ensure_future, so the task's on_tool_end can race ahead of the
+    # child frames; the old "last open task wins" heuristic broke on that and on
+    # concurrent task_batch delegations. Explicit linkage fixes both.)
+    child_parents = {p for k, n, p in frames if n == "current_time"}
+    assert child_parents == {"t1"}, f"subagent tool must carry parentId=t1; saw {child_parents} in {frames}"
+    # The delegation card itself stays top-level (no parent).
+    task_parents = {p for k, n, p in frames if n == "task"}
+    assert task_parents == {None}, f"the task card must not be nested; saw {task_parents}"

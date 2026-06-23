@@ -386,6 +386,9 @@ export type ToolEvent = {
   input?: string;
   output?: string;
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
+  /** id of the enclosing `task` delegation when this is a subagent's own tool call —
+   *  set server-side so nesting is explicit (by id), not inferred from frame order. */
+  parentId?: string;
 };
 
 // A background subagent job (ADR 0050) as returned by GET /api/background and

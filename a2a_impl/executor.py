@@ -554,6 +554,11 @@ def _tool_call_part(event_type: str, payload: Any) -> Part | None:
             phase,
             **kwargs,
         )
+        # A subagent's tool frame carries its parent delegation's tool-call id so the
+        # console nests it under the `task` card by id (the contract dict has no field
+        # for it, so ride it as an extra payload key the console reads).
+        if payload.get("parentId"):
+            emit["content"]["value"]["parentToolCallId"] = str(payload["parentId"])
         return _ext_data_part(emit)
     if payload:
         return _text_part(str(payload))

@@ -399,7 +399,15 @@ function dataByMime(parts: RawPart[] | undefined, mime: string): unknown {
  * single ever-overwriting card — the "only one tool at a time" symptom. */
 function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
   const d = dataByMime(parts, TOOL_CALL_MIME) as
-    | { toolCallId?: string; name?: string; phase?: string; args?: string; result?: string; error?: string }
+    | {
+        toolCallId?: string;
+        name?: string;
+        phase?: string;
+        args?: string;
+        result?: string;
+        error?: string;
+        parentToolCallId?: string;
+      }
     | null;
   if (!d) return null;
   return {
@@ -410,6 +418,8 @@ function toolEventFromParts(parts?: RawPart[]): ToolEvent | null {
     // A "failed" end carries the error text in `error`; fall back to it for the body.
     output: d.result ?? d.error,
     error: d.phase === "failed" || Boolean(d.error),
+    // Set only for a subagent's own tool calls → nest under the `task` card by id.
+    ...(d.parentToolCallId ? { parentId: d.parentToolCallId } : {}),
   };
 }
 
