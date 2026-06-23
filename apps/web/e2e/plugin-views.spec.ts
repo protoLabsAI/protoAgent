@@ -123,8 +123,11 @@ test("a plugin view with utility:{...} is a bottom-left widget (hover info + cli
   await expect(pill).toBeVisible();
   await expect(page.locator(".pl-rail").getByRole("button", { name: "Boardy Snapshot" })).toHaveCount(0);
 
-  // The hover info popover carries the manifest's `utility.info`.
-  await expect(page.locator(".pl-tip-wrap", { has: pill }).getByRole("tooltip")).toContainText("A quick board snapshot");
+  // The hover info popover carries the manifest's `utility.info`. The DS Tooltip is
+  // Radix-backed (ui 0.46.0): portaled + shown on hover, so assert the page-level
+  // tooltip role after hovering, not a static child of the trigger wrap.
+  await pill.hover();
+  await expect(page.getByRole("tooltip")).toContainText("A quick board snapshot");
 
   // Click → the plugin opens in a dialog hosting its iframe at the declared path.
   await pill.click();
