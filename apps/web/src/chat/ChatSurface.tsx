@@ -7,7 +7,6 @@ import {
   MessageAction,
   MessageActions,
   PromptInput,
-  Reasoning,
 } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
 import {
@@ -38,6 +37,7 @@ import {
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
+import { ReasoningCard } from "./ReasoningCard";
 import { useUI } from "../state/uiStore";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
@@ -1009,11 +1009,8 @@ function ChatSessionSlot({
             >
               {message.reasoning && !(message.parts && message.parts.length) ? (
                 // History-loaded turns have no ordered parts — fall back to the flat
-                // collapsible "thinking" block (open while still reasoning, auto-collapses
-                // once the answer starts). Live turns render reasoning inline via parts.
-                <Reasoning surface="subtle" streaming={message.status === "streaming" && !message.content}>
-                  {message.reasoning}
-                </Reasoning>
+                // collapsed reasoning card. Live turns render reasoning inline via parts.
+                <ReasoningCard text={message.reasoning} streaming={message.status === "streaming" && !message.content} />
               ) : null}
               {message.parts && message.parts.length ? (
                 // Live turns: reasoning, text runs and tool groups in emission order, so a
@@ -1024,10 +1021,8 @@ function ChatSessionSlot({
                     <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={message.status === "streaming"} onCancelDelegation={cancelDelegation} />
                   ) : part.kind === "reasoning" ? (
                     part.text.trim() ? (
-                      // Stream the animation only on the trailing run (thinking in progress).
-                      <Reasoning key={i} surface="subtle" streaming={message.status === "streaming" && i === arr.length - 1}>
-                        {part.text}
-                      </Reasoning>
+                      // Collapsed reasoning card; the spinner runs only on the trailing run.
+                      <ReasoningCard key={i} text={part.text} streaming={message.status === "streaming" && i === arr.length - 1} />
                     ) : null
                   ) : part.text.trim() ? (
                     message.role === "user" ? (
