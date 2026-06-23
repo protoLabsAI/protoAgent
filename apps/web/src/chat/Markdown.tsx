@@ -1,29 +1,17 @@
-import type { ComponentPropsWithoutRef } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
+import { Streamdown } from "streamdown";
 
-// GitHub-flavored markdown (tables, strikethrough, task lists, autolinks) +
-// syntax-highlighted code blocks. No raw-HTML plugin — LLM output is untrusted,
-// so we never render embedded HTML (XSS guard).
-const REMARK = [remarkGfm];
-const REHYPE = [rehypeHighlight];
-
-const components: Components = {
-  // External links open in a new tab; never let markdown navigate the app. Strip react-markdown's
-  // `node` prop before spreading so it doesn't reach the DOM <a>.
-  a: ({ node: _node, ...props }) => (
-    <a {...(props as ComponentPropsWithoutRef<"a">)} target="_blank" rel="noreferrer noopener" />
-  ),
-};
-
-/** Render assistant message text as markdown. Wrapped in `.markdown` for theming. */
+/**
+ * Assistant message text via **streamdown** — a streaming-markdown renderer built for AI
+ * output. It HARDENS incomplete markdown (a half-written code block / table / link doesn't
+ * flash broken mid-stream) and memoizes blocks, instead of re-parsing the whole answer on
+ * every streamed token (the old react-markdown path was O(N²) per turn). XSS-safe
+ * (rehype-sanitize/harden, no raw HTML); Shiki code highlighting. Wrapped in `.markdown`
+ * for the chat theme.
+ */
 export function Markdown({ children }: { children: string }) {
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={REHYPE} components={components}>
-        {children}
-      </ReactMarkdown>
+      <Streamdown>{children}</Streamdown>
     </div>
   );
 }

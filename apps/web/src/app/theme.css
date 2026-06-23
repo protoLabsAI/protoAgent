@@ -915,29 +915,9 @@ select:disabled {
 .markdown th { background: var(--bg-raised); }
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 0.9em 0; }
 
-/* highlight.js tokens (compact dark theme for rehype-highlight output) */
-.markdown .hljs-comment,
-.markdown .hljs-quote { color: var(--fg-muted); font-style: italic; }
-.markdown .hljs-keyword,
-.markdown .hljs-selector-tag,
-.markdown .hljs-built_in,
-.markdown .hljs-name { color: #c792ea; }
-.markdown .hljs-string,
-.markdown .hljs-attr,
-.markdown .hljs-template-tag { color: #c3e88d; }
-.markdown .hljs-number,
-.markdown .hljs-literal,
-.markdown .hljs-type { color: #f78c6c; }
-.markdown .hljs-title,
-.markdown .hljs-function .hljs-title,
-.markdown .hljs-section { color: #82aaff; }
-.markdown .hljs-attribute,
-.markdown .hljs-variable,
-.markdown .hljs-symbol { color: #ffcb6b; }
-.markdown .hljs-deletion { color: #ff5370; }
-.markdown .hljs-addition { color: #c3e88d; }
-.markdown .hljs-emphasis { font-style: italic; }
-.markdown .hljs-strong { font-weight: 600; }
+/* Code highlighting is now Shiki (via streamdown), which emits inline token colors — the
+   old rehype-highlight `.hljs-*` token rules are gone. streamdown's code-block chrome
+   (header / copy button) is styled by its own Tailwind classes (scanned in tailwind.config). */
 
 /* Chat composer + slash-command autocomplete — moved to src/chat/chat.css (#832). */
 /* HITL request card — moved to src/chat/hitl.css (#832). */

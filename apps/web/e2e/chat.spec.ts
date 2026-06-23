@@ -67,10 +67,12 @@ test("tool-call card is collapsed by default and renders structured components",
 test("expanded state is sticky and the assistant answer renders as markdown", async ({ page }) => {
   await send(page, "MARKDOWN: summarize");
 
-  // Final answer renders through the markdown pipeline.
+  // Final answer renders through the streamdown markdown pipeline. streamdown emits real
+  // semantic tags for block elements (h2/li/pre/code) but renders inline emphasis as a
+  // styled span (`[data-streamdown="strong"]`, class `font-semibold`) rather than <strong>.
   const md = page.locator(".pl-message--assistant .markdown");
   await expect(md.locator("h2")).toHaveText("Summary");
-  await expect(md.locator("strong")).toHaveText("key");
+  await expect(md.locator('[data-streamdown="strong"]')).toHaveText("key");
   await expect(md.locator("li")).toHaveCount(2);
   await expect(md.locator("pre code")).toContainText("const x = 1;");
 });

@@ -5,7 +5,10 @@
 // legacy theme.css without resetting base styles (incremental migration, ADR 0037 D4).
 module.exports = {
   presets: [require("@protolabsai/design/tailwind")],
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  // streamdown (chat markdown renderer) ships pre-built JS that uses Tailwind utility
+  // classes for its chrome (code-block header/copy button, tables, emphasis). Scan its dist
+  // so those classes generate; the shadcn→token vars below theme them on-brand.
+  content: ["./index.html", "./src/**/*.{ts,tsx}", "../../node_modules/streamdown/dist/*.js"],
   corePlugins: { preflight: false },
   theme: {
     extend: {

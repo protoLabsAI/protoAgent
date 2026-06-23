@@ -13,6 +13,7 @@ import { isLauncherWindow } from "./lib/desktop";
 import "@protolabsai/design/css/tokens";
 import "./app/tailwind.css";
 import "@protolabsai/ui/styles.css";
+import "streamdown/styles.css"; // streaming-markdown base styles (before the app theme so it can override)
 import "./app/theme-base.css"; // shared token bridge + resets — must load before the rest
 import "./app/theme.css";
 import { activateSlugAgent } from "./lib/api";

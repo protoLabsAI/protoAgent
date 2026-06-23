@@ -20,6 +20,7 @@
   "devDependencies": {
     "@protolabsai/design": "^0.3.0",
     "@protolabsai/vitepress-theme": "^0.3.6",
+    "@types/react": "18.3.29",
     "vitepress": "^1.6.4"
   }
 }
