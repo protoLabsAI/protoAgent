@@ -82,6 +82,40 @@
   color: var(--pl-color-fg-muted);
 }
 
+/* WorkBlock header: the turn's work tallied as icon + count chips (reasoning / tools /
+   skill loads), in the DS ToolCard name slot. Hover surfaces the breakdown tooltip. */
+.work-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.work-stat-label {
+  font-weight: 500;
+}
+.work-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--pl-color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.work-stat svg {
+  flex: none;
+  opacity: 0.85;
+}
+/* Tooltip breakdown — one line per work kind, with the tool/skill names dimmed. */
+.work-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 280px;
+}
+.work-breakdown-detail {
+  color: var(--pl-color-fg-subtle);
+}
+
 /* Spotlight: while the turn streams, the slot holds the MOST-RECENT tool — kept up until a
    newer one replaces it (so it's never empty: no blank gap between tools or during the
    answer tail). The next tool crossfades in; the previous one drops into the chip below. */
