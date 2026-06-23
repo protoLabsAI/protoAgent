@@ -310,6 +310,18 @@ function scenarioFor(prompt) {
         { id: "task-1", name: "task", phase: "end", output: "Subagent finished: found 1 result." },
       ],
     };
+  if (t.includes("FANOUT"))
+    // Two INDEPENDENT top-level tool calls (no task wrapping them) → both settle, so the
+    // console folds them behind a single "2 tools" summary chip (clutter cleanup).
+    return {
+      answer: "Ran a search and a calculation.",
+      events: [
+        { id: "fan-1", name: "web_search", phase: "start", input: JSON.stringify({ query: "coding agents" }) },
+        { id: "fan-1", name: "web_search", phase: "end", output: "1 result(s) for 'coding agents':\n1. Example — https://example.com/x\n   A snippet." },
+        { id: "fan-2", name: "calculator", phase: "start", input: JSON.stringify({ expression: "2 + 2" }) },
+        { id: "fan-2", name: "calculator", phase: "end", output: "2 + 2 = 4" },
+      ],
+    };
   if (t.includes("NOEND"))
     // A tool whose `end` frame never arrives (e.g. a workflow card whose end
     // races with the terminal `done`). The turn still completes — the client

@@ -10,10 +10,12 @@ import {
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 
 import type { ToolCall } from "../lib/types";
+import { ToolCardSummary } from "./ToolCardSummary";
 import { ToolValue } from "./tool-renderers";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
@@ -27,6 +29,29 @@ function iconFor(name: string): LucideIcon {
   return Wrench;
 }
 
+/** Header label for a card. A `task` delegation surfaces WHICH subagent it ran
+ *  (`task → researcher`), read from the call's args, so the roster is visible at a
+ *  glance without expanding. The subagent type rides in `input` from the start frame,
+ *  so it shows while the delegation is still running; falls back to the bare name until
+ *  the args parse. */
+function cardLabel(call: ToolCall): ReactNode {
+  if (call.name !== "task" || !call.input) return call.name;
+  try {
+    const args = JSON.parse(call.input) as { subagent_type?: unknown };
+    const sub = args.subagent_type;
+    if (typeof sub === "string" && sub) {
+      return (
+        <>
+          task <span className="tool-subagent">→ {sub}</span>
+        </>
+      );
+    }
+  } catch {
+    /* args not valid JSON yet (mid-stream) — fall back to the bare name */
+  }
+  return call.name;
+}
+
 /**
  * Renders the agent's tool activity as collapsible cards inside an assistant
  * message. Each card shows the tool name, a running→done/error state pill, and
@@ -37,9 +62,13 @@ function iconFor(name: string): LucideIcon {
  */
 export function ToolCalls({
   calls,
+  streaming = false,
   onCancelDelegation,
 }: {
   calls: ToolCall[];
+  /** The turn is still live. Keeps the spotlight slot reserved for the whole turn so the
+   *  layout doesn't bounce in the gap between one tool finishing and the next starting. */
+  streaming?: boolean;
   /** Abort a running top-level `task` delegation by its tool-call id (Tier 2). When
    *  omitted, no Stop affordance renders (e.g. historical/finished messages). */
   onCancelDelegation?: (id: string) => void;
@@ -56,21 +85,55 @@ export function ToolCalls({
       top.push(call);
     }
   }
-  return (
-    <ToolCardList className="tool-calls">
-      {top.map((call) => (
-        // Only TOP-LEVEL groups get the cancel callback — a delegation is always a
-        // top-level `task`; its nested children (the subagent's own tools) aren't
-        // independently cancellable, so recursion drops `onCancelDelegation`.
-        <ToolGroup
-          key={call.id}
-          call={call}
-          childrenByParent={childrenByParent}
-          onCancelDelegation={onCancelDelegation}
-        />
-      ))}
-    </ToolCardList>
+  const running = top.filter((c) => c.status === "running");
+  const settled = top.filter((c) => c.status !== "running");
+  const failedCount = settled.filter((c) => c.status === "error").length;
+
+  // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
+  // for a running task); nested children and settled cards never need it.
+  const group = (call: ToolCall) => (
+    <ToolGroup
+      key={call.id}
+      call={call}
+      childrenByParent={childrenByParent}
+      onCancelDelegation={call.status === "running" ? onCancelDelegation : undefined}
+    />
   );
+
+  // The folded summary chip — a running total of the whole block (running + settled), with
+  // the finished cards inside it.
+  const chip = (count: number) => (
+    <ToolCardSummary
+      count={count}
+      label={count === 1 ? "tool" : "tools"}
+      status={failedCount > 0 ? "error" : "done"}
+      failedCount={failedCount || undefined}
+    >
+      {settled.map(group)}
+    </ToolCardSummary>
+  );
+
+  // PINNED SPOTLIGHT (live turn): the active card(s) sit in a fixed-height slot that never
+  // collapses as tools cycle (`.tool-spotlight` reserves one row), and everything finished
+  // folds into the chip below. So the block holds a stable height for the whole turn — the
+  // column doesn't bounce as cards pop in and out; a finishing tool just crossfades from
+  // the slot into the chip. The chip is the running total, so it's present from the first
+  // finished tool onward.
+  if (streaming) {
+    return (
+      <ToolCardList className="tool-calls">
+        <div className="tool-spotlight">{running.map(group)}</div>
+        {settled.length > 0 && chip(top.length)}
+      </ToolCardList>
+    );
+  }
+
+  // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
+  // "1 tool" chip); a real fan-out (≥2) stays folded.
+  if (settled.length >= 2) {
+    return <ToolCardList className="tool-calls">{chip(settled.length)}</ToolCardList>;
+  }
+  return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
 }
 
 /** A tool card plus, when it's a subagent `task`, its nested child tool cards.
@@ -136,7 +199,7 @@ function ToolGroup({
 
   return (
     <ToolCard
-      name={call.name}
+      name={cardLabel(call)}
       status={call.status}
       icon={<Icon size={13} />}
       duration={call.durationMs}

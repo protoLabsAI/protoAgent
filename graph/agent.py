@@ -7,6 +7,7 @@ Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import InjectedState
 
@@ -194,6 +195,13 @@ def _parse_compaction_trigger(spec: str):
     return ("fraction", 0.8)
 
 
+class SubagentError(RuntimeError):
+    """A subagent delegation failed hard (the subagent itself raised). The ``task``
+    tool converts this into a ``status="error"`` ToolMessage so the console renders
+    the delegation card as a failure (X) — not a green "done" wrapping an ``Error:``
+    string (which read as success). ``task_batch`` reports it inline and continues."""
+
+
 async def _run_subagent(
     *,
     config,
@@ -270,7 +278,10 @@ async def _run_subagent(
 
         return f"[{subagent_type} completed: {description}]\n\n{body}"
     except Exception as e:
-        return f"Error: Subagent '{subagent_type}' failed: {e}"
+        # Surface a hard subagent failure as a tool ERROR (X) rather than a green
+        # "done" wrapping an "Error:" string. Callers (``task``/``task_batch``)
+        # turn this into a status="error" ToolMessage or an inline batch error line.
+        raise SubagentError(f"Subagent '{subagent_type}' failed: {e}") from e
 
 
 async def run_manual_subagent(
@@ -478,7 +489,14 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
             if inline in done:
-                return inline.result()
+                try:
+                    return inline.result()
+                except SubagentError as e:
+                    return ToolMessage(
+                        content=f"[{e}. Continue without its result.]",
+                        tool_call_id=tool_call_id,
+                        status="error",
+                    )
             inline.cancel()
             try:
                 await inline
@@ -518,11 +536,23 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             # User-initiated delegation cancel → swallow and let the lead keep going;
             # a turn-level cancel (flag unset) → re-raise so the whole turn unwinds.
             if delegations.was_cancelled(session_id, tool_call_id):
-                return (
-                    f"[delegation cancelled by the user before it finished: "
-                    f"{subagent_type} — {description}. Continue without its result.]"
+                return ToolMessage(
+                    content=(
+                        f"[delegation cancelled by the user before it finished: "
+                        f"{subagent_type} — {description}. Continue without its result.]"
+                    ),
+                    tool_call_id=tool_call_id,
+                    status="error",  # cancelled → the card closes as an X, not green "done"
                 )
             raise
+        except SubagentError as e:
+            # Subagent crashed → close the delegation card as a failure (X) while still
+            # handing the lead a readable result so it can continue without it.
+            return ToolMessage(
+                content=f"[{e}. Continue without its result.]",
+                tool_call_id=tool_call_id,
+                status="error",
+            )
         finally:
             delegations.unregister(session_id, tool_call_id)
 
@@ -562,15 +592,19 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             if not prm:
                 return f"Error: task '{desc}' is missing 'prompt'."
             async with sem:
-                return await _run_subagent(
-                    config=config,
-                    tool_map=tool_map,
-                    available_subagents=available_subagents,
-                    description=desc,
-                    prompt=prm,
-                    subagent_type=spec.get("subagent_type", "researcher"),
-                    truncate=truncate,
-                )
+                try:
+                    return await _run_subagent(
+                        config=config,
+                        tool_map=tool_map,
+                        available_subagents=available_subagents,
+                        description=desc,
+                        prompt=prm,
+                        subagent_type=spec.get("subagent_type", "researcher"),
+                        truncate=truncate,
+                    )
+                except SubagentError as e:
+                    # One failed delegation is reported inline; the batch goes on.
+                    return f"Error: {e}"
 
         results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
 

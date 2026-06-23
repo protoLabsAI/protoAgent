@@ -17,6 +17,84 @@
   white-space: normal;
 }
 
+/* TEMPORARY — mirrors the proposed DS `.pl-toolcard-summary*` (protoContent#292).
+   The summary chip folds a run of SETTLED cards into one expandable row so the active
+   card stays prominent. Delete this block once `@protolabsai/ui` ships the primitive
+   (its styles.css bundle then supplies these same rules) and ToolCardSummary.tsx swaps
+   to the DS import. */
+.pl-toolcard-summary {
+  min-width: 0;
+}
+.pl-toolcard-summary__head {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  /* Reads as a card even at rest — solid border + raised fill always visible (#1319). */
+  background: var(--pl-color-bg-raised);
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  color: var(--pl-color-fg-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pl-toolcard-summary__head:hover {
+  color: var(--pl-color-fg);
+}
+.pl-toolcard-summary__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-toolcard-summary--error .pl-toolcard-summary__text {
+  color: var(--pl-color-status-error);
+}
+.pl-toolcard-summary__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  margin-top: 6px;
+}
+
+/* `task → researcher` — the subagent type in the delegation card header. */
+.tool-subagent {
+  color: var(--pl-color-fg-muted);
+}
+
+/* Pinned spotlight: while the turn streams, the active card(s) live in a slot that
+   reserves one card-row of height and never collapses as tools cycle (so the column
+   can't bounce). A finishing tool leaves the slot for the chip; the next crossfades in. */
+.tool-spotlight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-height: 30px; /* ~ one collapsed ToolCard head row */
+}
+.tool-spotlight > * {
+  animation: tool-spotlight-in var(--pl-motion-base, 160ms) var(--pl-motion-ease, ease) both;
+}
+@keyframes tool-spotlight-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-spotlight > * {
+    animation: none;
+  }
+}
+
 /* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
    (.pl-toolcard__actions) as a compact, error-toned text button — quiet until
    hover so a long delegation reads as "running" first, "abortable" on intent. */
