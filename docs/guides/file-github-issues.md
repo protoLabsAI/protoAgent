@@ -4,8 +4,8 @@ Type `/issue` in chat to file a GitHub issue straight from the console. It's a
 **user-only control command** — like [`/goal`](/guides/goal-mode), it short-circuits
 the turn and is handled by the server. It is deliberately **not** an agent tool, so
 the agent can't open issues on its own (the read-only GitHub tools in the
-[`github` plugin](/plugins/github/) stay agent-facing; *creating* an issue is a write
-you keep in your own hands).
+`github` plugin stay agent-facing; *creating* an issue is a write you keep in your
+own hands).
 
 ## Syntax
 
