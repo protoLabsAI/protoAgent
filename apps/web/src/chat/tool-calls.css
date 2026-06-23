@@ -25,9 +25,15 @@
   color: var(--pl-color-fg-muted);
 }
 
-/* Pinned spotlight: while the turn streams, the active card(s) live in a slot that
-   reserves one card-row of height and never collapses as tools cycle (so the column
-   can't bounce). A finishing tool leaves the slot for the chip; the next crossfades in. */
+/* "· 3 tools" — running count of a delegation's nested subagent tools, in the header. */
+.tool-nested-count {
+  color: var(--pl-color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spotlight: while the turn streams, the slot holds the MOST-RECENT tool — kept up until a
+   newer one replaces it (so it's never empty: no blank gap between tools or during the
+   answer tail). The next tool crossfades in; the previous one drops into the chip below. */
 .tool-spotlight {
   display: flex;
   flex-direction: column;

@@ -84,9 +84,8 @@ export function ToolCalls({
       top.push(call);
     }
   }
-  const running = top.filter((c) => c.status === "running");
   const settled = top.filter((c) => c.status !== "running");
-  const failedCount = settled.filter((c) => c.status === "error").length;
+  const failedCount = top.filter((c) => c.status === "error").length;
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it.
@@ -99,30 +98,30 @@ export function ToolCalls({
     />
   );
 
-  // The folded summary chip — a running total of the whole block (running + settled), with
-  // the finished cards inside it.
-  const chip = (count: number) => (
+  // The folded summary chip — the block's running total, with the given finished cards inside.
+  const chip = (count: number, folded: ToolCall[]) => (
     <ToolCardSummary
       count={count}
       label={count === 1 ? "tool" : "tools"}
       status={failedCount > 0 ? "error" : "done"}
       failedCount={failedCount || undefined}
     >
-      {settled.map(group)}
+      {folded.map(group)}
     </ToolCardSummary>
   );
 
-  // PINNED SPOTLIGHT (live turn): the active card(s) sit in a fixed-height slot that never
-  // collapses as tools cycle (`.tool-spotlight` reserves one row), and everything finished
-  // folds into the chip below. So the block holds a stable height for the whole turn — the
-  // column doesn't bounce as cards pop in and out; a finishing tool just crossfades from
-  // the slot into the chip. The chip is the running total, so it's present from the first
-  // finished tool onward.
+  // LIVE TURN: keep the MOST-RECENT tool in the spotlight slot until a newer one replaces
+  // it — so the slot is never empty (no blank gap between tools, or during the answer tail
+  // after the last tool finishes). Everything older folds into the running-total chip; a
+  // new tool crossfades into the slot and the previous one drops into the chip.
   if (streaming) {
+    if (top.length === 0) return null;
+    const current = top[top.length - 1];
+    const folded = top.slice(0, -1);
     return (
       <ToolCardList className="tool-calls">
-        <div className="tool-spotlight">{running.map(group)}</div>
-        {settled.length > 0 && chip(top.length)}
+        <div className="tool-spotlight">{group(current)}</div>
+        {folded.length > 0 && chip(top.length, folded)}
       </ToolCardList>
     );
   }
@@ -130,13 +129,16 @@ export function ToolCalls({
   // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
   // "1 tool" chip); a real fan-out (≥2) stays folded.
   if (settled.length >= 2) {
-    return <ToolCardList className="tool-calls">{chip(settled.length)}</ToolCardList>;
+    return <ToolCardList className="tool-calls">{chip(settled.length, settled)}</ToolCardList>;
   }
   return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
 }
 
-/** A tool card plus, when it's a subagent `task`, its nested child tool cards.
- *  Subagent nesting rides the DS `ToolCard` `nested` prop (indented child rail). */
+/** A tool card. For a subagent `task`, its child tool cards collapse INSIDE the card's
+ *  body (revealed on expand) and the header shows a running count
+ *  ("task → researcher · 3 tools"). Keeping them in the collapsible body — not the DS
+ *  always-on `nested` rail — is what lets the card hold a STABLE one-row height while the
+ *  subagent works, instead of growing a rail and then collapsing when it folds. */
 function ToolGroup({
   call,
   childrenByParent,
@@ -147,21 +149,19 @@ function ToolGroup({
   onCancelDelegation?: (id: string) => void;
 }) {
   const kids = childrenByParent.get(call.id);
-  const nested = kids?.length
+  const nestedCards = kids?.length
     ? kids.map((kid) => (
         // Children inherit no cancel callback — they aren't independent delegations.
         <ToolGroup key={kid.id} call={kid} childrenByParent={childrenByParent} />
       ))
     : undefined;
 
-  // Collapsed by default and stays put — the header row (icon, name, status) is
-  // the stable at-a-glance view; expanding is an explicit, sticky choice so the
-  // message doesn't reflow as tools start and finish. Pass `children` only when
-  // there's detail so the DS gives us the disabled-caret behavior for empty cards
-  // (the DS gates `hasBody` on `children != null`, so a no-detail card omits it).
+  // Collapsed by default; expanding reveals the args/result AND the subagent's nested
+  // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
+  // state instead of always-on — so the header row stays a stable height as kids stream in).
   const Icon = iconFor(call.name);
   const body =
-    call.input || call.output ? (
+    call.input || call.output || nestedCards ? (
       <>
         {call.input ? (
           <ToolSection label="input" copyText={call.input}>
@@ -173,6 +173,7 @@ function ToolGroup({
             <ToolValue raw={call.output} role="output" tool={call.name} />
           </ToolSection>
         ) : null}
+        {nestedCards ? <div className="pl-toolcard__children">{nestedCards}</div> : null}
       </>
     ) : undefined;
 
@@ -196,13 +197,28 @@ function ToolGroup({
       </button>
     ) : undefined;
 
+  // A running count of the subagent's tools, in the header — so a collapsed delegation
+  // reads "task → researcher · 3 tools" at a glance without expanding.
+  const kidCount = kids?.length ?? 0;
+  const name =
+    kidCount > 0 ? (
+      <>
+        {cardLabel(call)}
+        <span className="tool-nested-count">
+          {" · "}
+          {kidCount} {kidCount === 1 ? "tool" : "tools"}
+        </span>
+      </>
+    ) : (
+      cardLabel(call)
+    );
+
   return (
     <ToolCard
-      name={cardLabel(call)}
+      name={name}
       status={call.status}
       icon={<Icon size={13} />}
       duration={call.durationMs}
-      nested={nested}
       actions={actions}
     >
       {body}
