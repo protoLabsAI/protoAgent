@@ -1,4 +1,4 @@
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { Bot, CheckCircle2, Loader2, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -131,6 +131,14 @@ export function BackgroundJobs() {
   const running = list.filter((j) => j.status === "running").length;
   const finished = list.length - running;
 
+  // Hover popover copy (matches the Inbox/Activity widgets), reflecting live state.
+  const info =
+    running > 0
+      ? `${running} background agent${running === 1 ? "" : "s"} running`
+      : unread > 0
+        ? `${unread} finished — click to review`
+        : "Background agents — work running on its own";
+
   // Tick the elapsed clock once a second while the dialog is open and work runs.
   useEffect(() => {
     if (!open || running === 0) return;
@@ -176,22 +184,23 @@ export function BackgroundJobs() {
 
   return (
     <>
-      <button
-        type="button"
-        className="util-btn bg-jobs-pill"
-        onClick={() => {
-          setOpen(true);
-          setUnread(0);
-          hydrate(); // fetch the FULL results when the panel opens (replaces any live previews)
-        }}
-        title="Background agents"
-        aria-label={`Background agents${running ? ` — ${running} running` : ""}`}
-        data-testid="background-jobs-pill"
-      >
-        {running > 0 ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
-        {running > 0 ? <span>{running}</span> : null}
-        {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
-      </button>
+      <Tooltip label={info}>
+        <button
+          type="button"
+          className="util-btn bg-jobs-pill"
+          onClick={() => {
+            setOpen(true);
+            setUnread(0);
+            hydrate(); // fetch the FULL results when the panel opens (replaces any live previews)
+          }}
+          aria-label={`Background agents${running ? ` — ${running} running` : ""}`}
+          data-testid="background-jobs-pill"
+        >
+          {running > 0 ? <Loader2 size={13} className="spin" /> : <Bot size={13} />}
+          {running > 0 ? <span>{running}</span> : null}
+          {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
+        </button>
+      </Tooltip>
       {open ? (
         <Dialog open onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
           {list.length === 0 ? (
