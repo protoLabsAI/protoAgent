@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (deliberately CLI-only). (#1159)
 
 ### Changed
+- **Chat tool-call rendering overhaul.** A `task` delegation card now shows which subagent
+  ran (`task → researcher`); the subagent's own tools nest inside that card with a running
+  count (expand to see them); a turn's finished tools fold into one expandable "N tools"
+  summary chip; and the live tool block holds a stable height — the column no longer grows
+  and shrinks as tools stream in and out. The summary chip is the new `@protolabsai/ui`
+  `ToolCardSummary` primitive. (#1319, #1320, #1321, #1322)
+- **`show_component` (inline component rendering, ADR 0051) is temporarily disabled** — not
+  in the agent's tool roster or the console Tools tab. The component-v1 pipeline (codec,
+  wire extraction, console renderer) is left intact; tracked by #1323. (#1324)
 - **The Goals and Tasks panels refresh on a bus push instead of polling every 5s.** Both
   panels held a 5s `refetchInterval`; now the goal store publishes `goal.changed` (on
   set/advance/clear) and the task store publishes `task.changed` (on create/update/
@@ -31,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task → it appears at once) and steady-state polling is gone. (#1310)
 
 ### Fixed
+- **Failed or user-cancelled `task` delegations now close as error cards (the X).** They
+  returned a plain `Error:` / `[cancelled]` string that rode the green "done" card (the
+  card's error flag is read from the tool-message status, which a string never set); the
+  tool now returns a `status="error"` ToolMessage so the card matches the red body. (#1319)
+- **A subagent's own tool calls reliably nest under the delegation card.** Nesting was
+  inferred from frame timing ("last open task wins"), which broke when the detached
+  delegation's end raced ahead of its child frames (and mis-attributed concurrent
+  `task_batch` delegations); the child frames now carry the parent delegation's tool-call
+  id so nesting is explicit and order-independent. (#1321)
 - **Mid-stream output rendering no longer rescans the whole response on every chunk.**
   The chat stream recomputed the visible `<output>` (and the live reasoning view) by
   re-running regexes over the *entire* accumulated text per token chunk — O(N²) over a
