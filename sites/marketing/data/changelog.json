@@ -1,5 +1,21 @@
 [
   {
+    "version": "v0.68.0",
+    "date": "2026-06-23",
+    "changes": [
+      "scripts/reset.sh — factory-reset the default (prod) instance from the CLI.",
+      "Chat tool-call rendering overhaul.",
+      "show_component (inline component rendering, ADR 0051) is temporarily disabled",
+      "The Goals and Tasks panels refresh on a bus push instead of polling every 5s.",
+      "Failed or user-cancelled task delegations now close as error cards (the X).",
+      "A subagent's own tool calls reliably nest under the delegation card.",
+      "Mid-stream output rendering no longer rescans the whole response on every chunk.",
+      "Empty-rail panel toggles fully disable.",
+      "Console-poll handlers no longer block the event loop.",
+      "The Docker image now serves the React console and stays in dep-lockstep with pyproject."
+    ]
+  },
+  {
     "version": "v0.67.0",
     "date": "2026-06-22",
     "changes": [

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-06-23
+
 ### Added
 - **`scripts/reset.sh` — factory-reset the default (prod) instance from the CLI.** Wipes
   the prod instance's data + local config back to a clean slate so the next boot runs the
