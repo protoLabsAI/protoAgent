@@ -51,9 +51,17 @@
 }
 
 /* WorkBlock — folds an agentic turn's whole reason→tool timeline behind ONE disclosure so
-   the final answer leads the message. Expand to replay the timeline. */
-.work-block {
+   the final answer leads. While streaming, the most-recent tool stays exposed below the
+   summary (`.work-spotlight`); both sit tightly in the `.work` container. */
+.work {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
   margin: 0 0 0.6em;
+}
+.work-block,
+.work-spotlight .tool-calls {
+  margin: 0;
 }
 .work-timeline {
   display: flex;

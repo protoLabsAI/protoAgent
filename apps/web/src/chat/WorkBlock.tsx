@@ -7,12 +7,14 @@ import { toolsForGroup } from "./parts";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
 
+type ToolsPart = Extract<ChatPart, { kind: "tools" }>;
+
 /**
- * Folds an agentic turn's whole intermediate timeline — every reasoning step and tool
- * call — behind ONE collapsed disclosure ("Working… / Worked · N tools"), so the final
- * answer leads the message and the reason→tool→reason scratchpad doesn't dominate the
- * thread. Expand to replay the full timeline (the collapsed reasoning + tool cards in
- * emission order; `flat` so there are no nested fold chips inside).
+ * Folds an agentic turn's intermediate reason→tool timeline behind ONE collapsed
+ * disclosure ("Working… / Worked · N tools") so the final answer leads. WHILE STREAMING it
+ * keeps the most-recent tool exposed below the summary (kept until a newer tool replaces
+ * it) — so the block isn't fully collapsed while the agent works and you can see what it's
+ * doing now. Expand the summary to replay the full timeline.
  */
 export function WorkBlock({
   parts,
@@ -29,25 +31,39 @@ export function WorkBlock({
   const label = streaming ? "Working…" : "Worked";
   const summary = n > 0 ? `${label} · ${n} ${n === 1 ? "tool" : "tools"}` : label;
 
+  // While streaming, spotlight the most-recent tool below the summary.
+  let spotlightIds: string[] = [];
+  if (streaming) {
+    const toolsParts = parts.filter((p): p is ToolsPart => p.kind === "tools");
+    const last = toolsParts[toolsParts.length - 1];
+    if (last && last.ids.length) spotlightIds = [last.ids[last.ids.length - 1]];
+  }
+
   return (
-    <ToolCard
-      name={summary}
-      icon={<Cog size={13} />}
-      status={streaming ? "running" : "done"}
-      className="work-block"
-    >
-      <div className="work-timeline">
-        {parts.map((part, i) =>
-          part.kind === "reasoning" ? (
-            part.text.trim() ? <ReasoningCard key={i} text={part.text} /> : null
-          ) : part.kind === "tools" ? (
-            <ToolCalls key={i} calls={toolsForGroup(part.ids, toolCalls)} flat />
-          ) : part.text.trim() ? (
-            // A rare pre-answer narration run that landed before the final answer.
-            <div key={i} className="work-text">{part.text}</div>
-          ) : null,
-        )}
-      </div>
-    </ToolCard>
+    <div className="work">
+      <ToolCard
+        name={summary}
+        icon={<Cog size={13} />}
+        status={streaming ? "running" : "done"}
+        className="work-block"
+      >
+        <div className="work-timeline">
+          {parts.map((part, i) =>
+            part.kind === "reasoning" ? (
+              part.text.trim() ? <ReasoningCard key={i} text={part.text} /> : null
+            ) : part.kind === "tools" ? (
+              <ToolCalls key={i} calls={toolsForGroup(part.ids, toolCalls)} flat />
+            ) : part.text.trim() ? (
+              <div key={i} className="work-text">{part.text}</div>
+            ) : null,
+          )}
+        </div>
+      </ToolCard>
+      {spotlightIds.length > 0 ? (
+        <div className="work-spotlight">
+          <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} flat />
+        </div>
+      ) : null}
+    </div>
   );
 }
