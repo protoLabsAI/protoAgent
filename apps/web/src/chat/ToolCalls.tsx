@@ -89,32 +89,38 @@ export function ToolCalls({
   const running = top.filter((c) => c.status === "running");
   const settled = top.filter((c) => c.status !== "running");
   const failedCount = settled.filter((c) => c.status === "error").length;
+  // A lone finished tool isn't clutter — fold only once there are ≥2 settled cards, so a
+  // simple one-tool turn still reads as a normal card rather than a pointless "1 tool" chip.
+  const fold = settled.length >= 2;
 
-  // Only TOP-LEVEL groups get the cancel callback — a delegation is always a top-level
-  // `task`; its nested children (the subagent's own tools) aren't independently
-  // cancellable. Settled cards can't be cancelled either, so the chip's groups drop it.
-  const group = (call: ToolCall, cancellable: boolean) => (
+  // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
+  // for a running task); nested children and settled cards never need it.
+  const group = (call: ToolCall) => (
     <ToolGroup
       key={call.id}
       call={call}
       childrenByParent={childrenByParent}
-      onCancelDelegation={cancellable ? onCancelDelegation : undefined}
+      onCancelDelegation={call.status === "running" ? onCancelDelegation : undefined}
     />
   );
 
+  // Common case (no fan-out): render every card inline in emission order — identical to a
+  // flat list, so a card never changes position (and never loses its expanded state) as it
+  // settles. Only a real fan-out (≥2 finished) splits running-vs-folded.
+  if (!fold) {
+    return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
+  }
+
   return (
     <ToolCardList className="tool-calls">
-      {running.map((call) => group(call, true))}
-      {settled.length > 0 && (
-        <ToolCardSummary
-          count={settled.length}
-          label={settled.length === 1 ? "tool" : "tools"}
-          status={failedCount > 0 ? "error" : "done"}
-          failedCount={failedCount || undefined}
-        >
-          {settled.map((call) => group(call, false))}
-        </ToolCardSummary>
-      )}
+      {running.map(group)}
+      <ToolCardSummary
+        count={settled.length}
+        status={failedCount > 0 ? "error" : "done"}
+        failedCount={failedCount || undefined}
+      >
+        {settled.map(group)}
+      </ToolCardSummary>
     </ToolCardList>
   );
 }
