@@ -32,8 +32,9 @@
   align-items: center;
   gap: 7px;
   padding: 5px 9px;
-  background: none;
-  border: var(--pl-border-width) solid transparent;
+  /* Reads as a card even at rest — solid border + raised fill always visible (#1319). */
+  background: var(--pl-color-bg-raised);
+  border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   color: var(--pl-color-fg-muted);
   font: inherit;
@@ -42,8 +43,7 @@
   cursor: pointer;
 }
 .pl-toolcard-summary__head:hover {
-  background: var(--pl-color-bg-raised);
-  border-color: var(--pl-color-border);
+  color: var(--pl-color-fg);
 }
 .pl-toolcard-summary__text {
   flex: 1 1 auto;

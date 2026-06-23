@@ -115,7 +115,9 @@ export function ToolCalls({
     <ToolCardList className="tool-calls">
       {running.map(group)}
       <ToolCardSummary
-        count={settled.length}
+        // Running total for the block — counts every tool call (running + settled), so
+        // the tally ticks up live as tools fire, not just what's currently folded.
+        count={top.length}
         status={failedCount > 0 ? "error" : "done"}
         failedCount={failedCount || undefined}
       >
