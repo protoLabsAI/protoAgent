@@ -1,0 +1,11 @@
+# Keep blank issues enabled: maintainers/agents may file intentional free-form
+# issues (tracking notes, quick split-outs). The gate flags those unless they
+# carry the `gate-exempt` label — see CONTRIBUTING.md.
+blank_issues_enabled: true
+contact_links:
+  - name: Issue standard & contributing
+    url: https://github.com/protoLabsAI/protoAgent/blob/main/CONTRIBUTING.md
+    about: What a good issue needs (the same checks the silent gate runs) and how to clear the needs-info label.
+  - name: Report a security vulnerability
+    url: https://github.com/protoLabsAI/protoAgent/security/advisories/new
+    about: Disclose vulnerabilities privately — do not open a public issue.

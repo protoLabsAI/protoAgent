@@ -1,0 +1,39 @@
+name: Enhancement / feature
+description: A new capability, or an improvement to an existing one.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The required fields below map 1:1 to the issue gate
+        (`.github/workflows/issue-gate.yml`) — fill them and the gate passes.
+        See #1159 for the house style.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What gap or pain motivates this? Who's affected, and where does it live today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: Sketch the approach. Multiple options are fine — note the trade-offs.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Verifiable criteria for "done".
+    validations:
+      required: true
+  - type: textarea
+    id: refs
+    attributes:
+      label: Refs
+      description: Related issues / PRs / ADRs.
+    validations:
+      required: false
