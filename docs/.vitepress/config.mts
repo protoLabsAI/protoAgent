@@ -82,6 +82,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Goal mode", link: "/guides/goal-mode" },
+            { text: "File GitHub issues (/issue)", link: "/guides/file-github-issues" },
             { text: "Schedule future work", link: "/guides/scheduler" },
             { text: "Middleware", link: "/guides/middleware" },
             { text: "Run on a coding agent (ACP runtime)", link: "/guides/acp-runtime" },

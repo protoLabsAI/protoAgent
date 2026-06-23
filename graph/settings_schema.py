@@ -651,6 +651,16 @@ FIELDS: list[Field] = [
         minimum=0,
         scope="host",
     ),
+    # ── GitHub ─────────────────────────────────────────────────────────────────
+    Field(
+        "github.default_repo",
+        "github_default_repo",
+        "Default repo for /issue",
+        "string",
+        "GitHub",
+        "Target repo (owner/name) the user-only /issue command files into when no "
+        "--repo is given. Blank = require --repo each time (or the GITHUB_DEFAULT_REPO env).",
+    ),
 ]
 
 _BY_KEY = {f.key: f for f in FIELDS}

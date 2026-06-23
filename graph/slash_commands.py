@@ -54,13 +54,15 @@ def find_user_facing_skill(name: str):
 def slash_kind(name: str) -> str | None:
     """The kind a ``/<name>`` slash command resolves to — the SINGLE source of
     precedence shared by the chat dispatcher and the console palette, so they can
-    never disagree about what a token does. Reserved: ``goal``. Precedence:
+    never disagree about what a token does. Reserved: ``goal``, ``issue``. Precedence:
     workflow > subagent > user-facing skill. Returns ``None`` for an unknown token.
     (Workflows/subagents match the bare name; skills match a slug.)"""
     if not name:
         return None
     if name == "goal" or slugify_slash(name) == "goal":
         return "goal"
+    if name == "issue" or slugify_slash(name) == "issue":
+        return "issue"
     if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:
         return "workflow"
     try:

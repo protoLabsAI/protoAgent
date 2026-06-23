@@ -517,8 +517,8 @@ def _operator_chat_commands() -> dict:
 
     The workflow/subagent/skill inventory + precedence comes from the SAME
     resolver the chat dispatcher uses (``server.chat.resolve_slash_commands``), so
-    the palette can't drift from what actually runs. ``/goal`` (a server-handled
-    control command) is surfaced here when goal mode is loaded."""
+    the palette can't drift from what actually runs. ``/goal`` and ``/issue``
+    (server-handled control commands) are surfaced here."""
     from graph.slash_commands import resolve_slash_commands
 
     commands = []
@@ -531,5 +531,13 @@ def _operator_chat_commands() -> dict:
                 "usage": "/goal <condition>   ·   /goal  (status)   ·   /goal clear",
             }
         )
+    commands.append(
+        {
+            "name": "issue",
+            "kind": "control",
+            "description": "File a GitHub issue (user-only — not an agent tool).",
+            "usage": "/issue <title> --bug|--feature [--repo owner/name] [--dry-run]  ·  then the body below",
+        }
+    )
     commands.extend(resolve_slash_commands())
     return {"commands": commands}
