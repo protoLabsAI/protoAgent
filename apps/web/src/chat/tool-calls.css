@@ -67,6 +67,34 @@
   color: var(--pl-color-fg-muted);
 }
 
+/* Pinned spotlight: while the turn streams, the active card(s) live in a slot that
+   reserves one card-row of height and never collapses as tools cycle (so the column
+   can't bounce). A finishing tool leaves the slot for the chip; the next crossfades in. */
+.tool-spotlight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  min-height: 30px; /* ~ one collapsed ToolCard head row */
+}
+.tool-spotlight > * {
+  animation: tool-spotlight-in var(--pl-motion-base, 160ms) var(--pl-motion-ease, ease) both;
+}
+@keyframes tool-spotlight-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-spotlight > * {
+    animation: none;
+  }
+}
+
 /* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
    (.pl-toolcard__actions) as a compact, error-toned text button — quiet until
    hover so a long delegation reads as "running" first, "abortable" on intent. */

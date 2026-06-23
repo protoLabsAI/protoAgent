@@ -62,9 +62,13 @@ function cardLabel(call: ToolCall): ReactNode {
  */
 export function ToolCalls({
   calls,
+  streaming = false,
   onCancelDelegation,
 }: {
   calls: ToolCall[];
+  /** The turn is still live. Keeps the spotlight slot reserved for the whole turn so the
+   *  layout doesn't bounce in the gap between one tool finishing and the next starting. */
+  streaming?: boolean;
   /** Abort a running top-level `task` delegation by its tool-call id (Tier 2). When
    *  omitted, no Stop affordance renders (e.g. historical/finished messages). */
   onCancelDelegation?: (id: string) => void;
@@ -81,17 +85,9 @@ export function ToolCalls({
       top.push(call);
     }
   }
-  // Spotlight the active work: running top-level cards render in full; finished ones
-  // fold into a single expandable summary chip ("N tools"), so a fan-out turn doesn't
-  // bury the answer under a wall of cards. "Settled" is the card's own status — a
-  // running subagent `task` stays full so its nested children stay visible. Once the
-  // turn ends nothing is running, so the whole run collapses into the chip.
   const running = top.filter((c) => c.status === "running");
   const settled = top.filter((c) => c.status !== "running");
   const failedCount = settled.filter((c) => c.status === "error").length;
-  // A lone finished tool isn't clutter — fold only once there are ≥2 settled cards, so a
-  // simple one-tool turn still reads as a normal card rather than a pointless "1 tool" chip.
-  const fold = settled.length >= 2;
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it.
@@ -104,27 +100,40 @@ export function ToolCalls({
     />
   );
 
-  // Common case (no fan-out): render every card inline in emission order — identical to a
-  // flat list, so a card never changes position (and never loses its expanded state) as it
-  // settles. Only a real fan-out (≥2 finished) splits running-vs-folded.
-  if (!fold) {
-    return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
+  // The folded summary chip — a running total of the whole block (running + settled), with
+  // the finished cards inside it.
+  const chip = (count: number) => (
+    <ToolCardSummary
+      count={count}
+      label={count === 1 ? "tool" : "tools"}
+      status={failedCount > 0 ? "error" : "done"}
+      failedCount={failedCount || undefined}
+    >
+      {settled.map(group)}
+    </ToolCardSummary>
+  );
+
+  // PINNED SPOTLIGHT (live turn): the active card(s) sit in a fixed-height slot that never
+  // collapses as tools cycle (`.tool-spotlight` reserves one row), and everything finished
+  // folds into the chip below. So the block holds a stable height for the whole turn — the
+  // column doesn't bounce as cards pop in and out; a finishing tool just crossfades from
+  // the slot into the chip. The chip is the running total, so it's present from the first
+  // finished tool onward.
+  if (streaming) {
+    return (
+      <ToolCardList className="tool-calls">
+        <div className="tool-spotlight">{running.map(group)}</div>
+        {settled.length > 0 && chip(top.length)}
+      </ToolCardList>
+    );
   }
 
-  return (
-    <ToolCardList className="tool-calls">
-      {running.map(group)}
-      <ToolCardSummary
-        // Running total for the block — counts every tool call (running + settled), so
-        // the tally ticks up live as tools fire, not just what's currently folded.
-        count={top.length}
-        status={failedCount > 0 ? "error" : "done"}
-        failedCount={failedCount || undefined}
-      >
-        {settled.map(group)}
-      </ToolCardSummary>
-    </ToolCardList>
-  );
+  // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
+  // "1 tool" chip); a real fan-out (≥2) stays folded.
+  if (settled.length >= 2) {
+    return <ToolCardList className="tool-calls">{chip(settled.length)}</ToolCardList>;
+  }
+  return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
 }
 
 /** A tool card plus, when it's a subagent `task`, its nested child tool cards.

@@ -1020,7 +1020,7 @@ function ChatSessionSlot({
                 // "thinking" inline next to the step it precedes.
                 message.parts.map((part, i, arr) =>
                   part.kind === "tools" ? (
-                    <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} onCancelDelegation={cancelDelegation} />
+                    <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={message.status === "streaming"} onCancelDelegation={cancelDelegation} />
                   ) : part.kind === "reasoning" ? (
                     part.text.trim() ? (
                       // Stream the animation only on the trailing run (thinking in progress).
