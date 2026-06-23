@@ -38,6 +38,7 @@ import {
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
+import { NewIssueDialog } from "./NewIssueDialog";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
 import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
@@ -311,6 +312,9 @@ function ChatSessionSlot({
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // `/issue` opens the New-issue form dialog (the console UX for the user-only
+  // issue command) rather than sending the raw text — see runClientSlash.
+  const [issueDialogOpen, setIssueDialogOpen] = useState(false);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
@@ -383,6 +387,12 @@ function ChatSessionSlot({
         noteToThread(`⚠ Unknown effort \`${arg}\`. Options: ${opts}.`);
       }
       textareaRef.current?.focus();
+      return true;
+    }
+    if (verb === "issue") {
+      // Open the form dialog instead of sending. Inline `/issue <title> …` still
+      // works: it only reaches here when picked from the menu with no args.
+      setIssueDialogOpen(true);
       return true;
     }
     return false;
@@ -1218,6 +1228,11 @@ function ChatSessionSlot({
           }}
         />
       </div>
+      <NewIssueDialog
+        open={issueDialogOpen}
+        onClose={() => setIssueDialogOpen(false)}
+        onFiled={(note) => noteToThread(note)}
+      />
     </div>
   );
 }

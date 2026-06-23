@@ -110,6 +110,69 @@ def missing_sections(body: str, kind: str) -> list[str]:
     return miss
 
 
+def labels_for(kind: str, extra: list[str] | None = None) -> list[str]:
+    """Labels for an issue of this ``kind`` — the type label first (``bug`` /
+    ``enhancement``), then any extras, de-duped in order."""
+    out: list[str] = []
+    if kind == "bug":
+        out.append("bug")
+    elif kind == "feature":
+        out.append("enhancement")
+    for lbl in extra or []:
+        if lbl and lbl not in out:
+            out.append(lbl)
+    return out
+
+
+def resolve_repo(explicit: str | None, default_repo: str = "") -> str | None:
+    """Target repo: explicit ``--repo`` > configured default > GITHUB_DEFAULT_REPO
+    / GH_REPO env > ``None`` (caller errors — there is no silent default)."""
+    return (
+        (explicit or "").strip()
+        or (default_repo or "").strip()
+        or os.environ.get("GITHUB_DEFAULT_REPO")
+        or os.environ.get("GH_REPO")
+        or None
+    )
+
+
+async def file_issue(req: IssueRequest) -> dict:
+    """Validate ``req`` against the gate rules, then create the issue via ``gh``
+    (or, for ``dry_run``, report what would be filed). Returns a structured
+    result the chat command and the console dialog both render:
+
+    - ``{"ok": False, "missing": [...], "kind": ...}`` — body fails the gate;
+    - ``{"ok": False, "error": "..."}`` — ``gh`` failed (auth / label / repo);
+    - ``{"ok": True, "dry_run": True, ...}`` — preview only, nothing created;
+    - ``{"ok": True, "url": "...", "repo": ..., "labels": [...]}`` — created.
+
+    Assumes ``req.repo`` is already set + validated (the callers do that).
+    """
+    miss = missing_sections(req.body, req.kind)
+    if miss:
+        return {"ok": False, "missing": miss, "kind": req.kind}
+    if req.dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "repo": req.repo,
+            "title": req.title,
+            "body": req.body,
+            "labels": req.labels,
+        }
+    args = ["issue", "create", "--repo", req.repo, "--title", req.title, "--body", req.body]
+    for lbl in req.labels:
+        args += ["--label", lbl]
+    rc, out, serr = await run_gh(args, timeout=45)
+    err = check_gh_error(rc, serr)
+    if err:
+        if "could not add label" in serr.lower() or "not found" in serr.lower():
+            err += f" (the label may not exist in {req.repo}; create it or drop the label.)"
+        return {"ok": False, "error": err}
+    url = out.strip().splitlines()[-1] if out.strip() else ""
+    return {"ok": True, "url": url, "repo": req.repo, "labels": req.labels}
+
+
 def _parse(rest: str, *, default_repo: str = "") -> IssueRequest | str:
     """Parse the raw ``/issue`` argument string into a request, or an error string."""
     first, _, body = rest.partition("\n")
@@ -152,12 +215,8 @@ def _parse(rest: str, *, default_repo: str = "") -> IssueRequest | str:
         i += 1
 
     title = " ".join(title_parts).strip()
-    if kind == "bug" and "bug" not in labels:
-        labels.insert(0, "bug")
-    if kind == "feature" and "enhancement" not in labels:
-        labels.insert(0, "enhancement")
-
-    repo = repo or default_repo or os.environ.get("GITHUB_DEFAULT_REPO") or os.environ.get("GH_REPO") or None
+    labels = labels_for(kind, labels)
+    repo = resolve_repo(repo, default_repo)
 
     if not title:
         return (
@@ -196,30 +255,20 @@ async def parse_issue_control(message: str, *, default_repo: str = "") -> str | 
     if isinstance(parsed, str):
         return parsed  # usage / scaffold / validation error
 
-    miss = missing_sections(parsed.body, parsed.kind)
-    if miss:
+    result = await file_issue(parsed)
+    if not result["ok"] and result.get("missing"):
         return (
-            "Not filed — this issue is missing " + "; ".join(miss) + ".\n\n"
+            "Not filed — this issue is missing " + "; ".join(result["missing"]) + ".\n\n"
             "Add the section(s) and resend. Scaffold for a "
             f"{parsed.kind} issue:\n```\n" + _scaffold(parsed.kind) + "```"
         )
+    if not result["ok"]:
+        return result.get("error", "Error filing issue.")
 
     label_note = f" · labels: {', '.join(parsed.labels)}" if parsed.labels else ""
-    if parsed.dry_run:
+    if result.get("dry_run"):
         return (
             f"Dry run — would create in **{parsed.repo}**{label_note}:\n\n"
             f"**{parsed.title}**\n\n{parsed.body}"
         )
-
-    args = ["issue", "create", "--repo", parsed.repo, "--title", parsed.title, "--body", parsed.body]
-    for lbl in parsed.labels:
-        args += ["--label", lbl]
-    rc, out, serr = await run_gh(args, timeout=45)
-    err = check_gh_error(rc, serr)
-    if err:
-        # A missing-label failure is the common one — surface it actionably.
-        if "could not add label" in serr.lower() or "not found" in serr.lower():
-            return f"{err}\n(Hint: the label may not exist in {parsed.repo}. Create it or drop `--label`.)"
-        return err
-    url = out.strip().splitlines()[-1] if out.strip() else ""
-    return f"Filed in {parsed.repo}{label_note}: {url or '(created)'}"
+    return f"Filed in {parsed.repo}{label_note}: {result.get('url') or '(created)'}"

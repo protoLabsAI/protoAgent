@@ -50,6 +50,10 @@
           "title": "Goal mode"
         },
         {
+          "path": "guides/file-github-issues.md",
+          "title": "File GitHub issues (/issue)"
+        },
+        {
           "path": "guides/scheduler.md",
           "title": "Schedule future work"
         },
