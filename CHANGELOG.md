@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-06-24
+
 ### Changed
 - **Native reasoning — the agent's thinking now streams from the model, not a forced text
   protocol.** Dropped the `<scratch_pad>`/`<output>` convention; the chat renders the model's
