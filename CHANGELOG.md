@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-06-24
+
 ### Added
 - **Plugins can own `/<name>` chat control commands** via `registry.register_chat_command(name, handler)`
   — the generalized form of the core `/goal`. The handler is `async (rest, session_id) -> str | None`:
