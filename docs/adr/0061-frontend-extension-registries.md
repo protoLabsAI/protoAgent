@@ -1,6 +1,6 @@
 # 0061 — Frontend extension registries (fork-safe console behavior seams)
 
-Status: **Accepted** (slash-command, composer-action, and palette-command registries shipped)
+Status: **Accepted** (slash-command, composer-action, palette-command registries + UI-state slices shipped)
 
 ## Context
 
@@ -80,16 +80,22 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
 
-### Out of scope (deferred)
+### UI-state slices (shipped, `createUISlice`)
 
-- **UI-store slices.** Zustand has no runtime slice-merge, and a fork's `src/ext/` surface
-  can own its own store for its own state, so the need is weak. Revisit only if a real case
-  appears. (Issue #1337.)
+- **`createUISlice(namespace, initial)`** (`apps/web/src/ext/uiStateRegistry.ts`) — a fork
+  owns a namespaced, **persisted** zustand store for its own UI state. It deliberately does
+  **not** merge into the core `UIState` object (zustand has no runtime slice-merge, and a
+  fork's state doesn't belong in core's closed shape) — it gives the fork its OWN store,
+  *standardized*: the same per-agent persistence as core layout (ADR 0042) and first-wins per
+  namespace (re-calling returns the same store, HMR-safe). Used like any zustand hook
+  (`const useX = createUISlice("ns", {…}); useX((s) => s.field); useX.setState(…)`). Core
+  UI/layout state stays in `state/uiStore.ts` — it's core's, not a fork slice.
 
 ## Consequences
 
-- A fork adds chat-input behavior (and, once shipped, composer/palette actions) by adding a
-  `src/ext/` module — no core edits, no upstream merge conflicts. Same story as the backend.
+- A fork adds chat-input behavior, composer/palette actions, and its own persisted UI-state
+  by adding a `src/ext/` module — no core edits, no upstream merge conflicts. Same story as
+  the backend's `register_*`.
 - The seam is **build-time + trusted/in-process** (the fork compiles its own bundle), NOT the
   sandboxed-iframe plugin path (ADR 0026). Untrusted UI still goes through plugin iframe views.
 - Core behavior is now defined through the public seam, so the registry can't silently rot —

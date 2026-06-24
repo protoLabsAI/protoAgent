@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`registerComposerAction`** — add a control to the chat composer's actions slot.
   - **`registerPaletteCommand`** — add a root ⌘K command; core's deep-links (Plugins: Discover,
     Settings, …) are dogfooded through it (no `deepLinkCommands()` bypass).
-  (uiStore slices deferred — a fork's `src/ext/` surface can own its own store.)
+  - **`createUISlice(namespace, initial)`** — own a namespaced, per-agent-persisted zustand
+    store for fork UI state, without editing core `uiStore.ts` (a standardized fork store, not
+    a merge into core's `UIState`).
 
 ## [0.70.0] - 2026-06-24
 
