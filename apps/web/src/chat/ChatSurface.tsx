@@ -1,5 +1,5 @@
 import "./chat.css";
-import { Empty } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
 import {
   Conversation,
@@ -34,6 +34,7 @@ import {
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
+import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
@@ -1174,7 +1175,32 @@ function ChatSessionSlot({
           onAttach={() => fileInputRef.current?.click()}
           // The model picker lives in the DS composer's actions slot (ADR 0048 / the
           // ComposerWithAttachments DS pattern) — replaces the separate chip below.
-          actions={<ComposerModelSelect />}
+          // Fork-registered composer actions (ADR 0061) render alongside it.
+          actions={
+            <>
+              {registeredComposerActions().map((a) => (
+                <Button
+                  key={a.id}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={a.label}
+                  title={a.label}
+                  onClick={() =>
+                    a.run({
+                      sessionId: session?.id ?? null,
+                      setDraft,
+                      focusComposer: () => textareaRef.current?.focus(),
+                      noteToThread,
+                    })
+                  }
+                >
+                  {a.icon}
+                </Button>
+              ))}
+              <ComposerModelSelect />
+            </>
+          }
           attachments={attachments.map((a) => ({
             id: a.id,
             name: a.name,

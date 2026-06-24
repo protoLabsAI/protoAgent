@@ -1,6 +1,6 @@
 # 0061 — Frontend extension registries (fork-safe console behavior seams)
 
-Status: **Accepted** (slash-command registry shipped; composer-action + palette-command registries planned)
+Status: **Accepted** (slash-command, composer-action, and palette-command registries shipped)
 
 ## Context
 
@@ -64,11 +64,21 @@ Core's `/new`, `/clear`, `/effort` moved out of the hardcoded `runClientSlash` s
 menu from `registeredSlashCommands()` + the server list, and `runClientSlash` dispatches via
 `findSlashCommand` — no hardcoded verbs remain.
 
-### Planned (follow-on, same pattern)
+### The other two seams (also shipped, same pattern)
 
-- **`registerComposerAction`** — buttons in the PromptInput actions slot (closes the
-  composer-action gap).
-- **`registerPaletteCommand`** — root ⌘K commands (closes the `deepLinkCommands` gap).
+- **`registerComposerAction`** (`apps/web/src/ext/composerRegistry.ts`) — adds a control to
+  the chat composer's actions slot (beside the model picker). `ChatSurface` renders
+  `registeredComposerActions()` there. An **additive** seam: core's composer controls
+  (attach, model select, send) are DS `PromptInput` built-ins, not migrated; the registry is
+  purely for fork-added actions (e.g. a templates or voice button). Handler context:
+  `{ sessionId, setDraft, focusComposer, noteToThread }`.
+- **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root ⌘K
+  command in the "Commands" group; `usePaletteRegistry` maps these onto DS palette `Command`s.
+  **Dogfooded:** core's deep-links (Plugins: Discover, Settings, Settings: Fleet/Telemetry)
+  register through this seam, so the registry is the only path (no `deepLinkCommands()`
+  bypass). Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
+  ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
+  code.)
 
 ### Out of scope (deferred)
 
