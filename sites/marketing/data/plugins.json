@@ -89,18 +89,20 @@
   },
   {
     "id": "github",
-    "name": "GitHub (read tools)",
+    "name": "GitHub (read/write tools)",
     "category": "Integrations",
     "official": true,
-    "tagline": "Read-only GitHub over the gh CLI — fetch a PR, an issue, list issues, a commit diff. Opt-in; not every agent needs GitHub.",
+    "tagline": "Read AND write GitHub over the gh CLI — PRs, issues, diffs, CI, repo files; plus gated create/edit/merge/close, comments, labels (per-agent write gating). Ships a read-only Issues/PRs board, a util-bar New-issue widget, and the user-only /issue command.",
     "adds": [
-      "tool"
+      "tool",
+      "view"
     ],
-    "bundled": true,
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/github-plugin",
     "enable": "github",
     "links": {
-      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/github",
-      "docs": "/docs/guides/plugins"
+      "source": "https://github.com/protoLabsAI/github-plugin",
+      "docs": "https://github.com/protoLabsAI/github-plugin#readme"
     }
   },
   {
