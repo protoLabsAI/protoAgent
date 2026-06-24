@@ -14,6 +14,7 @@ export { registerComposerAction, registeredComposerActions } from "./composerReg
 export type { ComposerAction, ComposerActionContext } from "./composerRegistry";
 export { registerPaletteCommand, registeredPaletteCommands } from "./paletteRegistry";
 export type { PaletteCommand, PaletteCommandContext } from "./paletteRegistry";
+export { createUISlice, registeredUISlices } from "./uiStateRegistry";
 export { registerContextMenu, openContextMenu } from "../contextMenu";
 export type { MenuItem, MenuEntry, ContextType } from "../contextMenu";
 
