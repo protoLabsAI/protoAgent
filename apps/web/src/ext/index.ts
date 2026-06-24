@@ -8,6 +8,8 @@
 // model doc: this is the fork path, NOT the sandboxed-plugin path.)
 export { registerSurface, registeredSurfaces } from "./registry";
 export type { ExtSurface } from "./registry";
+export { registerSlashCommand, registeredSlashCommands, findSlashCommand } from "./slashRegistry";
+export type { ClientSlashCommand, SlashContext } from "./slashRegistry";
 export { registerContextMenu, openContextMenu } from "../contextMenu";
 export type { MenuItem, MenuEntry, ContextType } from "../contextMenu";
 
