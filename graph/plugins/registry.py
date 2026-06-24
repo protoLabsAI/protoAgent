@@ -28,6 +28,8 @@ class PluginRegistry:
       (``register_subagent``).
     - ``mcp_servers`` — managed MCP server factories ``config -> entry|None``
       injected into MCP discovery (``register_mcp_server``).
+    - ``chat_commands`` — user-only ``/<name>`` control commands that short-circuit
+      the turn, like ``/goal`` (``register_chat_command``).
 
     Routes mount + surfaces start **once** at process init; a config reload reuses
     them — changing ``plugins.enabled`` needs a restart (ADR 0018).
@@ -60,6 +62,7 @@ class PluginRegistry:
         self.goal_hooks: list = []  # {on_achieved, on_failed} terminal reactions (ADR 0028)
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
+        self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""
@@ -72,6 +75,39 @@ class PluginRegistry:
         """Convenience: register an iterable of tools."""
         for tool in tools or []:
             self.register_tool(tool)
+
+    def register_chat_command(self, name: str, handler) -> None:
+        """Own a user-only chat control command — ``/<name> …`` short-circuits the
+        turn with the handler's reply, like the core ``/goal`` (and the old, now
+        plugin-owned, ``/issue``).
+
+        ``handler`` is ``async (rest: str, session_id: str) -> str | None``: ``rest``
+        is everything after the token; return the reply string to send (the turn is
+        NOT run through the agent), or ``None`` to pass the message through as a
+        normal turn. This is **user-only by design** — it is NOT an agent tool, so a
+        plugin can expose a write action (file an issue, open a PR) that the model
+        can't invoke autonomously. Read your own config in ``register()`` and close
+        over it, e.g. ``repo = self.config.get("default_repo")``.
+
+        The token is slugified + lowercased (``/Issue`` == ``/issue``). The reserved
+        core token ``goal`` is refused; a collision with a token another enabled
+        plugin already registered keeps the first and warns (resolved in the loader).
+        """
+        from graph.slash_commands import slugify_slash  # intra-graph, import-safe
+
+        token = slugify_slash(name)
+        if not token or not callable(handler):
+            log.warning(
+                "[plugins] %s: register_chat_command needs a name + callable: %r / %r", self.plugin_id, name, handler
+            )
+            return
+        if token == "goal":
+            log.warning("[plugins] %s: chat command /%s is reserved — skipped", self.plugin_id, token)
+            return
+        if token in self.chat_commands:
+            log.warning("[plugins] %s: chat command /%s registered twice — keeping the first", self.plugin_id, token)
+            return
+        self.chat_commands[token] = handler
 
     def emit(self, topic: str, data: dict | None = None) -> None:
         """Broadcast an event on the bus (ADR 0039) — fire-and-forget.

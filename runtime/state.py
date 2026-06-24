@@ -48,6 +48,7 @@ class AppState:
     plugin_late_tool_factories: list = field(default_factory=list)  # (all_tools, config) -> tool|list (late seam)
     plugin_workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     plugin_a2a_skills: list = field(default_factory=list)  # A2A card skills from plugins (#570)
+    plugin_chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only /<name> control commands
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571)
     plugin_routers: list = field(default_factory=list)
     # The live FastAPI app + the (plugin_id, prefix) keys already mounted on it —
