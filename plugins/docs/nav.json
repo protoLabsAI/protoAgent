@@ -573,6 +573,10 @@
           "title": "0060 — Skills: progressive disclosure (always-on index + load on demand)"
         },
         {
+          "path": "adr/0061-frontend-extension-registries.md",
+          "title": "0061 — Frontend extension registries (fork-safe console behavior seams)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

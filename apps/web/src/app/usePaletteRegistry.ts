@@ -14,6 +14,8 @@ import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui
 import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
+import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
+import type { PaletteCommand } from "../ext/paletteRegistry";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -102,43 +104,51 @@ function navigate(intent: NavIntent) {
   navigator(intent);
 }
 
-/** Deep-links into sub-tabbed surfaces. The sub-tab ids are the uiStore union types
- *  (the source of truth), so these can't drift into a 404 section. */
-function deepLinkCommands(): Command[] {
-  // Each deep-link is expressed as a serializable NavIntent routed through `navigate()`,
-  // so it works identically in the console window (apply locally) and the desktop
-  // launcher (forward to the main window).
-  const link = (id: string, label: string, keywords: string[], intent: NavIntent): Command => ({
+// Core deep-link palette commands — DOGFOODED through the public `registerPaletteCommand`
+// seam (ADR 0061), so core uses the same path a fork does (no bypass). Each deep-link is a
+// serializable NavIntent routed through `navigate()`, so it works identically in the console
+// window (apply locally) and the desktop launcher (forward to the main window). The sub-tab
+// ids are the uiStore union types (source of truth), so they can't drift into a 404.
+// (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
+// auto-registers as a "go to" nav command — so no Activity deep-links here.)
+const _link = (id: string, label: string, keywords: string[], intent: NavIntent) =>
+  registerPaletteCommand({
     id,
     label,
     group: "Commands",
     keywords,
-    run: (c) => {
+    run: (ctx) => {
       navigate(intent);
-      c.close();
+      ctx.close();
     },
   });
-  return [
-    // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
-    // auto-registers as a "go to" nav command — so no Activity deep-links here.)
-    link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
-      kind: "plugins",
-      tab: "market",
-    }),
-    // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-    link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
-      kind: "plugins",
-      tab: "local",
-    }),
-    // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-    // the drawer, or these ⌘K commands. A bare "Settings" command + Box-section deep-links.
-    link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" }),
-    link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" }),
-    link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
-      kind: "global",
-      section: "telemetry",
-    }),
-  ];
+_link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
+  kind: "plugins",
+  tab: "market",
+});
+// Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
+_link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
+  kind: "plugins",
+  tab: "local",
+});
+// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
+// the drawer, or these ⌘K commands. A bare "Settings" command + Box-section deep-links.
+_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
+_link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
+_link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
+  kind: "global",
+  section: "telemetry",
+});
+
+/** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. */
+function toDsCommand(pc: PaletteCommand): Command {
+  return {
+    id: pc.id,
+    label: pc.label,
+    group: pc.group ?? "Commands",
+    keywords: pc.keywords ?? [],
+    run: (c) => pc.run({ close: () => c.close() }),
+  };
 }
 
 /** Build the palette registry from the resolved view list + the inline plugin views.
@@ -246,7 +256,7 @@ export function usePaletteRegistry(
       keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
       run: (c) => c.enter("open"),
     };
-    const offCommands = registry.registerCommands([openCommand, ...deepLinkCommands()]);
+    const offCommands = registry.registerCommands([openCommand, ...registeredPaletteCommands().map(toDsCommand)]);
     return () => {
       offChat?.();
       offPlugins?.();

@@ -1,5 +1,5 @@
 import "./chat.css";
-import { Empty } from "@protolabsai/ui/primitives";
+import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
 import {
   Conversation,
@@ -30,10 +30,11 @@ import { notifyIfHidden } from "../lib/notify";
 import {
   chatStore,
   useChatState,
-  DEFAULT_REASONING_EFFORT,
-  REASONING_EFFORTS,
   effectiveReasoningEffort,
 } from "./chat-store";
+import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
+import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
+import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatComponent } from "./ChatComponent";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
@@ -326,11 +327,11 @@ function ChatSessionSlot({
   const slashMatches = useMemo(() => {
     if (slashQuery === null) return [];
     const q = slashQuery.toLowerCase();
-    // Deterministic client-side commands (ADR 0057) surface first, then server skills.
+    // Client-side commands (ADR 0061) surface first, then server skills. The client set
+    // comes from the slash-command registry — core (/new, /clear, /effort) AND any fork-
+    // registered commands — so neither is hardcoded here.
     const all: SlashCommand[] = [
-      { name: "new", description: "Open a new chat tab" },
-      { name: "clear", description: "Clear this chat's history" },
-      { name: "effort", description: "Reasoning effort: low | medium | high | max | off" },
+      ...registeredSlashCommands().map((c) => ({ name: c.name, description: c.description, usage: c.usage })),
       ...commands,
     ];
     return all.filter(
@@ -352,41 +353,24 @@ function ChatSessionSlot({
     ]);
   }
 
-  // Deterministic client-side commands (ADR 0057) — run locally, never sent to the
-  // agent. `/new` opens + focuses a fresh tab; `/clear` wipes THIS tab's history
-  // (server checkpoint + transcript), keeping the tab; `/effort <level>` sets this
-  // tab's reasoning effort (sent with each turn). `raw` is the command minus the
-  // slash, e.g. "effort high". Returns true if handled.
+  // Dispatch a CLIENT-SIDE slash command through the registry (ADR 0061) — run locally,
+  // never sent to the agent. A registered `/<verb>` CLAIMS the token (the frontend twin of
+  // the backend's `register_chat_command`): we build the SlashContext from local state +
+  // invoke its handler. `raw` is the command minus the slash, e.g. "effort high". Returns
+  // true if a command handled it (caller clears the draft + skips the send); false ⇒ not a
+  // client command (fall through to the server / draft path). Core commands (/new, /clear,
+  // /effort) and any fork-registered commands flow through here identically.
   function runClientSlash(raw: string): boolean {
     const [verb, ...rest] = raw.split(/\s+/);
-    const arg = rest.join(" ").trim().toLowerCase();
-    if (verb === "new") {
-      chatStore.createSession();
-      textareaRef.current?.focus();
-      return true;
-    }
-    if (verb === "clear" && session) {
-      void api.deleteChatSession(session.id, false).catch(() => {});
-      chatStore.updateMessages(session.id, []);
-      textareaRef.current?.focus();
-      return true;
-    }
-    if (verb === "effort" && session) {
-      const opts = REASONING_EFFORTS.join(" · ");
-      if (!arg) {
-        const cur = session.reasoningEffort ?? `${DEFAULT_REASONING_EFFORT} (default)`;
-        noteToThread(`⚙ Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
-      } else if ((REASONING_EFFORTS as readonly string[]).includes(arg)) {
-        chatStore.setSessionReasoningEffort(session.id, arg);
-        const off = arg === "off" ? " — reasoning disabled for this tab" : "";
-        noteToThread(`⚙ Reasoning effort set to **${arg}**${off}. Applies to the next message.`);
-      } else {
-        noteToThread(`⚠ Unknown effort \`${arg}\`. Options: ${opts}.`);
-      }
-      textareaRef.current?.focus();
-      return true;
-    }
-    return false;
+    const cmd = findSlashCommand(verb);
+    if (!cmd) return false;
+    return cmd.run({
+      rest: rest.join(" ").trim(),
+      sessionId: session?.id ?? null,
+      noteToThread,
+      setDraft,
+      focusComposer: () => textareaRef.current?.focus(),
+    });
   }
 
   function completeCommand(cmd: SlashCommand) {
@@ -1191,7 +1175,32 @@ function ChatSessionSlot({
           onAttach={() => fileInputRef.current?.click()}
           // The model picker lives in the DS composer's actions slot (ADR 0048 / the
           // ComposerWithAttachments DS pattern) — replaces the separate chip below.
-          actions={<ComposerModelSelect />}
+          // Fork-registered composer actions (ADR 0061) render alongside it.
+          actions={
+            <>
+              {registeredComposerActions().map((a) => (
+                <Button
+                  key={a.id}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={a.label}
+                  title={a.label}
+                  onClick={() =>
+                    a.run({
+                      sessionId: session?.id ?? null,
+                      setDraft,
+                      focusComposer: () => textareaRef.current?.focus(),
+                      noteToThread,
+                    })
+                  }
+                >
+                  {a.icon}
+                </Button>
+              ))}
+              <ComposerModelSelect />
+            </>
+          }
           attachments={attachments.map((a) => ({
             id: a.id,
             name: a.name,

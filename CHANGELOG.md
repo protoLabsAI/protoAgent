@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fork-safe console behavior seams** (ADR 0061, #1337) — give the console the backend's
+  "extend-without-editing-core, update-safe" property. Extends the `src/ext/` fork pattern
+  with three registries mirroring `registerSurface` (static, first-wins, HMR-safe), so a fork
+  adds chat behavior by dropping a `src/ext/` module — no core edits, no upstream conflicts:
+  - **`registerSlashCommand`** — own a client-side `/<name>` (registering claims the token;
+    the frontend twin of the backend's `register_chat_command`). Core's `/new`, `/clear`,
+    `/effort` now register through it — no hardcoded verbs remain.
+  - **`registerComposerAction`** — add a control to the chat composer's actions slot.
+  - **`registerPaletteCommand`** — add a root ⌘K command; core's deep-links (Plugins: Discover,
+    Settings, …) are dogfooded through it (no `deepLinkCommands()` bypass).
+  (uiStore slices deferred — a fork's `src/ext/` surface can own its own store.)
+
 ## [0.70.0] - 2026-06-24
 
 ### Added
