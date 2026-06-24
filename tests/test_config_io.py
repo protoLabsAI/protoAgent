@@ -150,7 +150,6 @@ def test_config_to_dict_mirrors_yaml_shape() -> None:
         "prompt_cache",
         "routing",
         "telemetry",
-        "github",
         # Box runtime (Host layer, ADR 0047 D8).
         "network",
         "fleet",

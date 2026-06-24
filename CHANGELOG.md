@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Changelog / GitHub — opens the repo's new-issue chooser in a new tab. A lightweight,
   always-present way to file a bug, independent of any GitHub plugin.
 
+### Removed
+- **GitHub is no longer in core — it's a standalone plugin** ([`protoLabsAI/github-plugin`](https://github.com/protoLabsAI/github-plugin)).
+  Removed the read tools (`tools/github_tools.py`), the `/issue` command logic (`tools/gh_issue.py`),
+  its REST surface (`operator_api/github_routes.py`), the in-tree `plugins/github` shim, the core
+  `github.repos`/`github.default_repo` config + settings fields, and the console's util-bar
+  "New issue" button + dialog (`NewIssueDialog`/`issueBody`). The chat `/issue` command and the
+  console GitHub surfaces now come from the plugin (install it + `plugins.enabled: [github]`); the
+  same `github.*` config keys carry over. Kept in core: the generic `ci` goal verifier and its
+  `tools/gh_cli.py` runner (goal-system infra, not the GitHub toolset). Closes the lean-core audit's
+  "GitHub → plugin" item.
+
 ## [0.69.0] - 2026-06-24
 
 ### Changed

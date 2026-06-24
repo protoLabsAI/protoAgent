@@ -571,15 +571,6 @@ class LangGraphConfig:
     # YAML ⊕ secrets overlay). A plugin reads its own via plugin_config["<section>"].
     plugin_config: dict = field(default_factory=dict)
 
-    # GitHub repos for the user-only ``/issue`` command + its console dialog
-    # (tools/gh_issue.py). ``github_repos`` is the picker list (each ``owner/name``)
-    # shown as a quick-toggle dropdown; ``github_default_repo`` is the preselected
-    # one (and the command's default when no ``--repo`` is given). An empty default
-    # falls back to the first repo in the list. Pairs with the portfolio manager,
-    # which federates over many repos/boards. UI-editable under Settings ▸ GitHub.
-    github_repos: list[str] = field(default_factory=list)
-    github_default_repo: str = ""
-
     # Identity — captured by the setup wizard, editable via the drawer.
     # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
     # the YAML value wins when both are set so per-fork customization
@@ -834,8 +825,6 @@ class LangGraphConfig:
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
-            github_repos=list(data.get("github", {}).get("repos", []) or []),
-            github_default_repo=data.get("github", {}).get("default_repo", cls.github_default_repo),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
             goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),

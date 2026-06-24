@@ -68,12 +68,6 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
-  // New GitHub issue dialog (the /issue command's form). EPHEMERAL — partialized
-  // out of persistence so a refresh never reopens it. Opened from the util-bar
-  // bug action or the chat `/issue` slash command.
-  newIssueOpen: boolean;
-  openNewIssue: () => void;
-  closeNewIssue: () => void;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
   rightWidth: number;
@@ -265,9 +259,6 @@ export const useUI = create<UIState>()(
       globalSettingsSection: undefined,
       openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
       closeGlobalSettings: () => set({ globalSettingsOpen: false }),
-      newIssueOpen: false,
-      openNewIssue: () => set({ newIssueOpen: true }),
-      closeNewIssue: () => set({ newIssueOpen: false }),
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
@@ -364,7 +355,7 @@ export const useUI = create<UIState>()(
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
       // The Global settings overlay is ephemeral UI state — drop it from persistence so a
       // refresh never reopens it (everything else persists as before).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, newIssueOpen: _ni, ...rest }) => rest,
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, ...rest }) => rest,
     },
   ),
 );

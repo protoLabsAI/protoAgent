@@ -651,25 +651,6 @@ FIELDS: list[Field] = [
         minimum=0,
         scope="host",
     ),
-    # ── GitHub ─────────────────────────────────────────────────────────────────
-    Field(
-        "github.repos",
-        "github_repos",
-        "Repos for /issue",
-        "string_list",
-        "GitHub",
-        "Repos (owner/name, one per line) offered as a quick-toggle dropdown in the "
-        "New-issue dialog. Pairs with the portfolio manager's many-repo setup.",
-    ),
-    Field(
-        "github.default_repo",
-        "github_default_repo",
-        "Default repo for /issue",
-        "string",
-        "GitHub",
-        "Preselected repo (owner/name) for the dialog + the /issue command's default when "
-        "no --repo is given. Blank = the first repo above (or require --repo / GITHUB_DEFAULT_REPO).",
-    ),
 ]
 
 _BY_KEY = {f.key: f for f in FIELDS}

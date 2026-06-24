@@ -886,34 +886,6 @@ export const api = {
     return request<{ commands: SlashCommand[] }>("/api/chat/commands");
   },
 
-  // GitHub issue creation (the /issue command's form dialog). `githubConfig`
-  // prefills the dialog (default repo + whether `gh` is installed); `createIssue`
-  // shares the server's tools.gh_issue path with the chat /issue command.
-  githubConfig() {
-    return request<{ repos: string[]; default_repo: string; gh_available: boolean }>("/api/github/config");
-  },
-
-  createIssue(body: {
-    title: string;
-    body: string;
-    kind: "bug" | "feature" | "generic";
-    repo?: string;
-    labels?: string[];
-    dry_run?: boolean;
-  }) {
-    return request<{
-      ok: boolean;
-      url?: string;
-      missing?: string[];
-      error?: string;
-      dry_run?: boolean;
-      repo?: string;
-      title?: string;
-      body?: string;
-      labels?: string[];
-    }>("/api/github/issue", { method: "POST", body });
-  },
-
   settingsSchema() {
     return request<{ groups: SettingsGroup[] }>("/api/settings/schema");
   },

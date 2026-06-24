@@ -82,21 +82,17 @@ async def run_plugin_chat_command(name: str, rest: str, session_id: str) -> str 
 def slash_kind(name: str) -> str | None:
     """The kind a ``/<name>`` slash command resolves to — the SINGLE source of
     precedence shared by the chat dispatcher and the console palette, so they can
-    never disagree about what a token does. Reserved: ``goal``, ``issue`` (``issue``
-    moves to the github plugin). Precedence:
+    never disagree about what a token does. Reserved: ``goal``. Precedence:
     goal > plugin chat command > workflow > subagent > user-facing skill. Returns
     ``None`` for an unknown token. (Plugin commands/workflows/subagents match the
-    bare name or its slug; skills match a slug.)"""
+    bare name or its slug; skills match a slug.) ``/issue`` is no longer core — the
+    github plugin owns it, so it resolves as a ``plugin_command``."""
     if not name:
         return None
     if name == "goal" or slugify_slash(name) == "goal":
         return "goal"
     if find_plugin_chat_command(name) is not None:
         return "plugin_command"
-    # ``issue`` is a core-reserved control command today; it moves to the github
-    # plugin (resolving as ``plugin_command`` above) and this branch is removed then.
-    if name == "issue" or slugify_slash(name) == "issue":
-        return "issue"
     if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:
         return "workflow"
     try:

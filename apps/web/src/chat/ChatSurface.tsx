@@ -39,7 +39,6 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { Markdown } from "./LazyMarkdown";
 import { ReasoningCard } from "./ReasoningCard";
 import { WorkBlock } from "./WorkBlock";
-import { useUI } from "../state/uiStore";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { ToolCalls } from "./ToolCalls";
 import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
@@ -385,13 +384,6 @@ function ChatSessionSlot({
         noteToThread(`⚠ Unknown effort \`${arg}\`. Options: ${opts}.`);
       }
       textareaRef.current?.focus();
-      return true;
-    }
-    if (verb === "issue") {
-      // Open the New-issue form dialog (mounted once in App, store-driven) instead
-      // of sending. Inline `/issue <title> …` still files directly — it only reaches
-      // here when picked from the menu with no args.
-      useUI.getState().openNewIssue();
       return true;
     }
     return false;

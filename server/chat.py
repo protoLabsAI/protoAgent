@@ -691,31 +691,14 @@ async def _chat_langgraph_stream(
                     return
 
             # Plugin-registered chat control command (/<name> …) short-circuits the
-            # turn with the plugin's reply — user-only, like /goal. Sits above the
-            # core /issue handler below, which moves onto this same seam in the github
-            # plugin (PR2). No plugin claims a token by default ⇒ falls through.
+            # turn with the plugin's reply — user-only, like /goal (e.g. the github
+            # plugin's /issue). No plugin claims a token by default ⇒ falls through.
             name, rest = _parse_slash_command(message)
             if name:
                 cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
                 if cmd_reply is not None:
                     yield ("done", cmd_reply)
                     return
-
-            # Issue control command (/issue ...) short-circuits the turn: file a
-            # GitHub issue. User-only by design — it is NOT an agent tool, so the
-            # model can't create issues autonomously (mirrors /goal).
-            from tools.gh_issue import effective_default_repo, parse_issue_control
-
-            issue_reply = await parse_issue_control(
-                message,
-                default_repo=effective_default_repo(
-                    getattr(STATE.graph_config, "github_default_repo", ""),
-                    getattr(STATE.graph_config, "github_repos", []),
-                ),
-            )
-            if issue_reply is not None:
-                yield ("done", issue_reply)
-                return
 
             # Workflow slash command (/<workflow-name> …) short-circuits the turn:
             # run the recipe and return its output. Each step renders its own
@@ -1051,27 +1034,13 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                     return [{"role": "assistant", "content": reply}]
 
             # Plugin-registered chat control command (/<name> …) short-circuits —
-            # user-only, like /goal. Above the core /issue handler (PR2 moves /issue
-            # onto this seam). No plugin claims a token by default ⇒ falls through.
+            # user-only, like /goal (e.g. the github plugin's /issue). No plugin
+            # claims a token by default ⇒ falls through to normal dispatch.
             name, rest = _parse_slash_command(message)
             if name:
                 cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
                 if cmd_reply is not None:
                     return [{"role": "assistant", "content": cmd_reply}]
-
-            # Issue control command (/issue ...) short-circuits — file a GitHub
-            # issue (user-only; never an agent tool). See the streaming path.
-            from tools.gh_issue import effective_default_repo, parse_issue_control
-
-            issue_reply = await parse_issue_control(
-                message,
-                default_repo=effective_default_repo(
-                    getattr(STATE.graph_config, "github_default_repo", ""),
-                    getattr(STATE.graph_config, "github_repos", []),
-                ),
-            )
-            if issue_reply is not None:
-                return [{"role": "assistant", "content": issue_reply}]
 
             # Workflow slash command (/<workflow-name> …) short-circuits the turn.
             parsed = _parse_workflow_command(message)

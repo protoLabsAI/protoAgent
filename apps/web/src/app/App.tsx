@@ -29,7 +29,6 @@ import {
   // (dashboards, data, comms, dev, finance, space/fleet, AI) find a fitting glyph.
   Bot,
   Brain,
-  Bug,
   Code,
   Coins,
   Compass,
@@ -78,7 +77,6 @@ import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { InboxWidget } from "../inbox/InboxWidget";
 import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
-import { NewIssueDialog } from "../chat/NewIssueDialog";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { AppDrawer } from "./AppDrawer";
@@ -255,9 +253,6 @@ export function App() {
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
-  const newIssueOpen = useUI((s) => s.newIssueOpen);
-  const openNewIssue = useUI((s) => s.openNewIssue);
-  const closeNewIssue = useUI((s) => s.closeNewIssue);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
@@ -913,19 +908,6 @@ export function App() {
                     <Settings2 size={14} />
                   </button>
                 </Tooltip>
-                {/* File a GitHub issue (the /issue command's form). Same store flag the
-                    chat `/issue` slash command opens, so there's one dialog (mounted below). */}
-                <Tooltip label="File a GitHub issue — opens the New-issue form">
-                  <button
-                    type="button"
-                    className="util-btn"
-                    aria-label="File a GitHub issue"
-                    data-testid="new-issue-widget"
-                    onClick={() => openNewIssue()}
-                  >
-                    <Bug size={14} />
-                  </button>
-                </Tooltip>
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3), the
                     inbox, and the read-only Activity feed — each a pill with a hover info
                     popover + a click dialog. */}
@@ -1066,28 +1048,6 @@ export function App() {
       open={globalSettingsOpen}
       section={globalSettingsSection}
       onClose={closeGlobalSettings}
-    />
-    {/* New GitHub issue dialog — store-driven, so the util-bar bug action and the chat
-        `/issue` slash command share one mount. On success, drop a note in the current chat. */}
-    <NewIssueDialog
-      open={newIssueOpen}
-      onClose={closeNewIssue}
-      onFiled={(note) => {
-        const snap = chatStore.getSnapshot();
-        const sid = snap.currentSessionId;
-        if (!sid) return;
-        const base = snap.sessions.find((s) => s.id === sid)?.messages ?? [];
-        chatStore.updateMessages(sid, [
-          ...base,
-          {
-            id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            role: "assistant",
-            content: note,
-            createdAt: Date.now(),
-            status: "done",
-          },
-        ]);
-      }}
     />
     </>
   );

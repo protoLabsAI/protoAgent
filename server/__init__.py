@@ -669,12 +669,6 @@ def _main():
     register_theme_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
-    # GitHub issue creation (the /issue command's form dialog) — write counterpart
-    # to the read-only github plugin tools; operator-surface only.
-    from operator_api.github_routes import register_github_routes
-
-    register_github_routes(fastapi_app)
-
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
