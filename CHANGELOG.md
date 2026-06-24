@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trigger autonomously. Precedence is `goal` > plugin command > workflow > subagent > skill, resolved
   once in `graph/slash_commands.py` so the chat dispatcher and the console palette can't drift. This is
   the seam that lets the GitHub `/issue` command move into a plugin.
+- **"Report a bug" link in the hamburger menu** (the header side panel), next to Docs /
+  Changelog / GitHub — opens the repo's new-issue chooser in a new tab. A lightweight,
+  always-present way to file a bug, independent of any GitHub plugin.
 
 ## [0.69.0] - 2026-06-24
 

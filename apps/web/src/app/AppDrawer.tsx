@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { BarChart3, BookOpen, Github, ScrollText, Settings2, X } from "lucide-react";
+import { BarChart3, BookOpen, Bug, Github, ScrollText, Settings2, X } from "lucide-react";
 
 import { Button } from "@protolabsai/ui/primitives";
 
@@ -120,6 +120,16 @@ export function AppDrawer({
             >
               <span className="app-drawer-ico"><Github size={16} /></span>
               GitHub
+            </a>
+            <a
+              className="app-drawer-item"
+              href="https://github.com/protoLabsAI/protoAgent/issues/new/choose"
+              target="_blank"
+              rel="noreferrer"
+              onClick={onClose}
+            >
+              <span className="app-drawer-ico"><Bug size={16} /></span>
+              Report a bug
             </a>
           </section>
         </div>
