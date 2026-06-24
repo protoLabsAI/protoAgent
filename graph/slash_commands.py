@@ -51,16 +51,50 @@ def find_user_facing_skill(name: str):
     return None
 
 
+def find_plugin_chat_command(name: str):
+    """The plugin-registered chat command handler whose token matches ``/<name>``,
+    or ``None``. Tokens are slugified+lowercased at registration, so we match the
+    lowercased name (exact) and its slug (so ``/Issue`` and ``/foo_bar`` resolve a
+    ``foo-bar`` token). User-only control commands (``register_chat_command``)."""
+    commands = getattr(STATE, "plugin_chat_commands", None) or {}
+    if not name or not commands:
+        return None
+    return commands.get(name.strip().lower()) or commands.get(slugify_slash(name))
+
+
+async def run_plugin_chat_command(name: str, rest: str, session_id: str) -> str | None:
+    """Invoke the plugin chat command matching ``/<name>`` and return its reply (the
+    dispatcher short-circuits the turn with it), or ``None`` to fall through. A
+    handler that itself returns ``None`` falls through too (it decided not to handle
+    the message); precedence still excludes a same-named workflow/skill from firing
+    because ``slash_kind`` reports ``plugin_command`` for the token. A raising handler
+    is logged + swallowed into a ``⚠️`` reply so one bad plugin can't 500 the turn."""
+    handler = find_plugin_chat_command(name)
+    if handler is None:
+        return None
+    try:
+        return await handler(rest, session_id)
+    except Exception as exc:  # noqa: BLE001 — a bad plugin command must not break the turn
+        log.warning("[slash] plugin chat command /%s failed: %s", name, exc)
+        return f"⚠️ /{name} failed: {exc}"
+
+
 def slash_kind(name: str) -> str | None:
     """The kind a ``/<name>`` slash command resolves to — the SINGLE source of
     precedence shared by the chat dispatcher and the console palette, so they can
-    never disagree about what a token does. Reserved: ``goal``, ``issue``. Precedence:
-    workflow > subagent > user-facing skill. Returns ``None`` for an unknown token.
-    (Workflows/subagents match the bare name; skills match a slug.)"""
+    never disagree about what a token does. Reserved: ``goal``, ``issue`` (``issue``
+    moves to the github plugin). Precedence:
+    goal > plugin chat command > workflow > subagent > user-facing skill. Returns
+    ``None`` for an unknown token. (Plugin commands/workflows/subagents match the
+    bare name or its slug; skills match a slug.)"""
     if not name:
         return None
     if name == "goal" or slugify_slash(name) == "goal":
         return "goal"
+    if find_plugin_chat_command(name) is not None:
+        return "plugin_command"
+    # ``issue`` is a core-reserved control command today; it moves to the github
+    # plugin (resolving as ``plugin_command`` above) and this branch is removed then.
     if name == "issue" or slugify_slash(name) == "issue":
         return "issue"
     if STATE.workflow_registry is not None and STATE.workflow_registry.get(name) is not None:
@@ -92,8 +126,17 @@ def resolve_slash_commands() -> list[dict]:
         seen.add(name)
         cmds.append({"name": name, "kind": kind, "description": description, "usage": usage})
 
+    # Plugin chat commands first — they sit just below ``goal`` in precedence, so a
+    # workflow/skill of the same token must not shadow them in the palette.
+    for token, handler in (getattr(STATE, "plugin_chat_commands", None) or {}).items():
+        doc = (getattr(handler, "__doc__", "") or "").strip()
+        desc = doc.splitlines()[0] if doc else f"Run the /{token} command."
+        _add(token, "plugin_command", desc, f"/{token} …")
+
     if STATE.workflow_registry is not None:
         for wf in STATE.workflow_registry.list():
+            if slash_kind(wf["name"]) != "workflow":  # a goal/plugin-command/issue of the same token wins
+                continue
             declared = wf.get("inputs", []) or []
             req = "".join(f" <{i['name']}>" for i in declared if i.get("required"))
             opt = "".join(f" [{i['name']}]" for i in declared if not i.get("required"))

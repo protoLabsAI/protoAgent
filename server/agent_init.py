@@ -193,6 +193,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     )
     STATE.plugin_workflow_dirs = _plugins.workflow_dirs
     STATE.plugin_a2a_skills = _plugins.a2a_skills  # A2A card skills (#570)
+    STATE.plugin_chat_commands = _plugins.chat_commands  # user-only /<name> control commands
     STATE.thread_id_resolver = _plugins.thread_id_resolver  # thread_id seam (#571)
     # A plugin may provide the knowledge backend (ADR 0031) — swap it in now (the
     # graph compiles below with STATE.knowledge_store). Default built-in store stays
@@ -1285,6 +1286,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
+    new_plugin_chat_commands: dict = {}  # user-only /<name> control commands
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
@@ -1305,6 +1307,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             new_plugin_tools = new_plugins.tools
             new_plugin_skill_dirs = new_plugins.skill_dirs
             new_plugin_meta = new_plugins.meta
+            new_plugin_chat_commands = new_plugins.chat_commands  # user-only /<name> control commands
             # Plugin knowledge backend (ADR 0031) — swap before the graph rebuild.
             new_store = _apply_plugin_knowledge_backend(new_config, new_store, new_plugins)
             _register_plugin_subagents(new_plugins.subagents)
@@ -1372,6 +1375,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     STATE.graph = new_graph
     STATE.plugin_middleware = new_middleware  # ADR 0032
     STATE.plugin_late_tool_factories = new_late_tool_factories  # late-tools seam
+    STATE.plugin_chat_commands = new_plugin_chat_commands  # user-only /<name> control commands
     # STATE.workflow_registry / workflow_run were (re)set by the workflows plugin above.
     STATE.inbox_store = new_inbox_store
     # Commit the scheduler swap. start/stop are async — fire-and-forget

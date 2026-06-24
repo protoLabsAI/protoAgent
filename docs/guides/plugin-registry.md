@@ -132,9 +132,19 @@ def register(registry):
     registry.register_subagent(my_subagent)    # a SubagentConfig
     registry.register_router(my_router)         # FastAPI routes at /plugins/<id>
     registry.register_mcp_server(my_factory)    # a managed MCP server
+    registry.register_chat_command("issue", h)  # a user-only /<name> control command
     # skills/ and workflows/ are auto-discovered — no call needed. For a
     # non-standard location: registry.register_workflow_dir("recipes")
 ```
+
+`register_chat_command(name, handler)` lets a plugin **own a `/<name>` chat
+control command** — the generalized form of the core `/goal`. The handler is
+`async (rest, session_id) -> str | None`: return a reply string to short-circuit
+the turn (the model never runs), or `None` to pass the message through. It is
+**user-only by design** — not an agent tool — so a plugin can expose a write
+action (file an issue, open a PR) that the model can't trigger autonomously. Close
+over `registry.config` to read your own settings. Precedence is `goal` > plugin
+command > workflow > subagent > skill; `goal` is reserved.
 
 `skills/` and `workflows/` are **data**, so they're auto-discovered from those
 conventional subdirs — no boilerplate. **Console views** (a rail icon + page) are

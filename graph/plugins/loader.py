@@ -41,6 +41,7 @@ class PluginLoadResult:
     late_tool_factories: list = field(default_factory=list)  # (all_tools, config) -> tool|list (late seam)
     mcp_servers: list = field(default_factory=list)  # factories: config -> entry|None (ADR 0019)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
+    chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only chat control commands
     meta: list[dict] = field(default_factory=list)
 
 
@@ -386,6 +387,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             result.embedders[name] = factory
         for f in registry.mcp_servers:
             result.mcp_servers.append({"plugin_id": manifest.id, "factory": f})
+        for token, handler in registry.chat_commands.items():  # user-only chat control commands
+            if token in result.chat_commands:
+                log.warning("[plugins] %s: chat command /%s collides — skipped", manifest.id, token)
+                continue
+            result.chat_commands[token] = handler
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         entry["skills"] = len(registry.skill_dirs)
@@ -393,6 +399,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         entry["surfaces"] = len(registry.surfaces)
         entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
         entry["mcp_servers"] = len(registry.mcp_servers)
+        entry["chat_commands"] = [f"/{t}" for t in registry.chat_commands]
         result.meta.append(entry)
         log.info(
             "[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "

@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Plugins can own `/<name>` chat control commands** via `registry.register_chat_command(name, handler)`
+  — the generalized form of the core `/goal`. The handler is `async (rest, session_id) -> str | None`:
+  a reply string short-circuits the turn (the model never runs), `None` passes through. It is
+  **user-only by design** (not an agent tool), so a plugin can expose a write action the model can't
+  trigger autonomously. Precedence is `goal` > plugin command > workflow > subagent > skill, resolved
+  once in `graph/slash_commands.py` so the chat dispatcher and the console palette can't drift. This is
+  the seam that lets the GitHub `/issue` command move into a plugin.
+
 ## [0.69.0] - 2026-06-24
 
 ### Changed

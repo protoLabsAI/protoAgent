@@ -599,6 +599,7 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
 # the two can't drift (operator_api may not import server, so it can't live here).
 from graph.slash_commands import (  # noqa: E402
     find_user_facing_skill as _find_user_facing_skill,
+    run_plugin_chat_command as _run_plugin_chat_command,
     slash_kind as _slash_kind,
 )
 
@@ -687,6 +688,17 @@ async def _chat_langgraph_stream(
                 reply = await STATE.goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     yield ("done", reply)
+                    return
+
+            # Plugin-registered chat control command (/<name> …) short-circuits the
+            # turn with the plugin's reply — user-only, like /goal. Sits above the
+            # core /issue handler below, which moves onto this same seam in the github
+            # plugin (PR2). No plugin claims a token by default ⇒ falls through.
+            name, rest = _parse_slash_command(message)
+            if name:
+                cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
+                if cmd_reply is not None:
+                    yield ("done", cmd_reply)
                     return
 
             # Issue control command (/issue ...) short-circuits the turn: file a
@@ -1037,6 +1049,15 @@ async def _chat_langgraph(message: str, session_id: str, *, model: str | None = 
                 reply = await STATE.goal_controller.parse_control(message, session_id)
                 if reply is not None:
                     return [{"role": "assistant", "content": reply}]
+
+            # Plugin-registered chat control command (/<name> …) short-circuits —
+            # user-only, like /goal. Above the core /issue handler (PR2 moves /issue
+            # onto this seam). No plugin claims a token by default ⇒ falls through.
+            name, rest = _parse_slash_command(message)
+            if name:
+                cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
+                if cmd_reply is not None:
+                    return [{"role": "assistant", "content": cmd_reply}]
 
             # Issue control command (/issue ...) short-circuits — file a GitHub
             # issue (user-only; never an agent tool). See the streaming path.
