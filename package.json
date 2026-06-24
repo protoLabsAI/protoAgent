@@ -20,7 +20,13 @@
   "devDependencies": {
     "@protolabsai/design": "^0.3.0",
     "@protolabsai/vitepress-theme": "^0.3.6",
-    "@types/react": "18.3.29",
     "vitepress": "^1.6.4"
+  },
+  "//overrides": "@docsearch/react (VitePress docs search) peers on react@18, which ERESOLVEs against the console's react@19; point it at the root react so we don't need `legacy-peer-deps` (which silently disables overrides). With this, the whole tree resolves a single @types/react@19 — matching @protolabsai/ui (React-19-native, ships .tsx source our tsc compiles).",
+  "overrides": {
+    "@docsearch/react": {
+      "react": "^19.0.0",
+      "react-dom": "^19.0.0"
+    }
   }
 }

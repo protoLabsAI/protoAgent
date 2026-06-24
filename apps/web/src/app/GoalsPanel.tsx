@@ -107,7 +107,7 @@ export function GoalsPanel() {
       />
       <ScrollArea className="goals-list" role="region" aria-label="Goals" tabIndex={0}>
         <QueryErrorResetBoundary>
-          {({ reset }) => (
+          {({ reset }: { reset: () => void }) => (
             <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="goals" />}>
               <Suspense fallback={<PanelSkeleton label="Loading goals…" />}>
                 <GoalsList />

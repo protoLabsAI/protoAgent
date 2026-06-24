@@ -1,17 +1,16 @@
-import { Streamdown } from "streamdown";
+import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
 
 /**
- * Assistant message text via **streamdown** — a streaming-markdown renderer built for AI
- * output. It HARDENS incomplete markdown (a half-written code block / table / link doesn't
- * flash broken mid-stream) and memoizes blocks, instead of re-parsing the whole answer on
- * every streamed token (the old react-markdown path was O(N²) per turn). XSS-safe
- * (rehype-sanitize/harden, no raw HTML); Shiki code highlighting. Wrapped in `.markdown`
- * for the chat theme.
+ * Assistant message markdown — the DS `<Markdown>` (`@protolabsai/ui/markdown`, ≥0.48),
+ * which owns the brand styling for streamdown's prose AND its interactive chrome (code /
+ * table action buttons, themed + re-pinned), wires KaTeX math + GFM, and renders ```mermaid
+ * as a themed code block (live diagrams are an opt-in `renderMermaid`). Chrome defaults to
+ * copy-only — download/fullscreen are off for a chat bubble. Replaces the console's
+ * hand-rolled streamdown usage (protoContent#298).
+ *
+ * `className="markdown"` rides the same element the DS scopes as `.pl-markdown`, so existing
+ * `.markdown` selectors (e2e + message-layout) keep matching.
  */
 export function Markdown({ children }: { children: string }) {
-  return (
-    <div className="markdown">
-      <Streamdown>{children}</Streamdown>
-    </div>
-  );
+  return <DSMarkdown className="markdown">{children}</DSMarkdown>;
 }

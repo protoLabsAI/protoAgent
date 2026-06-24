@@ -12,8 +12,9 @@ import { isLauncherWindow } from "./lib/desktop";
 // Tailwind + the shadcn→token bridge, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
 import "./app/tailwind.css";
-import "@protolabsai/ui/styles.css";
-import "streamdown/styles.css"; // streaming-markdown base styles (before the app theme so it can override)
+import "@protolabsai/ui/styles.css"; // component styles, incl. the DS `.pl-markdown` renderer
+import "streamdown/styles.css"; // streaming per-token fade (opt-in; see DS <Markdown> docstring)
+import "katex/dist/katex.min.css"; // KaTeX glyph layout for math in the DS <Markdown>
 import "./app/theme-base.css"; // shared token bridge + resets — must load before the rest
 import "./app/theme.css";
 import { activateSlugAgent } from "./lib/api";

@@ -115,7 +115,7 @@ export function StagePanel({
   return (
     <section className={cls} data-testid={testId}>
       <QueryErrorResetBoundary>
-        {({ reset }) => (
+        {({ reset }: { reset: () => void }) => (
           <ErrorBoundary onReset={reset} resetKeys={resetKeys} fallback={(a) => <PanelError {...a} label={label} />}>
             <Suspense fallback={<PanelSkeleton label={loadingLabel ?? `Loading ${label}…`} />}>
               {children}

@@ -1,5 +1,7 @@
 import "./chat-component.css";
 
+import type { JSX } from "react";
+
 import type { ComponentSpec } from "../lib/types";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed

@@ -4,7 +4,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, type JSX } from "react";
 import { Download, DownloadCloud, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";

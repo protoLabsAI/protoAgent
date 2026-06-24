@@ -334,7 +334,7 @@ export function TasksPanel({ confirm }: { confirm: (req: ConfirmRequest) => void
   return (
     <section className="panel side-panel tasks-panel">
       <QueryErrorResetBoundary>
-        {({ reset }) => (
+        {({ reset }: { reset: () => void }) => (
           <ErrorBoundary onReset={reset} fallback={(a) => <PanelError {...a} label="tasks" />}>
             <Suspense fallback={<PanelSkeleton label="Loading tasks…" />}>
               <TasksBody confirm={confirm} />

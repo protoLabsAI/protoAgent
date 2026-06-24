@@ -16,11 +16,12 @@
   },
   "dependencies": {
     "@protolabsai/design": "^0.5.1",
-    "@protolabsai/ui": "^0.47.1",
+    "@protolabsai/ui": "^0.48.1",
     "@radix-ui/react-dropdown-menu": "^2.1.17",
     "@tanstack/react-query": "^5.100.14",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "katex": "^0.16.47",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

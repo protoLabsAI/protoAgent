@@ -856,68 +856,12 @@ select:disabled {
 
 /* Tool-call cards + per-tool renderers — moved to src/chat/tool-calls.css (#832). */
 
-/* Rendered markdown (assistant messages). The parent keeps pre-wrap for the
-   literal user text; markdown content reflows normally. */
-.markdown {
-  white-space: normal;
-  line-height: 1.55;
-}
-.markdown > :first-child { margin-top: 0; }
-.markdown > :last-child { margin-bottom: 0; }
-.markdown p { margin: 0 0 0.6em; }
-.markdown ul,
-.markdown ol { margin: 0 0 0.6em; padding-left: 1.4em; }
-.markdown li { margin: 0.15em 0; }
-.markdown h1,
-.markdown h2,
-.markdown h3,
-.markdown h4 { margin: 0.9em 0 0.4em; line-height: 1.25; font-weight: 600; }
-.markdown h1 { font-size: 1.3em; }
-.markdown h2 { font-size: 1.18em; }
-.markdown h3 { font-size: 1.06em; }
-.markdown a { color: var(--brand-indigo-bright); text-decoration: underline; }
-.markdown code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.1em 0.35em;
-}
-.markdown pre {
-  margin: 0 0 0.7em;
-  padding: 12px 14px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow-x: auto;
-}
-.markdown pre code {
-  background: none;
-  border: 0;
-  padding: 0;
-  font-size: 0.85em;
-}
-.markdown blockquote {
-  margin: 0 0 0.6em;
-  padding-left: 0.9em;
-  border-left: 3px solid var(--border-strong);
-  color: var(--fg-secondary);
-}
-.markdown table {
-  border-collapse: collapse;
-  margin: 0 0 0.7em;
-  display: block;
-  overflow-x: auto;
-}
-.markdown th,
-.markdown td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
-.markdown th { background: var(--bg-raised); }
-.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 0.9em 0; }
-
-/* Code highlighting is now Shiki (via streamdown), which emits inline token colors — the
-   old rehype-highlight `.hljs-*` token rules are gone. streamdown's code-block chrome
-   (header / copy button) is styled by its own Tailwind classes (scanned in tailwind.config). */
+/* Rendered markdown (assistant messages) is now the DS `<Markdown>` (@protolabsai/ui
+   ≥0.48), which scopes its own `.pl-markdown` and owns the FULL visual layer — prose
+   typography, Shiki code, KaTeX math, GFM tables, AND streamdown's interactive chrome
+   (code/table action buttons, themed + re-pinned to the brand). The console's hand-rolled
+   `.markdown` rules + the streamdown Tailwind scan are gone (protoContent#297/#298). The
+   `.markdown` class still rides the same element as an e2e/selector alias. */
 
 /* Chat composer + slash-command autocomplete — moved to src/chat/chat.css (#832). */
 /* HITL request card — moved to src/chat/hitl.css (#832). */
