@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.70.0",
+    "date": "2026-06-24",
+    "changes": [
+      "Plugins can own /<name> chat control commands",
+      "\"Report a bug\" link in the hamburger menu",
+      "GitHub is no longer in core — it's a standalone plugin"
+    ]
+  },
+  {
     "version": "v0.69.0",
     "date": "2026-06-24",
     "changes": [
