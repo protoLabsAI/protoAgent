@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Native reasoning — the agent's thinking now streams from the model, not a forced text
+  protocol.** Dropped the `<scratch_pad>`/`<output>` convention; the chat renders the model's
+  native `reasoning_content`, tool calls, and answer as they actually stream. An agentic
+  turn's reason→tool steps fold into one "Working… / Worked" block that tallies reasoning
+  steps, tool calls, and skill loads (hover for the breakdown) so the final answer leads;
+  the most-recent tool stays spotlighted while the turn runs. (#1328)
+- **Chat markdown now renders through the design system's `Markdown` renderer**
+  (`@protolabsai/ui`), replacing the hand-rolled pipeline. Assistant answers are
+  streaming-hardened (partial markdown never flashes broken mid-stream), with on-brand
+  code/table chrome (copy button), KaTeX math, GFM tables/task-lists, and themed mermaid
+  code blocks. (#1329, #1331)
+
+### Fixed
+- **Heavy research turns no longer wedge the server.** `web_search` and `fetch_url` ran their
+  blocking work (DuckDuckGo search, HTML parsing) directly on the event loop, so a parallel
+  `task_batch` fan-out could peg CPU and make the server unresponsive — even to cancellation.
+  Both now run off the loop, keeping the server responsive under load. (#1328)
+
 ## [0.68.0] - 2026-06-23
 
 ### Added
