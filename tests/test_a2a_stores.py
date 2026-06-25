@@ -364,3 +364,90 @@ async def test_async_paths_resolve_dns_off_the_event_loop(tmp_path, monkeypatch)
     assert ok is False
     assert resolver_threads and all(t != loop_thread for t in resolver_threads)
     await engine.dispose()
+
+
+# ── (c) upgrade guard: legacy pre-SDK 'tasks' table is dropped + recreated ──────
+
+
+async def _make_legacy_tasks_db(db_path: str, rows: int = 2) -> None:
+    """Create the bespoke pre-#443 ``tasks`` schema (no ``id`` column) + some rows,
+    mimicking a db file left by the old a2a_task_store before the SDK migration."""
+    from sqlalchemy import text
+
+    engine = make_sqlite_engine(db_path)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE TABLE tasks ("
+                "task_id TEXT PRIMARY KEY, state TEXT NOT NULL, "
+                "updated_at TEXT NOT NULL, data TEXT NOT NULL)"
+            )
+        )
+        for i in range(rows):
+            await conn.execute(
+                text("INSERT INTO tasks (task_id, state, updated_at, data) VALUES (:i, 'working', '2026-01-01', '{}')"),
+                {"i": f"legacy-{i}"},
+            )
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_drop_legacy_task_table_drops_bespoke_schema(tmp_path):
+    """A legacy ``tasks`` table (no ``id``) is detected and dropped → True."""
+    from sqlalchemy import text
+
+    db = str(tmp_path / "a2a-tasks.db")
+    await _make_legacy_tasks_db(db)
+
+    engine = make_sqlite_engine(db)
+    dropped = await stores.drop_legacy_task_table(engine)
+    assert dropped is True
+    async with engine.begin() as conn:
+        cols = [r[1] for r in (await conn.execute(text("PRAGMA table_info('tasks')"))).fetchall()]
+    assert cols == []  # table gone; create_all will rebuild it
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_drop_legacy_task_table_noop_on_fresh_and_sdk_schema(tmp_path):
+    """No-op (False) when the table is absent, and again once the SDK schema exists."""
+    db = str(tmp_path / "a2a-tasks.db")
+
+    engine = make_sqlite_engine(db)
+    # Fresh db, no tasks table yet.
+    assert await stores.drop_legacy_task_table(engine) is False
+
+    # SDK schema present (has ``id``) → must be left untouched.
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    assert await stores.drop_legacy_task_table(engine) is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_initialize_recreates_sdk_schema_over_legacy_db(tmp_path):
+    """End-to-end: a legacy db survives initialize_a2a_stores and a task round-trips
+    (regression for 'no such column: tasks.id')."""
+    from a2a.types import a2a_pb2
+
+    db = str(tmp_path / "a2a-tasks.db")
+    await _make_legacy_tasks_db(db)
+
+    task_engine = make_sqlite_engine(db)
+    task_store = DatabaseTaskStore(task_engine)
+    push_store, push_engine = await _fresh_push_store(str(tmp_path / "a2a-push.db"))
+
+    await initialize_a2a_stores(task_store, push_store)
+
+    ctx = _ctx()
+    task = a2a_pb2.Task(
+        id="t-new",
+        context_id="ctx-new",
+        status=a2a_pb2.TaskStatus(state=a2a_pb2.TASK_STATE_COMPLETED),
+    )
+    await task_store.save(task, ctx)  # would 500 with the legacy schema
+    got = await task_store.get("t-new", ctx)
+    assert got is not None and got.id == "t-new"
+
+    await task_engine.dispose()
+    await push_engine.dispose()

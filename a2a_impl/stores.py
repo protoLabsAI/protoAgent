@@ -391,6 +391,37 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
         return result.rowcount or 0
 
 
+async def drop_legacy_task_table(engine: AsyncEngine) -> bool:
+    """Drop a pre-SDK bespoke ``tasks`` table so the SDK store can recreate it.
+
+    The bespoke ``a2a_task_store.py`` (removed in the #443 SDK migration) created
+    ``tasks(task_id, state, updated_at, data)``. The SDK's ``DatabaseTaskStore``
+    expects ``tasks(id, context_id, status, …)`` and creates it via
+    ``Base.metadata.create_all`` — which **skips a table that already exists**. So
+    an instance upgraded across the migration keeps the legacy table, and every
+    task op 500s with ``no such column: tasks.id`` (the console chat path included).
+
+    Detect the legacy schema (``tasks`` present but no ``id`` column) and drop it
+    — task rows are transient, regenerable state — so the subsequent
+    ``create_all`` rebuilds the correct schema. No-op when the table is absent
+    (fresh db) or already on the SDK schema. Returns True when a drop occurred.
+    """
+    async with engine.begin() as conn:
+        cols = [r[1] for r in (await conn.execute(text("PRAGMA table_info('tasks')"))).fetchall()]
+        if not cols or "id" in cols:
+            return False  # no table yet, or already the SDK schema — nothing to do
+        n = (await conn.execute(text("SELECT count(*) FROM tasks"))).scalar()
+        await conn.execute(text("DROP TABLE tasks"))
+        log.warning(
+            "[a2a] dropped legacy pre-SDK 'tasks' table (%s row(s), columns=%s) so the SDK "
+            "DatabaseTaskStore can recreate its schema — fixes 'no such column: tasks.id' on "
+            "instances upgraded across the #443 store migration",
+            n,
+            cols,
+        )
+        return True
+
+
 async def initialize_a2a_stores(
     task_store: DatabaseTaskStore,
     push_store: ValidatingPushNotificationConfigStore,
@@ -405,6 +436,13 @@ async def initialize_a2a_stores(
     ``input_required`` / ``auth_required`` pauses are left alone (resumable from
     the checkpoint).
     """
+    # Upgrade guard: a legacy bespoke ``tasks`` table would survive create_all and
+    # break every task op with "no such column: tasks.id". Drop it first so the
+    # SDK rebuilds the correct schema.
+    try:
+        await drop_legacy_task_table(task_store.engine)
+    except Exception:
+        log.exception("[a2a] legacy task-table migration check failed; continuing")
     await task_store.initialize()
     await push_store.initialize()
     try:
