@@ -211,10 +211,31 @@ def test_register_no_delegates_registers_nothing(monkeypatch):
     assert r.tools == []
 
 
-def test_register_exposes_delegate_to_with_listing(monkeypatch):
+def test_register_exposes_delegate_to_and_list_agents(monkeypatch):
     r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
-    assert [t.name for t in r.tools] == ["delegate_to"]
+    assert [t.name for t in r.tools] == ["delegate_to", "list_agents"]
     assert "opus" in r.tools[0].description
+
+
+def test_registry_roster_shape():
+    reg = DelegateRegistry([{"name": "opus", "type": "openai", "url": "https://g/v1",
+                             "model": "m", "description": "a model"}])
+    assert reg.roster() == [{"name": "opus", "type": "openai", "description": "a model", "url": "https://g/v1"}]
+
+
+def test_list_agents_lists_roster_with_health(monkeypatch):
+    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1",
+                    "model": "m", "description": "a model"}], monkeypatch)
+    la = next(t for t in r.tools if t.name == "list_agents")
+    monkeypatch.setattr("plugins.delegates.health.health_snapshot", lambda: {"opus": {"ok": True}})
+    assert "🟢 opus (openai) — a model" in la.invoke({})
+
+
+def test_list_agents_unknown_health_is_neutral(monkeypatch):
+    r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
+    la = next(t for t in r.tools if t.name == "list_agents")
+    monkeypatch.setattr("plugins.delegates.health.health_snapshot", lambda: {})
+    assert "⚪ opus (openai)" in la.invoke({})
 
 
 async def test_delegate_to_unknown_and_empty(monkeypatch):

@@ -55,6 +55,35 @@ def _build_delegate_to(registry: DelegateRegistry):
     return delegate_to
 
 
+def _build_list_agents(registry: DelegateRegistry):
+    @tool
+    def list_agents() -> str:
+        """List the agents/delegates you can reach with `delegate_to`, with each one's
+        type, description, and current reachability (🟢 reachable · 🔴 down · ⚪ unknown).
+
+        Read this before assuming who's available — the roster is configuration, not a
+        fixed set, and it changes as delegates are added or removed."""
+        try:
+            from .health import health_snapshot
+
+            health = health_snapshot() or {}
+        except Exception:  # noqa: BLE001 — prober not running; reachability stays unknown
+            health = {}
+        roster = registry.roster()
+        if not roster:
+            return "No delegates configured."
+        lines = []
+        for r in roster:
+            ok = (health.get(r["name"]) or {}).get("ok")
+            badge = "🟢" if ok is True else "🔴" if ok is False else "⚪"
+            typ = f" ({r['type']})" if r["type"] else ""
+            desc = f" — {r['description']}" if r["description"] else ""
+            lines.append(f"{badge} {r['name']}{typ}{desc}")
+        return "\n".join(lines)
+
+    return list_agents
+
+
 def _load_delegates_config() -> list:
     """Read the top-level ``delegates: [...]`` list from the live config doc.
 
@@ -107,4 +136,6 @@ def register(registry) -> None:
         )
         return
     registry.register_tool(_build_delegate_to(reg))
-    log.info("[delegates] registered delegate_to for %d delegate(s): %s", len(reg.names()), ", ".join(reg.names()))
+    registry.register_tool(_build_list_agents(reg))
+    log.info("[delegates] registered delegate_to + list_agents for %d delegate(s): %s",
+             len(reg.names()), ", ".join(reg.names()))

@@ -56,6 +56,13 @@ class DelegateRegistry:
             f"`{d.name}` ({d.type}{' — ' + d.description if d.description else ''})" for d in self._items.values()
         )
 
+    def roster(self) -> list[dict]:
+        """Structured one-entry-per-delegate roster (for the ``list_agents`` tool)."""
+        return [
+            {"name": d.name, "type": d.type, "description": d.description, "url": d.url}
+            for d in self._items.values()
+        ]
+
     async def dispatch(self, name: str, query: str) -> str:
         d = self._items.get(name)
         if d is None:
