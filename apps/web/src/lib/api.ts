@@ -545,6 +545,15 @@ export const api = {
     return request<RuntimeStatus>("/api/runtime/status");
   },
 
+  // Short-lived HMAC token for the SSE EventSource, which can't send an
+  // Authorization header. Bearer-gated; in open mode the server returns "" and
+  // accepts a tokenless /api/events. events.ts fetches this before each
+  // (re)connect. Same slug routing as /api/events so the token is signed by
+  // whichever server actually terminates the stream (host or a proxied member).
+  sseToken() {
+    return request<{ token: string }>("/api/sse-token");
+  },
+
   // Gracefully restart the server process (POST /api/restart) — the server drains and
   // re-execs; the console reconnects via the boot gate. Always targets the HOST (the
   // process you're connected to), never a slug-routed agent.
