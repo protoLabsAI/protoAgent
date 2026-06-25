@@ -716,6 +716,10 @@ def _main():
     # that to ``None`` so configure() applies the documented A2A_AUTH_TOKEN env
     # fallback. (configure() treats an explicit "" as "bearer off, no fallback";
     # protoAgent has no separate apiKey-only flag, so unset ⇒ env, not off.)
+    # Plugin-declared auth-exempt prefixes (namespace-scoped in the manifest parser)
+    # — registered before the gate is installed so an inbound webhook / public view
+    # page passes under a token-gated deployment.
+    auth.set_public_prefixes(getattr(STATE, "plugin_public_paths", []) or [])
     auth.install(
         fastapi_app,
         bearer_token=((STATE.graph_config.auth_token if STATE.graph_config else "") or None),

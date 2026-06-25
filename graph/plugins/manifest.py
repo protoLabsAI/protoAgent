@@ -66,6 +66,13 @@ class PluginManifest:
     # postMessage token handshake. See `_parse_views` (warns on non-same-origin)
     # and docs/guides/building-react-plugin-views.md.
     views: list[dict] = field(default_factory=list)
+    # Auth-exempt paths — prefixes under THIS plugin's own /plugins/<id>/ (or
+    # /api/plugins/<id>/) namespace that the default-deny auth middleware lets
+    # through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer
+    # — the plugin verifies its own signature) or a public view page that must load
+    # in a browser iframe under a token-gated deployment. Namespace-scoped by the
+    # parser so a plugin can never exempt a core route.
+    public_paths: list[str] = field(default_factory=list)
     # Event contract (ADR 0039) — the topics this plugin broadcasts / listens for.
     # Declarative for discoverability (surfaced in /api/runtime/status): a plugin
     # "ships" its events as its public API so others subscribe by topic without
@@ -123,6 +130,29 @@ def _parse_views(views, plugin_id: str) -> list[dict]:
     return kept
 
 
+def _parse_public_paths(paths, plugin_id: str) -> list[str]:
+    """Keep auth-exempt paths that live under THIS plugin's namespace
+    (``/plugins/<id>/…`` or ``/api/plugins/<id>/…``); drop + warn on anything else.
+
+    Namespace-scoping is the security boundary: a plugin can exempt only its own
+    routes from the auth gate, never a core path like ``/api/config``."""
+    if not isinstance(paths, (list, tuple)):
+        return []
+    roots = (f"/plugins/{plugin_id}", f"/api/plugins/{plugin_id}")
+    kept: list[str] = []
+    for p in paths:
+        s = str(p).strip()
+        if s.startswith(roots):
+            kept.append(s)
+        elif s:
+            log.warning(
+                "[plugins] %s: public_path %r is outside the plugin namespace "
+                "(/plugins/%s/… or /api/plugins/%s/…) — ignored",
+                plugin_id, s, plugin_id, plugin_id,
+            )
+    return kept
+
+
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     """Parse ``<plugin_dir>/protoagent.plugin.yaml`` → ``PluginManifest``.
 
@@ -156,6 +186,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     secrets = data.get("secrets")
     settings = data.get("settings")
     views = _parse_views(data.get("views"), pid)
+    public_paths = _parse_public_paths(data.get("public_paths"), pid)
     emits = data.get("emits")
     subscribes = data.get("subscribes")
     requires_pip = data.get("requires_pip")
@@ -177,6 +208,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         test=bool(data.get("test", False)),
         guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
+        public_paths=public_paths,
         emits=[str(x) for x in emits] if isinstance(emits, (list, tuple)) else [],
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],
         requires_pip=[str(x) for x in requires_pip] if isinstance(requires_pip, (list, tuple)) else [],

@@ -51,6 +51,7 @@ class AppState:
     plugin_chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only /<name> control commands
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571)
     plugin_routers: list = field(default_factory=list)
+    plugin_public_paths: list = field(default_factory=list)  # manifest auth-exempt prefixes
     # The live FastAPI app + the (plugin_id, prefix) keys already mounted on it —
     # lets a config reload hot-mount a newly-enabled plugin's routes (no restart).
     fastapi_app: object = None

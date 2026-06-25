@@ -57,6 +57,23 @@ def test_manifest_parse(tmp_path) -> None:
     assert load_manifest(tmp_path / "bad") is None  # missing id
 
 
+def test_public_paths_namespace_scoped(tmp_path) -> None:
+    # A plugin may declare auth-exempt paths only under its OWN namespace; anything
+    # else (a core path, another plugin's path) is dropped by the parser.
+    _make_plugin(
+        tmp_path, "wh", enabled=True,
+        manifest_extra=(
+            "public_paths:\n"
+            "  - /plugins/wh/webhook\n"
+            "  - /api/plugins/wh/data\n"
+            "  - /api/config\n"
+            "  - /plugins/other/x\n"
+        ),
+    )
+    m = load_manifest(tmp_path / "wh")
+    assert m.public_paths == ["/plugins/wh/webhook", "/api/plugins/wh/data"]
+
+
 def test_discover_live_overrides_bundle(tmp_path, monkeypatch) -> None:
     bundle = tmp_path / "bundle"
     live = tmp_path / "live"

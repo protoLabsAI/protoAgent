@@ -151,6 +151,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
                 _pre.surfaces,
                 _pre.meta,
             )
+            STATE.plugin_public_paths = _pre.public_paths
             _register_plugin_subagents(_pre.subagents)
             log.info(
                 "Setup wizard has not been completed — graph not compiled "
@@ -212,6 +213,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # build below so the first compile (and every reload) can delegate to them.
     # (`global STATE.plugin_routers, STATE.plugin_surfaces` is declared at the top of the fn.)
     STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
+    STATE.plugin_public_paths = _plugins.public_paths
     _register_plugin_subagents(_plugins.subagents)
     _apply_config_subagents(STATE.graph_config)  # YAML subagent overrides (tools/max_turns/model)
     STATE.plugin_middleware = _resolve_plugin_middleware(STATE.graph_config, _plugins.middleware)  # ADR 0032

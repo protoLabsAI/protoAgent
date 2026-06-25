@@ -35,6 +35,7 @@ class PluginLoadResult:
     embedders: dict = field(default_factory=dict)  # name -> embed_fn factory (ADR 0031)
     a2a_skills: list = field(default_factory=list)  # A2A card skill specs (#570)
     routers: list = field(default_factory=list)  # {plugin_id, router, prefix} (ADR 0018)
+    public_paths: list = field(default_factory=list)  # manifest-declared auth-exempt prefixes
     surfaces: list = field(default_factory=list)  # {plugin_id, name, start, stop}
     subagents: list = field(default_factory=list)  # SubagentConfig
     middleware: list = field(default_factory=list)  # factories: (config) -> AgentMiddleware|None (ADR 0032)
@@ -360,6 +361,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # the server can namespace + report them.
         for r in registry.routers:
             result.routers.append({"plugin_id": manifest.id, **r})
+        # Manifest-declared auth-exempt prefixes (already namespace-scoped by the
+        # parser) — the server hands these to the auth middleware so an inbound
+        # webhook / public view page works under a token gate.
+        result.public_paths.extend(manifest.public_paths)
         # Cross-check: every declared view must be served by one of this plugin's
         # routers, else the iframe renders blank/404. Catches "declared a view but
         # forgot register_router" / a path typo that fails silently today.

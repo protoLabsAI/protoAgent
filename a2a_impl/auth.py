@@ -61,13 +61,43 @@ _PUBLIC_PREFIXES = (
     "/_ds/",
 )
 
+# Plugin-declared auth-exempt prefixes. Set once at startup (and on reload) from
+# enabled plugins' manifest ``public_paths`` — each already validated to the
+# plugin's own ``/plugins/<id>/`` namespace by the manifest parser. This lets a
+# plugin serve an inbound webhook (no bearer — verified by its own HMAC) or a
+# public view page even when a bearer gates everything else. A plugin can ONLY
+# exempt its own routes; ``set_public_prefixes`` rejects anything else as
+# defence-in-depth.
+_PLUGIN_PUBLIC: list[str] = []
+
 # SSE token lifetime (seconds).
 _SSE_TOKEN_LIFETIME = 30
 
 
+def set_public_prefixes(prefixes) -> None:
+    """Replace the plugin-declared public-prefix set (idempotent + reload-safe).
+
+    Each prefix must live under a ``/plugins/<id>/`` namespace — a plugin can
+    exempt its own routes, never a core path. Non-conforming entries are dropped
+    with a warning."""
+    cleaned: list[str] = []
+    for p in prefixes or []:
+        s = str(p).strip()
+        if not s:
+            continue
+        if s.startswith("/plugins/") or s.startswith("/api/plugins/"):
+            cleaned.append(s)
+        else:
+            logger.warning("[a2a] ignoring plugin public prefix %r — must live under /plugins/<id>/", s)
+    _PLUGIN_PUBLIC[:] = cleaned
+    if cleaned:
+        logger.info("[a2a] %d plugin-declared auth-exempt path(s): %s", len(cleaned), ", ".join(cleaned))
+
+
 def _is_public(path: str) -> bool:
     """Return True when ``path`` is on the public allowlist (no auth needed)."""
-    return any(path.startswith(p) for p in _PUBLIC_PREFIXES)
+    return (any(path.startswith(p) for p in _PUBLIC_PREFIXES)
+            or any(path.startswith(p) for p in _PLUGIN_PUBLIC))
 
 
 def set_bearer_token(token: str | None) -> None:

@@ -169,6 +169,25 @@ def test_ac4_agent_card_public(monkeypatch):
     assert _client_multi().get("/.well-known/agent-card.json").status_code == 200
 
 
+# A plugin-declared public prefix is exempted; a core path can never be, and the
+# set replaces cleanly (reload-safe).
+def test_plugin_public_prefix_exempts_only_namespaced(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    try:
+        auth.set_public_prefixes(["/plugins/example/status"])
+        c = _client_multi()
+        assert c.get("/plugins/example/status").status_code == 200   # now exempt (e.g. a webhook)
+        assert c.post("/plugins/example/status").status_code == 200
+        assert c.get("/api/config").status_code == 401               # core path untouched
+        # A plugin cannot exempt a core path — set_public_prefixes drops it.
+        auth.set_public_prefixes(["/api/config"])
+        assert _client_multi().get("/api/config").status_code == 401
+    finally:
+        auth.set_public_prefixes([])  # reset module state for other tests
+        assert _client_multi().get("/plugins/example/status").status_code == 401
+
+
 # AC5: /app is public (SPA served without auth)
 def test_ac5_app_public(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
