@@ -3,26 +3,21 @@ import { Badge } from "@protolabsai/ui/primitives";
 import type { PluginUpdate } from "../lib/types";
 
 // Shared freshness indicator (ADR 0027) — joins an installed plugin to its
-// update status (GET /api/plugins/updates) and renders a single DS Badge next to
-// the v{version}. Used by BOTH the Settings → Integrations list (PluginsSection)
-// and the Plugins rail Local tab (PluginsSurface) so the copy/tone stay identical.
+// update status (GET /api/plugins/updates) and renders a DS Badge next to the
+// v{version} ONLY when there's something to say. Used by BOTH the Settings →
+// Integrations list (PluginsSection) and the Plugins Local tab (PluginsSurface).
 //
-//   not behind        → "up to date"  (success)
 //   behind            → "update available" (info)
-//   pinned (SHA ref)  → "pinned"       (neutral, muted — never auto-updates)
 //   check errored     → "check failed" (warning, error surfaced in the title)
+//   up to date        → nothing — the healthy default stays quiet (a badge on
+//                       every current plugin is just noise); the Update action
+//                       only appears when behind, so "up to date" needs no label
+//   pinned (SHA ref)  → nothing — it simply never offers an update
 //
 // `update` is undefined while the updates query is loading or unavailable (the
 // query degrades gracefully) — render nothing then, the row is still complete.
 export function PluginFreshness({ update }: { update?: PluginUpdate }) {
-  if (!update) return null;
-  if (update.pinned) {
-    return (
-      <Badge status="neutral">
-        <span title="Pinned to a commit SHA — won't auto-update">pinned</span>
-      </Badge>
-    );
-  }
+  if (!update || update.pinned) return null;
   if (update.error) {
     return (
       <Badge status="warning">
@@ -39,5 +34,5 @@ export function PluginFreshness({ update }: { update?: PluginUpdate }) {
       </Badge>
     );
   }
-  return <Badge status="success">up to date</Badge>;
+  return null; // up to date — no badge
 }

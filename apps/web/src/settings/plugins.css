@@ -77,6 +77,11 @@
 /* Installed plugin row. Configure now opens a per-plugin settings dialog (ADR 0059) —
    the row is a single line; the icon action cluster shouldn't shrink under a long name. */
 .plugin-row-wrap { display: flex; flex-direction: column; }
+/* Name · version · badge on one baseline-aligned line with real breathing room
+   (the old layout jammed the version + badge straight against the name). */
+.plugin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.plugin-row-head > strong { min-width: 0; }
+.plugin-row-head .plugin-ver { font-weight: 400; }
 /* Keep the action cluster a tight HORIZONTAL row. `.subagent-row > div { display: grid }`
    (theme.css) otherwise out-specifies the base `.plugin-row-actions { display: flex }` and
    stacks the buttons into a column — the bulk this rework is removing. This selector

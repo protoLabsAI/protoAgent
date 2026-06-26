@@ -64,20 +64,20 @@ function PluginRow({
     <div className="plugin-row-wrap">
       <div className="subagent-row">
         <div>
-          <strong>
-            {p.name}
-            {p.version ? <span className="muted"> v{p.version}</span> : null}
+          {/* Name · version · (only-when-actionable) freshness/error badge. The loaded
+              vs disabled state is already the section this row sits under, so it carries
+              no per-row status pill — only a genuine error gets a badge. */}
+          <div className="plugin-row-head">
+            <strong>{p.name}</strong>
+            {p.version ? <span className="plugin-ver">v{p.version}</span> : null}
             <PluginFreshness update={update} />
-          </strong>
+            {p.error ? <StatusPill label="error" tone="error" /> : null}
+          </div>
           <span>{contributionsLabel(p)}</span>
         </div>
         {/* Compact action cluster: secondary actions (update / configure / uninstall) are
             icon-only with tooltips; only the primary Enable/Disable toggle keeps its label. */}
         <div className="plugin-row-actions">
-          <StatusPill
-            label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
-            tone={p.loaded ? "success" : p.error ? "error" : "muted"}
-          />
           {update?.behind ? (
             <Button
               type="button"
