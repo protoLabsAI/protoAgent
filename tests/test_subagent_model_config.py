@@ -94,22 +94,28 @@ def test_allow_skill_emission_defaults_true_and_is_settable():
     assert opted_out.allow_skill_emission is False
 
 
-def test_config_overlay_preserves_allow_skill_emission():
-    """A YAML model/tools override must not clobber allow_skill_emission — _apply_config_subagents
-    rebuilds from the base entry, which carries the flag (replace() leaves it untouched)."""
+def test_config_overlay_preserves_allow_skill_emission(monkeypatch):
+    """A YAML model/tools override must not RESET allow_skill_emission to the dataclass
+    default — _apply_config_subagents rebuilds via replace(base, ...). Seed the base with
+    the flag OFF (the non-default) so this fails if a refactor reconstructs the config
+    without carrying it through, not just when it happens to match the default."""
+    import graph.subagents.config as sub_config
+
     original = SUBAGENT_REGISTRY.get("researcher")
+    # _apply_config_subagents reads the module-level RESEARCHER_CONFIG as its base.
+    monkeypatch.setattr(sub_config, "RESEARCHER_CONFIG", dataclasses.replace(RESEARCHER_CONFIG, allow_skill_emission=False))
     try:
-        RESEARCHER_CONFIG_BASE = dataclasses.replace(RESEARCHER_CONFIG)
-        SUBAGENT_REGISTRY["researcher"] = dataclasses.replace(RESEARCHER_CONFIG_BASE)
         cfg = LangGraphConfig()
         cfg.researcher = dataclasses.replace(cfg.researcher, model="protolabs/reasoning")
         _apply_config_subagents(cfg)
         entry = SUBAGENT_REGISTRY["researcher"]
-        assert entry.model == "protolabs/reasoning"
-        assert entry.allow_skill_emission is RESEARCHER_CONFIG.allow_skill_emission
+        assert entry.model == "protolabs/reasoning"  # overlay applied
+        assert entry.allow_skill_emission is False  # base flag preserved, NOT reset to default True
     finally:
         if original is not None:
             SUBAGENT_REGISTRY["researcher"] = original
+        else:
+            SUBAGENT_REGISTRY.pop("researcher", None)  # don't leave a temp entry behind
 
 
 def test_disabled_removes_subagent():
