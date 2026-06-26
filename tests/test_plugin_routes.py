@@ -151,6 +151,33 @@ def test_install_bundle_without_declared_enable_enables_every_member(monkeypatch
     assert body["enabled"] == ["a", "b"]
 
 
+def test_install_bundle_seeds_config_defaults_without_clobbering(monkeypatch):
+    """A bundle's recommended config defaults ride the same enable write (#1350) —
+    filling only keys the operator hasn't already set in the live config."""
+    from graph.plugins import installer
+
+    captured = _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {
+            "bundle": "pm-stack",
+            "installed": [{"id": "browser"}],
+            "enabled": ["browser"],
+            "config": {"browser": {"panel_mode": "full", "timeout": 30}},
+        },
+    )
+    # Operator already set browser.panel_mode — the default must NOT overwrite it.
+    import graph.config_io as _cio
+
+    monkeypatch.setattr(_cio, "load_yaml_doc", lambda p=None: {"browser": {"panel_mode": "compact"}})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack"}).json()
+    assert body["enabled"] == ["browser"]
+    # only the unset key is seeded; the operator's panel_mode is left for apply_updates_to_yaml to keep
+    assert captured["config"]["browser"] == {"timeout": 30}
+    assert captured["config"]["plugins"]["enabled"] == ["browser"]
+
+
 def test_install_opt_out_stays_install_not_enable(monkeypatch):
     from graph.plugins import installer
 

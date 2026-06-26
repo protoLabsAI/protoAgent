@@ -183,3 +183,44 @@ def test_enable_installed_idempotent_and_missing_lock(root):
     (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "s", "enabled": ["a"]}]}))
     assert manager._enable_installed_in_config(cfg, ws / "plugins.lock") == []  # already on
     assert yaml.safe_load(cfg.read_text())["plugins"]["enabled"] == ["delegates", "a"]
+
+
+# ── bundle config defaults on create (#1350) ──────────────────────────────────
+def test_apply_bundle_config_defaults_seeds_unset_keys(root):
+    """A bundle's recommended config defaults land in the workspace config, filling only
+    keys the operator hasn't set (a fresh workspace, so everything is unset)."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    cfg.write_text(cfg.read_text() + "agent_browser:\n  panel_mode: compact\n")  # operator pre-set
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "config": {"agent_browser": {"panel_mode": "full", "timeout": 30}, "board": {"theme": "dark"}},
+                    }
+                ]
+            }
+        )
+    )
+    overlay = manager._apply_bundle_config_defaults(cfg, ws / "plugins.lock")
+    assert overlay == {"agent_browser": {"timeout": 30}, "board": {"theme": "dark"}}
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["agent_browser"] == {"panel_mode": "compact", "timeout": 30}  # operator value kept, default added
+    assert doc["board"] == {"theme": "dark"}  # brand-new section seeded
+
+
+def test_apply_bundle_config_defaults_noop_without_config(root):
+    """A bundle with no `config:` block (or a missing lock) writes nothing."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    before = cfg.read_text()
+    assert manager._apply_bundle_config_defaults(cfg, ws / "nope.lock") == {}
+    (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "stack", "plugins": ["a"]}]}))
+    assert manager._apply_bundle_config_defaults(cfg, ws / "plugins.lock") == {}
+    assert cfg.read_text() == before  # untouched

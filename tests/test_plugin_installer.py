@@ -270,6 +270,32 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     # the curated turn-on list is persisted in the lock (#1346) so a lock-only consumer
     # (the fleet new-agent path) can auto-enable exactly what the author intended.
     assert bundles[0]["enabled"] == ["delegates", "demo_a", "demo_b"]
+    # ...and the recommended config defaults too (#1350), for the same consumer.
+    assert bundles[0]["config"] == {"demo_a": {"k": "v"}}
+
+
+def test_bundle_config_overlay_fills_only_unset_keys():
+    """Defaults overlay: a key the operator already set is left untouched; only the
+    unset keys are filled, and a fully-set section is dropped (#1350)."""
+    bundle_config = {
+        "agent_browser": {"panel_mode": "full", "timeout": 30},
+        "board": {"theme": "dark"},
+    }
+    current = {
+        "agent_browser": {"panel_mode": "compact"},  # operator already chose this — keep it
+        "board": {"theme": "light"},  # fully set → section dropped
+    }
+    overlay = installer.bundle_config_overlay(bundle_config, current)
+    assert overlay == {"agent_browser": {"timeout": 30}}  # only the unset key; operator value wins
+
+
+def test_bundle_config_overlay_empty_and_malformed():
+    assert installer.bundle_config_overlay(None, {}) == {}
+    assert installer.bundle_config_overlay({}, None) == {}
+    # a non-dict section value is skipped, not crashed on
+    assert installer.bundle_config_overlay({"x": "notadict"}, {}) == {}
+    # no current → every key is unset, so all fill
+    assert installer.bundle_config_overlay({"x": {"a": 1}}, {}) == {"x": {"a": 1}}
 
 
 def test_install_bundle_member_missing_url_errors(env):

@@ -284,8 +284,10 @@ def create(
             # matching the console install path (which auto-enables on install, ADR 0027).
             # The CLI installer deliberately doesn't enable, so without this the agent
             # comes up with the bundle installed-but-off and the operator has to flip each
-            # one on in Settings ▸ Plugins (#1346).
+            # one on in Settings ▸ Plugins (#1346). Then seed the bundle's recommended
+            # per-plugin config defaults (#1350) — a fresh workspace, so nothing to clobber.
             _enable_installed_in_config(cfg, ws / "plugins.lock")
+            _apply_bundle_config_defaults(cfg, ws / "plugins.lock")
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
@@ -327,6 +329,43 @@ def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:
         plugins["enabled"] = enabled + added
         save_yaml_doc(doc, cfg)
     return added
+
+
+def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
+    """Seed a freshly-installed bundle's recommended per-plugin ``config:`` defaults
+    into the workspace config (#1350). Defaults only — `bundle_config_overlay` drops any
+    key already set in the config, so an operator value is never clobbered. Each plugin's
+    config is a top-level section keyed by its id (ADR 0019). Returns the applied overlay.
+    Best-effort — a malformed lock/config is a no-op."""
+    import json
+
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.plugins.installer import bundle_config_overlay
+
+    try:
+        data = json.loads(lock.read_text()) if lock.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+    merged: dict = {}
+    for b in data.get("bundles") or []:
+        merged.update(b.get("config") or {})
+    if not merged:
+        return {}
+
+    doc = load_yaml_doc(cfg)
+    if not isinstance(doc, dict):
+        return {}
+    overlay = bundle_config_overlay(merged, doc)
+    if not overlay:
+        return {}
+    for section, fill in overlay.items():
+        dest = doc.setdefault(section, {})
+        if not isinstance(dest, dict):
+            continue
+        for k, v in fill.items():
+            dest[k] = v
+    save_yaml_doc(doc, cfg)
+    return overlay
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:

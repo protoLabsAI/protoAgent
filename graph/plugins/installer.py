@@ -435,6 +435,26 @@ def load_bundle(repo: Path) -> dict | None:
     return doc
 
 
+def bundle_config_overlay(bundle_config: dict | None, current: dict | None) -> dict:
+    """Reduce a bundle's recommended ``config:`` ({section: {key: val}}) to a DEFAULTS
+    overlay: only the keys the operator hasn't already set in ``current`` (the live
+    config sections). Per-section, per-leaf — an operator value always wins and a
+    present key is left untouched, so applying this never clobbers existing settings.
+    Empty sections are dropped. Shared by the console install route and the fleet
+    create path so both apply bundle defaults identically (#1350)."""
+    overlay: dict = {}
+    cur = current if isinstance(current, dict) else {}
+    for section, values in (bundle_config or {}).items():
+        if not isinstance(values, dict):
+            continue
+        existing = cur.get(section)
+        existing = existing if isinstance(existing, dict) else {}
+        fill = {k: v for k, v in values.items() if k not in existing}
+        if fill:
+            overlay[str(section)] = fill
+    return overlay
+
+
 def _install_bundle(
     bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None, *, force: bool, by: str, allow: list[str] | None
 ) -> dict:
@@ -471,6 +491,10 @@ def _install_bundle(
             # installs via a CLI subprocess and never sees the live install summary — can
             # auto-enable exactly what the bundle author intended. Empty = enable all members.
             "enabled": list(bundle.get("enabled") or []),
+            # The bundle's recommended per-plugin config defaults ({section: {key: val}}).
+            # Cached for the same lock-only consumer; applied as DEFAULTS (operator values
+            # win, present keys are never clobbered — see `bundle_config_overlay`).
+            "config": dict(bundle.get("config") or {}),
             # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
             # this bundle as a starter type without re-reading its manifest.
             "archetype": bundle.get("archetype") or {},

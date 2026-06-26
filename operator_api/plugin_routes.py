@@ -233,9 +233,22 @@ def register_plugin_routes(app) -> None:
                     enabled.append(pid)
             from server.agent_init import _apply_settings_changes
 
-            ok, messages = _apply_settings_changes(
-                config={"plugins": {"enabled": enabled, "disabled": disabled}},
-            )
+            config_updates: dict = {"plugins": {"enabled": enabled, "disabled": disabled}}
+            # Seed the bundle's recommended per-plugin config defaults (#1350) — same trust
+            # gate as auto-enable. Defaults only: reduce against the current YAML config so an
+            # operator value (or a key they've already set) is never clobbered.
+            bundle_config = summary.get("config") if "bundle" in summary else None
+            if bundle_config:
+                from graph.config_io import load_yaml_doc
+                from graph.plugins.installer import bundle_config_overlay
+
+                import graph.config_io as _cio
+
+                current = load_yaml_doc(_cio.CONFIG_YAML_PATH)
+                overlay = bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {})
+                config_updates.update(overlay)
+
+            ok, messages = _apply_settings_changes(config=config_updates)
             if ok:
                 reloaded, enabled_now = True, ids
             else:
