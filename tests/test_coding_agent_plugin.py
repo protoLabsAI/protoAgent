@@ -41,6 +41,13 @@ def test_short_tool_name_peels_inline_args_and_mcp_source():
     assert _short_tool_name("Skill: Use skill: 'browser-automation'") == "Skill: Use skill: 'browser-automation'"
     # A legit, non-MCP trailing parenthetical is PRESERVED (only "(… MCP Server)" is peeled).
     assert _short_tool_name("search (beta)") == "search (beta)"
+    # Claude Code's `mcp__<server>__<tool>` namespace prefix is peeled to the bare tool.
+    assert _short_tool_name("mcp__protoagent-operator__current_time") == "current_time"
+    assert _short_tool_name("mcp__proto_ops__list_issues") == "list_issues"
+    # …even with inline args attached.
+    assert _short_tool_name('mcp__protoagent-operator__fetch_url: {"url":"https://x"}') == "fetch_url"
+    # A non-namespaced native tool name is untouched.
+    assert _short_tool_name("read_file") == "read_file"
     # Defensive cap so an unbounded title can never blow out the header.
     assert len(_short_tool_name("x" * 500)) <= 80
 

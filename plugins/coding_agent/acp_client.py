@@ -72,12 +72,17 @@ def _split_tool_title(title: str) -> tuple[str, str]:
 
 def _short_tool_name(title: str) -> str:
     """A compact card label from a (possibly verbose) ACP tool title: drop the inline
-    JSON args and a trailing ``(… MCP Server)`` source so the header stays a short
-    at-a-glance name (parity with the native runtime's clean tool names). The args +
-    source live in the card body instead."""
+    JSON args, a trailing ``(… MCP Server)`` source, and a leading ``mcp__<server>__``
+    namespace prefix, so the header stays a short at-a-glance name (parity with the
+    native runtime's clean tool names). The args + source live in the card body instead."""
     label, _ = _split_tool_title(title)
     # Drop a trailing "(… MCP Server)" source suffix only — NOT a legit "(beta)" / "(v2)".
     label = re.sub(r"\s*\([^)]*\b(?:MCP|server)\b[^)]*\)\s*$", "", label, flags=re.IGNORECASE).strip()
+    # Drop the `mcp__<server>__` prefix some agents (Claude Code) put on MCP tools —
+    # `mcp__protoagent-operator__current_time` → `current_time` — so the card reads as the
+    # bare tool name like the native runtime, not the wire-namespaced one. Non-greedy so it
+    # peels only the mcp+server segment; a non-namespaced name (`read_file`) is untouched.
+    label = re.sub(r"^mcp__.+?__", "", label).strip()
     return (label or (title or "").strip() or "tool")[:80]
 
 
