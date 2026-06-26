@@ -115,3 +115,71 @@ def test_fleet_state_follows_scoped_root(root, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "roxy")
     assert supervisor._state_path() == manager.workspaces_root() / "fleet.json"
     assert "roxy" in supervisor._state_path().parts
+
+
+# ── bundle auto-enable on create (#1346) ──────────────────────────────────────
+def _seed_config(ws, enabled=("delegates",)):
+    """Write a minimal workspace config with the given plugins.enabled list."""
+    ws.mkdir(parents=True, exist_ok=True)
+    cfg = ws / "langgraph-config.yaml"
+    cfg.write_text(f"plugins:\n  enabled: [{', '.join(enabled)}]\n")
+    return cfg
+
+
+def test_enable_installed_honors_bundle_curated_subset(root):
+    """A bundle's curated `enabled` subset is what gets turned on — not every member —
+    and `delegates` from the template is preserved."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "plugins": [{"id": "a"}, {"id": "b"}, {"id": "extra"}],
+                "bundles": [{"id": "stack", "plugins": ["a", "b", "extra"], "enabled": ["a", "b"]}],
+            }
+        )
+    )
+    added = manager._enable_installed_in_config(cfg, ws / "plugins.lock")
+    assert added == ["a", "b"]
+    enabled = yaml.safe_load(cfg.read_text())["plugins"]["enabled"]
+    assert enabled == ["delegates", "a", "b"]  # delegates kept, curated subset added, `extra` left off
+
+
+def test_enable_installed_falls_back_to_all_members(root):
+    """A bundle with no curated `enabled` list enables every installed member."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(
+        json.dumps({"plugins": [{"id": "a"}, {"id": "b"}], "bundles": [{"id": "stack", "plugins": ["a", "b"]}]})
+    )
+    added = manager._enable_installed_in_config(cfg, ws / "plugins.lock")
+    assert added == ["a", "b"]
+    assert yaml.safe_load(cfg.read_text())["plugins"]["enabled"] == ["delegates", "a", "b"]
+
+
+def test_enable_installed_bare_plugin_no_bundle(root):
+    """A single-plugin install (no bundle record) enables that plugin."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(json.dumps({"plugins": [{"id": "solo"}]}))
+    added = manager._enable_installed_in_config(cfg, ws / "plugins.lock")
+    assert added == ["solo"]
+    assert yaml.safe_load(cfg.read_text())["plugins"]["enabled"] == ["delegates", "solo"]
+
+
+def test_enable_installed_idempotent_and_missing_lock(root):
+    """Already-enabled ids aren't duplicated; a missing lock is a no-op."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws, enabled=("delegates", "a"))
+    assert manager._enable_installed_in_config(cfg, ws / "nope.lock") == []  # no lock → no change
+    (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "s", "enabled": ["a"]}]}))
+    assert manager._enable_installed_in_config(cfg, ws / "plugins.lock") == []  # already on
+    assert yaml.safe_load(cfg.read_text())["plugins"]["enabled"] == ["delegates", "a"]

@@ -280,10 +280,53 @@ def create(
     try:
         if bundle:
             installed = _install_bundle_into(ws, bundle)
+            # Auto-enable the bundle's plugins so a new agent boots WITH its tools live —
+            # matching the console install path (which auto-enables on install, ADR 0027).
+            # The CLI installer deliberately doesn't enable, so without this the agent
+            # comes up with the bundle installed-but-off and the operator has to flip each
+            # one on in Settings ▸ Plugins (#1346).
+            _enable_installed_in_config(cfg, ws / "plugins.lock")
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
     return {**rec, "path": str(ws), "installed": installed}
+
+
+def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:
+    """Add a freshly-installed bundle's plugins to ``plugins.enabled`` in the workspace
+    config, so the agent starts with them on. Honors each bundle's curated ``enabled``
+    subset (cached in the lock by ``_install_bundle``), falling back to every installed
+    member; for a bare single-plugin install with no bundle entry, enables that plugin.
+    Unions with whatever the template already enabled (``delegates``); returns the ids
+    newly added. Best-effort — a malformed lock/config leaves enablement untouched."""
+    import json
+
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+
+    try:
+        data = json.loads(lock.read_text()) if lock.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return []
+    bundles = data.get("bundles") or []
+    want: list[str] = []
+    if bundles:
+        for b in bundles:
+            want += [str(x) for x in (b.get("enabled") or b.get("plugins") or [])]
+    else:  # a bare plugin install (no bundle record) — enable what landed
+        want += [str(p["id"]) for p in (data.get("plugins") or []) if p.get("id")]
+    if not want:
+        return []
+
+    doc = load_yaml_doc(cfg)
+    if not isinstance(doc, dict):
+        return []
+    plugins = doc.setdefault("plugins", {})
+    enabled = list(plugins.get("enabled") or [])
+    added = [p for p in want if p not in enabled]
+    if added:
+        plugins["enabled"] = enabled + added
+        save_yaml_doc(doc, cfg)
+    return added
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:

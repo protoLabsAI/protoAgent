@@ -466,6 +466,11 @@ def _install_bundle(
             "requested_ref": ref or "",
             "resolved_sha": bundle_sha,
             "plugins": [s["id"] for s in installed],
+            # The bundle's curated turn-on list (a subset of `plugins`). Cached here so a
+            # consumer that only sees the lock — e.g. the fleet new-agent path, which
+            # installs via a CLI subprocess and never sees the live install summary — can
+            # auto-enable exactly what the bundle author intended. Empty = enable all members.
+            "enabled": list(bundle.get("enabled") or []),
             # Archetype metadata (ADR 0042) cached here so the new-agent picker can offer
             # this bundle as a starter type without re-reading its manifest.
             "archetype": bundle.get("archetype") or {},
