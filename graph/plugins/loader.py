@@ -315,7 +315,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # Resolved config section (ADR 0019) — defaults if not in plugin_config.
             section = manifest.config_section or manifest.id
             pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
-            registry = PluginRegistry(manifest.id, manifest.path, config=pconf)
+            registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
             register(registry)
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot
             # Clear diagnostic when an enabled plugin's declared deps aren't
