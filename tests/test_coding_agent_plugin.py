@@ -18,7 +18,16 @@ import pytest
 
 import plugins.coding_agent as P
 from plugins.coding_agent import _make_permission
-from plugins.coding_agent.acp_client import AcpClient, AcpError, _short_tool_name, _split_tool_title
+from plugins.coding_agent import acp_client
+from plugins.coding_agent.acp_client import (
+    AcpClient,
+    AcpError,
+    _launch_env,
+    _missing_binary_message,
+    _short_tool_name,
+    _split_tool_title,
+    _version_sort_key,
+)
 
 
 def test_short_tool_name_peels_inline_args_and_mcp_source():
@@ -220,6 +229,70 @@ async def test_acp_client_missing_binary_raises_acp_error(tmp_path):
     client = AcpClient("definitely-not-a-real-binary-xyz", [], cwd=str(tmp_path))
     with pytest.raises(AcpError):
         await client.prompt("hi", timeout=10.0)
+
+
+# ── PATH augmentation for service-launched servers (nvm/fnm node not on PATH) ────────
+
+
+def _fake_node_dir(tmp_path) -> str:
+    """A dir that looks like a node bin dir (has an executable `node`)."""
+    d = tmp_path / "nodebin"
+    d.mkdir()
+    node = d / "node"
+    node.write_text("#!/bin/sh\n")
+    node.chmod(0o755)
+    return str(d)
+
+
+def test_launch_env_appends_node_dir_when_node_missing(tmp_path, monkeypatch):
+    """A service PATH that can't see node gets the discovered node dirs appended, so an
+    ACP agent that launches via `npx` can still find node — the systemd/nvm fix (#1)."""
+    node_dir = _fake_node_dir(tmp_path)
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: (node_dir,))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # minimal, no node
+    env = _launch_env(None)
+    assert env["PATH"].endswith(node_dir)  # appended, not prepended
+    assert env["PATH"].startswith("/usr/bin:/bin")  # original PATH preserved & wins
+
+
+def test_launch_env_leaves_path_when_node_already_resolvable(tmp_path, monkeypatch):
+    """If node is already on PATH, don't touch it — no override of a working setup."""
+    node_dir = _fake_node_dir(tmp_path)
+    extra_dir = str(tmp_path / "should-not-be-added")
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: (extra_dir,))
+    monkeypatch.setenv("PATH", node_dir)  # node IS resolvable here
+    env = _launch_env(None)
+    assert env["PATH"] == node_dir  # untouched
+    assert extra_dir not in env["PATH"]
+
+
+def test_launch_env_no_node_dirs_discovered_is_safe(monkeypatch):
+    """Nothing discovered → PATH is left as-is (the error path still fires later)."""
+    monkeypatch.setattr(acp_client, "_discovered_node_dirs", lambda: ())
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert _launch_env(None)["PATH"] == "/usr/bin:/bin"
+
+
+def test_missing_binary_message_hints_at_service_path_for_node_tools():
+    """The error for a node tool points at the service-PATH gap; a non-node binary doesn't."""
+    npx = _missing_binary_message("npx")
+    assert "npx" in npx and "service" in npx and "nvm" in npx
+    # the hint also fires when the command is an absolute path to a node tool
+    assert "nvm" in _missing_binary_message("/home/u/.nvm/versions/node/v22/bin/npx")
+    codex = _missing_binary_message("codex")
+    assert "codex" in codex and "service" not in codex  # not a node tool → no node hint
+
+
+def test_version_sort_key_orders_newest_first():
+    """nvm/fnm version dirs sort newest-first so the preferred node wins on PATH."""
+    dirs = [
+        "/h/.nvm/versions/node/v18.20.0/bin",
+        "/h/.nvm/versions/node/v22.22.0/bin",
+        "/h/.nvm/versions/node/v20.16.0/bin",
+    ]
+    assert sorted(dirs, key=_version_sort_key, reverse=True)[0].endswith("v22.22.0/bin")
+    # fnm layout (version is the grandparent of bin) still parses
+    assert _version_sort_key("/h/.fnm/node-versions/v21.7.0/installation/bin") == (21, 7, 0)
 
 
 async def test_acp_client_bad_workdir_raises_acp_error():

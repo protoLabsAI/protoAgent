@@ -27,11 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import glob
 import json
 import logging
 import os
 import re
+import shutil
 import signal
+from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -124,18 +127,104 @@ _NESTED_CLAUDE_ENV_EXACT = frozenset({"CLAUDECODE"})
 _NESTED_CLAUDE_ENV_PREFIX = "CLAUDE_CODE_"
 
 
+# Node-based ACP backends (the `claude` agent launches via `npx`; codex-acp too) need
+# `node` on PATH. A protoAgent server started as a service — systemd, launchd, a bare
+# `nohup` — gets a MINIMAL PATH that never picked up the user's Node install: nvm / fnm /
+# volta / asdf / nodenv all prepend their bin dir from the *shell rc*, which a service
+# never sources. That's the #1 cause of "agent binary not found: 'npx'". So when `node`
+# isn't already resolvable on the launch PATH, we discover the version-manager bin dirs
+# and append them — making node tooling reachable regardless of how the server was started.
+_NODE_TOOL_BASENAMES = frozenset({"npx", "node", "npm", "pnpm", "yarn", "bun", "corepack"})
+
+
+def _version_sort_key(bin_dir: str) -> tuple[int, ...]:
+    """Sort key for a version-manager node `bin` dir, newest-first. The version is the
+    dir component holding the semver (``…/node/v22.22.0/bin`` → ``v22.22.0``; fnm's
+    ``…/<ver>/installation/bin`` → the grandparent). Non-versioned dirs sort last."""
+    p = Path(bin_dir)
+    for name in (p.parent.name, p.parent.parent.name):
+        nums = re.findall(r"\d+", name)
+        if nums:
+            return tuple(int(n) for n in nums[:3])
+    return (0,)
+
+
+@lru_cache(maxsize=1)
+def _discovered_node_dirs() -> tuple[str, ...]:
+    """Existing node `bin` dirs from the common version managers + standard locations,
+    most-preferred first (newest version), for augmenting a minimal launch PATH. Only
+    dirs that actually contain a ``node`` executable are returned. Cached — the
+    filesystem probe runs once per process. Best-effort: any error yields fewer dirs."""
+    home = Path.home()
+    cands: list[str] = []
+
+    def _versioned(root: str | os.PathLike, pattern: str) -> None:
+        try:
+            hits = glob.glob(os.path.join(str(root), pattern))
+        except OSError:
+            return
+        cands.extend(sorted(hits, key=_version_sort_key, reverse=True))
+
+    # nvm: ~/.nvm/versions/node/<ver>/bin   (NVM_DIR overrides the location)
+    _versioned(os.environ.get("NVM_DIR") or home / ".nvm", "versions/node/*/bin")
+    # fnm: <root>/node-versions/<ver>/installation/bin
+    for fnm_root in (os.environ.get("FNM_DIR"), home / ".local/share/fnm", home / ".fnm"):
+        if fnm_root:
+            _versioned(fnm_root, "node-versions/*/installation/bin")
+    # Single shim/bin dirs: volta, asdf, nodenv, homebrew, common system.
+    cands.append(str(Path(os.environ.get("VOLTA_HOME") or home / ".volta") / "bin"))
+    cands.append(str(Path(os.environ.get("ASDF_DATA_DIR") or home / ".asdf") / "shims"))
+    cands.append(str(home / ".nodenv" / "shims"))
+    cands.extend(["/opt/homebrew/bin", "/usr/local/bin"])
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for d in cands:
+        if d in seen:
+            continue
+        seen.add(d)
+        if os.path.exists(os.path.join(d, "node")) or os.path.exists(os.path.join(d, "node.exe")):
+            out.append(d)
+    return tuple(out)
+
+
 def _launch_env(extra: dict[str, str] | None) -> dict[str, str]:
     """Build the subprocess environment for an ACP agent: the server's own ``os.environ``
     with the nested-Claude markers stripped (see above), then the delegate's ``env``
     overlaid last — so an operator who *deliberately* sets one of these in the delegate
-    env still wins."""
+    env still wins. Finally, if ``node`` isn't resolvable on the resulting PATH, append the
+    discovered node version-manager dirs so a service-launched server can still find npx."""
     env = {
         k: v
         for k, v in os.environ.items()
         if k not in _NESTED_CLAUDE_ENV_EXACT and not k.startswith(_NESTED_CLAUDE_ENV_PREFIX)
     }
     env.update(extra or {})
+
+    path = env.get("PATH") or os.defpath
+    if shutil.which("node", path=path) is None:
+        # APPEND (not prepend): an explicitly-configured PATH still wins for anything it
+        # already provides; we only add fallbacks for what it's missing.
+        present = path.split(os.pathsep)
+        extra_dirs = [d for d in _discovered_node_dirs() if d not in present]
+        if extra_dirs:
+            env["PATH"] = os.pathsep.join([path, *extra_dirs])
     return env
+
+
+def _missing_binary_message(command: str) -> str:
+    """The AcpError text for a launch that hit FileNotFoundError. For a node tool we add
+    the service-PATH hint, since a systemd/launchd server not seeing nvm/fnm node is by
+    far the most common cause."""
+    msg = f"agent binary not found: {command!r} (is it installed and on PATH?)"
+    if os.path.basename(command) in _NODE_TOOL_BASENAMES:
+        msg += (
+            " — if protoAgent runs as a service (systemd/launchd), its PATH likely doesn't "
+            "include your Node install: nvm/fnm/volta set PATH from your shell rc, which "
+            "services don't source. Add the node bin dir to the service PATH, or install "
+            "the agent's CLI on the system PATH."
+        )
+    return msg
 
 
 class AcpError(Exception):
@@ -259,7 +348,7 @@ class AcpClient:
                 limit=_STDOUT_LINE_LIMIT,
             )
         except FileNotFoundError as exc:
-            raise AcpError(f"agent binary not found: {self.command!r} (is it installed and on PATH?)") from exc
+            raise AcpError(_missing_binary_message(self.command)) from exc
 
         # The subprocess now exists. If the handshake raises OR the caller's wait_for
         # cancels us mid-initialize (the health prober's 45s probe timeout), reap the
