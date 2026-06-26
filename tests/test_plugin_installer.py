@@ -267,6 +267,9 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     bundles = lock.get("bundles") or []
     assert bundles and bundles[0]["id"] == "demo_stack"
     assert set(bundles[0]["plugins"]) == {"demo_a", "demo_b"}
+    # the curated turn-on list is persisted in the lock (#1346) so a lock-only consumer
+    # (the fleet new-agent path) can auto-enable exactly what the author intended.
+    assert bundles[0]["enabled"] == ["delegates", "demo_a", "demo_b"]
 
 
 def test_install_bundle_member_missing_url_errors(env):
