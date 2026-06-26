@@ -84,6 +84,40 @@ def test_tools_and_max_turns_override_applies(tmp_path):
             SUBAGENT_REGISTRY["researcher"] = original
 
 
+def test_allow_skill_emission_defaults_true_and_is_settable():
+    """The opt-out field (#1347) defaults True so stock subagents stay distillable,
+    and is settable so a plugin/fork can mark a subagent's runs non-emittable."""
+    from graph.subagents.config import SubagentConfig
+
+    assert RESEARCHER_CONFIG.allow_skill_emission is True
+    opted_out = SubagentConfig(name="verdict", description="d", system_prompt="p", allow_skill_emission=False)
+    assert opted_out.allow_skill_emission is False
+
+
+def test_config_overlay_preserves_allow_skill_emission(monkeypatch):
+    """A YAML model/tools override must not RESET allow_skill_emission to the dataclass
+    default — _apply_config_subagents rebuilds via replace(base, ...). Seed the base with
+    the flag OFF (the non-default) so this fails if a refactor reconstructs the config
+    without carrying it through, not just when it happens to match the default."""
+    import graph.subagents.config as sub_config
+
+    original = SUBAGENT_REGISTRY.get("researcher")
+    # _apply_config_subagents reads the module-level RESEARCHER_CONFIG as its base.
+    monkeypatch.setattr(sub_config, "RESEARCHER_CONFIG", dataclasses.replace(RESEARCHER_CONFIG, allow_skill_emission=False))
+    try:
+        cfg = LangGraphConfig()
+        cfg.researcher = dataclasses.replace(cfg.researcher, model="protolabs/reasoning")
+        _apply_config_subagents(cfg)
+        entry = SUBAGENT_REGISTRY["researcher"]
+        assert entry.model == "protolabs/reasoning"  # overlay applied
+        assert entry.allow_skill_emission is False  # base flag preserved, NOT reset to default True
+    finally:
+        if original is not None:
+            SUBAGENT_REGISTRY["researcher"] = original
+        else:
+            SUBAGENT_REGISTRY.pop("researcher", None)  # don't leave a temp entry behind
+
+
 def test_disabled_removes_subagent():
     import dataclasses
 

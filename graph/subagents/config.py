@@ -39,6 +39,14 @@ class SubagentConfig:
     # the main model. Pin a subagent that needs heavy reasoning to the main
     # model even when aux_model routes the others to a cheaper alias.
     model: str = ""
+    # Whether this subagent's runs are eligible to become a reusable skill-v1
+    # artifact via the skill-emission path. When False, emission is suppressed for
+    # this subagent even if the caller requests it — set it on subagents whose
+    # output is context-specific, sensitive, or non-deterministic (per-invocation
+    # conformance/verdict reviewers, agents over private data) so one-off runs
+    # don't pollute the distilled-skills index. Default True preserves the
+    # current behavior; honored wherever a runtime wires per-task skill emission.
+    allow_skill_emission: bool = True
 
 
 RESEARCHER_CONFIG = SubagentConfig(
