@@ -74,8 +74,14 @@
 .plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-muted); text-decoration: none; }
 .plugin-card-repo:hover { color: var(--fg-secondary); }
 
-/* Config folded into the Installed plugin rows (ADR 0059) — the Configure expander. */
+/* Installed plugin row. Configure now opens a per-plugin settings dialog (ADR 0059) —
+   the row is a single line; the icon action cluster shouldn't shrink under a long name. */
 .plugin-row-wrap { display: flex; flex-direction: column; }
-.plugin-row-config { margin: 0 0 10px; padding: 4px 12px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--bg-raised) 55%, transparent); }
+/* Keep the action cluster a tight HORIZONTAL row. `.subagent-row > div { display: grid }`
+   (theme.css) otherwise out-specifies the base `.plugin-row-actions { display: flex }` and
+   stacks the buttons into a column — the bulk this rework is removing. This selector
+   (two classes) wins that specificity battle. */
+.subagent-row > .plugin-row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.plugin-row-danger:hover:not(:disabled) { color: var(--danger); }
 .settings-flat-group { display: flex; flex-direction: column; }
 .plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
