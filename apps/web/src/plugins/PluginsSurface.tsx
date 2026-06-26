@@ -4,7 +4,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Alert } from "@protolabsai/ui/data";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
-import { Suspense, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 import { Download, DownloadCloud, ExternalLink, Github, Loader2, RefreshCw, Search, Settings2, Store, Trash2 } from "lucide-react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -13,7 +13,7 @@ import { StagePanel } from "../app/ErrorBoundary";
 import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
 import { InstallPluginDialog } from "./InstallPluginDialog";
-import { SettingsCategory } from "../settings/SettingsCategory";
+import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { PluginFreshness } from "./PluginFreshness";
 import { catalogCategories, filterCatalog } from "./catalog";
 import { api } from "../lib/api";
@@ -59,7 +59,7 @@ function PluginRow({
   removing: boolean;
 }) {
   const on = p.enabled;
-  const [open, setOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   return (
     <div className="plugin-row-wrap">
       <div className="subagent-row">
@@ -71,6 +71,8 @@ function PluginRow({
           </strong>
           <span>{contributionsLabel(p)}</span>
         </div>
+        {/* Compact action cluster: secondary actions (update / configure / uninstall) are
+            icon-only with tooltips; only the primary Enable/Disable toggle keeps its label. */}
         <div className="plugin-row-actions">
           <StatusPill
             label={p.loaded ? "loaded" : p.error ? "error" : p.enabled ? "enabled" : "disabled"}
@@ -79,29 +81,34 @@ function PluginRow({
           {update?.behind ? (
             <Button
               type="button"
+              icon
               variant="ghost"
               disabled={updating}
               onClick={() => onUpdate(p)}
               title={`Update ${p.name} to the latest commit`}
+              aria-label={`Update ${p.name}`}
             >
-              {updating ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Update
+              {updating ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
             </Button>
           ) : null}
-          {/* Config folded in (ADR 0059, bd-23a.3) — expand to edit this plugin's settings inline. */}
+          {/* Configure opens a per-plugin settings dialog (ADR 0059) rather than expanding
+              the row, so the row stays one line and the form gets room. */}
           {configurable ? (
             <Button
               type="button"
+              icon
               variant="ghost"
-              aria-expanded={open}
-              onClick={() => setOpen((o) => !o)}
+              onClick={() => setConfigOpen(true)}
               title={`Configure ${p.name}`}
+              aria-label={`Configure ${p.name}`}
             >
-              <Settings2 size={14} /> Configure
+              <Settings2 size={15} />
             </Button>
           ) : null}
           <Button
             type="button"
             variant="ghost"
+            size="sm"
             disabled={busy}
             onClick={() => onToggle(p)}
             title={on ? `Disable ${p.name}` : `Enable ${p.name}`}
@@ -114,23 +121,26 @@ function PluginRow({
           {removable ? (
             <Button
               type="button"
+              icon
               variant="ghost"
+              className="plugin-row-danger"
               disabled={removing}
               onClick={() => onRemove(p)}
               title={`Uninstall ${p.name}`}
               aria-label={`uninstall ${p.id}`}
             >
-              {removing ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} Uninstall
+              {removing ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
             </Button>
           ) : null}
         </div>
       </div>
-      {configurable && open ? (
-        <div className="plugin-row-config">
-          <Suspense fallback={<p className="muted">Loading settings…</p>}>
-            <SettingsCategory category="Plugins" pluginId={p.id} title={`${p.name} settings`} />
-          </Suspense>
-        </div>
+      {configurable ? (
+        <PluginSettingsDialog
+          pluginId={p.id}
+          pluginName={p.name}
+          open={configOpen}
+          onClose={() => setConfigOpen(false)}
+        />
       ) : null}
     </div>
   );

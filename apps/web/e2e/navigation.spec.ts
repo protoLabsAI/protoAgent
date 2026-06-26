@@ -89,10 +89,14 @@ test("plugins section: Installed / Discover (config + advanced install folded in
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".plugin-hint")).toContainText("Zzz Disabled enabled");
 
-  // Config folded in (ADR 0059, bd-23a.3) — Demo Plugin's row exposes Configure → fields inline.
+  // Configure opens a per-plugin settings DIALOG now (2026-06) — not an inline row expander.
+  // The (icon-only) Configure button is labelled "Configure <name>"; the dialog is
+  // role="dialog" named by the plugin.
   const demoRow = page.locator(".plugin-row-wrap", { hasText: "Demo Plugin" });
   await demoRow.getByRole("button", { name: "Configure" }).click();
-  await expect(demoRow.locator('.plugin-row-config .setting-row[data-key="demo.greeting"]')).toBeVisible();
+  const configDialog = page.getByRole("dialog", { name: "Demo Plugin" });
+  await expect(configDialog.locator('.setting-row[data-key="demo.greeting"]')).toBeVisible();
+  await configDialog.locator(".pl-dialog__close").click(); // close so it doesn't overlay later steps
 
   // Install-from-URL is a dialog opened from the Installed toolbar (2026-06 consolidation).
   // The DS Dialog title is role="dialog" (not a heading); assert via the URL field, which
