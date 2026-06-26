@@ -6,7 +6,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Loader2, RotateCcw, Save } from "lucide-react";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
@@ -434,6 +434,49 @@ function SettingRow({
   );
 }
 
+// A free-form string list (repos, allowed dirs, …) edited as ONE text field. Items are
+// separated by a comma OR a newline — both work, so you can paste "a, b, c" or one per
+// line. It keeps its own raw text while focused so a separator isn't eaten mid-type (the
+// old controlled `value={list.join(...)}` re-derived the text every keystroke, dropping
+// the trailing separator via filter(Boolean) — which made adding a 2nd item impossible).
+// Parsed → a clean string[] on every change; re-syncs from `value` on an external change
+// (discard / reset / load).
+// Split a string-list text field into clean items: comma OR newline separated, trimmed,
+// empties dropped — so "a, b", "a\nb", and "a , , b\n" all yield ["a","b"].
+export function parseStringList(text: string): string[] {
+  return text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+}
+
+function StringListInput({ id, value, onChange }: { id: string; value: unknown; onChange: (v: unknown) => void }) {
+  const items = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  const [text, setText] = useState(items.join(", "));
+  const lastParsed = useRef(items);
+  useEffect(() => {
+    // Adopt the parent value only when it changed to something we didn't just emit
+    // (e.g. Discard reverted it) — otherwise leave the user's in-progress text alone.
+    if (JSON.stringify(items) !== JSON.stringify(lastParsed.current)) {
+      setText(items.join(", "));
+      lastParsed.current = items;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <Textarea
+      id={id}
+      className="setting-input setting-textarea"
+      rows={2}
+      value={text}
+      placeholder="comma-separated (e.g. owner/repo, owner/repo2)"
+      onChange={(e) => {
+        setText(e.target.value);
+        const parsed = parseStringList(e.target.value);
+        lastParsed.current = parsed;
+        onChange(parsed);
+      }}
+    />
+  );
+}
+
 export function SettingInput({ field, value, onChange }: { field: SettingsField; value: unknown; onChange: (value: unknown) => void }) {
   const id = `set-${field.key}`;
 
@@ -502,17 +545,7 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
     );
   }
   if (field.type === "string_list") {
-    const text = Array.isArray(value) ? value.join("\n") : "";
-    return (
-      <Textarea
-        id={id}
-        className="setting-input setting-textarea"
-        rows={3}
-        value={text}
-        placeholder="one per line"
-        onChange={(e) => onChange(e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))}
-      />
-    );
+    return <StringListInput id={id} value={value} onChange={onChange} />;
   }
   if (field.type === "text") {
     // A scalar multiline string (#964) — a system prompt, template, or blurb. Renders

@@ -35,13 +35,20 @@ class PluginRegistry:
     them — changing ``plugins.enabled`` needs a restart (ADR 0018).
     """
 
-    def __init__(self, plugin_id: str, plugin_dir: Path, config: dict | None = None):
+    def __init__(
+        self, plugin_id: str, plugin_dir: Path, config: dict | None = None, config_section: str | None = None
+    ):
         self.plugin_id = plugin_id
         self.plugin_dir = plugin_dir
         # The plugin's resolved config section (ADR 0019) — manifest defaults ⊕
         # YAML ⊕ secrets. Read it in register() and close over it for your
-        # tools/routes/surface, e.g. ``registry.config.get("api_key")``.
+        # tools/routes/surface, e.g. ``registry.config.get("api_key")``. This is a
+        # register-time SNAPSHOT; for a mounted router/surface that must reflect config
+        # edits without a restart, use ``live_config()`` instead.
         self.config: dict = dict(config or {})
+        # The top-level config key this plugin's section lives under (``config_section``
+        # or the id) — the lookup key for ``live_config()``.
+        self.config_section: str = config_section or plugin_id
         # Host services (agent invoke + event bus) a surface/route can use — the
         # server populates these before startup; guard for None (e.g. in tests).
         from graph.plugins.host import HOST
@@ -63,6 +70,26 @@ class PluginRegistry:
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
+
+    def live_config(self) -> dict:
+        """The plugin's CURRENT resolved config, re-read from the host on each call.
+
+        ``self.config`` is a register-time snapshot, so a hot-reload after a config save
+        can't refresh it for an already-mounted router or running surface (FastAPI can't
+        re-mount a router). But the reload DOES rebuild ``STATE.graph_config`` — so a
+        handler that reads this on each request reflects config edits with no restart.
+        Falls back to the snapshot when the host state isn't available (unit tests, or a
+        section that resolved empty)."""
+        try:
+            from runtime.state import STATE
+
+            pconf = getattr(getattr(STATE, "graph_config", None), "plugin_config", None) or {}
+            live = pconf.get(self.config_section)
+            if isinstance(live, dict):
+                return live
+        except Exception:  # noqa: BLE001 — best-effort; any failure ⇒ the snapshot
+            pass
+        return self.config
 
     def register_tool(self, tool) -> None:
         """Expose a LangChain tool to the agent."""

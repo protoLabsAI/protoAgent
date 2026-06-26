@@ -528,3 +528,28 @@ def test_reload_picks_up_edited_sibling_submodule(tmp_path, monkeypatch) -> None
     res2 = load_plugins(_cfg(plugins_enabled=["multi"]))
     say2 = next(t for t in res2.tools if getattr(t, "name", "") == "say")
     assert say2.invoke({}) == "v2"
+
+
+def test_registry_live_config_reads_state_then_falls_back(monkeypatch) -> None:
+    """live_config() re-reads the section from STATE.graph_config on each call (so a
+    mounted router reflects config edits without a restart), falling back to the
+    register-time snapshot when the host state/section isn't available."""
+    import types
+
+    from graph.plugins.registry import PluginRegistry
+
+    reg = PluginRegistry("github", Path("."), config={"repos": ["o/snap"]}, config_section="github")
+    import runtime.state as rs
+
+    # No graph_config → snapshot.
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    assert reg.live_config() == {"repos": ["o/snap"]}
+
+    # Live section present → live wins (the edited value, no restart).
+    cfg = types.SimpleNamespace(plugin_config={"github": {"repos": ["o/live"]}})
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    assert reg.live_config() == {"repos": ["o/live"]}
+
+    # Section missing from live config → snapshot.
+    cfg.plugin_config = {"other": {}}
+    assert reg.live_config() == {"repos": ["o/snap"]}
