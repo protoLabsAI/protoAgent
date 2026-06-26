@@ -346,6 +346,11 @@ def _apply_bundle_config_defaults(cfg: Path, lock: Path) -> dict:
         data = json.loads(lock.read_text()) if lock.exists() else {}
     except (json.JSONDecodeError, OSError):
         return {}
+    # Merge every bundle's `config` into one {section: {...}} map. Last-write-wins per
+    # section (`dict.update`): if two installed bundles ship defaults for the SAME plugin
+    # section, the later bundle's block replaces the earlier one's. That's acceptable —
+    # a fresh workspace installs a single archetype bundle, so collisions don't arise in
+    # the create() path; the order is lock order if they ever do.
     merged: dict = {}
     for b in data.get("bundles") or []:
         merged.update(b.get("config") or {})
