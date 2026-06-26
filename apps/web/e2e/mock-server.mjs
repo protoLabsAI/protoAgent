@@ -660,6 +660,9 @@ const server = createServer(async (req, res) => {
       `window.addEventListener("message",function(e){var m=e.data||{};` +
       `if(m.type!=="protoagent:init")return;` +
       `document.body.setAttribute("data-bridge",m.token?"authed":"anon");});` +
+      // Like the real plugin-kit: announce readiness so the console (re-)sends the
+      // bearer + theme, closing the race where load-time init beats our listener.
+      `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:ready"},"*");}catch(_){}` +
       `</script></body></html>`,
     );
     return;
