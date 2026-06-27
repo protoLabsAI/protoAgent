@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Streaming answer text is full-width, no loading side-bar** — removed the DS streaming-pulse
+  (animated 2px accent left-border + inset) from the streaming message body, so the answer streams
+  as raw, full-width text instead of behind an animated rail. Applies to the main chat and the ⌘K
+  palette chat; tool cards keep their own loaders.
+
 ### Added
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
