@@ -77,18 +77,21 @@ test("expanded state is sticky and the assistant answer renders as markdown", as
   await expect(md.locator("pre code")).toContainText("const x = 1;");
 });
 
-test("a completed turn shows a per-turn token + cost footer (#1372)", async ({ page }) => {
+test("a completed turn shows a context meter + token/cost footer (#1372)", async ({ page }) => {
   await send(page, "what is the capital of France?");
 
-  // The terminal cost-v1 DataPart → a quiet footer under the answer: prompt ↑ / output ↓ / $.
+  // The terminal cost-v1 + context-v1 DataParts → a quiet footer under the answer:
+  // context-window fill (with a compaction bar) / output ↓ / $cost.
   const usage = page.locator(".pl-message--assistant .chat-usage").first();
   await expect(usage).toBeVisible();
-  await expect(usage).toContainText("12.3k"); // input_tokens 12_340 → compact
+  await expect(usage).toContainText("12.3k / 120k"); // contextTokens 12_340 / compactionAtTokens 120_000
   await expect(usage).toContainText("1.2k"); // output_tokens 1_200
   await expect(usage).toContainText("$0.04"); // costUsd 0.0412
-  // Full breakdown rides the tooltip, and is honest about scope.
-  await expect(usage).toHaveAttribute("title", /Total 13,540 tokens/);
-  await expect(usage).toHaveAttribute("title", /not live context-window fill/);
+  // The fill bar renders (token-based trigger → chartable).
+  await expect(usage.locator(".chat-usage-bar-fill")).toBeVisible();
+  // Tooltip carries the compaction threshold + the honest scope note.
+  await expect(usage).toHaveAttribute("title", /Compacts old history near 120,000 tokens/);
+  await expect(usage).toHaveAttribute("title", /cost is summed across the turn/);
 });
 
 test("long tool values do not overflow the chat horizontally", async ({ page }) => {

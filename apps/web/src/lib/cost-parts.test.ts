@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { costFromParts } from "./api";
+import { contextFromParts, costFromParts } from "./api";
 
 const COST_MIME = "application/vnd.protolabs.cost-v1+json";
+const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 
 // costFromParts lifts the terminal cost-v1 DataPart (A2A ext) into the camelCase TurnUsage
 // the per-turn footer renders. It must map snake_case wire fields, derive totalTokens, and
@@ -61,5 +62,36 @@ describe("costFromParts", () => {
     expect(costFromParts(undefined)).toBeNull();
     expect(costFromParts([{ metadata: { mimeType: "text/plain" }, data: { usage: {} } }])).toBeNull();
     expect(costFromParts([{ metadata: { mimeType: COST_MIME }, data: { costUsd: 1 } }])).toBeNull();
+  });
+});
+
+describe("contextFromParts", () => {
+  it("decodes the token-based context-v1 readout (with a compaction threshold)", () => {
+    const ctx = contextFromParts([
+      {
+        metadata: { mimeType: CONTEXT_MIME },
+        data: { contextTokens: 48_000, compactionAtTokens: 120_000, trigger: "tokens:120000", enabled: true },
+      },
+    ]);
+    expect(ctx).toEqual({
+      contextTokens: 48_000,
+      compactionAtTokens: 120_000,
+      trigger: "tokens:120000",
+      enabled: true,
+    });
+  });
+
+  it("keeps the size but omits the threshold for a non-token trigger (fraction/messages)", () => {
+    const ctx = contextFromParts([
+      { metadata: { mimeType: CONTEXT_MIME }, content: { $case: "data", value: { contextTokens: 9_000, trigger: "messages:80", enabled: true } } },
+    ]);
+    expect(ctx?.contextTokens).toBe(9_000);
+    expect(ctx).not.toHaveProperty("compactionAtTokens");
+    expect(ctx?.trigger).toBe("messages:80");
+  });
+
+  it("returns null with no context part or no contextTokens", () => {
+    expect(contextFromParts(undefined)).toBeNull();
+    expect(contextFromParts([{ metadata: { mimeType: CONTEXT_MIME }, data: { trigger: "tokens:1" } }])).toBeNull();
   });
 });

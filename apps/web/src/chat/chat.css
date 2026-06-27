@@ -77,6 +77,26 @@
 .chat-usage-item svg {
   opacity: 0.7;
 }
+/* Context-window fill bar — quiet until it nears the compaction threshold, then warns. */
+.chat-usage-bar {
+  display: inline-block;
+  width: 42px;
+  height: 4px;
+  margin-left: 2px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  vertical-align: middle;
+}
+.chat-usage-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--fg-muted);
+}
+.chat-usage-bar-fill[data-warn="true"] {
+  background: var(--warning, #d98324);
+}
 
 /* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click
    deletes with no confirm + no harvest). Swap the DS ✕ svg for a trash silhouette (mask

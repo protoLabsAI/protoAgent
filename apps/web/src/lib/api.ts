@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ComponentSpec,
   ConfigPayload,
+  ContextWindow,
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
@@ -367,6 +368,7 @@ const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
 const COST_MIME = "application/vnd.protolabs.cost-v1+json";
+const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 
 type RawPart = {
   kind?: string;
@@ -473,6 +475,30 @@ export function costFromParts(parts?: RawPart[]): TurnUsage | null {
     cacheCreationTokens: Number(d.usage.cache_creation_input_tokens || 0),
     ...(typeof d.costUsd === "number" ? { costUsd: d.costUsd } : {}),
     ...(typeof d.durationMs === "number" ? { durationMs: d.durationMs } : {}),
+  };
+}
+
+/** Decode the terminal context-v1 DataPart (#1372) → the turn's context-window fill +
+ * compaction threshold, or null. `compactionAtTokens` / `maxTokens` are present only when the
+ * server could resolve a token denominator (token-based trigger); otherwise the meter shows
+ * the raw size. */
+export function contextFromParts(parts?: RawPart[]): ContextWindow | null {
+  const d = dataByMime(parts, CONTEXT_MIME) as
+    | {
+        contextTokens?: number;
+        compactionAtTokens?: number;
+        maxTokens?: number;
+        trigger?: string;
+        enabled?: boolean;
+      }
+    | null;
+  if (!d || typeof d.contextTokens !== "number") return null;
+  return {
+    contextTokens: d.contextTokens,
+    ...(typeof d.compactionAtTokens === "number" ? { compactionAtTokens: d.compactionAtTokens } : {}),
+    ...(typeof d.maxTokens === "number" ? { maxTokens: d.maxTokens } : {}),
+    ...(typeof d.trigger === "string" ? { trigger: d.trigger } : {}),
+    ...(typeof d.enabled === "boolean" ? { enabled: d.enabled } : {}),
   };
 }
 
@@ -1097,6 +1123,8 @@ export const api = {
       onComponent?: (spec: ComponentSpec) => void;
       // This turn's token usage + cost — lifted off the terminal cost-v1 DataPart.
       onCost?: (usage: TurnUsage) => void;
+      // This turn's context-window fill + compaction threshold — terminal context-v1 DataPart.
+      onContext?: (ctx: ContextWindow) => void;
       onInputRequired?: (payload: HitlPayload) => void;
       // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
       // turn (bad API key → 401). Carries the gateway's error text. Without this
@@ -1172,10 +1200,12 @@ export const api = {
         const aParts = artifactUpdate.artifact?.parts;
         const text = textFromParts(aParts);
         if (text) handlers.onText?.(text, artifactUpdate.append !== false);
-        // The terminal answer artifact also carries the cost-v1 DataPart (a2a_impl
-        // executor) — surface this turn's token usage + cost for the per-turn footer.
+        // The terminal answer artifact also carries the cost-v1 + context-v1 DataParts
+        // (a2a_impl executor) — surface this turn's spend and its context-window fill.
         const usage = costFromParts(aParts);
         if (usage) handlers.onCost?.(usage);
+        const ctx = contextFromParts(aParts);
+        if (ctx) handlers.onContext?.(ctx);
       }
     };
 

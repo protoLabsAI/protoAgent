@@ -186,6 +186,7 @@ class ProtoAgentExecutor(AgentExecutor):
         self,
         stream_fn_factory: Callable[..., AsyncGenerator[tuple[str, Any], None]],
         structured_finalizer: Callable[[str, str], Any] | None = None,
+        context_meta_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
         # request_metadata)`` → async generator of (event_type, payload). This is
@@ -197,6 +198,10 @@ class ProtoAgentExecutor(AgentExecutor):
         # or None (#476). Injected by server.py so the executor stays decoupled
         # from the skill registry (no circular import).
         self._structured_finalizer = structured_finalizer
+        # ``context_meta_provider()`` → the static compaction context for the context-v1
+        # DataPart (#1372): {enabled, trigger, compactionAtTokens?}. Injected by server.py
+        # (it reads STATE.graph_config) so the executor needn't import the config (layering).
+        self._context_meta_provider = context_meta_provider
 
     async def _append_structured(self, parts: list[Part], context: RequestContext, final_text: str) -> list[Part]:
         """If the turn targets a structured skill (``skillHint`` + a declared
@@ -256,6 +261,10 @@ class ProtoAgentExecutor(AgentExecutor):
         }
         cost_usd = 0.0
         had_usage = False
+        # Peak prompt size this turn = the largest single model call's input_tokens (the
+        # model's own count of all prompt tokens, incl. cache reads). Unlike the summed
+        # usage above, this is the live context-window FILL, not per-turn spend (#1372).
+        context_tokens = 0
         confidence: float | None = None
         confidence_expl: str | None = None
         llm_calls = 0
@@ -295,6 +304,18 @@ class ProtoAgentExecutor(AgentExecutor):
             text once (the non-streaming path: workflow/subagent short-circuits)."""
             # text="" yields a dataparts-only list (the text part is conditional).
             body = "" if _answer_started else final_text
+            # Compaction context (#1372): the live prompt size + the configured trigger /
+            # token threshold, merged into one context-v1 DataPart. Provider failures
+            # degrade to "size only" — never break the turn's finalization.
+            context_meta: dict[str, Any] | None = None
+            if context_tokens > 0:
+                meta: dict[str, Any] = {}
+                if self._context_meta_provider is not None:
+                    try:
+                        meta = self._context_meta_provider() or {}
+                    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+                        meta = {}
+                context_meta = {"contextTokens": context_tokens, **meta}
             parts = _terminal_parts(
                 body,
                 deltas,
@@ -302,6 +323,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 cost_usd,
                 confidence,
                 confidence_expl,
+                context_meta,
                 success=True,
             )
             parts = await self._append_structured(parts, context, final_text)
@@ -392,6 +414,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         had_usage = True
                         llm_calls += 1
+                        context_tokens = max(context_tokens, int(payload.get("input_tokens", 0) or 0))
                         usage["input_tokens"] += int(payload.get("input_tokens", 0) or 0)
                         usage["output_tokens"] += int(payload.get("output_tokens", 0) or 0)
                         usage["cache_read_input_tokens"] += int(payload.get("cache_read_input_tokens", 0) or 0)
@@ -565,6 +588,9 @@ def _tool_call_part(event_type: str, payload: Any) -> Part | None:
     return None
 
 
+_CONTEXT_MIME = "application/vnd.protolabs.context-v1+json"
+
+
 def _terminal_parts(
     text: str,
     deltas: list[dict],
@@ -572,15 +598,16 @@ def _terminal_parts(
     cost_usd: float,
     confidence: float | None,
     confidence_expl: str | None,
+    context: dict | None = None,
     *,
     success: bool,
 ) -> list[Part]:
     """Assemble the terminal artifact's parts: text first, then the cost /
-    confidence / worldstate-delta extension DataParts that have content.
+    confidence / worldstate-delta / context extension DataParts that have content.
 
     Mirrors the hand-rolled handler's ``_terminal_artifact_parts`` ordering
     (text → worldstate → cost → confidence) so consumers reading parts in
-    order are unchanged.
+    order are unchanged; the context-v1 part trails as a pure append.
     """
     parts: list[Part] = []
     if text:
@@ -607,4 +634,8 @@ def _terminal_parts(
                 )
             )
         )
+    # Compaction context-window readout (#1372) — a template extension (no SDK helper),
+    # built with the generic DataPart packer. Only when we actually measured a prompt.
+    if context and context.get("contextTokens"):
+        parts.append(_ext_data_part(pa.data_part(context, _CONTEXT_MIME)))
     return parts

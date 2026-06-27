@@ -7,6 +7,7 @@
 
 export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 export const COST_MIME = "application/vnd.protolabs.cost-v1+json";
+export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -529,6 +530,16 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
               success: true,
             },
             metadata: { mimeType: COST_MIME },
+          },
+          {
+            kind: "data",
+            data: {
+              contextTokens: 12_340,
+              compactionAtTokens: 120_000,
+              trigger: "tokens:120000",
+              enabled: true,
+            },
+            metadata: { mimeType: CONTEXT_MIME },
           },
         ],
       },

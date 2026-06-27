@@ -37,7 +37,7 @@ from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
-from a2a_impl.executor import ProtoAgentExecutor, TurnOutcome, set_terminal_hook
+from a2a_impl.executor import _CONTEXT_MIME, ProtoAgentExecutor, TurnOutcome, set_terminal_hook
 
 A2A_HEADERS = {"A2A-Version": "1.0"}
 
@@ -271,12 +271,14 @@ async def test_send_message_runs_to_completed_with_text_artifact():
 
 @pytest.mark.asyncio
 async def test_terminal_artifact_carries_all_extensions_in_order():
-    """text → worldstate-delta → cost-v1 → confidence-v1, matching the order
-    the hand-rolled handler emitted (consumers read parts in order)."""
+    """text → worldstate-delta → cost-v1 → confidence-v1 → context-v1, matching
+    the order the hand-rolled handler emitted (consumers read parts in order); the
+    context-v1 readout (#1372) trails as a pure append."""
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         yield ("text", "done text")
         yield ("usage", {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.001})
+        yield ("usage", {"input_tokens": 140, "output_tokens": 20, "cost_usd": 0.001})
         yield ("delta", {"domain": "board", "path": "data.backlog", "op": "inc", "value": 1})
         yield ("confidence", {"confidence": 0.9, "explanation": "sure"})
         yield ("done", "done text")
@@ -289,12 +291,16 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
     parts = final["artifacts"][0]["parts"]
     assert parts[0]["text"] == "done text"
     mimes = [p.get("metadata", {}).get("mimeType") for p in parts[1:]]
-    assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, pa.CONFIDENCE_MIME]
-    # cost-v1 payload carries the token usage (parsed via protolabs_a2a, which
-    # tolerates the SDK's flattened proto-JSON DataPart shape).
+    assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, pa.CONFIDENCE_MIME, _CONTEXT_MIME]
+    # cost-v1 payload carries the SUMMED token usage (100+140 input).
     cost = pa.parse_cost(parts[2])
-    assert cost["usage"]["input_tokens"] == 100
+    assert cost["usage"]["input_tokens"] == 240
     assert cost["success"] is True
+    # context-v1 carries the PEAK prompt size (max single call's input_tokens), the live
+    # context-window fill — distinct from the summed spend above.
+    _ctx_mime, ctx = pa.read_data(parts[4])
+    assert _ctx_mime == _CONTEXT_MIME
+    assert ctx["contextTokens"] == 140
 
 
 @pytest.mark.asyncio

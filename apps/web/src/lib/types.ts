@@ -434,6 +434,21 @@ export type TurnUsage = {
   durationMs?: number;
 };
 
+/** Live context-window readout for a turn (terminal context-v1 DataPart, #1372). Unlike
+ *  TurnUsage (per-turn spend), `contextTokens` is the PEAK single-call prompt size — the
+ *  actual context-window fill. `compactionAtTokens` is the absolute summarization threshold
+ *  when the operator's trigger is token-based (`tokens:N`); fraction:/messages: triggers have
+ *  no surfaceable token denominator (the gateway exposes no per-model window), so the meter
+ *  shows the size without a bar. */
+export type ContextWindow = {
+  contextTokens: number;
+  compactionAtTokens?: number;
+  maxTokens?: number;
+  /** The configured compaction trigger string, for the tooltip (e.g. "tokens:120000"). */
+  trigger?: string;
+  enabled?: boolean;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
@@ -459,6 +474,9 @@ export type ChatMessage = {
   /** This turn's token usage + cost (terminal cost-v1 DataPart). Shown as a small footer
    *  under the answer; absent on user turns and history saved before this shipped. */
   usage?: TurnUsage;
+  /** This turn's context-window fill + compaction threshold (terminal context-v1 DataPart).
+   *  Drives the meter in the same footer; absent on user turns / pre-ship history. */
+  contextWindow?: ContextWindow;
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required

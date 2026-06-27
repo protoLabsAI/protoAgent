@@ -764,9 +764,26 @@ def _main():
 
         return await finalize_structured(skill_id, spec["schema"], spec["mime"], final_text, STATE.graph_config)
 
+    def _context_meta() -> dict:
+        """Static compaction context for the context-v1 DataPart (#1372): whether compaction
+        is on, the configured trigger, and the absolute token threshold when the trigger is
+        token-based. fraction:/messages: triggers have no surfaceable token denominator here
+        (a gateway alias exposes no model window), so the console shows the size without a bar."""
+        cfg = STATE.graph_config
+        trigger = str(getattr(cfg, "compaction_trigger", "") or "")
+        meta: dict = {"enabled": bool(getattr(cfg, "compaction_enabled", False)), "trigger": trigger}
+        kind, _, val = trigger.partition(":")
+        if kind == "tokens" and val.strip().isdigit():
+            meta["compactionAtTokens"] = int(val.strip())
+        return meta
+
     _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(_chat_langgraph_stream, structured_finalizer=_structured_finalizer),
+        agent_executor=ProtoAgentExecutor(
+            _chat_langgraph_stream,
+            structured_finalizer=_structured_finalizer,
+            context_meta_provider=_context_meta,
+        ),
         task_store=task_store,
         agent_card=a2a_card,
         push_config_store=push_config_store,

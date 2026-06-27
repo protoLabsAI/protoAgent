@@ -1,10 +1,10 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
-import { ArrowDown, ArrowUp, Check, Copy, GitBranch, Loader2, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowDown, Check, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
-import type { ChatMessage, ChatPart, TurnUsage } from "../lib/types";
+import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { Markdown } from "./LazyMarkdown";
 import { ReasoningCard } from "./ReasoningCard";
@@ -138,8 +138,8 @@ export function ChatMessageView({
           <Maximize2 size={14} /> Read full report
         </Button>
       ) : null}
-      {message.role === "assistant" && !streaming && message.usage ? (
-        <UsageFooter usage={message.usage} />
+      {message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
+        <UsageFooter usage={message.usage} context={message.contextWindow} />
       ) : null}
       {actions && message.role === "assistant" && !streaming && message.content ? (
         <MessageActions>
@@ -180,30 +180,60 @@ function fmtCost(usd: number): string {
   return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
 }
 
-/** The per-turn token/cost footer under an assistant answer: prompt ↑ · output ↓ · cost,
- *  with the full breakdown (incl. cache + duration) on hover. Honest about scope — this is
- *  the turn's accumulated spend, not a live context-window gauge (see TurnUsage). */
-function UsageFooter({ usage }: { usage: TurnUsage }) {
+/** The per-turn footer under an assistant answer: a context-window meter (fill ⊙, with a
+ *  "/ threshold" bar when compaction is token-based) · output ↓ · cost, with the full
+ *  breakdown on hover. Honest about scope: `contextTokens` is the live prompt size; the cost
+ *  is summed across the turn's calls (see ContextWindow / TurnUsage). */
+function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextWindow }) {
+  // Prefer the true context-window fill (peak prompt); fall back to the summed input only
+  // for history saved before context-v1 shipped.
+  const ctxTokens = context?.contextTokens ?? usage?.inputTokens;
+  const threshold = context?.compactionAtTokens;
+  const pct =
+    ctxTokens != null && threshold ? Math.min(100, Math.round((ctxTokens / threshold) * 100)) : null;
+
+  const compactionLine = context
+    ? context.enabled === false
+      ? "Compaction off"
+      : threshold
+        ? `Compacts old history near ${threshold.toLocaleString()} tokens${context.trigger ? ` (${context.trigger})` : ""}`
+        : context.trigger
+          ? `Compaction trigger: ${context.trigger} (no token threshold to chart here)`
+          : ""
+    : "";
   const title = [
-    `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()} tokens`,
-    usage.cacheReadTokens ? `${usage.cacheReadTokens.toLocaleString()} input tokens served from cache` : "",
-    usage.costUsd != null ? `Cost ${fmtCost(usage.costUsd)}` : "",
-    usage.durationMs ? `Took ${(usage.durationMs / 1000).toFixed(1)}s` : "",
-    "Per-turn total (summed across this turn's model calls), not live context-window fill.",
+    ctxTokens != null ? `Context window: ${ctxTokens.toLocaleString()} tokens (this turn's prompt)` : "",
+    compactionLine,
+    usage ? `Output ${usage.outputTokens.toLocaleString()} tokens` : "",
+    usage?.cacheReadTokens ? `${usage.cacheReadTokens.toLocaleString()} input tokens served from cache` : "",
+    usage?.costUsd != null ? `Cost ${fmtCost(usage.costUsd)}` : "",
+    usage?.durationMs ? `Took ${(usage.durationMs / 1000).toFixed(1)}s` : "",
+    "Context = the live prompt size; cost is summed across the turn's model calls.",
   ]
     .filter(Boolean)
     .join("\n");
+
   return (
     <div className="chat-usage" title={title}>
-      <span className="chat-usage-item" aria-label="prompt tokens">
-        <ArrowUp size={11} aria-hidden />
-        {fmtTokens(usage.inputTokens)}
-      </span>
-      <span className="chat-usage-item" aria-label="output tokens">
-        <ArrowDown size={11} aria-hidden />
-        {fmtTokens(usage.outputTokens)}
-      </span>
-      {usage.costUsd != null ? <span className="chat-usage-item">{fmtCost(usage.costUsd)}</span> : null}
+      {ctxTokens != null ? (
+        <span className="chat-usage-item" aria-label="context window">
+          <Gauge size={11} aria-hidden />
+          {fmtTokens(ctxTokens)}
+          {threshold ? ` / ${fmtTokens(threshold)}` : ""}
+          {pct != null ? (
+            <span className="chat-usage-bar" aria-hidden>
+              <span className="chat-usage-bar-fill" style={{ width: `${pct}%` }} data-warn={pct >= 80} />
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      {usage ? (
+        <span className="chat-usage-item" aria-label="output tokens">
+          <ArrowDown size={11} aria-hidden />
+          {fmtTokens(usage.outputTokens)}
+        </span>
+      ) : null}
+      {usage?.costUsd != null ? <span className="chat-usage-item">{fmtCost(usage.costUsd)}</span> : null}
     </div>
   );
 }

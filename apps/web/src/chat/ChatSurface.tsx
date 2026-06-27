@@ -964,6 +964,18 @@ function ChatSessionSlot({
             ),
           );
         },
+        onContext: (contextWindow) => {
+          // This turn's context-window fill + compaction threshold (terminal context-v1) —
+          // pinned to the message so the footer meter persists with history.
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) =>
+              message.id === assistantId ? { ...message, contextWindow } : message,
+            ),
+          );
+        },
         onDone: () => {
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
