@@ -95,9 +95,53 @@ is a later, lower-trust option for iframe plugins.
 3. **More core menus** — `chat-message`, `note`, `bead` (retire their ad-hoc buttons).
 4. *(optional)* manifest-declared static items for iframe/untrusted plugins.
 
+## Addendum (2026-06-26) — rail-surface management actions + the `hidden` bucket
+
+The `rail-surface` menu grew two management actions beyond move/reorder:
+
+- **Hide** — moves the surface into a new `railOrder.hidden` bucket (uiStore): a surface is now on
+  exactly one dock *or* hidden. "Hidden" = *enabled-but-not-shown* — it declutters the rails without
+  disabling the plugin (previously the only way to remove a plugin view from a rail). `railSurfaces()`
+  renders only the dock arrays, so a hidden id has no rail icon; its safety-net append counts
+  `hidden` as "placed" so it never re-adds one. Both reconcilers (`reconcilePluginViews`,
+  `reconcileCoreSurfaces`) treat `hidden` as placed, so a reload never resurrects a hidden surface;
+  `reconcilePluginViews` prunes a hidden id only when its plugin is uninstalled. **Chat is never
+  hidden** (it mounts unconditionally on its dock — a hidden chat would render with no rail icon).
+  Restore is via the command palette (ADR 0057) **or the new `rail-background` menu**: `openView()`
+  un-hides before routing, so ⌘K — or right-clicking empty rail space — brings a hidden view back to
+  a dock (its core default dock, else the left rail). Persist migration **v13** adds the empty bucket
+  to older layouts.
+- **Hidden-views menu on the rail background** (`rail-background` ContextType) — right-clicking empty
+  rail space (not an icon) lists the hidden surfaces; selecting one restores it **onto the dock whose
+  background was clicked** (`showSurface(id, side)`) and opens it there — so it lands where you asked,
+  not its default dock. The DS `AppShell` only fires `onRailContextMenu` on icons, so the App catches
+  the rail-container right-click by event delegation (`onContextMenu` on the shell wrapper, keyed off
+  the stable `.pl-rail` / `.pl-rail__btn` classnames), derives the side from the rail's modifier
+  class, and resolves each hidden id's label before opening the menu.
+- **Util-bar widget menu** (`util-widget` ContextType) — right-clicking a plugin's util-bar pill
+  offers **Configure…** (same per-plugin dialog as the rail). `UtilityWidget` gained an `onContextMenu`
+  passthrough to its pill; the App resolves the plugin id/name from the widget's `plugin:<id>:<view>`
+  key.
+- **Chat tab menu** (`chat-tab` ContextType) — right-clicking a chat session tab offers **New chat /
+  Rename / Close**. The DS `TabBar` exposes no per-tab context-menu hook, so `ChatSurface` delegates
+  from a (layout-transparent) tab-bar wrapper, maps the clicked `.pl-tabbar__tab` to its session by
+  sibling index (DOM order tracks the `items` = sessions order), and passes the behavior into the
+  menu as `ctx` closures — Close reuses the delete-confirm dialog; Rename fires the TabBar's inline
+  editor via a synthetic `dblclick`.
+
+**DS gaps to contribute back:** both `AppShell` (rail background) and `TabBar` (per-tab) should
+expose context-menu hooks so the console needn't delegate off DOM classnames / map by sibling
+index. Until then, the stable `pl-*` classnames are the contract.
+- **Configure…** (plugin views only) — opens the owning plugin's settings dialog (ADR 0059). The
+  App-side `onRailContextMenu` resolves the owning plugin's id + name from the `plugin:<id>:<view>`
+  rail id and passes them in `ctx`; the action sets a store-driven `configurePlugin`, mounted once at
+  the app root — the same per-plugin dialog the Plugins manager uses, now reached from the rail.
+
 ## References
 
 - `rabbit-hole.io` context-menu module (`apps/rabbit-hole/app/context-menu/` — the registry +
   imperative-open pattern this adopts).
 - ADR 0034 (plugin UI as first-class React — the SDK that re-exports `registerContextMenu`, and
-  the trust gate it inherits), ADR 0035 (rail surfaces — the `rail-surface` menu is customer #1).
+  the trust gate it inherits), ADR 0035 (rail surfaces — the `rail-surface` menu is customer #1),
+  ADR 0057 (command palette — the restore point for hidden surfaces), ADR 0059 (the per-plugin
+  settings dialog that "Configure…" opens).

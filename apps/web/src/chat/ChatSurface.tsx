@@ -18,8 +18,10 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { openContextMenu } from "../contextMenu";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -136,6 +138,27 @@ export function ChatSurface({
     chatStore.deleteSession(id);
   }
 
+  // Right-click a chat tab → context menu (ADR 0036). The DS TabBar exposes no per-tab
+  // context-menu hook, so we delegate from the tab-bar wrapper and map the clicked tab to its
+  // session by sibling index (DOM order tracks the `items` = sessions order). Close reuses the
+  // confirm dialog; Rename fires the TabBar's inline editor via a synthetic dblclick on the tab.
+  function onTabBarContextMenu(e: ReactMouseEvent) {
+    const tabEl = (e.target as HTMLElement).closest(".pl-tabbar__tab") as HTMLElement | null;
+    if (!tabEl) {
+      openContextMenu("chat-tab", e, { onNew: () => chatStore.createSession() });
+      return;
+    }
+    const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll(".pl-tabbar__tab"));
+    const session = chat.sessions[tabs.indexOf(tabEl)];
+    if (!session) return;
+    openContextMenu("chat-tab", e, {
+      sessionId: session.id,
+      onNew: () => chatStore.createSession(),
+      onRename: () => tabEl.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+      onClose: () => setPendingClose(session.id),
+    });
+  }
+
   return (
     <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active}>
       {/* DS TabBar (#832): a tab per session (status dot · title · close) + "+".
@@ -143,25 +166,27 @@ export function ChatSurface({
           `responsive` collapses to a DS-native <select> + add in a narrow panel
           (container query). The status dot rides the `icon` slot — wide-strip only:
           the collapsed <option> can't host markup, matching the old behavior. */}
-      <TabBar
-        ariaLabel="Chat sessions"
-        responsive
-        activeId={chat.currentSessionId ?? ""}
-        items={chat.sessions.map((session) => {
-          const status = chat.sessionStatusMap[session.id] || "idle";
-          return {
-            id: session.id,
-            label: session.title,
-            icon: <span className={`session-dot ${status}`} title={status} />,
-          };
-        })}
-        onSelect={(id) => chatStore.switchSession(id)}
-        onClose={(id) => setPendingClose(id)}
-        onRename={(id, label) => chatStore.renameSession(id, label)}
-        onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
-        onAdd={() => chatStore.createSession()}
-        addLabel="New chat"
-      />
+      <div className="chat-tabbar-wrap" onContextMenu={onTabBarContextMenu}>
+        <TabBar
+          ariaLabel="Chat sessions"
+          responsive
+          activeId={chat.currentSessionId ?? ""}
+          items={chat.sessions.map((session) => {
+            const status = chat.sessionStatusMap[session.id] || "idle";
+            return {
+              id: session.id,
+              label: session.title,
+              icon: <span className={`session-dot ${status}`} title={status} />,
+            };
+          })}
+          onSelect={(id) => chatStore.switchSession(id)}
+          onClose={(id) => setPendingClose(id)}
+          onRename={(id, label) => chatStore.renameSession(id, label)}
+          onReorder={(next) => chatStore.reorderSessions(next.map((t) => t.id))}
+          onAdd={() => chatStore.createSession()}
+          addLabel="New chat"
+        />
+      </div>
 
       <div className="chat-session-pool">
         {chat.activeSessions.map((sessionId) => (

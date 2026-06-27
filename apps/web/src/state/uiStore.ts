@@ -68,6 +68,12 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
+  // Per-plugin Configure dialog (ADR 0059), opened from the plugin manager OR a rail
+  // context-menu "Configure…" (ADR 0036). EPHEMERAL — partialized out of persistence so a
+  // refresh never reopens it. App mounts one root `PluginSettingsDialog` driven by this.
+  configurePlugin?: { id: string; name: string };
+  openPluginConfig: (id: string, name: string) => void;
+  closePluginConfig: () => void;
   rightCollapsed: boolean;
   leftCollapsed: boolean;
   rightWidth: number;
@@ -76,11 +82,20 @@ type UIState = {
   // is pinned left (mounts unconditionally for streaming continuity) — never moved across rails.
   // Three docks now (DS AppShell bottom dock): left/right rails + the bottom dock (a
   // horizontal icon rail in the util bar + a full-width panel). A surface is on exactly
-  // one dock, at a position.
-  railOrder: { left: string[]; right: string[]; bottom: string[] };
-  moveSurface: (id: string, side: "left" | "right" | "bottom") => void; // splice out → append to the target dock
+  // one dock, at a position — OR in `hidden`. `hidden` holds surfaces the operator hid
+  // from the rails WITHOUT disabling the plugin: enabled-but-not-shown. railSurfaces()
+  // renders only the dock arrays, so a hidden id has no rail icon; restore it from ⌘K
+  // (openView un-hides) or by moving it to a dock. The reconcilers never resurrect a
+  // hidden id onto a dock (only prune it from `hidden` when the plugin is uninstalled).
+  railOrder: { left: string[]; right: string[]; bottom: string[]; hidden: string[] };
+  moveSurface: (id: string, side: "left" | "right" | "bottom") => void; // splice out (incl. hidden) → append to the target dock
   reorderSurface: (id: string, dir: -1 | 1) => void; // swap with the neighbour within its rail
-  setRailOrder: (next: { left: string[]; right: string[]; bottom: string[] }) => void; // DS AppShell DnD — whole new order
+  setRailOrder: (next: { left: string[]; right: string[]; bottom: string[] }) => void; // DS AppShell DnD — new dock order (hidden preserved)
+  // Hide a surface from the rails without disabling its plugin (move it to `hidden`); show
+  // it again on a dock (default: its core dock, else left). `showSurface` is a no-op-safe
+  // un-hide if the id is already on a dock. Chat is never hidden (it mounts unconditionally).
+  hideSurface: (id: string) => void;
+  showSurface: (id: string, side?: "left" | "right" | "bottom") => void;
   // Sync plugin views into railOrder (ADR 0036) — append newly-available ones to their placement
   // side, prune `plugin:` ids no longer present. Core surfaces are left untouched.
   reconcilePluginViews: (views: { id: string; side: "left" | "right" | "bottom" }[]) => void;
@@ -120,10 +135,11 @@ type UIState = {
 // `reconcileCoreSurfaces`, which re-adds a CORE surface to its default dock when a
 // persisted `railOrder` is missing it (see the action). Keep ids in sync with
 // CORE_SURFACES (apps/web/src/app/coreSurfaces.tsx).
-const DEFAULT_RAIL_ORDER: { left: string[]; right: string[]; bottom: string[] } = {
+const DEFAULT_RAIL_ORDER: { left: string[]; right: string[]; bottom: string[]; hidden: string[] } = {
   left: ["chat", "knowledge"],
   right: ["work"],
   bottom: [],
+  hidden: [],
 };
 const coreDefaultSide = (id: string): "left" | "right" | "bottom" | null =>
   DEFAULT_RAIL_ORDER.left.includes(id)
@@ -241,6 +257,16 @@ export function migrateUiState(persisted: unknown): unknown {
         (x) => x !== "activity" && x !== "plugins" && x !== "settings" && !FOLDED.has(x),
       );
     }
+    // v13 (hidden surfaces): railOrder gains a `hidden` bucket (enabled-but-not-shown
+    // surfaces). Complete the shape with [] for a layout that predates it. Runs LAST — the
+    // v2/v8/v10/v11/v12 steps rebuild railOrder as {left,right,bottom} and would drop a
+    // `hidden` added earlier — so reapply the ORIGINAL persisted hidden (read off the
+    // untouched input) here, making a re-run on an already-current state idempotent too.
+    const origHidden = (persisted as { railOrder?: { hidden?: unknown } }).railOrder?.hidden;
+    const roH = rest.railOrder as { left?: string[]; right?: string[]; bottom?: string[]; hidden?: string[] } | undefined;
+    if (roH) {
+      rest.railOrder = { ...roH, hidden: Array.isArray(origHidden) ? (origHidden as string[]) : [] };
+    }
     return rest;
   }
   return persisted;
@@ -259,19 +285,30 @@ export const useUI = create<UIState>()(
       globalSettingsSection: undefined,
       openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
       closeGlobalSettings: () => set({ globalSettingsOpen: false }),
+      configurePlugin: undefined,
+      openPluginConfig: (id, name) => set({ configurePlugin: { id, name } }),
+      closePluginConfig: () => set({ configurePlugin: undefined }),
       rightCollapsed: false,
       leftCollapsed: false,
       rightWidth: 360,
       bottomPanel: "",
       bottomHeight: 240,
       bottomCollapsed: false,
-      railOrder: { left: [...DEFAULT_RAIL_ORDER.left], right: [...DEFAULT_RAIL_ORDER.right], bottom: [...DEFAULT_RAIL_ORDER.bottom] },
+      railOrder: {
+        left: [...DEFAULT_RAIL_ORDER.left],
+        right: [...DEFAULT_RAIL_ORDER.right],
+        bottom: [...DEFAULT_RAIL_ORDER.bottom],
+        hidden: [...DEFAULT_RAIL_ORDER.hidden],
+      },
       moveSurface: (id, side) =>
         set((s) => {
+          // Moving to a dock also un-hides (splice from every bucket incl. hidden), so
+          // "Move to …" doubles as a restore for a hidden surface.
           const arrs = {
             left: s.railOrder.left.filter((x) => x !== id),
             right: s.railOrder.right.filter((x) => x !== id),
             bottom: s.railOrder.bottom.filter((x) => x !== id),
+            hidden: (s.railOrder.hidden ?? []).filter((x) => x !== id),
           };
           arrs[side].push(id); // append to the target dock's end
           return { railOrder: arrs };
@@ -286,9 +323,48 @@ export const useUI = create<UIState>()(
             [next[i], next[j]] = [next[j], next[i]];
             return next;
           };
-          return { railOrder: { left: swap(s.railOrder.left), right: swap(s.railOrder.right), bottom: swap(s.railOrder.bottom) } };
+          return {
+            railOrder: {
+              left: swap(s.railOrder.left),
+              right: swap(s.railOrder.right),
+              bottom: swap(s.railOrder.bottom),
+              hidden: s.railOrder.hidden ?? [],
+            },
+          };
         }),
-      setRailOrder: (railOrder) => set({ railOrder }),
+      // DS AppShell DnD reports the three DOCK orders only — preserve the `hidden` bucket.
+      setRailOrder: (next) => set((s) => ({ railOrder: { ...next, hidden: s.railOrder.hidden ?? [] } })),
+      hideSurface: (id) =>
+        set((s) => {
+          const hidden = s.railOrder.hidden ?? [];
+          if (hidden.includes(id)) return {}; // already hidden — no write
+          return {
+            railOrder: {
+              left: s.railOrder.left.filter((x) => x !== id),
+              right: s.railOrder.right.filter((x) => x !== id),
+              bottom: s.railOrder.bottom.filter((x) => x !== id),
+              hidden: [...hidden, id],
+            },
+          };
+        }),
+      showSurface: (id, side) =>
+        set((s) => {
+          const hidden = (s.railOrder.hidden ?? []).filter((x) => x !== id);
+          const placed = new Set([...s.railOrder.left, ...s.railOrder.right, ...s.railOrder.bottom]);
+          // Already on a dock — just clear it from hidden (defensive; shouldn't co-occur).
+          if (placed.has(id)) return { railOrder: { ...s.railOrder, hidden } };
+          // Restore to its core default dock when known (work→right), else the left rail.
+          // A plugin view has no known dock here, so it lands left; the operator can re-dock it.
+          const target = side ?? coreDefaultSide(id) ?? "left";
+          const arrs = {
+            left: [...s.railOrder.left],
+            right: [...s.railOrder.right],
+            bottom: [...s.railOrder.bottom],
+            hidden,
+          };
+          arrs[target].push(id);
+          return { railOrder: arrs };
+        }),
       mobileActive: "chat",
       setMobileActive: (mobileActive) => set({ mobileActive }),
       quickBar: ["chat", "knowledge", "plugins"],
@@ -302,18 +378,25 @@ export const useUI = create<UIState>()(
         set((s) => {
           const ids = new Set(views.map((v) => v.id));
           const keep = (arr: string[]) => arr.filter((x) => !x.startsWith("plugin:") || ids.has(x));
-          const arrs = { left: keep(s.railOrder.left), right: keep(s.railOrder.right), bottom: keep(s.railOrder.bottom) };
+          // `hidden` is reconciled too: prune uninstalled plugin views from it, but KEEP a
+          // hidden id so it stays enabled-but-not-shown across reloads.
+          const hidden = keep(s.railOrder.hidden ?? []);
+          const hiddenSet = new Set(hidden);
+          const arrs = { left: keep(s.railOrder.left), right: keep(s.railOrder.right), bottom: keep(s.railOrder.bottom), hidden };
           for (const v of views) {
+            if (hiddenSet.has(v.id)) continue; // operator hid it — don't resurrect onto a dock
             if (!arrs.left.includes(v.id) && !arrs.right.includes(v.id) && !arrs.bottom.includes(v.id)) arrs[v.side].push(v.id);
           }
           return { railOrder: arrs };
         }),
       reconcileCoreSurfaces: (ids) =>
         set((s) => {
-          const placed = new Set([...s.railOrder.left, ...s.railOrder.right, ...s.railOrder.bottom]);
+          // A hidden core surface counts as "placed" — don't re-add it to a dock.
+          const hidden = s.railOrder.hidden ?? [];
+          const placed = new Set([...s.railOrder.left, ...s.railOrder.right, ...s.railOrder.bottom, ...hidden]);
           const missing = ids.filter((id) => !placed.has(id) && coreDefaultSide(id));
           if (!missing.length) return {}; // whole already — avoid a needless state write
-          const arrs = { left: [...s.railOrder.left], right: [...s.railOrder.right], bottom: [...s.railOrder.bottom] };
+          const arrs = { left: [...s.railOrder.left], right: [...s.railOrder.right], bottom: [...s.railOrder.bottom], hidden };
           for (const id of missing) arrs[coreDefaultSide(id)!].push(id);
           return { railOrder: arrs };
         }),
@@ -351,11 +434,11 @@ export const useUI = create<UIState>()(
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
-      version: 12, // …v10 Plugins→Settings section · v11 Tasks+Goals+Schedule→Work hub · v12 Settings→utility pill (prune rail id)
+      version: 13, // …v11 Tasks+Goals+Schedule→Work hub · v12 Settings→utility pill · v13 railOrder.hidden bucket
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,
-      // The Global settings overlay is ephemeral UI state — drop it from persistence so a
-      // refresh never reopens it (everything else persists as before).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, ...rest }) => rest,
+      // Ephemeral overlay state — dropped from persistence so a refresh never reopens it
+      // (the Global settings overlay + the per-plugin Configure dialog).
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, configurePlugin: _c, ...rest }) => rest,
     },
   ),
 );

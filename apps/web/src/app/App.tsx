@@ -59,7 +59,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
+import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
@@ -79,6 +79,7 @@ import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
+import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
@@ -253,6 +254,8 @@ export function App() {
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
+  const configurePlugin = useUI((s) => s.configurePlugin);
+  const closePluginConfig = useUI((s) => s.closePluginConfig);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
@@ -455,7 +458,9 @@ export function App() {
   );
   const metaFor = (id: string): RailItem | undefined => coreMeta.get(id) ?? pluginMeta.get(id);
   function railSurfaces(side: "left" | "right" | "bottom"): RailItem[] {
-    const placed = new Set([...railOrder.left, ...railOrder.right, ...railOrder.bottom]);
+    // `placed` includes the `hidden` bucket so the safety-net below never re-appends a
+    // view the operator hid (hidden = enabled-but-not-shown, ADR 0035/0036).
+    const placed = new Set([...railOrder.left, ...railOrder.right, ...railOrder.bottom, ...(railOrder.hidden ?? [])]);
     const ordered = (railOrder[side] ?? []).map(metaFor).filter((s): s is RailItem => Boolean(s));
     // Safety net: a plugin view that appeared before reconcile ran — append it for this side.
     const extra = (side === "left" ? pluginRail : side === "right" ? pluginRightPanels : pluginBottom)
@@ -472,6 +477,26 @@ export function App() {
       .map((s): RailItem => ({ id: s.id, label: s.label, icon: s.icon }));
     return [...ordered, ...extra, ...ext];
   }
+
+  // Right-click the EMPTY rail background (not an icon) → the "Hidden views" restore menu
+  // (ADR 0035/0036). The DS AppShell only fires onRailContextMenu on icons, so we catch the
+  // rail-container right-click here via event delegation (the DS classnames are the contract)
+  // and hand the resolved hidden-surface labels to the `rail-background` menu. An icon click
+  // is handled by its own `rail-surface` menu, so bail when the target is a rail button.
+  const onShellContextMenu = (e: ReactMouseEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest(".pl-rail__btn")) return; // an icon — its own menu handles it
+    const railEl = t.closest(".pl-rail") as HTMLElement | null;
+    if (!railEl) return; // not the rail — leave the default menu
+    // Which rail was right-clicked → restore a hidden view to THIS dock (not its default).
+    const side: "left" | "right" | "bottom" = railEl.classList.contains("pl-rail--right")
+      ? "right"
+      : railEl.classList.contains("pl-rail--bottom")
+        ? "bottom"
+        : "left";
+    const hidden = (railOrder.hidden ?? []).map((id) => ({ id, label: metaFor(id)?.label ?? id }));
+    openContextMenu("rail-background", e, { side, hidden });
+  };
 
   // ── Command palette (⌘K, ADR 0057) ────────────────────────────────────────────
   // Every resolvable View becomes a "go to" command (via openView → setSurface);
@@ -656,7 +681,7 @@ export function App() {
     {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
-    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
+    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`} onContextMenu={onShellContextMenu}>
       {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
           2.5s then hands off via the View Transitions API cross-fade (the
           protoAgent path); shows once per tab session (sessionStorage
@@ -808,7 +833,15 @@ export function App() {
             else { setBottomPanel(id); setBottomCollapsed(false); }
           }
         }}
-        onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
+        onRailContextMenu={(side, e, id) => {
+          // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
+          // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).
+          const pluginId = id.startsWith("plugin:") ? id.split(":")[1] : undefined;
+          const pluginName = pluginId
+            ? (runtime?.plugins?.find((p) => p.id === pluginId)?.name ?? pluginId)
+            : undefined;
+          openContextMenu("rail-surface", e, { id, side, pluginId, pluginName });
+        }}
         onRailReorder={(next) => {
           // Chat can dock anywhere now — left, right, or the bottom dock. Its slot mounts
           // unconditionally on whichever dock holds it (bottomContent mirrors the side rails),
@@ -916,7 +949,10 @@ export function App() {
                 <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens
                     the plugin's iframe in a dialog, with hover info. Reuses PluginView. */}
-                {utilityWidgetViews.map((v) => (
+                {utilityWidgetViews.map((v) => {
+                  const pluginId = v.key.split(":")[1];
+                  const pluginName = runtime?.plugins?.find((p) => p.id === pluginId)?.name ?? pluginId;
+                  return (
                   <UtilityWidget
                     key={v.key}
                     testId={`util-widget-${v.id}`}
@@ -925,12 +961,14 @@ export function App() {
                     info={typeof v.utility === "object" && v.utility?.info ? v.utility.info : `Open ${v.label}`}
                     dialogTitle={v.label}
                     dialogWidth="min(900px, 96vw)"
+                    onContextMenu={(e) => openContextMenu("util-widget", e, { pluginId, pluginName })}
                   >
                     <div className="plugin-widget-dialog">
                       <PluginView view={v} />
                     </div>
                   </UtilityWidget>
-                ))}
+                  );
+                })}
               </>
             }
             end={
@@ -1049,6 +1087,16 @@ export function App() {
       section={globalSettingsSection}
       onClose={closeGlobalSettings}
     />
+    {/* Per-plugin Configure dialog (ADR 0059) — opened from a rail context-menu "Configure…"
+        (ADR 0036). Store-driven so it can be triggered from anywhere; one root mount. */}
+    {configurePlugin && (
+      <PluginSettingsDialog
+        pluginId={configurePlugin.id}
+        pluginName={configurePlugin.name}
+        open
+        onClose={closePluginConfig}
+      />
+    )}
     </>
   );
 }

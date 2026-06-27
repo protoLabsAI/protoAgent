@@ -1,7 +1,18 @@
 import type { ReactNode } from "react";
 
 // ADR 0036 — what was right-clicked. Open string so plugins can define their own types.
-export type ContextType = "rail-surface" | "chat-message" | "note" | "bead" | "background" | (string & {});
+// `rail-background` = empty rail space (not an icon) → the "Hidden views" restore menu.
+// `util-widget` = a plugin's util-bar pill → Configure. `chat-tab` = a chat session tab.
+export type ContextType =
+  | "rail-surface"
+  | "rail-background"
+  | "util-widget"
+  | "chat-tab"
+  | "chat-message"
+  | "note"
+  | "bead"
+  | "background"
+  | (string & {});
 
 export interface MenuHelpers { close: () => void; }
 

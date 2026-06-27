@@ -185,6 +185,25 @@ test("right-click → Move to bottom dock docks the surface at the bottom", asyn
   await expect(page.locator(".pl-appshell__bottom .pl-tabs").getByRole("tab", { name: "Overview", exact: true })).toBeVisible();
 });
 
+test("right-click a core surface → Hide removes it; Chat offers no Hide (ADR 0035/0036)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const leftRail = page.locator(".pl-rail:not(.pl-rail--right)");
+
+  // Knowledge can be hidden off the rail (enabled-but-not-shown — no plugin to disable here).
+  await expect(leftRail.getByRole("button", { name: "Knowledge", exact: true })).toBeVisible();
+  await leftRail.getByRole("button", { name: "Knowledge", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Hide", { exact: true }).click();
+  await expect(leftRail.getByRole("button", { name: "Knowledge", exact: true })).toHaveCount(0);
+
+  // Chat mounts unconditionally on its dock, so it must NOT offer Hide (a hidden chat would
+  // render with no rail icon). Its menu still has the move actions.
+  await leftRail.getByRole("button", { name: "Chat", exact: true }).click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("Move to right rail")).toBeVisible();
+  await expect(menu.getByText("Hide", { exact: true })).toHaveCount(0);
+});
+
 test("mobile shell: bottom quick-bar + unified header drawer (ADR 0035 S4)", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto("/app/", { waitUntil: "load" });

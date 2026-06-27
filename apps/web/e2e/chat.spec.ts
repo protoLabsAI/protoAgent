@@ -99,3 +99,19 @@ test("long tool values do not overflow the chat horizontally", async ({ page }) 
   expect(metrics.docScroll).toBeLessThanOrEqual(metrics.win + 1);
   expect(metrics.bodyScroll).toBeLessThanOrEqual(metrics.bodyClient + 1);
 });
+
+test("right-click a chat tab → New chat / Rename / Close, and New chat adds a tab", async ({ page }) => {
+  // ADR 0036 — the chat tab context menu. Default has one session tab.
+  const tabs = page.locator(".pl-tabbar__tab");
+  await expect(tabs).toHaveCount(1);
+
+  await tabs.first().click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("New chat", { exact: true })).toBeVisible();
+  await expect(menu.getByText("Rename", { exact: true })).toBeVisible();
+  await expect(menu.getByText("Close chat", { exact: true })).toBeVisible();
+
+  await menu.getByText("New chat", { exact: true }).click();
+  await expect(tabs).toHaveCount(2);
+});

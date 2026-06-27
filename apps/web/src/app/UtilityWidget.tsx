@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { RefreshButton } from "./ui-kit";
 
@@ -39,6 +39,7 @@ export function UtilityWidget({
   testId,
   onOpen,
   onClose,
+  onContextMenu,
   children,
 }: {
   icon: ReactNode;
@@ -52,6 +53,8 @@ export function UtilityWidget({
   testId?: string;
   onOpen?: () => void;
   onClose?: () => void;
+  /** Right-click the pill — wired to the context-menu system (ADR 0036). */
+  onContextMenu?: (e: ReactMouseEvent) => void;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -69,6 +72,7 @@ export function UtilityWidget({
         onOpen?.();
         setOpen(true);
       }}
+      onContextMenu={onContextMenu}
     >
       {icon}
       {badge}
