@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background-job tool glyphs (now lucide icons). Status is carried by text/tone/icons, not emoji.
 
 ### Added
+- **Keyboard shortcuts** (ADR 0063) — a scoped, user-rebindable keybinding system. Defaults: `⌘K`
+  command palette, `⌘,` Settings, `/` focus composer, VS Code-style panel toggles `⌘B` left rail /
+  `⌘⌥B` right panel / `⌘J` bottom dock, and (in the chat panel) `⌘T` new chat, `⌘⇧K` clear,
+  `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump to chat tab N. Bindings are **focus-scoped** (the chat ones
+  fire only when the chat panel is focused) and **rebindable** in **Settings ▸ Keyboard** (record /
+  reset / conflict-detect; overrides persist globally). Forks/plugins add their own via
+  `registerKeybinding`. Note: the browser-mirroring combos (`⌘T`/`⌘1–9`/`⌃Tab`/`⌘B`/`⌘J`) work in
+  the desktop app; a browser tab reserves some — rebind to a free combo there.
 - **Quick-delete a chat tab** — **Shift+click** a tab's ✕ to delete it with no confirmation dialog
   and no knowledge harvest; while Shift is held the ✕ shows as a red trashcan to signal it. Plain
   click keeps the confirm dialog.
