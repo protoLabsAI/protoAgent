@@ -137,3 +137,57 @@ registerKeybinding({
   allowInInput: true,
   run: toggle(() => useUI.getState().bottomCollapsed, (b) => useUI.getState().setBottomCollapsed(b)),
 });
+
+// ── Focus a dock (global) ────────────────────────────────────────────────────────────
+// Ctrl+1–4 move keyboard FOCUS into a region (so that region's scoped binds activate) —
+// distinct from ⌘1–9, which JUMP chat tabs. Literal `ctrl` (not `mod`): on mac that's a
+// different key from ⌘, so it never collides with ⌘1–9. (On Win/Linux `mod`=Ctrl, so
+// ctrl+1 overlaps ⌘1's tab-jump — the conflict detector flags it; rebind there.)
+function focusDock(colSelector: string): void {
+  const col = document.querySelector(colSelector);
+  if (!col) return;
+  // Land on the first interactive element so the user can act immediately; fall back to the
+  // column itself (made programmatically focusable) so the keyboard scope still activates.
+  const focusable = col.querySelector<HTMLElement>(
+    'input:not([disabled]), textarea:not([disabled]), button:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+  );
+  if (focusable) {
+    focusable.focus();
+    return;
+  }
+  const el = col as HTMLElement;
+  if (el.tabIndex < 0) el.tabIndex = -1;
+  el.focus();
+}
+registerKeybinding({
+  id: "focus.chat",
+  label: "Focus chat composer",
+  group: "Focus",
+  defaultKeys: "ctrl+1",
+  allowInInput: true,
+  run: () => useKbIntents.getState().focusComposer(),
+});
+registerKeybinding({
+  id: "focus.left",
+  label: "Focus left panel",
+  group: "Focus",
+  defaultKeys: "ctrl+2",
+  allowInInput: true,
+  run: () => focusDock(".pl-appshell__col--left"),
+});
+registerKeybinding({
+  id: "focus.right",
+  label: "Focus right panel",
+  group: "Focus",
+  defaultKeys: "ctrl+3",
+  allowInInput: true,
+  run: () => focusDock(".pl-appshell__col--right"),
+});
+registerKeybinding({
+  id: "focus.bottom",
+  label: "Focus bottom dock",
+  group: "Focus",
+  defaultKeys: "ctrl+4",
+  allowInInput: true,
+  run: () => focusDock(".pl-appshell__bottom"),
+});
