@@ -4,11 +4,8 @@
 // handlers. ONE preserved thread per agent (stable contextId + persisted transcript,
 // see paletteChatStore) — `/clear` wipes it (transcript + server checkpoint).
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
-import { Conversation, Message, PromptInput, Reasoning } from "@protolabsai/ui/ai";
-import { Markdown } from "../chat/LazyMarkdown";
-import { ToolCalls } from "../chat/ToolCalls";
-import { ChatComponent } from "../chat/ChatComponent";
+import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
+import { ChatMessageView } from "../chat/ChatMessageView";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
@@ -135,8 +132,6 @@ export function PaletteChat({ agentName }: { agentName: string }) {
 
   const stop = () => abortRef.current?.abort();
   const empty = messages.length === 0;
-  const last = messages.length - 1;
-
   // Minimal slash menu — `/clear` hint while the draft starts with "/".
   const slashMatches = draft.startsWith("/")
     ? SLASH.filter((c) => c.name.startsWith(draft.slice(1).toLowerCase()))
@@ -153,28 +148,12 @@ export function PaletteChat({ agentName }: { agentName: string }) {
             <span style={{ color: "var(--pl-color-fg-muted)" }}>Ask {agentName} anything. /clear wipes this thread.</span>
           </Message>
         ) : null}
-        {messages.map((m, i) => {
-          const isStreaming = m.status === "streaming" && i === last;
-          if (m.role === "user") {
-            return (
-              <Message key={i} role="user">
-                <span className="chat-user-text">{m.content}</span>
-              </Message>
-            );
-          }
-          return (
-            <Message key={i} role={m.role} streaming={isStreaming}>
-              {m.reasoning ? <Reasoning surface="subtle" streaming={isStreaming && !m.content}>{m.reasoning}</Reasoning> : null}
-              {m.toolCalls && m.toolCalls.length ? <ToolCalls calls={m.toolCalls} /> : null}
-              {m.content ? (
-                <Markdown>{m.content}</Markdown>
-              ) : isStreaming && !m.toolCalls?.length && !m.reasoning ? (
-                <Loader2 className="spin" size={16} />
-              ) : null}
-              {m.components?.map((s, j) => <ChatComponent key={j} spec={s} />)}
-            </Message>
-          );
-        })}
+        {messages.map((m, i) => (
+          // Shared renderer (ADR 0035) — the SAME message tree as the main chat (reasoning,
+          // tools, content, components, the report card), so the ⌘K chat never drifts. No
+          // per-message action row (transient quick-chat). Streaming is read from m.status.
+          <ChatMessageView key={i} message={m} />
+        ))}
       </Conversation>
       <PromptInput
         value={draft}
