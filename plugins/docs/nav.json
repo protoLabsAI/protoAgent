@@ -577,6 +577,10 @@
           "title": "0061 — Frontend extension registries (fork-safe console behavior seams)"
         },
         {
+          "path": "adr/0063-keybinding-system.md",
+          "title": "ADR 0063 — Scoped, user-rebindable keybinding system"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
