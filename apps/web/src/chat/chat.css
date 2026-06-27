@@ -55,6 +55,29 @@
   margin-top: 8px;
 }
 
+/* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of
+   prompt ↑ / output ↓ / cost chips; full breakdown lives in the title tooltip. */
+.chat-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.chat-usage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.chat-usage-item svg {
+  opacity: 0.7;
+}
+
 /* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click
    deletes with no confirm + no harvest). Swap the DS ✕ svg for a trash silhouette (mask
    tinted via currentColor). */

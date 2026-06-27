@@ -418,6 +418,22 @@ export type ChatPart =
   | { kind: "reasoning"; text: string }
   | { kind: "tools"; ids: string[] };
 
+/** Per-turn token usage + cost, accumulated across the turn's LLM calls — lifted off the
+ *  terminal cost-v1 DataPart (A2A ext, ADR 0006). `inputTokens` is the SUM of prompt tokens
+ *  across the turn's calls (so a tool-loop turn counts each model call's prompt), NOT the live
+ *  context-window fill; it's a per-turn spend/size readout, not a context-fullness gauge. */
+export type TurnUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Prompt tokens served from the model's cache (subset of inputTokens). */
+  cacheReadTokens: number;
+  /** Prompt tokens written to the cache this turn (subset of inputTokens). */
+  cacheCreationTokens: number;
+  costUsd?: number;
+  durationMs?: number;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
@@ -440,6 +456,9 @@ export type ChatMessage = {
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */
   report?: { jobId: string; title: string };
+  /** This turn's token usage + cost (terminal cost-v1 DataPart). Shown as a small footer
+   *  under the answer; absent on user turns and history saved before this shipped. */
+  usage?: TurnUsage;
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required

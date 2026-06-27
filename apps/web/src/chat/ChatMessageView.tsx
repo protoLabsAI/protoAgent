@@ -1,10 +1,10 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
-import { Check, Copy, GitBranch, Loader2, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, GitBranch, Loader2, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
-import type { ChatMessage, ChatPart } from "../lib/types";
+import type { ChatMessage, ChatPart, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { Markdown } from "./LazyMarkdown";
 import { ReasoningCard } from "./ReasoningCard";
@@ -138,6 +138,9 @@ export function ChatMessageView({
           <Maximize2 size={14} /> Read full report
         </Button>
       ) : null}
+      {message.role === "assistant" && !streaming && message.usage ? (
+        <UsageFooter usage={message.usage} />
+      ) : null}
       {actions && message.role === "assistant" && !streaming && message.content ? (
         <MessageActions>
           {actions.onCopy ? (
@@ -161,5 +164,46 @@ export function ChatMessageView({
         </MessageActions>
       ) : null}
     </Message>
+  );
+}
+
+/** Compact tokens (12340 → "12.3k", 1_200_000 → "1.2M"); raw under 1k. */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
+}
+
+/** Dollars: sub-cent gets 4 decimals so a fraction-of-a-cent turn still reads non-zero. */
+function fmtCost(usd: number): string {
+  if (usd === 0) return "$0";
+  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+}
+
+/** The per-turn token/cost footer under an assistant answer: prompt ↑ · output ↓ · cost,
+ *  with the full breakdown (incl. cache + duration) on hover. Honest about scope — this is
+ *  the turn's accumulated spend, not a live context-window gauge (see TurnUsage). */
+function UsageFooter({ usage }: { usage: TurnUsage }) {
+  const title = [
+    `Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Total ${usage.totalTokens.toLocaleString()} tokens`,
+    usage.cacheReadTokens ? `${usage.cacheReadTokens.toLocaleString()} input tokens served from cache` : "",
+    usage.costUsd != null ? `Cost ${fmtCost(usage.costUsd)}` : "",
+    usage.durationMs ? `Took ${(usage.durationMs / 1000).toFixed(1)}s` : "",
+    "Per-turn total (summed across this turn's model calls), not live context-window fill.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <div className="chat-usage" title={title}>
+      <span className="chat-usage-item" aria-label="prompt tokens">
+        <ArrowUp size={11} aria-hidden />
+        {fmtTokens(usage.inputTokens)}
+      </span>
+      <span className="chat-usage-item" aria-label="output tokens">
+        <ArrowDown size={11} aria-hidden />
+        {fmtTokens(usage.outputTokens)}
+      </span>
+      {usage.costUsd != null ? <span className="chat-usage-item">{fmtCost(usage.costUsd)}</span> : null}
+    </div>
   );
 }

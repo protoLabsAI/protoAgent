@@ -77,6 +77,20 @@ test("expanded state is sticky and the assistant answer renders as markdown", as
   await expect(md.locator("pre code")).toContainText("const x = 1;");
 });
 
+test("a completed turn shows a per-turn token + cost footer (#1372)", async ({ page }) => {
+  await send(page, "what is the capital of France?");
+
+  // The terminal cost-v1 DataPart → a quiet footer under the answer: prompt ↑ / output ↓ / $.
+  const usage = page.locator(".pl-message--assistant .chat-usage").first();
+  await expect(usage).toBeVisible();
+  await expect(usage).toContainText("12.3k"); // input_tokens 12_340 → compact
+  await expect(usage).toContainText("1.2k"); // output_tokens 1_200
+  await expect(usage).toContainText("$0.04"); // costUsd 0.0412
+  // Full breakdown rides the tooltip, and is honest about scope.
+  await expect(usage).toHaveAttribute("title", /Total 13,540 tokens/);
+  await expect(usage).toHaveAttribute("title", /not live context-window fill/);
+});
+
 test("long tool values do not overflow the chat horizontally", async ({ page }) => {
   await send(page, "OVERFLOW: trigger a long token");
 

@@ -35,6 +35,7 @@ import type {
   TelemetrySummary,
   TelemetryTurn,
   ToolEvent,
+  TurnUsage,
   WorkflowRunResult,
   WorkflowSummary,
 } from "./types";
@@ -365,6 +366,7 @@ const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
+const COST_MIME = "application/vnd.protolabs.cost-v1+json";
 
 type RawPart = {
   kind?: string;
@@ -441,6 +443,37 @@ export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
 function reasoningFromParts(parts?: RawPart[]): string | null {
   const d = dataByMime(parts, REASONING_MIME) as { text?: string } | null;
   return d?.text || null;
+}
+
+/** Decode the terminal cost-v1 DataPart (A2A ext) → this turn's token usage + cost, or null.
+ * Wire shape: `{ usage: {input_tokens, output_tokens, cache_read_input_tokens,
+ * cache_creation_input_tokens}, costUsd?, durationMs? }`. The snake_case `usage` fields are
+ * mapped to the camelCase `TurnUsage` the console renders; totalTokens is derived. */
+export function costFromParts(parts?: RawPart[]): TurnUsage | null {
+  const d = dataByMime(parts, COST_MIME) as
+    | {
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
+        costUsd?: number;
+        durationMs?: number;
+      }
+    | null;
+  if (!d || !d.usage) return null;
+  const inputTokens = Number(d.usage.input_tokens || 0);
+  const outputTokens = Number(d.usage.output_tokens || 0);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    cacheReadTokens: Number(d.usage.cache_read_input_tokens || 0),
+    cacheCreationTokens: Number(d.usage.cache_creation_input_tokens || 0),
+    ...(typeof d.costUsd === "number" ? { costUsd: d.costUsd } : {}),
+    ...(typeof d.durationMs === "number" ? { durationMs: d.durationMs } : {}),
+  };
 }
 
 function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
@@ -1062,6 +1095,8 @@ export const api = {
       onReasoning?: (delta: string) => void;
       onToolCall?: (evt: ToolEvent) => void;
       onComponent?: (spec: ComponentSpec) => void;
+      // This turn's token usage + cost — lifted off the terminal cost-v1 DataPart.
+      onCost?: (usage: TurnUsage) => void;
       onInputRequired?: (payload: HitlPayload) => void;
       // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
       // turn (bad API key → 401). Carries the gateway's error text. Without this
@@ -1134,8 +1169,13 @@ export const api = {
         }
       }
       if (artifactUpdate) {
-        const text = textFromParts(artifactUpdate.artifact?.parts);
+        const aParts = artifactUpdate.artifact?.parts;
+        const text = textFromParts(aParts);
         if (text) handlers.onText?.(text, artifactUpdate.append !== false);
+        // The terminal answer artifact also carries the cost-v1 DataPart (a2a_impl
+        // executor) — surface this turn's token usage + cost for the per-turn footer.
+        const usage = costFromParts(aParts);
+        if (usage) handlers.onCost?.(usage);
       }
     };
 

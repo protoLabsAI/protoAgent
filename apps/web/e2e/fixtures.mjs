@@ -6,6 +6,7 @@
 // constants to assert against, so the contract can't drift between the two.
 
 export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
+export const COST_MIME = "application/vnd.protolabs.cost-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -503,12 +504,34 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       }),
     );
   }
+  // The terminal answer artifact also carries the cost-v1 DataPart (token usage + cost),
+  // exactly as a2a_impl's executor emits it — so the per-turn usage footer (#1372) renders.
   frames.push(
     wrap({
       kind: "artifact-update",
       taskId,
       contextId,
-      artifact: { artifactId: taskId, parts: [{ kind: "text", text: scenario.answer }] },
+      artifact: {
+        artifactId: taskId,
+        parts: [
+          { kind: "text", text: scenario.answer },
+          {
+            kind: "data",
+            data: {
+              usage: {
+                input_tokens: 12_340,
+                output_tokens: 1_200,
+                cache_read_input_tokens: 8_000,
+                cache_creation_input_tokens: 0,
+              },
+              costUsd: 0.0412,
+              durationMs: 2300,
+              success: true,
+            },
+            metadata: { mimeType: COST_MIME },
+          },
+        ],
+      },
       append: false,
       lastChunk: true,
     }),
