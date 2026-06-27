@@ -6,9 +6,9 @@
 // tab/new/clear ops are scoped to the chat panel (`scope: "chat"`, active only when focus is
 // within the chat surface) and `allowInInput` so they fire while typing in the composer.
 //
-// NOTE: ⌘T / ⌘1–9 / ⌃Tab are browser-reserved — they work in the Tauri desktop app but a
-// plain browser tab swallows them. Because every binding is rebindable, browser users can
-// remap to non-reserved combos in Settings ▸ Keyboard.
+// The chat ops use ⌘⌃ (Command+Control) combos: plain ⌘T/⌘N/⌘1–9/⌃Tab are browser-reserved
+// (new tab / new window / tab-switch), so the browser eats them before the page sees them.
+// ⌘⌃ is not browser-reserved, so these work in both the browser console and the desktop app.
 import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
 import { useUI } from "../state/uiStore";
@@ -59,7 +59,7 @@ registerKeybinding({
   id: "chat.new",
   label: "New chat",
   group: "Chat",
-  defaultKeys: "mod+t",
+  defaultKeys: "mod+ctrl+n", // ⌘⌃N — ⌘T/⌘N are browser-reserved; ⌘⌃ escapes the browser
   scope: "chat",
   allowInInput: true,
   run: () => chatStore.createSession(),
@@ -82,7 +82,7 @@ registerKeybinding({
   id: "chat.tab.next",
   label: "Next chat tab",
   group: "Chat",
-  defaultKeys: "ctrl+tab",
+  defaultKeys: "mod+ctrl+tab", // ⌘⌃Tab — plain ⌃Tab is the browser's tab-switch
   scope: "chat",
   allowInInput: true,
   run: () => switchByOffset(1),
@@ -91,7 +91,7 @@ registerKeybinding({
   id: "chat.tab.prev",
   label: "Previous chat tab",
   group: "Chat",
-  defaultKeys: "ctrl+shift+tab",
+  defaultKeys: "mod+ctrl+shift+tab",
   scope: "chat",
   allowInInput: true,
   run: () => switchByOffset(-1),
@@ -101,7 +101,7 @@ for (let n = 1; n <= 9; n++) {
     id: `chat.tab.${n}`,
     label: `Jump to chat tab ${n}`,
     group: "Chat",
-    defaultKeys: `mod+${n}`,
+    defaultKeys: `mod+ctrl+${n}`, // ⌘⌃1–9 — plain ⌘1–9 are the browser's tab-switch
     scope: "chat",
     allowInInput: true,
     run: () => switchToIndex(n - 1),
