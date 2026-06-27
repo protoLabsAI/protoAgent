@@ -156,6 +156,14 @@ test("right-click a plugin view → Configure opens that plugin's settings dialo
   await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
 });
 
+test("right-click a plugin's util-bar widget → Configure opens its settings dialog", async ({ page }) => {
+  // ADR 0036/0059 — the util-bar widget context menu mirrors the rail-icon Configure.
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("util-widget-snap").click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Configure", { exact: false }).click();
+  await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
+});
+
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 

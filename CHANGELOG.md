@@ -18,9 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from **right-clicking the empty rail** (a "Hidden views" menu), or "Move to …". The reconcilers
   respect `hidden`, so a reload never resurrects a hidden view and uninstalling the plugin prunes
   it. Persist migration **v13**.
-- **Configure a plugin from its rail icon** (ADR 0036/0059) — a plugin view's right-click menu now
-  offers **Configure…**, which opens that plugin's settings dialog (the same per-plugin dialog the
-  Plugins manager uses), store-driven from a single root mount.
+- **Configure a plugin from its rail icon or util-bar widget** (ADR 0036/0059) — right-clicking a
+  plugin view's rail icon, or its util-bar widget pill, now offers **Configure…**, which opens that
+  plugin's settings dialog (the same per-plugin dialog the Plugins manager uses), store-driven from
+  a single root mount.
+- **Chat tab context menu** (ADR 0036) — right-click a chat session tab for **New chat / Rename /
+  Close** (Close reuses the delete-confirm; Rename opens the inline tab editor).
 - **Fork-safe console behavior seams** (ADR 0061, #1337) — give the console the backend's
   "extend-without-editing-core, update-safe" property. Extends the `src/ext/` fork pattern
   with three registries mirroring `registerSurface` (static, first-wins, HMR-safe), so a fork

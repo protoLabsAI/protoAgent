@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, SlidersHorizontal } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, Pencil, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
@@ -115,5 +115,50 @@ registerContextMenu({
         }),
       ),
     ];
+  },
+});
+
+// Right-click a plugin's util-bar widget (a bottom-left pill) → Configure its plugin (ADR
+// 0036/0059), mirroring the rail-icon Configure. The App-side trigger resolves the owning
+// plugin's id/name from the `plugin:<id>:<view>` widget key into `ctx`.
+registerContextMenu({
+  type: "util-widget",
+  items: (ctx: { pluginId?: string; pluginName?: string }): MenuEntry[] => {
+    if (!ctx?.pluginId) return [];
+    const pid = ctx.pluginId;
+    const pname = ctx.pluginName ?? ctx.pluginId;
+    return [
+      {
+        id: "configure",
+        label: "Configure…",
+        icon: <SlidersHorizontal size={14} />,
+        run: () => useUI.getState().openPluginConfig(pid, pname),
+      },
+    ];
+  },
+});
+
+// Right-click a chat session tab → New chat / Rename / Close (ADR 0036). ChatSurface owns the
+// behavior and passes it in `ctx` as closures: Close reuses its confirm-dialog flow, Rename
+// triggers the DS TabBar's inline editor (a synthetic dblclick on the tab). Right-clicking empty
+// tab-bar space carries only `onNew`. (The DS TabBar exposes no per-tab context-menu hook — a
+// DS gap noted for contribute-back; ChatSurface delegates from the tab-bar wrapper meanwhile.)
+registerContextMenu({
+  type: "chat-tab",
+  items: (ctx: {
+    sessionId?: string;
+    onNew?: () => void;
+    onRename?: () => void;
+    onClose?: () => void;
+  }): MenuEntry[] => {
+    const out: MenuEntry[] = [
+      { id: "new", label: "New chat", icon: <Plus size={14} />, run: () => ctx?.onNew?.() },
+    ];
+    if (ctx?.sessionId) {
+      out.push({ id: "rename", label: "Rename", icon: <Pencil size={14} />, run: () => ctx.onRename?.() });
+      out.push({ id: "tab-div", divider: true });
+      out.push({ id: "close", label: "Close chat", icon: <X size={14} />, danger: true, run: () => ctx.onClose?.() });
+    }
+    return out;
   },
 });

@@ -942,7 +942,10 @@ export function App() {
                 <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens
                     the plugin's iframe in a dialog, with hover info. Reuses PluginView. */}
-                {utilityWidgetViews.map((v) => (
+                {utilityWidgetViews.map((v) => {
+                  const pluginId = v.key.split(":")[1];
+                  const pluginName = runtime?.plugins?.find((p) => p.id === pluginId)?.name ?? pluginId;
+                  return (
                   <UtilityWidget
                     key={v.key}
                     testId={`util-widget-${v.id}`}
@@ -951,12 +954,14 @@ export function App() {
                     info={typeof v.utility === "object" && v.utility?.info ? v.utility.info : `Open ${v.label}`}
                     dialogTitle={v.label}
                     dialogWidth="min(900px, 96vw)"
+                    onContextMenu={(e) => openContextMenu("util-widget", e, { pluginId, pluginName })}
                   >
                     <div className="plugin-widget-dialog">
                       <PluginView view={v} />
                     </div>
                   </UtilityWidget>
-                ))}
+                  );
+                })}
               </>
             }
             end={

@@ -115,9 +115,21 @@ The `rail-surface` menu grew two management actions beyond move/reorder:
   rail space (not an icon) lists the hidden surfaces, each restoring via `openView`. The DS `AppShell`
   only fires `onRailContextMenu` on icons, so the App catches the rail-container right-click by event
   delegation (`onContextMenu` on the shell wrapper, keyed off the stable `.pl-rail` / `.pl-rail__btn`
-  classnames) and resolves each hidden id's label before opening the menu. **DS gap to contribute
-  back:** `AppShell` should expose a rail-background context-menu hook so this needn't sniff DOM
-  classes.
+  classnames) and resolves each hidden id's label before opening the menu.
+- **Util-bar widget menu** (`util-widget` ContextType) — right-clicking a plugin's util-bar pill
+  offers **Configure…** (same per-plugin dialog as the rail). `UtilityWidget` gained an `onContextMenu`
+  passthrough to its pill; the App resolves the plugin id/name from the widget's `plugin:<id>:<view>`
+  key.
+- **Chat tab menu** (`chat-tab` ContextType) — right-clicking a chat session tab offers **New chat /
+  Rename / Close**. The DS `TabBar` exposes no per-tab context-menu hook, so `ChatSurface` delegates
+  from a (layout-transparent) tab-bar wrapper, maps the clicked `.pl-tabbar__tab` to its session by
+  sibling index (DOM order tracks the `items` = sessions order), and passes the behavior into the
+  menu as `ctx` closures — Close reuses the delete-confirm dialog; Rename fires the TabBar's inline
+  editor via a synthetic `dblclick`.
+
+**DS gaps to contribute back:** both `AppShell` (rail background) and `TabBar` (per-tab) should
+expose context-menu hooks so the console needn't delegate off DOM classnames / map by sibling
+index. Until then, the stable `pl-*` classnames are the contract.
 - **Configure…** (plugin views only) — opens the owning plugin's settings dialog (ADR 0059). The
   App-side `onRailContextMenu` resolves the owning plugin's id + name from the `plugin:<id>:<view>`
   rail id and passes them in `ctx`; the action sets a store-driven `configurePlugin`, mounted once at

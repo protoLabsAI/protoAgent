@@ -28,6 +28,12 @@
   min-height: 0;
 }
 
+/* The tab-bar wrapper exists only to scope the right-click context menu (ADR 0036) to the
+   tab strip — it generates no box, so the DS TabBar stays the flex child it was. */
+.chat-tabbar-wrap {
+  display: contents;
+}
+
 .chat-session-slot {
   height: 100%;
   display: grid;
