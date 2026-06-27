@@ -16,8 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (animated 2px accent left-border + inset) from the streaming message body, so the answer streams
   as raw, full-width text instead of behind an animated rail. Applies to the main chat and the ⌘K
   palette chat; tool cards keep their own loaders.
+- **No hardcoded emojis in the UI** — stripped emoji/glyph literals from user-facing strings: the
+  chat paste-attachment label (`📎` → `Attached:`), background-agent completion headers (`✅`/`⚠️`),
+  the `/effort` notes (`⚙`/`⚠`), delegate/plugin-install status strings (`✓`/`✗`/`⚠`), and the
+  background-job tool glyphs (now lucide icons). Status is carried by text/tone/icons, not emoji.
 
 ### Added
+- **Quick-delete a chat tab** — **Shift+click** a tab's ✕ to delete it with no confirmation dialog
+  and no knowledge harvest; while Shift is held the ✕ shows as a red trashcan to signal it. Plain
+  click keeps the confirm dialog.
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
   a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K,

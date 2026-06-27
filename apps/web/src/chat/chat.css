@@ -34,6 +34,25 @@
   display: contents;
 }
 
+/* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click
+   deletes with no confirm + no harvest). Swap the DS ✕ svg for a trash silhouette (mask
+   tinted via currentColor). */
+.chat-tabbar-wrap--del .pl-tabbar__close {
+  color: var(--pl-color-danger, #e5484d);
+}
+.chat-tabbar-wrap--del .pl-tabbar__close svg {
+  display: none;
+}
+.chat-tabbar-wrap--del .pl-tabbar__close::after {
+  content: "";
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
 .chat-session-slot {
   height: 100%;
   display: grid;
