@@ -79,6 +79,7 @@ import { ChatSlot } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
+import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FleetSwitcher } from "./FleetSwitcher";
@@ -253,6 +254,8 @@ export function App() {
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
+  const configurePlugin = useUI((s) => s.configurePlugin);
+  const closePluginConfig = useUI((s) => s.closePluginConfig);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   // Shell-level runtime read (ADR 0013): non-suspense useQuery so the topbar
@@ -455,7 +458,9 @@ export function App() {
   );
   const metaFor = (id: string): RailItem | undefined => coreMeta.get(id) ?? pluginMeta.get(id);
   function railSurfaces(side: "left" | "right" | "bottom"): RailItem[] {
-    const placed = new Set([...railOrder.left, ...railOrder.right, ...railOrder.bottom]);
+    // `placed` includes the `hidden` bucket so the safety-net below never re-appends a
+    // view the operator hid (hidden = enabled-but-not-shown, ADR 0035/0036).
+    const placed = new Set([...railOrder.left, ...railOrder.right, ...railOrder.bottom, ...(railOrder.hidden ?? [])]);
     const ordered = (railOrder[side] ?? []).map(metaFor).filter((s): s is RailItem => Boolean(s));
     // Safety net: a plugin view that appeared before reconcile ran — append it for this side.
     const extra = (side === "left" ? pluginRail : side === "right" ? pluginRightPanels : pluginBottom)
@@ -808,7 +813,15 @@ export function App() {
             else { setBottomPanel(id); setBottomCollapsed(false); }
           }
         }}
-        onRailContextMenu={(side, e, id) => openContextMenu("rail-surface", e, { id, side })}
+        onRailContextMenu={(side, e, id) => {
+          // A plugin view's rail id is `plugin:<pluginId>:<viewId>` — resolve the owning
+          // plugin's id + display name so the menu can offer "Configure…" (ADR 0036/0059).
+          const pluginId = id.startsWith("plugin:") ? id.split(":")[1] : undefined;
+          const pluginName = pluginId
+            ? (runtime?.plugins?.find((p) => p.id === pluginId)?.name ?? pluginId)
+            : undefined;
+          openContextMenu("rail-surface", e, { id, side, pluginId, pluginName });
+        }}
         onRailReorder={(next) => {
           // Chat can dock anywhere now — left, right, or the bottom dock. Its slot mounts
           // unconditionally on whichever dock holds it (bottomContent mirrors the side rails),
@@ -1049,6 +1062,16 @@ export function App() {
       section={globalSettingsSection}
       onClose={closeGlobalSettings}
     />
+    {/* Per-plugin Configure dialog (ADR 0059) — opened from a rail context-menu "Configure…"
+        (ADR 0036). Store-driven so it can be triggered from anywhere; one root mount. */}
+    {configurePlugin && (
+      <PluginSettingsDialog
+        pluginId={configurePlugin.id}
+        pluginName={configurePlugin.name}
+        open
+        onClose={closePluginConfig}
+      />
+    )}
     </>
   );
 }

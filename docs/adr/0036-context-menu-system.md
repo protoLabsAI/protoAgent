@@ -95,9 +95,31 @@ is a later, lower-trust option for iframe plugins.
 3. **More core menus** — `chat-message`, `note`, `bead` (retire their ad-hoc buttons).
 4. *(optional)* manifest-declared static items for iframe/untrusted plugins.
 
+## Addendum (2026-06-26) — rail-surface management actions + the `hidden` bucket
+
+The `rail-surface` menu grew two management actions beyond move/reorder:
+
+- **Hide** — moves the surface into a new `railOrder.hidden` bucket (uiStore): a surface is now on
+  exactly one dock *or* hidden. "Hidden" = *enabled-but-not-shown* — it declutters the rails without
+  disabling the plugin (previously the only way to remove a plugin view from a rail). `railSurfaces()`
+  renders only the dock arrays, so a hidden id has no rail icon; its safety-net append counts
+  `hidden` as "placed" so it never re-adds one. Both reconcilers (`reconcilePluginViews`,
+  `reconcileCoreSurfaces`) treat `hidden` as placed, so a reload never resurrects a hidden surface;
+  `reconcilePluginViews` prunes a hidden id only when its plugin is uninstalled. **Chat is never
+  hidden** (it mounts unconditionally on its dock — a hidden chat would render with no rail icon).
+  Restore is via the command palette (ADR 0057): `openView()` un-hides before routing, so ⌘K → a
+  hidden view's name brings it back to a dock (its core default dock, else the left rail). Persist
+  migration **v13** adds the empty bucket to older layouts.
+- **Configure…** (plugin views only) — opens the owning plugin's settings dialog (ADR 0059). The
+  App-side `onRailContextMenu` resolves the owning plugin's id + name from the `plugin:<id>:<view>`
+  rail id and passes them in `ctx`; the action sets a store-driven `configurePlugin`, mounted once at
+  the app root — the same per-plugin dialog the Plugins manager uses, now reached from the rail.
+
 ## References
 
 - `rabbit-hole.io` context-menu module (`apps/rabbit-hole/app/context-menu/` — the registry +
   imperative-open pattern this adopts).
 - ADR 0034 (plugin UI as first-class React — the SDK that re-exports `registerContextMenu`, and
-  the trust gate it inherits), ADR 0035 (rail surfaces — the `rail-surface` menu is customer #1).
+  the trust gate it inherits), ADR 0035 (rail surfaces — the `rail-surface` menu is customer #1),
+  ADR 0057 (command palette — the restore point for hidden surfaces), ADR 0059 (the per-plugin
+  settings dialog that "Configure…" opens).

@@ -101,6 +101,35 @@ test("a 404-ing plugin view shows an actionable error, not a blank panel", async
   await expect(page.locator(".plugin-view-frame")).toHaveCount(0);
 });
 
+test("right-click a plugin view → Hide removes its rail icon, and it stays hidden across a reload", async ({ page }) => {
+  // ADR 0035/0036 — "hidden but enabled": hiding a plugin view drops its rail icon WITHOUT
+  // disabling the plugin, and the reconcile-on-load must NOT resurrect it (the layout-wipe trap).
+  await page.goto("/app/", { waitUntil: "load" });
+  const rail = page.locator(".pl-rail");
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+
+  await rail.getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Hide", { exact: true }).click();
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
+  // Only Board is hidden — its sibling view (Stats) is untouched.
+  await expect(rail.getByRole("button", { name: "Stats", exact: true })).toBeVisible();
+
+  // Reload: boardy is still installed (the runtime status lists it), but Board stays hidden —
+  // reconcilePluginViews keeps it in the hidden bucket rather than re-docking it.
+  await page.reload({ waitUntil: "load" });
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Stats", exact: true })).toBeVisible();
+  await expect(page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
+});
+
+test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
+  // ADR 0036/0059 — a plugin view's rail menu offers "Configure…", which opens the owning
+  // plugin's per-plugin settings dialog (titled with the plugin's display name, "Boardy").
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Configure", { exact: false }).click();
+  await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
+});
+
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 

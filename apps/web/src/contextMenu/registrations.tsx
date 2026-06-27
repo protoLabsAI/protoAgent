@@ -1,15 +1,22 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, EyeOff, SlidersHorizontal } from "lucide-react";
 
 import { useUI } from "../state/uiStore";
 import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
 
 // First customer (ADR 0036 D6 / ADR 0035 D2): right-click a rail icon → reorder it within its
-// rail (Move up/down) and move it to another dock (append to the end). Chat is movable across all
-// three docks like any other surface; plugin views follow their manifest placement (no items yet).
+// rail (Move up/down), move it to another dock, Configure the owning plugin, or Hide it from the
+// rails (without disabling the plugin). Chat is movable across all three docks like any other
+// surface; plugin views carry their owning plugin's id/name in `ctx` (resolved by the App-side
+// trigger) so Configure can open that plugin's settings dialog.
 registerContextMenu({
   type: "rail-surface",
-  items: (ctx: { id: string; side: "left" | "right" | "bottom" }): MenuEntry[] => {
+  items: (ctx: {
+    id: string;
+    side: "left" | "right" | "bottom";
+    pluginId?: string;
+    pluginName?: string;
+  }): MenuEntry[] => {
     if (!ctx) return [];
     const ui = useUI.getState();
     const list = ui.railOrder[ctx.side] ?? [];
@@ -29,6 +36,29 @@ registerContextMenu({
       { side: "right", label: "Move to right rail" },
       { side: "bottom", label: "Move to bottom dock" },
     ];
+    // Management actions, gathered so the divider only shows when at least one applies:
+    // Configure (plugin views only) opens the owning plugin's settings dialog; Hide moves the
+    // surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never hidden — it
+    // mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
+    const manage: MenuEntry[] = [];
+    if (ctx.pluginId) {
+      const pid = ctx.pluginId;
+      const pname = ctx.pluginName ?? ctx.pluginId;
+      manage.push({
+        id: "configure",
+        label: "Configure…",
+        icon: <SlidersHorizontal size={14} />,
+        run: () => useUI.getState().openPluginConfig(pid, pname),
+      });
+    }
+    if (ctx.id !== "chat") {
+      manage.push({
+        id: "hide",
+        label: "Hide",
+        icon: <EyeOff size={14} />,
+        run: () => useUI.getState().hideSurface(ctx.id),
+      });
+    }
     // Any surface — core, plugin, or chat — reorders within its dock and moves across, including
     // chat to the bottom dock (its slot mounts unconditionally there too). Moving chat across docks
     // remounts it: a brief blip on an in-flight stream; a deliberate action.
@@ -55,6 +85,7 @@ registerContextMenu({
           icon: <ArrowLeftRight size={14} />,
           run: () => moveTo(d.side),
         })),
+      ...(manage.length ? [{ id: "manage-div", divider: true } as MenuEntry, ...manage] : []),
     ];
   },
 });

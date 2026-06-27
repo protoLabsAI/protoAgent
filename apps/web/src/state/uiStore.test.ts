@@ -142,8 +142,8 @@ describe("migrateUiState", () => {
 // set would prune every persisted entry and the reload would re-seed by manifest —
 // the layout-wipe bug this contract pins down.)
 describe("reconcilePluginViews", () => {
-  const seed = (left: string[], right: string[], bottom: string[] = []) =>
-    useUI.setState({ railOrder: { left, right, bottom } });
+  const seed = (left: string[], right: string[], bottom: string[] = [], hidden: string[] = []) =>
+    useUI.setState({ railOrder: { left, right, bottom, hidden } });
 
   beforeEach(() => seed(["chat", "plugin:doom:panel"], ["tasks", "plugin:board:board", "notes"]));
 
@@ -194,22 +194,111 @@ describe("reconcileCoreSurfaces", () => {
   const CORE = ["chat", "work", "knowledge"];
 
   it("re-adds a CORE surface missing from a persisted railOrder to its default dock", () => {
-    useUI.setState({ railOrder: { left: ["chat", "plugins"], right: ["work"], bottom: [] } });
+    useUI.setState({ railOrder: { left: ["chat", "plugins"], right: ["work"], bottom: [], hidden: [] } });
     useUI.getState().reconcileCoreSurfaces(CORE);
     expect(useUI.getState().railOrder.left).toContain("knowledge"); // restored on its default (left)
   });
 
   it("is a no-op (same ref, no write) when every core surface is already placed", () => {
-    useUI.setState({ railOrder: { left: ["chat", "knowledge"], right: ["work"], bottom: [] } });
+    useUI.setState({ railOrder: { left: ["chat", "knowledge"], right: ["work"], bottom: [], hidden: [] } });
     const before = useUI.getState().railOrder;
     useUI.getState().reconcileCoreSurfaces(CORE);
     expect(useUI.getState().railOrder).toBe(before);
   });
 
   it("respects a surface the operator moved to another dock — no duplicate", () => {
-    useUI.setState({ railOrder: { left: ["chat"], right: ["work", "knowledge"], bottom: [] } });
+    useUI.setState({ railOrder: { left: ["chat"], right: ["work", "knowledge"], bottom: [], hidden: [] } });
     useUI.getState().reconcileCoreSurfaces(CORE);
     expect(useUI.getState().railOrder.left).not.toContain("knowledge");
     expect(useUI.getState().railOrder.right).toContain("knowledge"); // left where the operator put it
+  });
+
+  it("does NOT re-add a core surface the operator hid (hidden counts as placed)", () => {
+    useUI.setState({ railOrder: { left: ["chat"], right: ["work"], bottom: [], hidden: ["knowledge"] } });
+    useUI.getState().reconcileCoreSurfaces(CORE);
+    expect(useUI.getState().railOrder.left).not.toContain("knowledge");
+    expect(useUI.getState().railOrder.hidden).toEqual(["knowledge"]); // stays hidden, not resurrected
+  });
+});
+
+// hideSurface / showSurface — the "hidden but enabled" bucket (ADR 0035/0036). A surface is on
+// exactly one dock OR in `hidden`; hiding removes its rail icon without disabling the plugin, and
+// showing restores it (to its core default dock, else left). The reconcilers respect `hidden` so a
+// reload never resurrects a hidden view; uninstalling the plugin prunes it from `hidden`.
+describe("hideSurface / showSurface", () => {
+  const seed = (left: string[], right: string[], bottom: string[] = [], hidden: string[] = []) =>
+    useUI.setState({ railOrder: { left, right, bottom, hidden } });
+
+  it("hides a surface off its dock into the hidden bucket", () => {
+    seed(["chat", "knowledge"], ["work"]);
+    useUI.getState().hideSurface("knowledge");
+    expect(useUI.getState().railOrder.left).toEqual(["chat"]);
+    expect(useUI.getState().railOrder.hidden).toEqual(["knowledge"]);
+  });
+
+  it("hiding is idempotent — re-hiding a hidden id is a no-op (same ref)", () => {
+    seed(["chat"], ["work"], [], ["knowledge"]);
+    const before = useUI.getState().railOrder;
+    useUI.getState().hideSurface("knowledge");
+    expect(useUI.getState().railOrder).toBe(before);
+  });
+
+  it("shows a hidden core surface back on its default dock", () => {
+    seed(["chat"], [], [], ["work", "knowledge"]);
+    useUI.getState().showSurface("work"); // work's core default is the right dock
+    expect(useUI.getState().railOrder.right).toContain("work");
+    expect(useUI.getState().railOrder.hidden).toEqual(["knowledge"]);
+  });
+
+  it("shows a hidden plugin view on the left rail by default (no known dock)", () => {
+    seed(["chat"], ["work"], [], ["plugin:board:board"]);
+    useUI.getState().showSurface("plugin:board:board");
+    expect(useUI.getState().railOrder.left).toContain("plugin:board:board");
+    expect(useUI.getState().railOrder.hidden).toEqual([]);
+  });
+
+  it("shows onto an explicit dock when asked", () => {
+    seed(["chat"], ["work"], [], ["plugin:board:board"]);
+    useUI.getState().showSurface("plugin:board:board", "right");
+    expect(useUI.getState().railOrder.right).toEqual(["work", "plugin:board:board"]);
+  });
+
+  it("moveSurface un-hides (move doubles as restore)", () => {
+    seed(["chat"], ["work"], [], ["plugin:board:board"]);
+    useUI.getState().moveSurface("plugin:board:board", "bottom");
+    expect(useUI.getState().railOrder.hidden).toEqual([]);
+    expect(useUI.getState().railOrder.bottom).toEqual(["plugin:board:board"]);
+  });
+
+  it("reconcilePluginViews keeps a hidden view hidden and never re-docks it", () => {
+    seed(["chat"], ["work"], [], ["plugin:board:board"]);
+    // board is still installed (declares its right placement) — but the operator hid it.
+    useUI.getState().reconcilePluginViews([{ id: "plugin:board:board", side: "right" }]);
+    expect(useUI.getState().railOrder.right).toEqual(["work"]); // NOT resurrected
+    expect(useUI.getState().railOrder.hidden).toEqual(["plugin:board:board"]);
+  });
+
+  it("reconcilePluginViews prunes a hidden view when its plugin is uninstalled", () => {
+    seed(["chat"], ["work"], [], ["plugin:board:board"]);
+    useUI.getState().reconcilePluginViews([]); // board gone from the loaded set
+    expect(useUI.getState().railOrder.hidden).toEqual([]);
+  });
+});
+
+// The v13 migration adds the `hidden` bucket to a persisted railOrder that predates it, so the
+// shape is complete (actions also fall back to [] defensively).
+describe("migrateUiState — v13 hidden bucket", () => {
+  it("adds an empty hidden array to a railOrder without one", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat", "knowledge"], right: ["work"], bottom: [] },
+    }) as { railOrder: { hidden: string[] } };
+    expect(out.railOrder.hidden).toEqual([]);
+  });
+
+  it("preserves an existing hidden array", () => {
+    const out = migrateUiState({
+      railOrder: { left: ["chat"], right: ["work"], bottom: [], hidden: ["knowledge"] },
+    }) as { railOrder: { hidden: string[] } };
+    expect(out.railOrder.hidden).toEqual(["knowledge"]);
   });
 });

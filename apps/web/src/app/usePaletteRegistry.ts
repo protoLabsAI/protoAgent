@@ -43,16 +43,21 @@ export type InlinePluginView = {
 };
 
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
- *  Reads live state via the store's `getState()` so it isn't a render subscription. */
+ *  Reads live state via the store's `getState()` so it isn't a render subscription.
+ *  A HIDDEN surface (railOrder.hidden — enabled but not shown) is un-hidden first: the
+ *  palette is the restore point, so ⌘K → a hidden view's name brings it back onto a dock. */
 export function openView(id: string) {
   const ui = useUI.getState();
-  if (ui.railOrder.right.includes(id)) {
+  if ((ui.railOrder.hidden ?? []).includes(id)) ui.showSurface(id); // restore onto its dock, then route
+  const ro = useUI.getState().railOrder; // re-read: showSurface mutated it
+  if (ro.right.includes(id)) {
     ui.setRightCollapsed(false);
     ui.setRightPanel(id);
-  } else if (ui.railOrder.bottom.includes(id)) {
+  } else if (ro.bottom.includes(id)) {
     ui.setBottomCollapsed(false);
     ui.setBottomPanel(id);
   } else {
+    ui.setLeftCollapsed(false);
     ui.setSurface(id);
   }
 }
