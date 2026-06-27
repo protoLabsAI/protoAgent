@@ -577,6 +577,10 @@
           "title": "0061 — Frontend extension registries (fork-safe console behavior seams)"
         },
         {
+          "path": "adr/0062-full-screen-document-viewer.md",
+          "title": "ADR 0062 — Full-screen document viewer surface"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
