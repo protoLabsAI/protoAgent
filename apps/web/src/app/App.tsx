@@ -92,13 +92,14 @@ import { api, apiUrl, authToken, is401 } from "../lib/api";
 import { PluginView, consoleTheme } from "./PluginView";
 import { UtilityWidget } from "./UtilityWidget";
 import { AppShell, Header, UtilityBar } from "@protolabsai/ui/app-shell";
-import { CommandPalette, usePaletteHotkey } from "@protolabsai/ui/command-palette";
+import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
+import { useGlobalKeybindings, useKbIntents } from "../keybindings";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
@@ -544,8 +545,12 @@ export function App() {
     [chatAgentName],
   );
   const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  usePaletteHotkey(() => setPaletteOpen((o) => !o));
+  // Palette open-state lives in the keybinding intents store now: ⌘K is a regular,
+  // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
+  const paletteOpen = useKbIntents((s) => s.paletteOpen);
+  const setPaletteOpen = useKbIntents((s) => s.setPaletteOpen);
+  // The single global keydown host — resolves combos against the registry (scope + overrides).
+  useGlobalKeybindings();
   // Desktop launcher handoff (ADR 0057): the frameless ⌥Space launcher window can't
   // mutate this window's store, so its navigation commands forward a serializable
   // NavIntent over a Tauri event; the main window replays it here (the Rust shell has
