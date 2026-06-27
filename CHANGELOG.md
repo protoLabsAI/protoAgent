@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-06-27
+
 ### Added
 - **Panel-focus keybindings** (ADR 0063) — `⌃1`/`⌃2`/`⌃3`/`⌃4` move keyboard focus *into* the
   chat composer / left panel / right panel / bottom dock (so that region's scoped binds activate).

@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.71.0",
+    "date": "2026-06-27",
+    "changes": [
+      "Panel-focus keybindings",
+      "⌘K palette chat streams with live text↔tool interleave",
+      "Streaming answer text is full-width, no loading side-bar",
+      "No hardcoded emojis in the UI",
+      "Full-screen document viewer",
+      "Keyboard shortcuts",
+      "Quick-delete a chat tab",
+      "Hide a rail surface without disabling its plugin",
+      "Configure a plugin from its rail icon or util-bar widget",
+      "Chat tab context menu",
+      "Fork-safe console behavior seams"
+    ]
+  },
+  {
     "version": "v0.70.0",
     "date": "2026-06-24",
     "changes": [
