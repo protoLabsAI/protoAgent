@@ -35,9 +35,7 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
   conflict detection (same combo in an overlapping scope is blocked), per-row + reset-all.
 - **Core defaults dogfood the seam** (`coreKeybindings.ts`): `⌘K` palette (adopted off the DS
   `usePaletteHotkey` — palette open-state moved to an intents store), `⌘,` Settings, `/` focus
-  composer (global); `⌘⌃N` new, `⌘⇧K` clear, `⌘⌃Tab`/`⌘⌃⇧Tab` prev/next, `⌘⌃1–9` jump (scope
-  `"chat"`). The chat ops use `⌘⌃` (Command+Control) rather than the obvious `⌘T`/`⌘1–9`/`⌃Tab`
-  because those are browser-reserved (see Consequences).
+  composer (global); `⌘T` new, `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`).
 
 ## Consequences
 
@@ -45,12 +43,10 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
   bindings (and their own `data-kb-scope` panels) without touching core.
 - **Focus-aware** — "only when I'm in the chat input" is just `scope: "chat"`; the model extends
   to any panel/plugin view.
-- **Browser-reserved combos avoided** — the obvious chat shortcuts (`⌘T` new tab, `⌘N` new window,
-  `⌘1–9` / `⌃Tab` tab-switch) are intercepted by the browser before the page sees them, so they'd
-  only work in the Tauri desktop app. The defaults therefore use the `⌘⌃` family (not browser-
-  reserved), which works in both the browser console and the desktop app. Any binding can still be
-  remapped — including to a reserved combo for desktop-only use. (`⌘⌃F` is macOS fullscreen; the
-  chosen `⌘⌃N`/`⌘⌃1–9`/`⌘⌃Tab` are free.)
+- **Browser-reserved caveat** — `⌘T`, `⌘1–9`, `⌃Tab` are intercepted by the browser, so they fire
+  in the **Tauri desktop app** but a plain browser tab swallows them. Because everything is
+  rebindable, browser users remap to free combos. (Headless Playwright has no browser chrome, so
+  e2e can still exercise them.)
 - **Untouched:** DS-internal keys (Dialog Esc, palette/menu/tab arrows, AppShell resize) and the
   composer's contextual slash-menu nav remain owned by their components — not global commands.
 

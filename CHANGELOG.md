@@ -13,13 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Keyboard shortcuts** (ADR 0063) — a scoped, user-rebindable keybinding system. Defaults: `⌘K`
-  command palette, `⌘,` Settings, `/` focus composer, and (in the chat panel) `⌘⌃N` new chat,
-  `⌘⇧K` clear, `⌘⌃Tab`/`⌘⌃⇧Tab` prev/next, `⌘⌃1–9` jump to chat tab N. The chat ops use `⌘⌃`
-  (Command+Control) because plain `⌘T`/`⌘1–9`/`⌃Tab` are browser-reserved (new tab / tab-switch) —
-  `⌘⌃` works in both the browser console and the desktop app. Bindings are **focus-scoped** (the
-  chat ones fire only when the chat panel is focused) and **rebindable** in **Settings ▸ Keyboard**
-  (record / reset / conflict-detect; overrides persist globally). Forks/plugins add their own via
-  `registerKeybinding`.
+  command palette, `⌘,` Settings, `/` focus composer, and (in the chat panel) `⌘T` new chat,
+  `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump to chat tab N. Bindings are **focus-scoped**
+  (the chat ones fire only when the chat panel is focused) and **rebindable** in **Settings ▸
+  Keyboard** (record / reset / conflict-detect; overrides persist globally). Forks/plugins add
+  their own via `registerKeybinding`. Note: `⌘T`/`⌘1–9`/`⌃Tab` are browser-reserved — they work in
+  the desktop app; in a browser, rebind to a free combo.
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
   a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K,
