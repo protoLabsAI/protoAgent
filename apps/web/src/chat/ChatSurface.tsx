@@ -138,6 +138,38 @@ export function ChatSurface({
     chatStore.deleteSession(id);
   }
 
+  // Quick-delete: Shift+click a tab's ✕ → delete with NO confirm dialog and NO harvest.
+  // While Shift is held the ✕ shows as a red trashcan (the `--del` class → CSS) to signal it.
+  const [shiftDel, setShiftDel] = useState(false);
+  useEffect(() => {
+    const sync = (e: KeyboardEvent) => setShiftDel(e.shiftKey);
+    const clear = () => setShiftDel(false);
+    window.addEventListener("keydown", sync);
+    window.addEventListener("keyup", sync);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", sync);
+      window.removeEventListener("keyup", sync);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+  // The DS TabBar's onClose always opens the confirm dialog, so intercept the close-button
+  // click in the CAPTURE phase (before the DS button's own onClick) when Shift is down and
+  // delete directly. Maps the clicked ✕ to its session by sibling index (DOM = sessions order).
+  function onTabBarClickCapture(e: ReactMouseEvent) {
+    if (!e.shiftKey) return;
+    const closeBtn = (e.target as HTMLElement).closest(".pl-tabbar__close");
+    if (!closeBtn) return;
+    const tabEl = closeBtn.closest(".pl-tabbar__tab") as HTMLElement | null;
+    if (!tabEl) return;
+    const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll(".pl-tabbar__tab"));
+    const session = chat.sessions[tabs.indexOf(tabEl)];
+    if (!session) return;
+    e.preventDefault();
+    e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
+    closeSession(session.id, false); // false = no knowledge harvest
+  }
+
   // Right-click a chat tab → context menu (ADR 0036). The DS TabBar exposes no per-tab
   // context-menu hook, so we delegate from the tab-bar wrapper and map the clicked tab to its
   // session by sibling index (DOM order tracks the `items` = sessions order). Close reuses the
@@ -166,7 +198,11 @@ export function ChatSurface({
           `responsive` collapses to a DS-native <select> + add in a narrow panel
           (container query). The status dot rides the `icon` slot — wide-strip only:
           the collapsed <option> can't host markup, matching the old behavior. */}
-      <div className="chat-tabbar-wrap" onContextMenu={onTabBarContextMenu}>
+      <div
+        className={`chat-tabbar-wrap${shiftDel ? " chat-tabbar-wrap--del" : ""}`}
+        onContextMenu={onTabBarContextMenu}
+        onClickCapture={onTabBarClickCapture}
+      >
         <TabBar
           ariaLabel="Chat sessions"
           responsive

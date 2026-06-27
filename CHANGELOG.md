@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Quick-delete a chat tab** — **Shift+click** a tab's ✕ to delete it with no confirmation dialog
+  and no knowledge harvest; while Shift is held the ✕ shows as a red trashcan to signal it. Plain
+  click keeps the confirm dialog.
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
   a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K,
