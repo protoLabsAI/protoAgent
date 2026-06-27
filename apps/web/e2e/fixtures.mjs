@@ -8,6 +8,7 @@
 export const TOOL_CALL_MIME = "application/vnd.protolabs.tool-call-v1+json";
 export const COST_MIME = "application/vnd.protolabs.cost-v1+json";
 export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
+export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -327,6 +328,20 @@ function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
+  if (t.includes("COMPONENT"))
+    // show_component (#1323): the tool fires AND emits a component-v1 part. The tool card is
+    // suppressed (it's a render directive); the table renders inline below the answer.
+    return {
+      events: [
+        { id: "comp-1", name: "show_component", phase: "start", input: JSON.stringify({ component: "table" }) },
+        { id: "comp-1", name: "show_component", phase: "end", output: "Rendered a table component for the user." },
+      ],
+      component: {
+        component: "table",
+        props: { title: "Fleet", columns: ["Ship", "Status"], rows: [["Hauler", "active"], ["Scout", "idle"]] },
+      },
+      answer: "Here's the fleet breakdown.",
+    };
   if (t.includes("TIME"))
     return {
       name: "current_time",
@@ -492,6 +507,25 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+  }
+  // Inline component (component-v1, #1323): a status frame carrying the {component,props}
+  // DataPart — decoded by componentFromParts → rendered by the console registry.
+  if (scenario.component) {
+    frames.push(
+      wrap({
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: {
+          state: "working",
+          message: {
+            role: "agent",
+            parts: [{ kind: "data", data: scenario.component, metadata: { mimeType: COMPONENT_MIME } }],
+          },
+        },
+        final: false,
+      }),
+    );
   }
   // Stream the answer as append:true deltas when the scenario asks for it,
   // then always send the authoritative append:false terminal artifact.
