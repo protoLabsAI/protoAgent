@@ -352,6 +352,31 @@ def test_manifest_parses_views() -> None:
     assert m.views[0]["icon"] == "LayoutDashboard"
 
 
+def test_view_paths_are_auto_public(tmp_path) -> None:
+    # A view page is public chrome (the console iframes it; the nav can't carry a
+    # bearer), so its path — and its palette morph's path, query stripped — is
+    # auto-exempted from the auth gate WITHOUT the manifest re-declaring it in
+    # public_paths. (This is the bug that 401-blanked the bundled notes/docs views
+    # under a token gate.) Explicit public_paths still merge in, deduped.
+    _make_plugin(
+        tmp_path, "viewy", enabled=True,
+        manifest_extra=(
+            "views:\n"
+            '  - {id: main, label: Main, path: /plugins/viewy/view, palette: {path: "/plugins/viewy/quick?mode=search"}}\n'
+            "public_paths:\n"
+            "  - /plugins/viewy/view\n"          # also declared explicitly → not duplicated
+            "  - /api/plugins/viewy/webhook\n"   # a non-view exempt path → preserved
+        ),
+    )
+    m = load_manifest(tmp_path / "viewy")
+    assert m is not None
+    assert m.public_paths == [
+        "/plugins/viewy/view",          # from public_paths; the view path collapses onto it
+        "/api/plugins/viewy/webhook",
+        "/plugins/viewy/quick",         # palette path, query stripped, auto-added
+    ]
+
+
 def test_loader_meta_exposes_views_for_enabled_plugin(monkeypatch, tmp_path) -> None:
     root = tmp_path / "plugins"
     _make_plugin(

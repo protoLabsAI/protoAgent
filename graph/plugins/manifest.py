@@ -153,6 +153,35 @@ def _parse_public_paths(paths, plugin_id: str) -> list[str]:
     return kept
 
 
+def _view_public_paths(views: list[dict]) -> list[str]:
+    """The page path of every console view (and its palette morph), to auto-exempt
+    from the auth gate.
+
+    A view page is public *chrome*: the console iframes it with a plain navigation
+    that cannot carry the operator bearer, so a gated page 401-blanks under a
+    token-gated deployment. Its DATA stays gated under ``/api/plugins/<id>/*`` and
+    is fetched from inside the loaded page with the postMessage handshake token.
+
+    Deriving these from ``views`` means a plugin's view loads under a token gate
+    automatically — authors don't have to re-declare each view path in
+    ``public_paths`` (the bundled notes/docs plugins didn't, and 401-blanked).
+    Query/fragment are stripped so the prefix match covers e.g.
+    ``/plugins/docs/view?mode=search``. Same-origin scoping is enforced later by
+    ``_parse_public_paths``.
+    """
+    out: list[str] = []
+    for v in views:
+        candidates = [v.get("path")]
+        palette = v.get("palette")
+        if isinstance(palette, dict):
+            candidates.append(palette.get("path"))
+        for c in candidates:
+            p = str(c or "").split("?", 1)[0].split("#", 1)[0].strip()
+            if p:
+                out.append(p)
+    return out
+
+
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     """Parse ``<plugin_dir>/protoagent.plugin.yaml`` → ``PluginManifest``.
 
@@ -186,7 +215,18 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     secrets = data.get("secrets")
     settings = data.get("settings")
     views = _parse_views(data.get("views"), pid)
-    public_paths = _parse_public_paths(data.get("public_paths"), pid)
+    # public_paths = explicitly-declared exempt paths PLUS every view's own page
+    # path (view pages are public chrome — see _view_public_paths). Both run
+    # through the namespace validator; dict.fromkeys dedupes while preserving order
+    # (a view path a manifest also lists explicitly collapses to one).
+    public_paths = list(
+        dict.fromkeys(
+            [
+                *_parse_public_paths(data.get("public_paths"), pid),
+                *_parse_public_paths(_view_public_paths(views), pid),
+            ]
+        )
+    )
     emits = data.get("emits")
     subscribes = data.get("subscribes")
     requires_pip = data.get("requires_pip")
