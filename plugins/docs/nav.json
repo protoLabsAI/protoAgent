@@ -176,6 +176,10 @@
           "title": "Deploy via GHCR"
         },
         {
+          "path": "guides/deploy-docker.md",
+          "title": "Deploy in Docker (seed + UI override)"
+        },
+        {
           "path": "guides/releasing.md",
           "title": "Releasing"
         },
