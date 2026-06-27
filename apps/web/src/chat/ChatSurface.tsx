@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
 import { openDocument } from "../docviewer";
+import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -194,7 +195,7 @@ export function ChatSurface({
   }
 
   return (
-    <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active}>
+    <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active} data-kb-scope="chat">
       {/* DS TabBar (#832): a tab per session (status dot · title · close) + "+".
           Double-click a title to rename (TabBar owns the inline EditableText).
           `responsive` collapses to a DS-native <select> + add in a narrow panel
@@ -314,6 +315,13 @@ function ChatSessionSlot({
   useEffect(() => {
     if (visible && surfaceActive) textareaRef.current?.focus();
   }, [visible, surfaceActive]);
+  // The global "focus composer" keybinding (ADR 0063 — `/`) bumps this nonce; only the
+  // VISIBLE + active slot grabs focus (others no-op), same gate as the autofocus above.
+  const composerFocusNonce = useKbIntents((s) => s.composerFocusNonce);
+  useEffect(() => {
+    if (composerFocusNonce && visible && surfaceActive) textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerFocusNonce]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;

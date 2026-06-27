@@ -1,0 +1,104 @@
+/* Settings ▸ Keyboard (ADR 0063) — the rebind list. */
+.kb-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.kb-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.kb-panel__hint {
+  margin: 0;
+  font-size: 12px;
+  max-width: 60ch;
+}
+.kb-panel__hint kbd {
+  font-size: 11px;
+  padding: 0 4px;
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: 4px;
+  background: var(--pl-color-bg-subtle);
+}
+
+.kb-group {
+  display: flex;
+  flex-direction: column;
+}
+.kb-group__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pl-color-fg-subtle);
+  padding: 4px 0;
+}
+
+.kb-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border-subtle, var(--pl-color-border));
+}
+.kb-row__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.kb-row__scope {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--pl-color-fg-subtle);
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: 100px;
+  padding: 0 6px;
+}
+.kb-row__keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-key {
+  min-width: 84px;
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  padding: 4px 10px;
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-subtle);
+  color: var(--pl-color-fg);
+  cursor: pointer;
+}
+.kb-key:hover {
+  background: var(--pl-color-bg-hover);
+}
+.kb-key--recording {
+  border-color: var(--pl-color-accent);
+  color: var(--pl-color-accent);
+}
+.kb-reset {
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: var(--pl-color-fg-subtle);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--pl-radius);
+}
+.kb-reset:hover {
+  color: var(--pl-color-fg);
+  background: var(--pl-color-bg-hover);
+}
+.kb-row__conflict {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--pl-color-danger, #c0392b);
+  padding-top: 4px;
+}
