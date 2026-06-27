@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Panel-focus keybindings** (ADR 0063) — `⌃1`/`⌃2`/`⌃3`/`⌃4` move keyboard focus *into* the
+  chat composer / left panel / right panel / bottom dock (so that region's scoped binds activate).
+  Literal `⌃` (mac) so they're distinct from `⌘1–9` tab-jump; `⌃2/3/4` land on the first
+  interactive element in the dock. Rebindable in Settings ▸ Keyboard.
+
 ### Changed
 - **⌘K palette chat streams with live text↔tool interleave** — PaletteChat now builds the same
   ordered `parts` the main chat does (via the shared `appendText`/`appendReasoning`/`addToolRef`

@@ -36,7 +36,13 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
 - **Core defaults dogfood the seam** (`coreKeybindings.ts`): `⌘K` palette (adopted off the DS
   `usePaletteHotkey` — palette open-state moved to an intents store), `⌘,` Settings, `/` focus
   composer (global); `⌘T` new, `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`);
-  global VS Code-style panel toggles `⌘B` left rail / `⌘⌥B` right panel / `⌘J` bottom dock.
+  global VS Code-style panel toggles `⌘B` left rail / `⌘⌥B` right panel / `⌘J` bottom dock; and
+  panel-**focus** binds `⌃1` chat composer / `⌃2` left / `⌃3` right / `⌃4` bottom — these move
+  keyboard focus *into* a dock (so its scoped binds activate), and use the **literal `⌃`** (the
+  secondary modifier on mac) precisely so they don't collide with `⌘1–9` tab-jump. `⌃2/3/4` focus
+  the first interactive element in the dock's AppShell column; `⌃1` reuses the composer-focus
+  intent. (The combo layer maps `Ctrl`→`mod` on Win/Linux, so the literal-`⌃` default is
+  mac-semantics — rebind elsewhere; the conflict detector flags the `⌘1`/`Ctrl+1` overlap there.)
 
 ## Consequences
 
