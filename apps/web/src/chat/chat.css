@@ -144,16 +144,18 @@
   max-width: 230px;
 }
 
-/* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click
-   deletes with no confirm + no harvest). Swap the DS ✕ svg for a trash silhouette (mask
-   tinted via currentColor). */
-.chat-tabbar-wrap--del .pl-tabbar__close {
+/* Quick-delete mode: while Shift is held, the ✕ becomes a red trashcan (Shift+click deletes
+   with no confirm + no harvest). Scoped to :hover (#1373) so ONLY the tab whose ✕ you're
+   pointing at shows the trash — not every tab at once — for a clearer delete affordance and
+   fewer accidental clicks. Swap the DS ✕ svg for a trash silhouette (mask tinted via
+   currentColor). The Shift+click handler is unchanged; this only narrows the visual cue. */
+.chat-tabbar-wrap--del .pl-tabbar__close:hover {
   color: var(--pl-color-danger, #e5484d);
 }
-.chat-tabbar-wrap--del .pl-tabbar__close svg {
+.chat-tabbar-wrap--del .pl-tabbar__close:hover svg {
   display: none;
 }
-.chat-tabbar-wrap--del .pl-tabbar__close::after {
+.chat-tabbar-wrap--del .pl-tabbar__close:hover::after {
   content: "";
   display: inline-block;
   width: 13px;
