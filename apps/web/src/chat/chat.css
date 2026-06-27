@@ -34,8 +34,23 @@
   display: contents;
 }
 
-/* "Read full report" on a background-agent report card (ADR 0050/0062) — opens the full
-   report in the full-screen document viewer. */
+/* Background-agent report card (ADR 0050/0062). The DS system message is a de-emphasized
+   centered pill (bg-inset fill); for a report + "Read full report" button that reads wrong.
+   Restyle it as a bordered card sitting on the chat surface: same background as the surface
+   (transparent), a border instead of the fill, de-pilled + left-aligned + readable size. */
+.chat-report.pl-message--system {
+  justify-content: stretch;
+}
+.chat-report .pl-message__content {
+  background: transparent; /* match the chat surface — no bg-inset fill */
+  border: var(--pl-border-width) solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  display: block;
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--pl-color-fg);
+  padding: 10px 14px;
+}
 .chat-report-open {
   margin-top: 8px;
 }

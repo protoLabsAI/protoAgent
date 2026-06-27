@@ -1010,6 +1010,7 @@ function ChatSessionSlot({
               key={message.id || `${message.role}-${message.createdAt}`}
               role={message.role}
               streaming={message.status === "streaming"}
+              className={message.report ? "chat-report" : undefined}
             >
               {message.reasoning && !(message.parts && message.parts.length) ? (
                 // History-loaded turns have no ordered parts — fall back to the flat
