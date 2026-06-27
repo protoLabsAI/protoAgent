@@ -73,6 +73,16 @@ def test_mark_delivered_removes_from_pending(tmp_path):
     assert s.mark_delivered([a["id"]]) == 0  # already delivered
 
 
+def test_mark_pending_restores_to_queue(tmp_path):
+    """Un-deliver puts an item back in the pending queue (restore-on-failed-fire, #1375)."""
+    s = _store(tmp_path)
+    a = s.add("a", priority="now")
+    assert s.mark_delivered([a["id"]]) == 1
+    assert s.list(priority_floor="later") == []  # delivered → out of the queue
+    assert s.mark_pending([a["id"]]) == 1
+    assert len(s.list(priority_floor="later")) == 1  # back in the queue
+
+
 def test_add_rejects_empty_and_bad_priority(tmp_path):
     s = _store(tmp_path)
     with pytest.raises(ValueError):
@@ -194,7 +204,66 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
     res = await ch._operator_inbox_add({"text": "bg done", "priority": "now"})
     assert res["fired"] is False
-    assert len(store.list(priority_floor="later")) == 1  # still pending for check_inbox
+    assert len(store.list(priority_floor="later")) == 1  # restored to pending for check_inbox
+
+
+# ── badge dedup: inbox.item fires only for items that land in the queue (#1375) ──
+
+
+def _capture_inbox_events(monkeypatch):
+    import operator_api.console_handlers as ch
+
+    published: list[str] = []
+    monkeypatch.setattr(ch._event_bus, "publish", lambda topic, payload=None: published.append(topic))
+    return published
+
+
+@pytest.mark.asyncio
+async def test_fired_now_item_does_not_publish_inbox_item(tmp_path, monkeypatch):
+    """A fired now-item is an Activity event (activity.message), not an inbox-queue arrival —
+    so it must NOT publish inbox.item, which would double-bump the Inbox + Activity badges."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "inbox_store", _store(tmp_path), raising=False)
+    published = _capture_inbox_events(monkeypatch)
+
+    async def _fire_ok(_item):
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    await ch._operator_inbox_add({"text": "x", "priority": "now"})
+    assert "inbox.item" not in published
+
+
+@pytest.mark.asyncio
+async def test_queued_item_publishes_inbox_item(tmp_path, monkeypatch):
+    """A next/later item lands in the queue → publishes inbox.item (one badge)."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "inbox_store", _store(tmp_path), raising=False)
+    published = _capture_inbox_events(monkeypatch)
+    await ch._operator_inbox_add({"text": "x", "priority": "next"})
+    assert "inbox.item" in published
+
+
+@pytest.mark.asyncio
+async def test_failed_now_fire_publishes_inbox_item(tmp_path, monkeypatch):
+    """A now-item whose fire FAILED is pending again → it DOES publish inbox.item (the
+    check_inbox fallback path needs the operator to see it)."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "inbox_store", _store(tmp_path), raising=False)
+    published = _capture_inbox_events(monkeypatch)
+
+    async def _fire_fail(_item):
+        return False
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+    await ch._operator_inbox_add({"text": "x", "priority": "now"})
+    assert "inbox.item" in published
 
 
 # ── POST /api/inbox route ────────────────────────────────────────────────────

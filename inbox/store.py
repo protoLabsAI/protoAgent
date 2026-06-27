@@ -144,6 +144,24 @@ class InboxStore:
         finally:
             db.close()
 
+    def mark_pending(self, ids: list[int]) -> int:
+        """Un-deliver: clear ``delivered_at`` so an item re-enters the pending queue. The
+        inverse of ``mark_delivered`` — used to RESTORE a now-item that was optimistically
+        delivered (so its fired turn couldn't double-read it) but whose fire then failed."""
+        if not ids:
+            return 0
+        db = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            cur = db.execute(
+                f"UPDATE inbox SET delivered_at = NULL WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
     def pending_count(self, *, priority_floor: str = "next") -> int:
         return len(self.list(priority_floor=priority_floor, limit=1000))
 

@@ -465,25 +465,38 @@ async def _operator_inbox_add(payload: dict) -> dict:
     )
     if item is None:
         return {"ok": True, "deduped": True}
-    _event_bus.publish(
-        "inbox.item",
-        {
-            "id": item["id"],
-            "priority": item["priority"],
-            "source": item.get("source") or "",
-            "text": item["text"],
-        },
-    )
-    fired = await _fire_activity_from_inbox(item) if item["priority"] == "now" else False
-    if fired:
-        # A now-item that fired has been delivered to the agent (its Activity turn
-        # ran) — mark it delivered so it doesn't linger as pending and get
-        # re-surfaced by the next check_inbox (bd-jus). A FAILED fire stays pending
-        # so check_inbox remains the fallback delivery path for it.
+
+    fired = False
+    if item["priority"] == "now":
+        # Deliver-BEFORE-fire (#1375): mark the now-item delivered before its Activity turn
+        # runs, so the fired turn can't re-read its own trigger via check_inbox (double
+        # processing). If the fire never happens (storm-blocked / failed), restore it to
+        # pending so it isn't lost — check_inbox stays the fallback delivery path.
         try:
             await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])
-        except Exception:  # noqa: BLE001 — best-effort; a missed mark just re-surfaces
-            log.warning("[inbox] could not mark fired now-item %s delivered", item.get("id"))
+        except Exception:  # noqa: BLE001 — best-effort; a missed mark just means a double-read
+            log.warning("[inbox] could not pre-mark now-item %s delivered", item.get("id"))
+        fired = await _fire_activity_from_inbox(item)
+        if not fired:
+            try:
+                await asyncio.to_thread(STATE.inbox_store.mark_pending, [item["id"]])
+            except Exception:  # noqa: BLE001 — restore is best-effort
+                log.warning("[inbox] could not restore unfired now-item %s to pending", item.get("id"))
+
+    # Badge dedup (#1375): publish `inbox.item` ONLY for items that actually LAND in the queue
+    # — next/later items, or a now-item whose fire failed (now pending again). A fired now-item
+    # is an Activity event (the `activity.message` push covers it), not an inbox arrival, so it
+    # no longer double-bumps both the Inbox and Activity widget badges.
+    if not fired:
+        _event_bus.publish(
+            "inbox.item",
+            {
+                "id": item["id"],
+                "priority": item["priority"],
+                "source": item.get("source") or "",
+                "text": item["text"],
+            },
+        )
     return {"ok": True, "item": item, "fired": fired}
 
 
