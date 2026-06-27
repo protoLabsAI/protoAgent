@@ -142,6 +142,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { text: "Deploy via GHCR", link: "/guides/deploy" },
+            { text: "Deploy in Docker (seed + UI override)", link: "/guides/deploy-docker" },
             { text: "Releasing", link: "/guides/releasing" },
             { text: "Run multiple instances", link: "/guides/multi-instance" },
             { text: "Sandboxing & egress", link: "/guides/sandboxing" },

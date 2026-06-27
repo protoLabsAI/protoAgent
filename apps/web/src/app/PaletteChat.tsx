@@ -117,14 +117,14 @@ export function PaletteChat({ agentName }: { agentName: string }) {
           onReasoning: (d) => update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d })),
           onToolCall: (evt) => update((m) => upsertTool(m, evt)),
           onComponent: (spec) => update((m) => ({ ...m, components: [...(m.components ?? []), spec] })),
-          onFailed: (detail) => update((m) => ({ ...m, content: m.content || `⚠️ ${detail}`, status: "error" })),
+          onFailed: (detail) => update((m) => ({ ...m, content: m.content || detail, status: "error" })),
           onDone: () => update(finalize),
         },
         { model, reasoningEffort: effectiveReasoningEffort(sess) },
       );
     } catch (e) {
       if (!controller.signal.aborted) {
-        update((m) => ({ ...m, content: m.content || `⚠️ ${(e as Error).message || "Chat failed."}`, status: "error" }));
+        update((m) => ({ ...m, content: m.content || (e as Error).message || "Chat failed.", status: "error" }));
       }
     } finally {
       setStreaming(false);

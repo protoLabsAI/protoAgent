@@ -42,13 +42,13 @@ registerSlashCommand({
     if (!arg) {
       const session = chatStore.getSnapshot().sessions.find((s) => s.id === ctx.sessionId);
       const cur = session?.reasoningEffort ?? `${DEFAULT_REASONING_EFFORT} (default)`;
-      ctx.noteToThread(`⚙ Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
+      ctx.noteToThread(`Reasoning effort: **${cur}**. Set it with \`/effort ${REASONING_EFFORTS.join("|")}\`.`);
     } else if ((REASONING_EFFORTS as readonly string[]).includes(arg)) {
       chatStore.setSessionReasoningEffort(ctx.sessionId, arg);
       const off = arg === "off" ? " — reasoning disabled for this tab" : "";
-      ctx.noteToThread(`⚙ Reasoning effort set to **${arg}**${off}. Applies to the next message.`);
+      ctx.noteToThread(`Reasoning effort set to **${arg}**${off}. Applies to the next message.`);
     } else {
-      ctx.noteToThread(`⚠ Unknown effort \`${arg}\`. Options: ${opts}.`);
+      ctx.noteToThread(`Unknown effort \`${arg}\`. Options: ${opts}.`);
     }
     ctx.focusComposer();
     return true;

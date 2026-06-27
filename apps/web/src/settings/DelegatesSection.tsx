@@ -54,9 +54,9 @@ function coerce(field: DelegateFieldSpec, raw: unknown): unknown {
 function probeLine(p: DelegateProbe): string {
   if (p.ok) {
     const lat = p.latency_ms != null ? ` (${p.latency_ms} ms)` : "";
-    return `✓ ${p.detail || "reachable"}${lat}`;
+    return `${p.detail || "reachable"}${lat}`;
   }
-  return `✗ ${p.error || "unreachable"}`;
+  return `${p.error || "unreachable"}`;
 }
 
 export function DelegatesSection() {
@@ -129,7 +129,7 @@ export function DelegatesSection() {
                     </span>
                   ) : null}
                   {d.name} <Badge status="neutral">{d.type}</Badge>
-                  {!d.configured ? <StatusPill label="⚠ unconfigured" tone="warning" /> : null}
+                  {!d.configured ? <StatusPill label="unconfigured" tone="warning" /> : null}
                   {d.has_secret ? <StatusPill label="secret set" tone="muted" /> : null}
                 </strong>
                 <span>{p ? probeLine(p) : d.description || d.error || ""}</span>

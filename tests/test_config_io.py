@@ -274,6 +274,41 @@ def test_ensure_live_config_noop_without_example(monkeypatch, tmp_path: Path) ->
     assert not (tmp_path / "langgraph-config.yaml").exists()
 
 
+def test_ensure_live_config_seeds_from_seed_config_env(monkeypatch, tmp_path: Path) -> None:
+    # PROTOAGENT_SEED_CONFIG (a baked config-as-code seed) wins over the .example.
+    from graph import config_io
+
+    example = tmp_path / "langgraph-config.example.yaml"
+    seed = tmp_path / "my-seed.yaml"
+    live = tmp_path / "langgraph-config.yaml"
+    example.write_text("model:\n  name: from-template\n")
+    seed.write_text("model:\n  name: from-seed\n")
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
+    monkeypatch.setenv("PROTOAGENT_SEED_CONFIG", str(seed))
+
+    assert config_io.ensure_live_config() is True
+    assert "from-seed" in live.read_text()  # seeded from the env file, not the template
+
+
+def test_seed_config_env_missing_falls_back_to_example(monkeypatch, tmp_path: Path) -> None:
+    # A misconfigured PROTOAGENT_SEED_CONFIG (nonexistent file) degrades to the
+    # .example template rather than failing the boot.
+    from graph import config_io
+
+    example = tmp_path / "langgraph-config.example.yaml"
+    live = tmp_path / "langgraph-config.yaml"
+    example.write_text("model:\n  name: from-template\n")
+    monkeypatch.setattr(config_io, "CONFIG_EXAMPLE_PATH", example)
+    monkeypatch.setattr(config_io, "CONFIG_YAML_PATH", live)
+    monkeypatch.setattr(config_io, "_BASE_CONFIG_YAML", live)
+    monkeypatch.setenv("PROTOAGENT_SEED_CONFIG", str(tmp_path / "does-not-exist.yaml"))
+
+    assert config_io.ensure_live_config() is True
+    assert "from-template" in live.read_text()
+
+
 # ── SOUL.md dual-path ────────────────────────────────────────────────────────
 
 
