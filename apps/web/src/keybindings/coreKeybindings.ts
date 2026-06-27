@@ -107,3 +107,33 @@ for (let n = 1; n <= 9; n++) {
     run: () => switchToIndex(n - 1),
   });
 }
+
+// ── Panels (global toggles) ──────────────────────────────────────────────────────────
+// VS Code-style: ⌘B left rail, ⌘⌥B right panel, ⌘J bottom dock. Same desktop-vs-browser
+// trade-off as the chat ops (⌘B/⌘J are browser shortcuts in a tab) — work in the desktop
+// app, rebindable in a browser.
+const toggle = (get: () => boolean, set: (b: boolean) => void) => () => set(!get());
+registerKeybinding({
+  id: "panel.toggle.left",
+  label: "Toggle left rail",
+  group: "Panels",
+  defaultKeys: "mod+b",
+  allowInInput: true,
+  run: toggle(() => useUI.getState().leftCollapsed, (b) => useUI.getState().setLeftCollapsed(b)),
+});
+registerKeybinding({
+  id: "panel.toggle.right",
+  label: "Toggle right panel",
+  group: "Panels",
+  defaultKeys: "mod+alt+b",
+  allowInInput: true,
+  run: toggle(() => useUI.getState().rightCollapsed, (b) => useUI.getState().setRightCollapsed(b)),
+});
+registerKeybinding({
+  id: "panel.toggle.bottom",
+  label: "Toggle bottom dock",
+  group: "Panels",
+  defaultKeys: "mod+j",
+  allowInInput: true,
+  run: toggle(() => useUI.getState().bottomCollapsed, (b) => useUI.getState().setBottomCollapsed(b)),
+});

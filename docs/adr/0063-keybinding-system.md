@@ -35,7 +35,8 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
   conflict detection (same combo in an overlapping scope is blocked), per-row + reset-all.
 - **Core defaults dogfood the seam** (`coreKeybindings.ts`): `⌘K` palette (adopted off the DS
   `usePaletteHotkey` — palette open-state moved to an intents store), `⌘,` Settings, `/` focus
-  composer (global); `⌘T` new, `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`).
+  composer (global); `⌘T` new, `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`);
+  global VS Code-style panel toggles `⌘B` left rail / `⌘⌥B` right panel / `⌘J` bottom dock.
 
 ## Consequences
 

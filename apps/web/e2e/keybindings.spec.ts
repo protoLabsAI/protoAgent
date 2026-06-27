@@ -58,6 +58,23 @@ test("chat-scoped shortcut does NOT fire when focus is outside the chat panel", 
   await expect(tabs).toHaveCount(1); // no new tab — chat scope wasn't focused
 });
 
+test("⌘B / ⌘⌥B toggle the left rail / right panel (global)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const left = page.locator(".pl-appshell__col--left");
+  const right = page.locator(".pl-appshell__col--right");
+  await expect(left).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+b");
+  await expect(left).toHaveCount(0); // collapsed
+  await page.keyboard.press("ControlOrMeta+b");
+  await expect(left).toHaveCount(1); // back
+
+  await expect(right).toHaveCount(1);
+  await page.keyboard.press("ControlOrMeta+Alt+b");
+  await expect(right).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+Alt+b");
+  await expect(right).toHaveCount(1);
+});
+
 test("Settings ▸ Keyboard lists the bindings (opened via mod+,)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.keyboard.press("ControlOrMeta+Comma"); // settings.open
