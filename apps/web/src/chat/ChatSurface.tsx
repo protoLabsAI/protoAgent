@@ -320,6 +320,16 @@ function ChatSessionSlot({
     const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
     setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
 
+    // A text-only model can't see images, and the file pipeline can't read them either (it
+    // extracts text — no OCR), so an image would otherwise bounce off the extractor with a
+    // cryptic "unsupported file type" (#1374). Short-circuit with a clear, actionable error.
+    if (kind === "image" && !visionModel) {
+      const msg = "This model can't see images. Switch to a vision-capable model to send a screenshot.";
+      setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
+      onError(msg);
+      return;
+    }
+
     // Native vision: a vision model sees the image directly — base64 it and send
     // it as a multimodal part, no pipeline round-trip.
     if (kind === "image" && visionModel) {
