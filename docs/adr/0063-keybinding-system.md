@@ -43,10 +43,15 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
   bindings (and their own `data-kb-scope` panels) without touching core.
 - **Focus-aware** — "only when I'm in the chat input" is just `scope: "chat"`; the model extends
   to any panel/plugin view.
-- **Browser-reserved caveat** — `⌘T`, `⌘1–9`, `⌃Tab` are intercepted by the browser, so they fire
-  in the **Tauri desktop app** but a plain browser tab swallows them. Because everything is
-  rebindable, browser users remap to free combos. (Headless Playwright has no browser chrome, so
-  e2e can still exercise them.)
+- **Browser-reserved caveat (deliberate, verified)** — the chat defaults mirror the browser
+  (`⌘T` new, `⌘1–9` jump, `⌃Tab` switch). A real browser tab reserves these (new tab / tab-switch)
+  and swallows them before the page sees them, but the **Tauri desktop app does not**: its only
+  custom menu is the tray (Show/Hide/Updates/Quit, `apps/desktop/src-tauri/src/lib.rs`), the
+  default macOS app menu claims only standard accelerators (`⌘Z/X/C/V`, `⌘W/M/Q`) — none of
+  `⌘T`/`⌘1–9`/`⌃Tab` — and a WKWebView has no tab/omnibox chrome to intercept them. So they work
+  in the desktop app (the primary target); in the browser console they're rebindable to a free
+  combo (e.g. the `⌘⌃` family). We chose the familiar combos + this limitation over uglier
+  always-works chords. (Headless Playwright has no browser chrome, so e2e still exercises them.)
 - **Untouched:** DS-internal keys (Dialog Esc, palette/menu/tab arrows, AppShell resize) and the
   composer's contextual slash-menu nav remain owned by their components — not global commands.
 
