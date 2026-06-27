@@ -902,6 +902,10 @@ function ChatSessionSlot({
           );
         },
         onToolCall: (evt) => {
+          // `show_component` is a render directive, not a real action — its output IS the
+          // inline component (delivered via onComponent / message.components). Suppress its
+          // tool card so it doesn't add noise to the collapsed work timeline (#1323).
+          if (evt.name === "show_component") return;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(

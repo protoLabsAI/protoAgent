@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from graph.components import (
     COMPONENT_MIME,
@@ -46,7 +45,6 @@ class TestCodec:
         assert set(COMPONENT_TYPES) == {"table", "keyvalue", "timeline"}
 
 
-@pytest.mark.skip(reason="show_component temporarily disabled — see issue #1323 (the codec above stays tested)")
 class TestShowComponentTool:
     def _tool(self):
         from tools.lg_tools import get_all_tools

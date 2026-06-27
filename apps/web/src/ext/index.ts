@@ -12,6 +12,8 @@ export { registerSlashCommand, registeredSlashCommands, findSlashCommand } from 
 export type { ClientSlashCommand, SlashContext } from "./slashRegistry";
 export { registerComposerAction, registeredComposerActions } from "./composerRegistry";
 export type { ComposerAction, ComposerActionContext } from "./composerRegistry";
+export { registerChatComponent, registeredChatComponents } from "./componentRegistry";
+export type { ChatComponentRenderer } from "./componentRegistry";
 export { registerPaletteCommand, registeredPaletteCommands } from "./paletteRegistry";
 export type { PaletteCommand, PaletteCommandContext } from "./paletteRegistry";
 export { createUISlice, registeredUISlices } from "./uiStateRegistry";
