@@ -434,11 +434,9 @@ def _handle_background_terminal(outcome) -> None:
         pass
     # Carry a trimmed result so a still-open spawning chat can render the outcome
     # live without a refetch (the model learns separately, via the next-turn drain).
-    result_preview = (
-        text
-        if len(text) <= 2000
-        else text[:2000] + "\n\n…[truncated — open the **Background agents** panel for the full report]"
-    )
+    # The console chat card offers "Read full report" for the full text, so the
+    # preview just marks that it's clipped — no panel CTA.
+    result_preview = text if len(text) <= 2000 else text[:2000] + "\n\n…_[truncated]_"
     _event_bus.publish(
         "background.completed",
         {
