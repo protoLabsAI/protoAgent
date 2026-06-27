@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Full-screen document viewer** (ADR 0062) — a reusable reader (`openDocument(spec)` → a
+  root-mounted full-screen dialog rendering markdown). Background-agent reports no longer strand
+  you: the chat card keeps the preview but a **"Read full report"** button opens the *full* report
+  (fetched by job id) full-screen, and **Activity feed** entries open into the *same* viewer — no
+  trip to the Background/Activity panel. `DocumentSpec` is generic (inline `content`, async `load()`,
+  or a custom `render()`), so future long-content views can reuse it.
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
   a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K,

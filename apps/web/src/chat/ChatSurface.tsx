@@ -14,6 +14,7 @@ import {
   Copy,
   GitBranch,
   Loader2,
+  Maximize2,
   RotateCcw,
   TerminalSquare,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
+import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { runtimeStatusQuery } from "../lib/queries";
@@ -1086,6 +1088,32 @@ function ChatSessionSlot({
               {message.components && message.components.length > 0
                 ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
                 : null}
+              {/* Background-agent report (ADR 0050/0062): the bubble shows the server's
+                  preview; this opens the FULL report in the full-screen document viewer
+                  (fetched by job id) — no trip to the Activity/Background panel. */}
+              {message.report ? (
+                <Button
+                  className="chat-report-open"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    openDocument({
+                      title: message.report!.title,
+                      subtitle: "Background agent report",
+                      load: () =>
+                        api
+                          .background()
+                          .then(
+                            (r) =>
+                              r.jobs.find((j) => j.id === message.report!.jobId)?.result ||
+                              "_The full report is no longer available — it may have been cleared from the Background agents panel._",
+                          ),
+                    })
+                  }
+                >
+                  <Maximize2 size={14} /> Read full report
+                </Button>
+              ) : null}
               {message.role === "assistant" && message.status !== "streaming" && message.content ? (
                 <MessageActions>
                   <MessageAction

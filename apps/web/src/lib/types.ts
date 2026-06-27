@@ -436,6 +436,10 @@ export type ChatMessage = {
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
+  /** Background-agent report (ADR 0050/0062): the spawning job's id + title. The bubble
+   *  shows the server's preview; this lets the card open the FULL report in the document
+   *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */
+  report?: { jobId: string; title: string };
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required

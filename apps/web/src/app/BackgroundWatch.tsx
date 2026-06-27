@@ -39,8 +39,9 @@ function markNotified(key: string) {
 }
 
 /** Append a display-only system message to a session IF that session is still open in
- *  this window. Returns false when the chat is gone (the model still learns via drain). */
-function appendSystem(sessionId: string, content: string): boolean {
+ *  this window. Returns false when the chat is gone (the model still learns via drain).
+ *  `report` (when set) lets the card open the FULL report in the document viewer. */
+function appendSystem(sessionId: string, content: string, report?: ChatMessage["report"]): boolean {
   const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (!session) return false;
   const msg: ChatMessage = {
@@ -49,6 +50,7 @@ function appendSystem(sessionId: string, content: string): boolean {
     content,
     createdAt: Date.now(),
     status: "done",
+    ...(report ? { report } : {}),
   };
   chatStore.updateMessages(sessionId, [...session.messages, msg]);
   return true;
@@ -81,7 +83,11 @@ export function BackgroundWatch() {
       const header = failed
         ? `⚠️ Background agent failed — ${desc}`
         : `✅ Background agent finished — ${desc}`;
-      const injected = appendSystem(session, result ? `${header}\n\n${result}` : header);
+      const injected = appendSystem(
+        session,
+        result ? `${header}\n\n${result}` : header,
+        jobId ? { jobId, title: desc } : undefined,
+      );
       toast({
         tone: failed ? "error" : "success",
         title: failed ? "Background task failed" : "Background task finished",

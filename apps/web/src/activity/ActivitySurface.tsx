@@ -1,11 +1,12 @@
 import "./activity.css";
 
 import { Empty } from "@protolabsai/ui/primitives";
-import { Clock, Inbox, MessageSquare, Users, Webhook, Zap } from "lucide-react";
+import { Clock, Inbox, Maximize2, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "../chat/LazyMarkdown";
+import { openDocument } from "../docviewer";
 import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
@@ -114,7 +115,26 @@ export function ActivitySurface() {
           ) : null}
           {chronological.map((e) => (
             <div className="activity-entry" key={e.id} data-origin={e.origin}>
-              <Badge entry={e} />
+              <div className="activity-entry-head">
+                <Badge entry={e} />
+                {/* Open the full entry in the shared full-screen reader (ADR 0062) —
+                    the same view the chat report card opens. */}
+                <button
+                  type="button"
+                  className="pl-iconbtn activity-entry-open"
+                  aria-label="Open in reader"
+                  title="Open in reader"
+                  onClick={() =>
+                    openDocument({
+                      title: ORIGIN[e.origin]?.label ?? e.origin ?? "Activity",
+                      subtitle: [e.trigger, e.created_at ? ago(e.created_at) : ""].filter(Boolean).join(" · ") || undefined,
+                      content: e.text,
+                    })
+                  }
+                >
+                  <Maximize2 size={13} />
+                </button>
+              </div>
               <div className="activity-content">
                 <Markdown>{e.text}</Markdown>
               </div>

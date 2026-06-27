@@ -72,6 +72,24 @@
   flex-direction: column;
   gap: 5px;
 }
+/* Entry header: provenance badge + an "open in reader" affordance (ADR 0062),
+   revealed on hover/focus so the feed stays clean. */
+.activity-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.activity-entry-open {
+  opacity: 0;
+  flex: none;
+  color: var(--fg-muted);
+  transition: opacity 0.1s ease;
+}
+.activity-entry:hover .activity-entry-open,
+.activity-entry-open:focus-visible {
+  opacity: 1;
+}
 .activity-prov {
   display: flex;
   align-items: center;

@@ -99,6 +99,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { useActiveTheme } from "../lib/useActiveTheme";
 import { registeredSurfaces } from "../ext"; // build-time fork seam (ADR 0038 D3); also self-loads fork surfaces
 import { ContextMenuRenderer, openContextMenu } from "../contextMenu";
+import { DocumentViewer } from "../docviewer";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { brandName } from "../lib/brand";
 import { onConnectionChange, onServerEvent, onTopic } from "../lib/events";
@@ -1066,6 +1067,9 @@ export function App() {
         Rendered OUTSIDE the .app-shell grid: the DS Menu stays mounted to hold its ref, so
         its (closed) anchor would otherwise be a stray 4th grid row and break the layout. */}
     <ContextMenuRenderer />
+    {/* Full-screen document reader (ADR 0062) — one root host; opened from anywhere via
+        openDocument() (chat background-report card, Activity feed, future views). */}
+    <DocumentViewer />
     {/* The header drawer (hamburger) — global actions + (on mobile) surface nav. */}
     <AppDrawer
       open={drawerOpen}

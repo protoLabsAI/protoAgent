@@ -29,3 +29,17 @@ test("widget badge → dialog feed with provenance + live append", async ({ page
   // Read-only since the IA pass — there is no reply composer.
   await expect(page.locator(".activity-composer")).toHaveCount(0);
 });
+
+test("an Activity entry opens in the shared full-screen document reader (ADR 0062)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("activity-widget").click();
+  const feed = page.getByTestId("activity-surface");
+  const entry = feed.locator(".activity-entry", { hasText: "3 PRs merged overnight, CI green." });
+  await entry.hover();
+  await entry.getByRole("button", { name: "Open in reader" }).click();
+
+  // The full-screen document viewer opens (on top of the feed) with the entry's full content.
+  const reader = page.locator(".doc-viewer");
+  await expect(reader).toBeVisible();
+  await expect(reader.getByText("3 PRs merged overnight, CI green.")).toBeVisible();
+});

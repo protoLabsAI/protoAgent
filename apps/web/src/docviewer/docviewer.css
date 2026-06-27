@@ -1,0 +1,46 @@
+/* Full-screen document reader (ADR 0062). Overrides the DS dialog's content-height sizing
+   to a tall, fixed reading surface whose body scrolls — so long reports/docs get a real
+   full-screen read instead of a short centered modal. */
+.doc-viewer.pl-dialog {
+  height: min(90vh, 1000px);
+  max-height: 96vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-viewer .pl-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.doc-viewer__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.doc-viewer__heading {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-viewer__subtitle {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.doc-viewer__body {
+  /* Comfortable reading measure; the markdown renderer styles the rest. */
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.doc-viewer__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  padding: 8px 0;
+}
