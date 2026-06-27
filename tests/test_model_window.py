@@ -38,41 +38,40 @@ def _clear_cache():
     model_window.reset_window_cache()
 
 
-def test_resolves_window_and_caches(monkeypatch):
+def test_resolves_window_from_model_info_and_caches(monkeypatch):
     calls: list[str] = []
 
+    # The real gateway shape: /v1/model/info with the window nested under model_info.
     def fake_get(url, headers=None, timeout=None):
         calls.append(url)
         return _Resp(200, {"data": [
-            {"model_group": "protolabs/smart", "max_input_tokens": 196608},
-            {"model_group": "protolabs/fast", "max_input_tokens": 32768},
+            {"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 196608}},
+            {"model_name": "protolabs/fast", "model_info": {"max_input_tokens": 32768}},
         ]})
 
     monkeypatch.setattr(httpx, "get", fake_get)
 
     assert model_window.context_window_for(_cfg()) == 196608
     assert model_window.context_window_for(_cfg(), "protolabs/fast") == 32768
-    # Hits /v1/model/group/info on the /v1-stripped root, exactly once (cached after).
-    assert calls == ["https://gw.example/v1/model/group/info"]
+    # Hits /v1/model/info on the /v1-stripped root, exactly once (cached after).
+    assert calls == ["https://gw.example/v1/model/info"]
 
 
-def test_falls_back_to_unversioned_path_on_404(monkeypatch):
-    seen: list[str] = []
-
+def test_also_parses_top_level_group_info_shape(monkeypatch):
+    # The grouped /model/group/info view carries the window top-level on model_group — and
+    # /v1/model/info 404s on a proxy that only exposes the grouped endpoint.
     def fake_get(url, headers=None, timeout=None):
-        seen.append(url)
-        if url.endswith("/v1/model/group/info"):
-            return _Resp(404)
-        return _Resp(200, {"data": [{"model_group": "protolabs/smart", "max_input_tokens": 196608}]})
+        if "group/info" in url:
+            return _Resp(200, {"data": [{"model_group": "protolabs/smart", "max_input_tokens": 196608}]})
+        return _Resp(404)
 
     monkeypatch.setattr(httpx, "get", fake_get)
     assert model_window.context_window_for(_cfg()) == 196608
-    assert seen[-1].endswith("/model/group/info")
 
 
 def test_unknown_model_is_none(monkeypatch):
     monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(200, {"data": [
-        {"model_group": "protolabs/smart", "max_input_tokens": 196608},
+        {"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 196608}},
     ]}))
     assert model_window.context_window_for(_cfg(model_name="claude-opus-4-8")) is None
 

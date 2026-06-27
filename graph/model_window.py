@@ -29,12 +29,25 @@ _ATTEMPTED: set[str] = set()
 _GATEWAY_UA = "protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)"
 
 
-def _fetch_window_map(api_base: str, api_key: str) -> dict[str, int]:
-    """GET the LiteLLM proxy's per-group context windows → ``{model_group: max_input_tokens}``.
+def _window_from_entry(entry: dict) -> tuple[str | None, int | None]:
+    """(model name, max_input_tokens) from one LiteLLM info row, across both shapes:
+    ``/model/info`` nests it under ``model_info.max_input_tokens`` (per deployment); the
+    grouped ``/model/group/info`` view puts ``max_input_tokens`` top-level on ``model_group``."""
+    name = entry.get("model_name") or entry.get("model_group")
+    info = entry.get("model_info") if isinstance(entry.get("model_info"), dict) else {}
+    win = info.get("max_input_tokens")
+    if win is None:
+        win = entry.get("max_input_tokens")
+    return (name if isinstance(name, str) else None, win if isinstance(win, int) and win > 0 else None)
 
-    Bounded: a connection error / timeout on the first path returns empty (don't hammer the
-    second). ``/v1/model/group/info`` is the grouped view (top-level ``max_input_tokens`` per
-    ``model_group``); ``/model/group/info`` is the un-versioned alias — proxies differ on prefix.
+
+def _fetch_window_map(api_base: str, api_key: str) -> dict[str, int]:
+    """GET the LiteLLM proxy's model metadata → ``{model_name: max_input_tokens}``.
+
+    Tries the per-deployment ``/model/info`` first (what our gateway exposes — window nested
+    under ``model_info``), then the grouped ``/model/group/info`` (top-level window), each in
+    its ``/v1``-prefixed and un-prefixed form (proxies differ). Bounded: a connection error /
+    timeout stops the probe (the host is unreachable), so worst case is one timeout.
     """
     import httpx
 
@@ -46,28 +59,25 @@ def _fetch_window_map(api_base: str, api_key: str) -> dict[str, int]:
         headers["Authorization"] = f"Bearer {api_key}"
 
     out: dict[str, int] = {}
-    for i, url in enumerate((f"{root}/v1/model/group/info", f"{root}/model/group/info")):
+    for path in ("/v1/model/info", "/model/info", "/v1/model/group/info", "/model/group/info"):
         try:
-            resp = httpx.get(url, headers=headers, timeout=2.5)
-        except Exception:  # noqa: BLE001 — host unreachable/timeout: don't try the second path
+            resp = httpx.get(f"{root}{path}", headers=headers, timeout=2.5)
+        except Exception:  # noqa: BLE001 — host unreachable/timeout: stop probing
             return out
         if resp.status_code != 200:
-            # 404 on the versioned path → try the un-versioned one; any other status → give up.
-            if i == 0 and resp.status_code == 404:
-                continue
-            return out
+            continue  # wrong shape/path for this proxy — try the next
         try:
             data = resp.json().get("data") or []
         except Exception:  # noqa: BLE001 — non-JSON body
-            return out
+            continue
         for entry in data:
             if not isinstance(entry, dict):
                 continue
-            name = entry.get("model_group") or entry.get("model_name")
-            win = entry.get("max_input_tokens")
-            if isinstance(name, str) and isinstance(win, int) and win > 0:
+            name, win = _window_from_entry(entry)
+            if name and win:
                 out[name] = win
-        return out
+        if out:
+            return out
     return out
 
 
