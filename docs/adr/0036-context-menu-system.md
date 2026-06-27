@@ -112,10 +112,12 @@ The `rail-surface` menu grew two management actions beyond move/reorder:
   a dock (its core default dock, else the left rail). Persist migration **v13** adds the empty bucket
   to older layouts.
 - **Hidden-views menu on the rail background** (`rail-background` ContextType) — right-clicking empty
-  rail space (not an icon) lists the hidden surfaces, each restoring via `openView`. The DS `AppShell`
-  only fires `onRailContextMenu` on icons, so the App catches the rail-container right-click by event
-  delegation (`onContextMenu` on the shell wrapper, keyed off the stable `.pl-rail` / `.pl-rail__btn`
-  classnames) and resolves each hidden id's label before opening the menu.
+  rail space (not an icon) lists the hidden surfaces; selecting one restores it **onto the dock whose
+  background was clicked** (`showSurface(id, side)`) and opens it there — so it lands where you asked,
+  not its default dock. The DS `AppShell` only fires `onRailContextMenu` on icons, so the App catches
+  the rail-container right-click by event delegation (`onContextMenu` on the shell wrapper, keyed off
+  the stable `.pl-rail` / `.pl-rail__btn` classnames), derives the side from the rail's modifier
+  class, and resolves each hidden id's label before opening the menu.
 - **Util-bar widget menu** (`util-widget` ContextType) — right-clicking a plugin's util-bar pill
   offers **Configure…** (same per-plugin dialog as the rail). `UtilityWidget` gained an `onContextMenu`
   passthrough to its pill; the App resolves the plugin id/name from the widget's `plugin:<id>:<view>`

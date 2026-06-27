@@ -92,13 +92,13 @@ registerContextMenu({
 });
 
 // Right-click the EMPTY rail background (not an icon) → the "Hidden views" menu: one entry per
-// hidden surface (railOrder.hidden), restoring it via openView (un-hide → route to its dock). The
-// App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives there) into
-// `ctx.hidden`. When nothing is hidden, a disabled hint shows so the menu still confirms the
-// feature. This is the discoverable counterpart to ⌘K for un-hiding (ADR 0035/0036).
+// hidden surface (railOrder.hidden), each restored onto the dock whose background was clicked
+// (`ctx.side`) and then opened. The App-side trigger resolves each hidden id's label (core/plugin/
+// ext metadata lives there) + the clicked side into `ctx`. When nothing is hidden, a disabled hint
+// shows so the menu still confirms the feature. The discoverable counterpart to ⌘K (ADR 0035/0036).
 registerContextMenu({
   type: "rail-background",
-  items: (ctx: { hidden?: { id: string; label: string }[] }): MenuEntry[] => {
+  items: (ctx: { side?: "left" | "right" | "bottom"; hidden?: { id: string; label: string }[] }): MenuEntry[] => {
     const hidden = ctx?.hidden ?? [];
     if (!hidden.length) {
       return [{ id: "none", label: "No hidden views", disabled: true, run: () => {} }];
@@ -111,7 +111,11 @@ registerContextMenu({
           id: `show-${h.id}`,
           label: h.label,
           icon: <Eye size={14} />,
-          run: () => openView(h.id),
+          // Restore to the dock the menu was opened on, then open it there.
+          run: () => {
+            useUI.getState().showSurface(h.id, ctx?.side);
+            openView(h.id);
+          },
         }),
       ),
     ];

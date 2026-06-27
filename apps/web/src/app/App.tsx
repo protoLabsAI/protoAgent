@@ -486,9 +486,16 @@ export function App() {
   const onShellContextMenu = (e: ReactMouseEvent) => {
     const t = e.target as HTMLElement;
     if (t.closest(".pl-rail__btn")) return; // an icon — its own menu handles it
-    if (!t.closest(".pl-rail")) return; // not the rail — leave the default menu
+    const railEl = t.closest(".pl-rail") as HTMLElement | null;
+    if (!railEl) return; // not the rail — leave the default menu
+    // Which rail was right-clicked → restore a hidden view to THIS dock (not its default).
+    const side: "left" | "right" | "bottom" = railEl.classList.contains("pl-rail--right")
+      ? "right"
+      : railEl.classList.contains("pl-rail--bottom")
+        ? "bottom"
+        : "left";
     const hidden = (railOrder.hidden ?? []).map((id) => ({ id, label: metaFor(id)?.label ?? id }));
-    openContextMenu("rail-background", e, { hidden });
+    openContextMenu("rail-background", e, { side, hidden });
   };
 
   // ── Command palette (⌘K, ADR 0057) ────────────────────────────────────────────

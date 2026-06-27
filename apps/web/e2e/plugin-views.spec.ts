@@ -147,6 +147,28 @@ test("right-click the empty rail → a 'Hidden views' menu restores a hidden sur
   await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
 });
 
+test("the Hidden views menu restores onto the rail it was opened on", async ({ page }) => {
+  // ADR 0035/0036 — restoring from a rail's background drops the view on THAT dock, not its default.
+  await page.goto("/app/", { waitUntil: "load" });
+  const leftRail = page.getByRole("complementary", { name: "Left surfaces" });
+  const rightRail = page.getByRole("complementary", { name: "Right surfaces" });
+  await expect(leftRail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+
+  // Hide Board (it lives on the left rail by default).
+  await leftRail.getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Hide", { exact: true }).click();
+  await expect(leftRail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
+
+  // Right-click the RIGHT rail's empty area → restore Board THERE, not back on the left.
+  const box = await rightRail.boundingBox();
+  if (!box) throw new Error("right rail has no bounding box");
+  await rightRail.click({ button: "right", position: { x: box.width / 2, y: box.height - 8 } });
+  await page.locator(".pl-menu").getByText("Board", { exact: true }).click();
+
+  await expect(rightRail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+  await expect(leftRail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
+});
+
 test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
   // ADR 0036/0059 — a plugin view's rail menu offers "Configure…", which opens the owning
   // plugin's per-plugin settings dialog (titled with the plugin's display name, "Boardy").
