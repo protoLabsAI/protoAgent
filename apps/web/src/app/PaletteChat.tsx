@@ -6,32 +6,43 @@
 import { useEffect, useRef, useState } from "react";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { ChatMessageView } from "../chat/ChatMessageView";
+import { addToolRef, appendReasoning, appendText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
-// Upsert a streaming tool event onto a message's toolCalls (mirrors ChatSurface's
-// onToolCall): start → a running card (nested under the last open `task`); end → flip
-// the matching card to done/error and stamp elapsed.
+// Upsert a streaming tool event onto a message's toolCalls AND its ordered `parts`
+// (mirrors ChatSurface's onToolCall): start → a running card (nested under its parent
+// `task` — authoritative `evt.parentId`, else last-open-task), and a top-level tool
+// opens/extends a `tools` part in emission order so text↔tool interleave renders live;
+// end → flip the matching card to done/error and stamp elapsed.
 function upsertTool(message: ChatMessage, evt: ToolEvent): ChatMessage {
   const calls = [...(message.toolCalls || [])];
   const idx = calls.findIndex((c) => c.id === evt.id);
   const now = Date.now();
+  let nextParts = message.parts;
   if (evt.phase === "start") {
     const openTask = [...calls].reverse().find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
-    const card: ToolCall = { id: evt.id, name: evt.name, input: evt.input, status: "running", startedAt: now, parentId: openTask?.id };
+    const parentId = evt.parentId ?? openTask?.id;
+    const card: ToolCall = { id: evt.id, name: evt.name, input: evt.input, status: "running", startedAt: now, parentId };
     if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
     else calls.push(card);
+    // Children (parentId set) nest under their parent's card — only top-level tools get a block.
+    if (parentId == null) nextParts = addToolRef(message.parts, evt.id);
   } else {
     const startedAt = idx >= 0 ? calls[idx].startedAt : undefined;
     const durationMs = startedAt !== undefined ? now - startedAt : undefined;
     const endStatus: ToolCall["status"] = evt.error ? "error" : "done";
-    if (idx >= 0) calls[idx] = { ...calls[idx], output: evt.output, status: endStatus, durationMs };
-    else calls.push({ id: evt.id, name: evt.name, output: evt.output, status: endStatus });
+    if (idx >= 0) {
+      calls[idx] = { ...calls[idx], output: evt.output, status: endStatus, durationMs };
+    } else {
+      calls.push({ id: evt.id, name: evt.name, output: evt.output, status: endStatus });
+      nextParts = addToolRef(message.parts, evt.id);
+    }
   }
-  return { ...message, toolCalls: calls };
+  return { ...message, toolCalls: calls, parts: nextParts };
 }
 
 // Finalize a completed turn — no tool can still be "running" (mirrors onDone).
@@ -95,7 +106,7 @@ export function PaletteChat({ agentName }: { agentName: string }) {
     setMessages((ms) => [
       ...ms,
       { role: "user", content },
-      { role: "assistant", content: "", status: "streaming", toolCalls: [], components: [], reasoning: "" },
+      { role: "assistant", content: "", status: "streaming", toolCalls: [], components: [], reasoning: "", parts: [] },
     ]);
     setDraft("");
     setStreaming(true);
@@ -110,8 +121,10 @@ export function PaletteChat({ agentName }: { agentName: string }) {
         contextRef.current,
         {
           signal: controller.signal,
-          onText: (t, append) => update((m) => ({ ...m, content: append ? m.content + t : t })),
-          onReasoning: (d) => update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d })),
+          onText: (t, append) =>
+            update((m) => ({ ...m, content: append ? m.content + t : t, parts: appendText(m.parts, t, append) })),
+          onReasoning: (d) =>
+            update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d, parts: appendReasoning(m.parts, d) })),
           onToolCall: (evt) => update((m) => upsertTool(m, evt)),
           onComponent: (spec) => update((m) => ({ ...m, components: [...(m.components ?? []), spec] })),
           onFailed: (detail) => update((m) => ({ ...m, content: m.content || detail, status: "error" })),

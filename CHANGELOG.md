@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **⌘K palette chat streams with live text↔tool interleave** — PaletteChat now builds the same
+  ordered `parts` the main chat does (via the shared `appendText`/`appendReasoning`/`addToolRef`
+  helpers + the top-level-only `addToolRef` rule), so the shared `<ChatMessageView>` renders the
+  interleaved timeline (and WorkBlock fold) live instead of the grouped history-fallback. Full
+  parity with the main chat "as it's doing its thing."
 - **Streaming answer text is full-width, no loading side-bar** — removed the DS streaming-pulse
   (animated 2px accent left-border + inset) from the streaming message body, so the answer streams
   as raw, full-width text instead of behind an animated rail. Applies to the main chat and the ⌘K
