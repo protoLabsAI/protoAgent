@@ -1,0 +1,18 @@
+# Seed config (config-as-code). protoAgent copies this to the live
+# langgraph-config.yaml on FIRST boot only (via PROTOAGENT_SEED_CONFIG), then never
+# clobbers it — operators override settings in the console and those edits persist
+# on the config volume. Updating this seed only affects a FRESH instance (or one
+# whose config volume you've cleared); existing instances keep their live config.
+#
+# Secrets do NOT go here — the api_key is read from the OPENAI_API_KEY env, so this
+# file (and your image) carries no credentials.
+identity:
+  name: my-agent
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  api_base: https://api.openai.com/v1   # OPENAI_API_KEY supplies the key (env)
+
+plugins:
+  enabled: []   # e.g. [notes, docs] — bundled plugins, or ones you've installed
