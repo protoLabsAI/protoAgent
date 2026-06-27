@@ -24,6 +24,10 @@ export type RuntimeStatus = {
     /** Model accepts native image input (model.vision) — chat sends attached
      *  images straight to the model instead of through the extraction pipeline. */
     vision?: boolean;
+    /** A vision model is configured to describe images for a text-only chat model
+     *  (knowledge.image_describe_model, #1381) — images route through the describe
+     *  pipeline instead of erroring. */
+    image_describe?: boolean;
   };
   identity: null | {
     name: string;

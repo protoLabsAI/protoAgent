@@ -539,17 +539,24 @@ def register_knowledge_routes(app) -> None:
             return JSONResponse({"detail": "session_id is required"}, status_code=400)
 
         transcribe = None
+        describe = None
         try:
-            from graph.llm import create_transcribe_fn
+            from graph.llm import create_describe_image_fn, create_transcribe_fn
 
-            transcribe = create_transcribe_fn(STATE.graph_config) if STATE.graph_config else None
-        except Exception as exc:  # noqa: BLE001 — transcription stays optional
-            log.warning("[knowledge] transcribe fn unavailable: %s", exc)
+            if STATE.graph_config:
+                transcribe = create_transcribe_fn(STATE.graph_config)
+                # Image-describe (#1381): lets a text-only chat model "see" an attached image
+                # via a configured vision model. None when no describe model is set.
+                describe = create_describe_image_fn(STATE.graph_config)
+        except Exception as exc:  # noqa: BLE001 — transcription/description stays optional
+            log.warning("[knowledge] media fn unavailable: %s", exc)
 
         name = file.filename or "attachment"
         try:
             data = await file.read()
-            result = await asyncio.to_thread(extract_bytes, name, data, file.content_type, transcribe=transcribe)
+            result = await asyncio.to_thread(
+                extract_bytes, name, data, file.content_type, transcribe=transcribe, describe=describe
+            )
         except MissingDependency as exc:
             return JSONResponse({"detail": str(exc)}, status_code=501)
         except UnsupportedSource as exc:

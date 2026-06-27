@@ -21,6 +21,7 @@ export const RUNTIME_STATUS = {
     api_base: "https://api.proto-labs.ai/v1",
     api_key_configured: true,
     vision: true, // a vision-capable model: attached images go inline (the happy path)
+    image_describe: true, // a describe model is configured (#1381) — see image-attach.spec
     temperature: 0.2,
     max_tokens: 2048,
     max_iterations: 8,

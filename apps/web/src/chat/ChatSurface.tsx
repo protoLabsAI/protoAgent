@@ -314,17 +314,22 @@ function ChatSessionSlot({
   // straight to the model as multimodal parts; otherwise they take the pipeline.
   const { data: runtime } = useQuery(runtimeStatusQuery());
   const visionModel = Boolean(runtime?.model?.vision);
+  // A configured vision model can DESCRIBE images for a text-only chat model (#1381), so an
+  // image attaches via the pipeline instead of erroring.
+  const imageDescribe = Boolean(runtime?.model?.image_describe);
 
   async function uploadAttachment(file: File) {
     const id = messageId();
     const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
     setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
 
-    // A text-only model can't see images, and the file pipeline can't read them either (it
-    // extracts text — no OCR), so an image would otherwise bounce off the extractor with a
-    // cryptic "unsupported file type" (#1374). Short-circuit with a clear, actionable error.
-    if (kind === "image" && !visionModel) {
-      const msg = "This model can't see images. Switch to a vision-capable model to send a screenshot.";
+    // An image on a text-only model with NO describe model can't be read at all (the file
+    // pipeline extracts text — no OCR) — so short-circuit with a clear, actionable error
+    // instead of a cryptic "unsupported file type" (#1374). When a describe model IS
+    // configured (#1381), the image falls through to the pipeline, which describes it.
+    if (kind === "image" && !visionModel && !imageDescribe) {
+      const msg =
+        "This model can't see images. Switch to a vision-capable model — or set an image-description model in Settings ▸ Knowledge — to send a screenshot.";
       setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
       onError(msg);
       return;

@@ -290,6 +290,20 @@ FIELDS: list[Field] = [
         restart=True,
     ),
     Field(
+        "knowledge.image_describe_model",
+        "image_describe_model",
+        "Image description model",
+        "string",
+        "Knowledge",
+        "Vision-capable gateway model used to DESCRIBE attached images when the chat model "
+        "can't see them (text-only). The screenshot is sent to this model; its description + "
+        "any transcribed text is inlined as context. Blank disables image attachments on "
+        "non-vision models (they error with a clear message). Needs a vision model (e.g. "
+        "protolabs/smart); the chat model can stay text-only.",
+        options_source="models",
+        restart=True,
+    ),
+    Field(
         "knowledge.recall_preview_chars",
         "knowledge_recall_preview_chars",
         "Recall preview length",

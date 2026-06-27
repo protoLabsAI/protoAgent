@@ -390,6 +390,11 @@ class LangGraphConfig:
     # as-is; video has its audio track pulled by ffmpeg first. Blank disables
     # audio/video ingestion (they error with a clear message).
     transcribe_model: str = "whisper-1"
+    # Vision model used to DESCRIBE attached images for a text-only chat model (#1381) —
+    # the screenshot is sent to this vision-capable gateway model, its description + any
+    # transcribed text is inlined as context the chat model can read. Blank disables image
+    # attachments on non-vision models (they error with a clear "switch models" message).
+    image_describe_model: str = ""
     # Semantic recall (ADR 0021): when True, the knowledge store is the
     # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
     # with RRF). On by default — semantic recall finds paraphrases keyword search
@@ -861,6 +866,7 @@ class LangGraphConfig:
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),
             transcribe_model=knowledge.get("transcribe_model", cls.transcribe_model),
+            image_describe_model=knowledge.get("image_describe_model", cls.image_describe_model),
             knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
             knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),

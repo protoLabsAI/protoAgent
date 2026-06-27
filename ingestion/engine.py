@@ -60,6 +60,10 @@ _PDF_EXTS = {".pdf"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
 _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg", ".wmv"}
+# Image → described by a vision model (gateway), gated on an injected describe fn. Not in
+# SUPPORTED_EXTENSIONS: support is conditional (needs knowledge.image_describe_model), so a
+# bare extractor without a describe fn still rejects images with a clear message.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 
 SUPPORTED_EXTENSIONS = sorted(_TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
 SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF, audio + video files, and web/YouTube URLs"
@@ -270,16 +274,35 @@ def _transcribe_media(data: bytes, filename: str, transcribe, *, video: bool) ->
 # ── public entry points ──────────────────────────────────────────────────────
 
 
+def _describe_image(data: bytes, filename: str, mime: str, describe) -> str:
+    """Turn image bytes into a text description via the injected describe fn (a gateway
+    vision model). Lets a text-only chat model "see" an attached screenshot (#1381)."""
+    if describe is None:
+        raise UnsupportedSource(
+            "this model can't see images — set knowledge.image_describe_model to a "
+            "vision-capable gateway model to attach screenshots, or switch to a vision model"
+        )
+    try:
+        text = describe(data, mime, filename or "image")
+    except IngestionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — gateway/transport error → clean failure
+        raise ExtractionError(f"image description failed: {exc}") from exc
+    return text or ""
+
+
 def extract_bytes(
     filename: str,
     data: bytes,
     content_type: str | None = None,
     *,
     transcribe=None,
+    describe=None,
 ) -> ExtractResult:
     """Extract text from an uploaded file's bytes, dispatched by extension then
     content-type. ``filename`` provides the extension + a default title.
-    ``transcribe`` (bytes, filename) -> text powers audio/video (gateway STT)."""
+    ``transcribe`` (bytes, filename) -> text powers audio/video (gateway STT);
+    ``describe`` (bytes, mime, filename) -> text powers images (gateway vision)."""
     ext = Path(filename or "").suffix.lower()
     ct = (content_type or "").split(";")[0].strip().lower()
     title = (Path(filename).stem if filename else None) or None
@@ -294,6 +317,8 @@ def extract_bytes(
         text, source_type = _transcribe_media(data, filename, transcribe, video=False), "audio"
     elif ext in _VIDEO_EXTS or ct.startswith("video/"):
         text, source_type = _transcribe_media(data, filename, transcribe, video=True), "video"
+    elif ext in _IMAGE_EXTS or ct.startswith("image/"):
+        text, source_type = _describe_image(data, filename, ct or f"image/{(ext[1:] or 'png')}", describe), "image"
     elif ext in _TEXT_EXTS or ct.startswith("text/"):
         text, source_type = _decode(data), "text"
     elif not ext and not ct and _looks_textual(data):

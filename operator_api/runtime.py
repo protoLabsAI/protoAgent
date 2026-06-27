@@ -98,6 +98,10 @@ def build_runtime_status(
             "max_tokens": getattr(config, "max_tokens", None),
             "max_iterations": getattr(config, "max_iterations", None),
             "vision": bool(getattr(config, "model_vision", False)),
+            # A vision model is configured to describe attached images for a text-only chat
+            # model (#1381) — the console routes images to the describe pipeline instead of
+            # erroring when this is set.
+            "image_describe": bool((getattr(config, "image_describe_model", "") or "").strip()),
         },
         "identity": {
             "name": getattr(config, "identity_name", ""),

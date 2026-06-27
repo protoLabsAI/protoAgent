@@ -252,6 +252,52 @@ def create_transcribe_fn(
     return _transcribe
 
 
+_DESCRIBE_IMAGE_PROMPT = (
+    "Describe this image in detail for a text-only model that cannot see it. Transcribe ALL "
+    "visible text verbatim (UI labels, code, error messages, captions), then describe the "
+    "layout and salient visual content. Be thorough and literal — this description is the "
+    "only way the downstream model can understand the image. No preamble."
+)
+
+
+def create_describe_image_fn(
+    config: LangGraphConfig,
+) -> Callable[[bytes, str, str], str] | None:
+    """Build a sync ``(image_bytes, mime, filename) -> description`` function, or None (#1381).
+
+    Lets a TEXT-only chat model "see" an attached image: the bytes are sent to the configured
+    vision model (``knowledge.image_describe_model``) as an OpenAI ``image_url`` block, and its
+    description + transcribed text is inlined as context by the attachment pipeline — the same
+    shape as ``create_transcribe_fn`` does for audio. Returns ``None`` when no describe model is
+    configured (images then stay unsupported on non-vision models, with a clear error)."""
+    model = (getattr(config, "image_describe_model", "") or "").strip()
+    if not model:
+        return None
+    llm = create_llm(config, model_name=model)
+
+    def _describe(data: bytes, mime: str, filename: str) -> str:
+        import base64
+
+        from langchain_core.messages import HumanMessage
+
+        from graph.output_format import extract_output
+
+        uri = f"data:{mime or 'image/png'};base64,{base64.b64encode(data).decode()}"
+        resp = llm.invoke(
+            [
+                HumanMessage(
+                    content=[
+                        {"type": "text", "text": _DESCRIBE_IMAGE_PROMPT},
+                        {"type": "image_url", "image_url": {"url": uri}},
+                    ]
+                )
+            ]
+        )
+        return extract_output(str(resp.content)).strip()
+
+    return _describe
+
+
 # Contextual Retrieval (Anthropic) — situate each chunk in its source document
 # before embedding/indexing, so a chunk's vector + FTS terms carry doc-level
 # context they'd otherwise lack. Improves both semantic and keyword recall.
