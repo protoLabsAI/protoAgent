@@ -1,7 +1,7 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
-import { ArrowDownToLine, Check, Coins, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowDownToLine, Check, Clock, Coins, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
@@ -184,6 +184,11 @@ function fmtCost(usd: number): string {
   return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
 }
 
+/** Turn duration, matching the tool-card style: sub-second in ms, else one-decimal seconds. */
+function fmtDuration(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** One labelled row inside the hover tooltip. */
 function TipRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -229,9 +234,8 @@ function UsageTip({
       {usage?.cacheReadTokens ? (
         <TipRow label="Cache" value={`${usage.cacheReadTokens.toLocaleString()} tokens`} sub="reused from cache" />
       ) : null}
-      {usage?.costUsd != null ? (
-        <TipRow label="Cost" value={fmtCost(usage.costUsd)} sub={usage.durationMs ? `${(usage.durationMs / 1000).toFixed(1)}s` : undefined} />
-      ) : null}
+      {usage?.durationMs ? <TipRow label="Time" value={fmtDuration(usage.durationMs)} /> : null}
+      {usage?.costUsd != null ? <TipRow label="Cost" value={fmtCost(usage.costUsd)} /> : null}
       <p className="chat-usage-tip-note">Context is the live prompt size; cost is summed across the turn's calls.</p>
     </div>
   );
@@ -268,6 +272,12 @@ function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextW
           <span className="chat-usage-item" aria-label="output tokens">
             <ArrowDownToLine size={13} aria-hidden />
             {fmtTokens(usage.outputTokens)}
+          </span>
+        ) : null}
+        {usage?.durationMs ? (
+          <span className="chat-usage-item" aria-label="duration">
+            <Clock size={13} aria-hidden />
+            {fmtDuration(usage.durationMs)}
           </span>
         ) : null}
         {usage?.costUsd != null ? (

@@ -86,6 +86,7 @@ test("a completed turn shows a context meter + token/cost footer (#1372)", async
   await expect(usage).toBeVisible();
   await expect(usage).toContainText("12.3k / 120k"); // contextTokens 12_340 / compactionAtTokens 120_000
   await expect(usage).toContainText("1.2k"); // output_tokens 1_200
+  await expect(usage).toContainText("2.3s"); // durationMs 2300
   await expect(usage).toContainText("$0.04"); // costUsd 0.0412
   // The fill bar renders (token-based trigger → chartable).
   await expect(usage.locator(".chat-usage-bar-fill")).toBeVisible();
