@@ -1,0 +1,31 @@
+# Reference compose for a config-as-code protoAgent deploy (seed + UI override).
+# Walkthrough: docs/guides/deploy-docker.md
+services:
+  agent:
+    build: .                       # or: image: your-registry/your-agent:latest
+    container_name: my-agent
+    restart: unless-stopped
+    environment:
+      PROTOAGENT_UI: console
+      # Seed validates + auto-marks setup complete on boot, so a fresh instance comes
+      # up configured with NO setup wizard. (Omit to drive setup via the wizard.)
+      PROTOAGENT_HEADLESS_SETUP: "1"
+      # The model/gateway key — kept in the env, never in the seed/image.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set your model/gateway key}
+      # protoAgent refuses to bind 0.0.0.0 with an OPEN operator API. Give A2A a token
+      # (then send it as `Authorization: Bearer`), or bind 127.0.0.1, or — only behind
+      # a trusted network boundary — set PROTOAGENT_ALLOW_OPEN=1.
+      A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN:?set an operator token}
+    ports:
+      - "7870:7870"
+    volumes:
+      # NAMED config volume: protoAgent seeds the live config here on first boot, then
+      # console edits persist across reboots + image rolls. Re-seed = remove it
+      # (`docker volume rm <project>_agent-config`). Do NOT rely on the image's
+      # anonymous VOLUME — it silently shadows config.
+      - agent-config:/opt/protoagent/config
+      - agent-sandbox:/sandbox
+
+volumes:
+  agent-config:
+  agent-sandbox:

@@ -215,8 +215,14 @@ def ensure_live_config() -> bool:
     """Seed the live config on first run. Returns True only when it created the file.
 
     The live ``langgraph-config.yaml`` is untracked, so a fresh clone / new container
-    volume / **new instance** won't have one. Seed source:
+    volume / **new instance** won't have one. Seed source, in precedence order:
 
+    - ``PROTOAGENT_SEED_CONFIG`` — an explicit baked config file. A container/fleet
+      deploy points at it so a fresh instance comes up **pre-configured** (then
+      console edits override it, persisted on the config volume). This is the
+      config-as-code seed: bake your config into the image, point this env at it, and
+      you never hand-bake the live ``langgraph-config.yaml`` (which a config volume
+      would then freeze + shadow on later image updates).
     - An **instance-scoped** path (PROTOAGENT_INSTANCE set) inherits the unscoped *base*
       config + secrets + setup-marker when they exist — so `--instance foo` boots from
       the default's setup, then diverges on its own saves (graceful, no re-setup).
@@ -234,7 +240,19 @@ def ensure_live_config() -> bool:
     # fleet member's explicit dir is its own base, so it seeds from the template, not
     # a self-copy.
     scoped = CONFIG_YAML_PATH != _BASE_CONFIG_YAML
-    source = _BASE_CONFIG_YAML if (scoped and _BASE_CONFIG_YAML.exists()) else CONFIG_EXAMPLE_PATH
+    # An explicit baked seed (PROTOAGENT_SEED_CONFIG) wins over the scoped-base /
+    # .example fallbacks. Missing/blank env → unchanged behaviour.
+    seed_override = os.environ.get("PROTOAGENT_SEED_CONFIG", "").strip()
+    seed_path = Path(seed_override).expanduser() if seed_override else None
+    if seed_path is not None and seed_path.is_file():
+        source = seed_path
+    else:
+        if seed_override:
+            log.warning(
+                "[config] PROTOAGENT_SEED_CONFIG=%r is not a readable file — "
+                "seeding from the default template instead", seed_override
+            )
+        source = _BASE_CONFIG_YAML if (scoped and _BASE_CONFIG_YAML.exists()) else CONFIG_EXAMPLE_PATH
     if not source.exists():
         return False
 

@@ -81,8 +81,8 @@ export function BackgroundWatch() {
       const desc = String(data.description ?? "background task");
       const result = String(data.result ?? "");
       const header = failed
-        ? `⚠️ Background agent failed — ${desc}`
-        : `✅ Background agent finished — ${desc}`;
+        ? `Background agent failed — ${desc}`
+        : `Background agent finished — ${desc}`;
       const injected = appendSystem(
         session,
         result ? `${header}\n\n${result}` : header,

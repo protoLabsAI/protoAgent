@@ -41,11 +41,11 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       const deps = s.requires_pip?.length ? ` — declares deps (install manually): ${s.requires_pip.join(", ")}` : "";
       setStatus(
         res.enable_error
-          ? `✓ installed ${who} — auto-enable failed (${res.enable_error}); enable it from the list${deps}`
-          : `✓ installed ${who}${deps}`,
+          ? `Installed ${who} — auto-enable failed (${res.enable_error}); enable it from the list${deps}`
+          : `Installed ${who}${deps}`,
       );
     },
-    onError: (e: unknown) => setStatus(`✗ ${e instanceof Error ? e.message : "install failed"}`),
+    onError: (e: unknown) => setStatus(e instanceof Error ? e.message : "install failed"),
   });
 
   if (!open) return null;

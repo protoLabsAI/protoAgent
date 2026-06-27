@@ -55,6 +55,25 @@
   margin-top: 8px;
 }
 
+/* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click
+   deletes with no confirm + no harvest). Swap the DS ✕ svg for a trash silhouette (mask
+   tinted via currentColor). */
+.chat-tabbar-wrap--del .pl-tabbar__close {
+  color: var(--pl-color-danger, #e5484d);
+}
+.chat-tabbar-wrap--del .pl-tabbar__close svg {
+  display: none;
+}
+.chat-tabbar-wrap--del .pl-tabbar__close::after {
+  content: "";
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 3v1H4v2h16V4h-5V3H9zM6 7l1 13h10l1-13H6z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
 .chat-session-slot {
   height: 100%;
   display: grid;
@@ -95,6 +114,17 @@
    the report's own margins tidy inside the card. */
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
+
+/* No "loading side-bar" on streaming answer text. The DS pulses a 2px accent left-border +
+   10px inset on a streaming message body (ai.css) — but the streaming text itself is the cue,
+   and it should read FULL WIDTH, not inset behind an animated rail. Drop it (higher specificity
+   than the DS rule, so it wins regardless of import order; applies to BOTH the main chat and the
+   ⌘K palette chat). Tools keep their own loaders — their cards/WorkBlock are untouched. */
+.pl-message.pl-message--streaming .pl-message__body {
+  border-left: none;
+  padding-left: 0;
+  animation: none;
+}
 
 /* Stop (while streaming) and the queued-steer bubble are now the DS busy mode +
    <Message queued> (0.42.0) — see ChatSurface. No bespoke CSS needed here. */
