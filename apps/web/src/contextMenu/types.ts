@@ -1,7 +1,15 @@
 import type { ReactNode } from "react";
 
 // ADR 0036 — what was right-clicked. Open string so plugins can define their own types.
-export type ContextType = "rail-surface" | "chat-message" | "note" | "bead" | "background" | (string & {});
+// `rail-background` = empty rail space (not an icon) → the "Hidden views" restore menu.
+export type ContextType =
+  | "rail-surface"
+  | "rail-background"
+  | "chat-message"
+  | "note"
+  | "bead"
+  | "background"
+  | (string & {});
 
 export interface MenuHelpers { close: () => void; }
 

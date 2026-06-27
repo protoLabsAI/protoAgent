@@ -1,5 +1,6 @@
-import { ArrowLeftRight, ChevronDown, ChevronUp, EyeOff, SlidersHorizontal } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, Eye, EyeOff, SlidersHorizontal } from "lucide-react";
 
+import { openView } from "../app/usePaletteRegistry";
 import { useUI } from "../state/uiStore";
 import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
@@ -86,6 +87,33 @@ registerContextMenu({
           run: () => moveTo(d.side),
         })),
       ...(manage.length ? [{ id: "manage-div", divider: true } as MenuEntry, ...manage] : []),
+    ];
+  },
+});
+
+// Right-click the EMPTY rail background (not an icon) → the "Hidden views" menu: one entry per
+// hidden surface (railOrder.hidden), restoring it via openView (un-hide → route to its dock). The
+// App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives there) into
+// `ctx.hidden`. When nothing is hidden, a disabled hint shows so the menu still confirms the
+// feature. This is the discoverable counterpart to ⌘K for un-hiding (ADR 0035/0036).
+registerContextMenu({
+  type: "rail-background",
+  items: (ctx: { hidden?: { id: string; label: string }[] }): MenuEntry[] => {
+    const hidden = ctx?.hidden ?? [];
+    if (!hidden.length) {
+      return [{ id: "none", label: "No hidden views", disabled: true, run: () => {} }];
+    }
+    return [
+      { id: "hidden-header", label: "Show hidden view", disabled: true, run: () => {} },
+      { id: "hidden-div", divider: true },
+      ...hidden.map(
+        (h): MenuEntry => ({
+          id: `show-${h.id}`,
+          label: h.label,
+          icon: <Eye size={14} />,
+          run: () => openView(h.id),
+        }),
+      ),
     ];
   },
 });

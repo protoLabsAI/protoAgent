@@ -121,6 +121,32 @@ test("right-click a plugin view → Hide removes its rail icon, and it stays hid
   await expect(page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
 });
 
+test("right-click the empty rail → a 'Hidden views' menu restores a hidden surface", async ({ page }) => {
+  // ADR 0035/0036 — the rail-background menu is the discoverable counterpart to ⌘K for un-hiding.
+  await page.goto("/app/", { waitUntil: "load" });
+  // The left rail aside (full-height grid column) — by aria-label, so it's unambiguous vs the
+  // bottom rail (which also lacks the --right modifier).
+  const rail = page.getByRole("complementary", { name: "Left surfaces" });
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+
+  // Hide Board first.
+  await rail.getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Hide", { exact: true }).click();
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toHaveCount(0);
+
+  // Right-click the EMPTY rail area (near the bottom of the column, below the icons) → the
+  // Hidden views menu lists Board. Compute the point from the rail's box so it's robust to height.
+  const box = await rail.boundingBox();
+  if (!box) throw new Error("left rail has no bounding box");
+  await rail.click({ button: "right", position: { x: box.width / 2, y: box.height - 8 } });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await menu.getByText("Board", { exact: true }).click();
+
+  // Board is restored to the rail.
+  await expect(rail.getByRole("button", { name: "Board", exact: true })).toBeVisible();
+});
+
 test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
   // ADR 0036/0059 — a plugin view's rail menu offers "Configure…", which opens the owning
   // plugin's per-plugin settings dialog (titled with the plugin's display name, "Boardy").

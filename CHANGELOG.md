@@ -14,9 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click
-  a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K
-  (opening a hidden view un-hides it) or "Move to …". The reconcilers respect `hidden`, so a reload
-  never resurrects a hidden view and uninstalling the plugin prunes it. Persist migration **v13**.
+  a rail icon → **Hide** to declutter the rails without disabling the plugin; restore it from ⌘K,
+  from **right-clicking the empty rail** (a "Hidden views" menu), or "Move to …". The reconcilers
+  respect `hidden`, so a reload never resurrects a hidden view and uninstalling the plugin prunes
+  it. Persist migration **v13**.
 - **Configure a plugin from its rail icon** (ADR 0036/0059) — a plugin view's right-click menu now
   offers **Configure…**, which opens that plugin's settings dialog (the same per-plugin dialog the
   Plugins manager uses), store-driven from a single root mount.

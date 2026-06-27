@@ -107,9 +107,17 @@ The `rail-surface` menu grew two management actions beyond move/reorder:
   `reconcileCoreSurfaces`) treat `hidden` as placed, so a reload never resurrects a hidden surface;
   `reconcilePluginViews` prunes a hidden id only when its plugin is uninstalled. **Chat is never
   hidden** (it mounts unconditionally on its dock — a hidden chat would render with no rail icon).
-  Restore is via the command palette (ADR 0057): `openView()` un-hides before routing, so ⌘K → a
-  hidden view's name brings it back to a dock (its core default dock, else the left rail). Persist
-  migration **v13** adds the empty bucket to older layouts.
+  Restore is via the command palette (ADR 0057) **or the new `rail-background` menu**: `openView()`
+  un-hides before routing, so ⌘K — or right-clicking empty rail space — brings a hidden view back to
+  a dock (its core default dock, else the left rail). Persist migration **v13** adds the empty bucket
+  to older layouts.
+- **Hidden-views menu on the rail background** (`rail-background` ContextType) — right-clicking empty
+  rail space (not an icon) lists the hidden surfaces, each restoring via `openView`. The DS `AppShell`
+  only fires `onRailContextMenu` on icons, so the App catches the rail-container right-click by event
+  delegation (`onContextMenu` on the shell wrapper, keyed off the stable `.pl-rail` / `.pl-rail__btn`
+  classnames) and resolves each hidden id's label before opening the menu. **DS gap to contribute
+  back:** `AppShell` should expose a rail-background context-menu hook so this needn't sniff DOM
+  classes.
 - **Configure…** (plugin views only) — opens the owning plugin's settings dialog (ADR 0059). The
   App-side `onRailContextMenu` resolves the owning plugin's id + name from the `plugin:<id>:<view>`
   rail id and passes them in `ctx`; the action sets a store-driven `configurePlugin`, mounted once at

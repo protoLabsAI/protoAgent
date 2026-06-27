@@ -59,7 +59,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { ComponentType, LazyExoticComponent, ReactNode } from "react";
+import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
@@ -478,6 +478,19 @@ export function App() {
     return [...ordered, ...extra, ...ext];
   }
 
+  // Right-click the EMPTY rail background (not an icon) → the "Hidden views" restore menu
+  // (ADR 0035/0036). The DS AppShell only fires onRailContextMenu on icons, so we catch the
+  // rail-container right-click here via event delegation (the DS classnames are the contract)
+  // and hand the resolved hidden-surface labels to the `rail-background` menu. An icon click
+  // is handled by its own `rail-surface` menu, so bail when the target is a rail button.
+  const onShellContextMenu = (e: ReactMouseEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest(".pl-rail__btn")) return; // an icon — its own menu handles it
+    if (!t.closest(".pl-rail")) return; // not the rail — leave the default menu
+    const hidden = (railOrder.hidden ?? []).map((id) => ({ id, label: metaFor(id)?.label ?? id }));
+    openContextMenu("rail-background", e, { hidden });
+  };
+
   // ── Command palette (⌘K, ADR 0057) ────────────────────────────────────────────
   // Every resolvable View becomes a "go to" command (via openView → setSurface);
   // deep-link actions ride alongside. Plugin-declared `commands:` + inline plugin
@@ -661,7 +674,7 @@ export function App() {
     {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
-    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
+    <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`} onContextMenu={onShellContextMenu}>
       {/* protoLabs.studio brand bumper — DS Splash (@protolabsai/ui/splash). Holds
           2.5s then hands off via the View Transitions API cross-fade (the
           protoAgent path); shows once per tab session (sessionStorage
