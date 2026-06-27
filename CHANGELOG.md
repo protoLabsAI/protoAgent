@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Streaming answer text is full-width, no loading side-bar** — removed the DS streaming-pulse
+  (animated 2px accent left-border + inset) from the streaming message body, so the answer streams
+  as raw, full-width text instead of behind an animated rail. Applies to the main chat and the ⌘K
+  palette chat; tool cards keep their own loaders.
 - **No hardcoded emojis in the UI** — stripped emoji/glyph literals from user-facing strings: the
   chat paste-attachment label (`📎` → `Attached:`), background-agent completion headers (`✅`/`⚠️`),
   the `/effort` notes (`⚙`/`⚠`), delegate/plugin-install status strings (`✓`/`✗`/`⚠`), and the
