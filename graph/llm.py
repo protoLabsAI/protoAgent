@@ -154,6 +154,18 @@ def create_llm(
     # caches per (model, effort) so the rebuild is paid once.
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
+    # Context window (#1378): seed the model profile with the gateway's reported
+    # max_input_tokens so SummarizationMiddleware can resolve fraction:/tokens: compaction
+    # (instead of falling back to a message count) and the chat context meter (#1372) gets a
+    # real denominator. Best-effort + cached — an unknown window just omits the profile.
+    try:
+        from graph.model_window import context_window_for
+
+        win = context_window_for(config, kwargs.get("model"))
+        if win:
+            kwargs.setdefault("profile", {"max_input_tokens": win})
+    except Exception:  # noqa: BLE001 — model-info must never break model creation
+        log.debug("[llm] context-window resolution skipped", exc_info=True)
     return _ReasoningChatOpenAI(**kwargs)
 
 

@@ -766,15 +766,29 @@ def _main():
 
     def _context_meta() -> dict:
         """Static compaction context for the context-v1 DataPart (#1372): whether compaction
-        is on, the configured trigger, and the absolute token threshold when the trigger is
-        token-based. fraction:/messages: triggers have no surfaceable token denominator here
-        (a gateway alias exposes no model window), so the console shows the size without a bar."""
+        is on, the configured trigger, the model's context window, and the absolute token
+        threshold compaction fires at. The window comes from the gateway (#1378), so a
+        `fraction:` trigger now resolves to `fraction × window`; `tokens:N` is taken verbatim;
+        `messages:` has no token threshold (the meter shows size without a bar)."""
         cfg = STATE.graph_config
         trigger = str(getattr(cfg, "compaction_trigger", "") or "")
         meta: dict = {"enabled": bool(getattr(cfg, "compaction_enabled", False)), "trigger": trigger}
+        from graph.model_window import context_window_for
+
+        window = context_window_for(cfg)
+        if window:
+            meta["maxTokens"] = window
         kind, _, val = trigger.partition(":")
-        if kind == "tokens" and val.strip().isdigit():
-            meta["compactionAtTokens"] = int(val.strip())
+        val = val.strip()
+        if kind == "tokens" and val.isdigit():
+            meta["compactionAtTokens"] = int(val)
+        elif kind == "fraction" and window:
+            try:
+                frac = float(val)
+            except ValueError:
+                frac = 0.0
+            if 0 < frac <= 1:
+                meta["compactionAtTokens"] = int(window * frac)
         return meta
 
     _a2a_push_client = httpx.AsyncClient(timeout=30)
