@@ -1,29 +1,14 @@
 import "./chat.css";
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
-import {
-  Conversation,
-  Message,
-  MessageAction,
-  MessageActions,
-  PromptInput,
-} from "@protolabsai/ui/ai";
+import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
-import {
-  Check,
-  Copy,
-  GitBranch,
-  Loader2,
-  Maximize2,
-  RotateCcw,
-  TerminalSquare,
-} from "lucide-react";
+import { Check, TerminalSquare } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { openContextMenu } from "../contextMenu";
-import { openDocument } from "../docviewer";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
@@ -40,14 +25,10 @@ import {
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
-import { ChatComponent } from "./ChatComponent";
+import { ChatMessageView } from "./ChatMessageView";
 import { ComposerModelSelect } from "./ComposerModelSelect";
-import { Markdown } from "./LazyMarkdown";
-import { ReasoningCard } from "./ReasoningCard";
-import { WorkBlock } from "./WorkBlock";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
-import { ToolCalls } from "./ToolCalls";
-import { addToolRef, appendReasoning, appendText, toolsForGroup } from "./parts";
+import { addToolRef, appendReasoning, appendText } from "./parts";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1050,138 +1031,19 @@ function ChatSessionSlot({
           <Empty icon={<TerminalSquare />} description="No messages in this session." />
         ) : (
           messages.map((message) => (
-            <Message
+            <ChatMessageView
               key={message.id || `${message.role}-${message.createdAt}`}
-              role={message.role}
-              streaming={message.status === "streaming"}
-              className={message.report ? "chat-report" : undefined}
-            >
-              {message.reasoning && !(message.parts && message.parts.length) ? (
-                // History-loaded turns have no ordered parts — fall back to the flat
-                // collapsed reasoning card. Live turns render reasoning inline via parts.
-                <ReasoningCard text={message.reasoning} streaming={message.status === "streaming" && !message.content} />
-              ) : null}
-              {message.parts && message.parts.length ? (
-                (() => {
-                  // Fold the intermediate reason→tool timeline behind ONE WorkBlock so the
-                  // answer leads — but ONLY when the turn interleaves reasoning WITH tools (the
-                  // forever-stack case). Tool-only / reasoning-only turns keep their inline
-                  // cards; a plain turn is just the answer. The "answer" is the trailing run of
-                  // text parts; everything before it is the work. User messages carry only text.
-                  const parts = message.parts!;
-                  let split = parts.length;
-                  while (split > 0 && parts[split - 1].kind === "text") split--;
-                  const workParts = parts.slice(0, split);
-                  const answerParts = parts.slice(split);
-                  const hasTools = workParts.some((p) => p.kind === "tools");
-                  const hasReasoning = workParts.some((p) => p.kind === "reasoning");
-                  const renderText = (part: ChatPart, key: string) =>
-                    part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
-                      <span className="chat-user-text" key={key}>{part.text}</span>
-                    ) : (
-                      <Markdown key={key}>{part.text}</Markdown>
-                    );
-                  const renderInline = (part: ChatPart, i: number) =>
-                    part.kind === "tools" ? (
-                      <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={message.status === "streaming"} onCancelDelegation={cancelDelegation} />
-                    ) : part.kind === "reasoning" ? (
-                      part.text.trim() ? (
-                        <ReasoningCard key={i} text={part.text} streaming={message.status === "streaming" && i === workParts.length - 1} />
-                      ) : null
-                    ) : (
-                      renderText(part, `w${i}`)
-                    );
-                  return (
-                    <>
-                      {hasTools && hasReasoning ? (
-                        <WorkBlock
-                          parts={workParts}
-                          toolCalls={message.toolCalls}
-                          streaming={message.status === "streaming" && answerParts.length === 0}
-                        />
-                      ) : (
-                        workParts.map(renderInline)
-                      )}
-                      {answerParts.map((part, i) => renderText(part, `a${i}`))}
-                    </>
-                  );
-                })()
-              ) : (
-                // History-loaded messages have no ordered parts — keep the grouped layout
-                // (tool cards above the text; order isn't recoverable from storage).
-                <>
-                  {message.toolCalls && message.toolCalls.length > 0 ? (
-                    <ToolCalls calls={message.toolCalls} onCancelDelegation={cancelDelegation} />
-                  ) : null}
-                  {message.content ? (
-                    message.role === "user" ? (
-                      <span className="chat-user-text">{message.content}</span>
-                    ) : (
-                      <Markdown>{message.content}</Markdown>
-                    )
-                  ) : null}
-                </>
-              )}
-              {message.status === "streaming"
-                && !(message.parts && message.parts.length)
-                && !message.content
-                && !(message.toolCalls && message.toolCalls.length)
-                && !(message.components && message.components.length)
-                && !message.reasoning
-                ? <Loader2 className="spin" size={15} />
-                : null}
-              {message.components && message.components.length > 0
-                ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
-                : null}
-              {/* Background-agent report (ADR 0050/0062): the bubble shows the server's
-                  preview; this opens the FULL report in the full-screen document viewer
-                  (fetched by job id) — no trip to the Activity/Background panel. */}
-              {message.report ? (
-                <Button
-                  className="chat-report-open"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    openDocument({
-                      title: message.report!.title,
-                      subtitle: "Background agent report",
-                      load: () =>
-                        api
-                          .background()
-                          .then(
-                            (r) =>
-                              r.jobs.find((j) => j.id === message.report!.jobId)?.result ||
-                              "_The full report is no longer available — it may have been cleared from the Background agents panel._",
-                          ),
-                    })
-                  }
-                >
-                  <Maximize2 size={14} /> Read full report
-                </Button>
-              ) : null}
-              {message.role === "assistant" && message.status !== "streaming" && message.content ? (
-                <MessageActions>
-                  <MessageAction
-                    label={copiedId === message.id ? "Copied" : "Copy"}
-                    icon={copiedId === message.id ? <Check size={14} /> : <Copy size={14} />}
-                    onClick={() => copyMessage(message)}
-                  />
-                  <MessageAction
-                    label="Fork from here"
-                    icon={<GitBranch size={14} />}
-                    onClick={() => forkAtMessage(message)}
-                  />
-                  {message.id === lastAssistantId ? (
-                    <MessageAction
-                      label="Regenerate"
-                      icon={<RotateCcw size={14} />}
-                      disabled={status === "streaming"}
-                      onClick={() => regenerate(message.id)}
-                    />
-                  ) : null}
-                </MessageActions>
-              ) : null}
-            </Message>
+              message={message}
+              onCancelDelegation={cancelDelegation}
+              actions={{
+                copiedId,
+                onCopy: copyMessage,
+                onFork: forkAtMessage,
+                onRegenerate: regenerate,
+                lastAssistantId,
+                regenDisabled: status === "streaming",
+              }}
+            />
           ))
         )}
         {steerQueue.map((q) => (
