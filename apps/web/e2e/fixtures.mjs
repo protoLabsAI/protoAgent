@@ -20,6 +20,7 @@ export const RUNTIME_STATUS = {
     name: "protolabs/reasoning",
     api_base: "https://api.proto-labs.ai/v1",
     api_key_configured: true,
+    vision: true, // a vision-capable model: attached images go inline (the happy path)
     temperature: 0.2,
     max_tokens: 2048,
     max_iterations: 8,
