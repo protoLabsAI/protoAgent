@@ -550,7 +550,7 @@ function ChatSessionSlot({
     // user bubble shows only the typed text + a 📎 list (never a raw doc/data dump).
     const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
     const names = [...piped, ...nativeImgs].map((a) => a.name).join(", ");
-    const display = text ? `${text}\n\n📎 ${names}` : `📎 ${names}`;
+    const display = text ? `${text}\n\nAttached: ${names}` : `Attached: ${names}`;
     setAttachments([]);
     void runTurn(display, { sendAs: sent, images });
   }

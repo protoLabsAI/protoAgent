@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **No hardcoded emojis in the UI** — stripped emoji/glyph literals from user-facing strings: the
+  chat paste-attachment label (`📎` → `Attached:`), background-agent completion headers (`✅`/`⚠️`),
+  the `/effort` notes (`⚙`/`⚠`), delegate/plugin-install status strings (`✓`/`✗`/`⚠`), and the
+  background-job tool glyphs (now lucide icons). Status is carried by text/tone/icons, not emoji.
+
 ### Added
 - **Hide a rail surface without disabling its plugin** (ADR 0035/0036) — `railOrder` gains a
   `hidden` bucket: a surface is on exactly one dock *or* hidden (enabled-but-not-shown). Right-click

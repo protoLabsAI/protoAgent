@@ -274,7 +274,7 @@ function BgJobRow({
               <span className="bg-jobs-tools">
                 {recentTools.map((t) => (
                   <span key={t.id} className={`bg-jobs-tool ${t.error ? "is-err" : t.done ? "is-done" : "is-run"}`}>
-                    {t.error ? "✗" : t.done ? "✓" : "⊷"} {t.tool}
+                    {t.error ? <XCircle size={11} /> : t.done ? <CheckCircle2 size={11} /> : <Loader2 size={11} className="spin" />} {t.tool}
                   </span>
                 ))}
               </span>
