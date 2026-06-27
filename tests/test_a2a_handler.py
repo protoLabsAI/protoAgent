@@ -292,10 +292,12 @@ async def test_terminal_artifact_carries_all_extensions_in_order():
     assert parts[0]["text"] == "done text"
     mimes = [p.get("metadata", {}).get("mimeType") for p in parts[1:]]
     assert mimes == [pa.WORLDSTATE_DELTA_MIME, pa.COST_MIME, pa.CONFIDENCE_MIME, _CONTEXT_MIME]
-    # cost-v1 payload carries the SUMMED token usage (100+140 input).
+    # cost-v1 payload carries the SUMMED token usage (100+140 input) + the turn duration.
     cost = pa.parse_cost(parts[2])
     assert cost["usage"]["input_tokens"] == 240
     assert cost["success"] is True
+    # durationMs is present (proto-JSON round-trips numbers as floats, so compare numerically).
+    assert isinstance(cost["durationMs"], (int, float)) and cost["durationMs"] >= 0
     # context-v1 carries the PEAK prompt size (max single call's input_tokens), the live
     # context-window fill — distinct from the summed spend above.
     _ctx_mime, ctx = pa.read_data(parts[4])

@@ -325,6 +325,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 confidence_expl,
                 context_meta,
                 success=True,
+                duration_ms=int((time.monotonic() - started) * 1000),
             )
             parts = await self._append_structured(parts, context, final_text)
             if parts:
@@ -601,6 +602,7 @@ def _terminal_parts(
     context: dict | None = None,
     *,
     success: bool,
+    duration_ms: int | None = None,
 ) -> list[Part]:
     """Assemble the terminal artifact's parts: text first, then the cost /
     confidence / worldstate-delta / context extension DataParts that have content.
@@ -619,6 +621,7 @@ def _terminal_parts(
             _ext_data_part(
                 pa.emit_cost(
                     usage,
+                    duration_ms=duration_ms,
                     cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
                     success=success,
                 )
