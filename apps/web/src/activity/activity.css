@@ -43,6 +43,39 @@
   font-size: 14px;
 }
 
+/* Stimulus attribution (#1375): a quiet quoted line above the response naming what it
+   replies to — a scheduled prompt, an inbound message, a webhook body. Truncated to one
+   line; the full text is in the title tooltip + the full-screen reader. */
+.activity-stimulus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+  min-width: 0;
+}
+.activity-stimulus svg {
+  flex: none;
+  opacity: 0.7;
+}
+.activity-stimulus-label {
+  flex: none;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px;
+  opacity: 0.85;
+}
+.activity-stimulus-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .activity-user .activity-content {
   background: color-mix(in srgb, var(--accent, #7c8cff) 12%, transparent);
 }

@@ -23,8 +23,15 @@ test("widget badge → dialog feed with provenance + live append", async ({ page
   await expect(feed.getByText("Build failed on main — investigating.")).toBeVisible();
   await expect(feed.getByText("inbox").first()).toBeVisible(); // inbox origin badge
 
-  // A pushed event appends live while the dialog is open.
+  // Each response is explicitly attributed to the stimulus it replies to (#1375).
+  const sched = feed.locator(".activity-entry", { hasText: "3 PRs merged overnight, CI green." });
+  await expect(sched.locator(".activity-stimulus")).toContainText("in response to");
+  await expect(sched.locator(".activity-stimulus-text")).toContainText("Summarize overnight repo activity");
+
+  // A pushed event appends live while the dialog is open — carrying its stimulus.
   await expect(feed.getByText("live activity ping").first()).toBeVisible();
+  const live = feed.locator(".activity-entry", { hasText: "live activity ping" });
+  await expect(live.locator(".activity-stimulus-text")).toContainText("Hourly heartbeat check");
 
   // Read-only since the IA pass — there is no reply composer.
   await expect(page.locator(".activity-composer")).toHaveCount(0);

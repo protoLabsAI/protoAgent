@@ -123,6 +123,52 @@ def test_prune_activity_removes_old(tmp_path):
     assert remaining[0]["text"] == "recent entry"
 
 
+def test_activity_add_round_trips_stimulus(tmp_path):
+    """The stimulus (triggering input) is stored + returned so the feed can show the
+    response as an explicit reply to it (#1375)."""
+    al = _activity_log(tmp_path)
+    al.add(
+        context_id="system:activity",
+        origin="inbox",
+        trigger="ci",
+        priority="now",
+        text="Build failed on main — investigating.",
+        stimulus="CI webhook: build #4821 failed on main.",
+    )
+    row = al.recent(limit=1)[0]
+    assert row["stimulus"] == "CI webhook: build #4821 failed on main."
+    # Omitted stimulus is fine (empty), not an error.
+    al.add(context_id="system:activity", origin="operator", text="a manual note")
+    assert al.recent(limit=1)[0]["stimulus"] in ("", None)
+
+
+def test_activity_migrates_pre_stimulus_db(tmp_path):
+    """A DB created before the `stimulus` column gets it added on open (additive ALTER),
+    and existing rows read back with stimulus = None."""
+    import sqlite3
+
+    path = str(tmp_path / "activity.db")
+    db = sqlite3.connect(path)
+    # The original (pre-#1375) schema — no `stimulus` column.
+    db.execute(
+        "CREATE TABLE activity (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, "
+        "context_id TEXT NOT NULL, origin TEXT NOT NULL DEFAULT '', trigger TEXT, priority TEXT, "
+        "state TEXT, text TEXT NOT NULL, task_id TEXT)"
+    )
+    db.execute(
+        "INSERT INTO activity (created_at, context_id, origin, text) VALUES (?, ?, ?, ?)",
+        (datetime(2026, 1, 1, tzinfo=UTC).isoformat(), "ctx", "scheduler", "old entry"),
+    )
+    db.commit()
+    db.close()
+
+    al = ActivityLog(path)  # opening migrates the schema
+    al.add(context_id="ctx", origin="inbox", text="new entry", stimulus="ping")
+    rows = {r["text"]: r for r in al.recent(limit=10)}
+    assert rows["old entry"]["stimulus"] is None  # legacy row, back-filled column
+    assert rows["new entry"]["stimulus"] == "ping"
+
+
 def test_prune_activity_keep_all_zero(tmp_path):
     """keep_days=0 removes nothing (keep forever)."""
     al = _activity_log(tmp_path)

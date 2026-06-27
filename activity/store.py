@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS activity (
     priority    TEXT,
     state       TEXT,
     text        TEXT NOT NULL,
-    task_id     TEXT
+    task_id     TEXT,
+    stimulus    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
 """
@@ -49,6 +50,14 @@ class ActivityLog:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
+            # Additive migration: `stimulus` (the triggering input text, so a response can be
+            # shown as "in response to X") was added after the table shipped. ALTER is a no-op
+            # on a fresh DB (the column is already in _SCHEMA) and "duplicate column" on a
+            # migrated one — both fine.
+            try:
+                db.execute("ALTER TABLE activity ADD COLUMN stimulus TEXT")
+            except sqlite3.OperationalError:
+                pass
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -71,17 +80,20 @@ class ActivityLog:
         priority: str = "",
         state: str = "completed",
         task_id: str = "",
+        stimulus: str = "",
     ) -> int | None:
-        """Append a feed entry. ``origin`` empty ⇒ "operator" (a reply/live turn)."""
+        """Append a feed entry. ``origin`` empty ⇒ "operator" (a reply/live turn).
+        ``stimulus`` is the triggering input text (the scheduled prompt / inbound message),
+        so the feed can show the response as an explicit reply to it."""
         if not text or not text.strip():
             return None
         try:
             db = self._connect()
             cur = db.execute(
                 "INSERT INTO activity "
-                "(created_at, context_id, origin, trigger, priority, state, text, task_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (_now_iso(), context_id, origin or "operator", trigger, priority, state, text, task_id),
+                "(created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (_now_iso(), context_id, origin or "operator", trigger, priority, state, text, task_id, stimulus),
             )
             db.commit()
             return int(cur.lastrowid)
@@ -119,7 +131,7 @@ class ActivityLog:
         try:
             db = self._connect()
             rows = db.execute(
-                "SELECT id, created_at, context_id, origin, trigger, priority, state, text, task_id "
+                "SELECT id, created_at, context_id, origin, trigger, priority, state, text, task_id, stimulus "
                 "FROM activity ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()

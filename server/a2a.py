@@ -500,7 +500,9 @@ def _a2a_terminal(outcome) -> None:
     origin = getattr(outcome, "origin", "") or "operator"
     trigger = getattr(outcome, "trigger", "") or ""
     priority = getattr(outcome, "priority", "") or ""
-    # Provenance feed (ADR 0022): durably log the turn + what triggered it.
+    stimulus = getattr(outcome, "stimulus", "") or ""
+    # Provenance feed (ADR 0022): durably log the turn + what triggered it + the stimulus it
+    # responds to (#1375), so the feed reads as an explicit reply.
     if STATE.activity_log is not None:
         STATE.activity_log.add(
             context_id=ACTIVITY_CONTEXT,
@@ -510,6 +512,7 @@ def _a2a_terminal(outcome) -> None:
             state=getattr(outcome, "state", "completed"),
             text=text,
             task_id=getattr(outcome, "task_id", "") or "",
+            stimulus=stimulus,
         )
     _event_bus.publish(
         "activity.message",
@@ -520,5 +523,6 @@ def _a2a_terminal(outcome) -> None:
             "origin": origin,
             "trigger": trigger,
             "priority": priority,
+            "stimulus": stimulus,
         },
     )

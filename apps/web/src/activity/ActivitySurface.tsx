@@ -1,7 +1,7 @@
 import "./activity.css";
 
 import { Empty } from "@protolabsai/ui/primitives";
-import { Clock, Inbox, Maximize2, MessageSquare, Users, Webhook, Zap } from "lucide-react";
+import { Clock, CornerDownRight, Inbox, Maximize2, MessageSquare, Users, Webhook, Zap } from "lucide-react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -85,6 +85,7 @@ export function ActivitySurface() {
           state: "completed",
           text,
           task_id: "",
+          stimulus: typeof data.stimulus === "string" ? data.stimulus : "",
         };
         setEntries((prev) => [entry, ...prev]);
       }),
@@ -128,13 +129,24 @@ export function ActivitySurface() {
                     openDocument({
                       title: ORIGIN[e.origin]?.label ?? e.origin ?? "Activity",
                       subtitle: [e.trigger, e.created_at ? ago(e.created_at) : ""].filter(Boolean).join(" · ") || undefined,
-                      content: e.text,
+                      content: e.stimulus
+                        ? `> **In response to**\n>\n> ${e.stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
+                        : e.text,
                     })
                   }
                 >
                   <Maximize2 size={13} />
                 </button>
               </div>
+              {/* Explicit stimulus attribution (#1375): the input this response is replying to,
+                  so the feed isn't an unanchored wall of agent output. Full text on hover. */}
+              {e.stimulus ? (
+                <div className="activity-stimulus" title={e.stimulus}>
+                  <CornerDownRight size={12} aria-hidden />
+                  <span className="activity-stimulus-label">in response to</span>
+                  <span className="activity-stimulus-text">{e.stimulus}</span>
+                </div>
+              ) : null}
               <div className="activity-content">
                 <Markdown>{e.text}</Markdown>
               </div>

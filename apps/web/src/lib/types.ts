@@ -311,8 +311,11 @@ export type ActivityEntry = {
   trigger: string;       // job id / inbox source (human label), may be ""
   priority: string;      // inbox tier when applicable, else ""
   state: string;
-  text: string;
+  text: string;          // the agent's RESPONSE
   task_id: string;
+  /** The triggering input text this turn is a response to (scheduled prompt / inbound
+   *  message / webhook body), truncated. Shown as "in response to …" (#1375). */
+  stimulus?: string;
 };
 
 export type ActivityHistory = {

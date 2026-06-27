@@ -88,6 +88,9 @@ class TurnOutcome:
     origin: str = ""
     trigger: str = ""
     priority: str = ""
+    # The triggering input text (the scheduled prompt / inbound message / webhook body),
+    # truncated — so the Activity feed can show the response as an explicit reply to it (#1375).
+    stimulus: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -249,6 +252,11 @@ class ProtoAgentExecutor(AgentExecutor):
         _origin = str(_md.get("origin", "") or "")
         _priority = str(_md.get("priority", "") or "")
         _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")
+        # The stimulus = this turn's input text, kept as a truncated preview so the Activity
+        # feed can show the response as an explicit reply to what triggered it (#1375).
+        _stimulus = (text or "").strip()
+        if len(_stimulus) > 600:
+            _stimulus = _stimulus[:600] + "…"
 
         started = time.monotonic()
         accumulated = ""
@@ -351,6 +359,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 origin=_origin,
                 trigger=_trigger,
                 priority=_priority,
+                stimulus=_stimulus,
             )
 
         try:
