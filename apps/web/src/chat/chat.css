@@ -61,21 +61,22 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-top: 6px;
-  color: var(--fg-muted);
+  gap: 12px;
+  margin-top: 7px;
+  color: var(--fg-secondary, var(--fg-muted));
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12.5px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   cursor: default;
 }
 .chat-usage-item {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 .chat-usage-item svg {
-  opacity: 0.7;
+  opacity: 0.85;
 }
 /* Context-window fill bar — quiet until it nears the compaction threshold, then warns. */
 .chat-usage-bar {
@@ -96,6 +97,51 @@
 }
 .chat-usage-bar-fill[data-warn="true"] {
   background: var(--warning, #d98324);
+}
+
+/* Hover card (DS Tooltip content): a compact label/value breakdown of the turn. */
+.chat-usage-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 190px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+.chat-usage-tip-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.chat-usage-tip-label {
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-usage-tip-value {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+}
+.chat-usage-tip-sub {
+  display: block;
+  color: var(--fg-muted);
+  font-weight: 400;
+  font-size: 10.5px;
+}
+.chat-usage-tip-note {
+  margin: 3px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  color: var(--fg-muted);
+  font-family: var(--font-sans, inherit);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  max-width: 230px;
 }
 
 /* Quick-delete mode: while Shift is held, the tab ✕ becomes a red trashcan (Shift+click

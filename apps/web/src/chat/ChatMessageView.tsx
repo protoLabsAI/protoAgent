@@ -1,9 +1,11 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
-import { ArrowDown, Check, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
+import { Tooltip } from "@protolabsai/ui/overlays";
+import { ArrowDownToLine, Check, Coins, Copy, GitBranch, Gauge, Loader2, Maximize2, RotateCcw } from "lucide-react";
 
 import { openDocument } from "../docviewer";
 import { api } from "../lib/api";
+import { useUI } from "../state/uiStore";
 import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { Markdown } from "./LazyMarkdown";
@@ -38,6 +40,8 @@ export function ChatMessageView({
   actions?: ChatMessageActions;
 }) {
   const streaming = message.status === "streaming";
+  // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
+  const showChatUsage = useUI((s) => s.showChatUsage);
   return (
     <Message role={message.role} streaming={streaming} className={message.report ? "chat-report" : undefined}>
       {message.reasoning && !(message.parts && message.parts.length) ? (
@@ -138,7 +142,7 @@ export function ChatMessageView({
           <Maximize2 size={14} /> Read full report
         </Button>
       ) : null}
-      {message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
+      {showChatUsage && message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
         <UsageFooter usage={message.usage} context={message.contextWindow} />
       ) : null}
       {actions && message.role === "assistant" && !streaming && message.content ? (
@@ -180,10 +184,63 @@ function fmtCost(usd: number): string {
   return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
 }
 
+/** One labelled row inside the hover tooltip. */
+function TipRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="chat-usage-tip-row">
+      <span className="chat-usage-tip-label">{label}</span>
+      <span className="chat-usage-tip-value">
+        {value}
+        {sub ? <span className="chat-usage-tip-sub">{sub}</span> : null}
+      </span>
+    </div>
+  );
+}
+
+/** Structured hover card: the full per-turn breakdown, honest about what each number means. */
+function UsageTip({
+  ctxTokens,
+  threshold,
+  context,
+  usage,
+}: {
+  ctxTokens?: number;
+  threshold?: number;
+  context?: ContextWindow;
+  usage?: TurnUsage;
+}) {
+  const compaction =
+    context == null
+      ? null
+      : context.enabled === false
+        ? "off"
+        : threshold
+          ? `near ${threshold.toLocaleString()} tokens${context.trigger ? ` · ${context.trigger}` : ""}`
+          : context.trigger
+            ? `${context.trigger} · no token threshold to chart`
+            : null;
+  return (
+    <div className="chat-usage-tip">
+      {ctxTokens != null ? (
+        <TipRow label="Context" value={`${ctxTokens.toLocaleString()} tokens`} sub="this turn's prompt" />
+      ) : null}
+      {compaction ? <TipRow label="Compaction" value={compaction} /> : null}
+      {usage ? <TipRow label="Output" value={`${usage.outputTokens.toLocaleString()} tokens`} /> : null}
+      {usage?.cacheReadTokens ? (
+        <TipRow label="Cache" value={`${usage.cacheReadTokens.toLocaleString()} tokens`} sub="reused from cache" />
+      ) : null}
+      {usage?.costUsd != null ? (
+        <TipRow label="Cost" value={fmtCost(usage.costUsd)} sub={usage.durationMs ? `${(usage.durationMs / 1000).toFixed(1)}s` : undefined} />
+      ) : null}
+      <p className="chat-usage-tip-note">Context is the live prompt size; cost is summed across the turn's calls.</p>
+    </div>
+  );
+}
+
 /** The per-turn footer under an assistant answer: a context-window meter (fill ⊙, with a
- *  "/ threshold" bar when compaction is token-based) · output ↓ · cost, with the full
- *  breakdown on hover. Honest about scope: `contextTokens` is the live prompt size; the cost
- *  is summed across the turn's calls (see ContextWindow / TurnUsage). */
+ *  "/ threshold" bar when compaction is token-based) · output ↓ · cost. The full breakdown is
+ *  a rich hover card. Honest about scope: `contextTokens` is the live prompt size; the cost is
+ *  summed across the turn's calls (see ContextWindow / TurnUsage). */
 function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextWindow }) {
   // Prefer the true context-window fill (peak prompt); fall back to the summed input only
   // for history saved before context-v1 shipped.
@@ -192,48 +249,34 @@ function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextW
   const pct =
     ctxTokens != null && threshold ? Math.min(100, Math.round((ctxTokens / threshold) * 100)) : null;
 
-  const compactionLine = context
-    ? context.enabled === false
-      ? "Compaction off"
-      : threshold
-        ? `Compacts old history near ${threshold.toLocaleString()} tokens${context.trigger ? ` (${context.trigger})` : ""}`
-        : context.trigger
-          ? `Compaction trigger: ${context.trigger} (no token threshold to chart here)`
-          : ""
-    : "";
-  const title = [
-    ctxTokens != null ? `Context window: ${ctxTokens.toLocaleString()} tokens (this turn's prompt)` : "",
-    compactionLine,
-    usage ? `Output ${usage.outputTokens.toLocaleString()} tokens` : "",
-    usage?.cacheReadTokens ? `${usage.cacheReadTokens.toLocaleString()} input tokens served from cache` : "",
-    usage?.costUsd != null ? `Cost ${fmtCost(usage.costUsd)}` : "",
-    usage?.durationMs ? `Took ${(usage.durationMs / 1000).toFixed(1)}s` : "",
-    "Context = the live prompt size; cost is summed across the turn's model calls.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
   return (
-    <div className="chat-usage" title={title}>
-      {ctxTokens != null ? (
-        <span className="chat-usage-item" aria-label="context window">
-          <Gauge size={11} aria-hidden />
-          {fmtTokens(ctxTokens)}
-          {threshold ? ` / ${fmtTokens(threshold)}` : ""}
-          {pct != null ? (
-            <span className="chat-usage-bar" aria-hidden>
-              <span className="chat-usage-bar-fill" style={{ width: `${pct}%` }} data-warn={pct >= 80} />
-            </span>
-          ) : null}
-        </span>
-      ) : null}
-      {usage ? (
-        <span className="chat-usage-item" aria-label="output tokens">
-          <ArrowDown size={11} aria-hidden />
-          {fmtTokens(usage.outputTokens)}
-        </span>
-      ) : null}
-      {usage?.costUsd != null ? <span className="chat-usage-item">{fmtCost(usage.costUsd)}</span> : null}
-    </div>
+    <Tooltip label={<UsageTip ctxTokens={ctxTokens} threshold={threshold} context={context} usage={usage} />} side="top" align="start">
+      <div className="chat-usage">
+        {ctxTokens != null ? (
+          <span className="chat-usage-item" aria-label="context window">
+            <Gauge size={13} aria-hidden />
+            {fmtTokens(ctxTokens)}
+            {threshold ? ` / ${fmtTokens(threshold)}` : ""}
+            {pct != null ? (
+              <span className="chat-usage-bar" aria-hidden>
+                <span className="chat-usage-bar-fill" style={{ width: `${pct}%` }} data-warn={pct >= 80} />
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+        {usage ? (
+          <span className="chat-usage-item" aria-label="output tokens">
+            <ArrowDownToLine size={13} aria-hidden />
+            {fmtTokens(usage.outputTokens)}
+          </span>
+        ) : null}
+        {usage?.costUsd != null ? (
+          <span className="chat-usage-item" aria-label="cost">
+            <Coins size={13} aria-hidden />
+            {fmtCost(usage.costUsd)}
+          </span>
+        ) : null}
+      </div>
+    </Tooltip>
   );
 }

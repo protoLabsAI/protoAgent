@@ -63,6 +63,7 @@ test("the settings dialog lists the grouped Agent + Box sections (host, no scope
     "Memory",
     "System",
     "Theme",
+    "Chat",
     "Keyboard",
     // Box group (host console only). (Shared Skills folded into Agent ▸ Skills.)
     "Overview",

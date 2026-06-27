@@ -129,6 +129,10 @@ type UIState = {
   // bus activity shows a rail dot until opened. Persisted so the dot survives a refresh.
   pluginDots: Record<string, boolean>;
   setPluginDot: (key: string, on: boolean) => void;
+  // Chat display: show the per-turn token/cost + context-window footer under each answer
+  // (#1372). On by default; operators who want a cleaner transcript turn it off (this device).
+  showChatUsage: boolean;
+  setShowChatUsage: (b: boolean) => void;
 };
 
 // The pristine rail layout — the store's initial value AND the side-of-record for
@@ -430,6 +434,8 @@ export const useUI = create<UIState>()(
           else delete next[key];
           return { pluginDots: next };
         }),
+      showChatUsage: true,
+      setShowChatUsage: (showChatUsage) => set({ showChatUsage }),
     }),
     {
       name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)

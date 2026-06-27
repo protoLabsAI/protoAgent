@@ -89,9 +89,29 @@ test("a completed turn shows a context meter + token/cost footer (#1372)", async
   await expect(usage).toContainText("$0.04"); // costUsd 0.0412
   // The fill bar renders (token-based trigger → chartable).
   await expect(usage.locator(".chat-usage-bar-fill")).toBeVisible();
-  // Tooltip carries the compaction threshold + the honest scope note.
-  await expect(usage).toHaveAttribute("title", /Compacts old history near 120,000 tokens/);
-  await expect(usage).toHaveAttribute("title", /cost is summed across the turn/);
+
+  // The full breakdown is a rich hover card (DS Tooltip) — the compaction threshold + the
+  // honest scope note live there, not in a native title attribute.
+  // The full breakdown is a rich hover card (DS Tooltip) that mounts only on hover. Radix
+  // double-renders the content (positioned + a11y copy) with identical text — assert on the
+  // first; its presence proves the card opened.
+  await expect(page.locator(".chat-usage-tip")).toHaveCount(0); // closed → not mounted
+  await usage.hover();
+  const tip = page.locator(".chat-usage-tip").first();
+  await expect(tip).toContainText("near 120,000 tokens");
+  await expect(tip).toContainText("Context is the live prompt size");
+});
+
+test("Settings ▸ Chat can hide the token/cost footer (#1372)", async ({ page }) => {
+  await send(page, "what is the capital of France?");
+  await expect(page.locator(".pl-message--assistant .chat-usage")).toBeVisible();
+
+  // Flip it off in Settings ▸ Chat — the chat stays mounted behind the overlay, so the footer
+  // clears live the moment the pref changes (no reload).
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Chat", exact: true }).click();
+  await page.locator('.setting-row[data-key="chat.showUsage"] .pl-switch').click();
+  await expect(page.locator(".pl-message--assistant .chat-usage")).toHaveCount(0);
 });
 
 test("long tool values do not overflow the chat horizontally", async ({ page }) => {

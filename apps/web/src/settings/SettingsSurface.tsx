@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Keyboard, Layers, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
+import { BarChart3, Bot, BookMarked, Boxes, Database, Gauge, Keyboard, Layers, MessageSquare, Network, Palette, Plug, Puzzle, Server, Settings2, Sparkles, Store, Wrench } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -17,6 +17,7 @@ import { useUI } from "../state/uiStore";
 import { DelegatesSection } from "./DelegatesSection";
 import { FleetSurface } from "./FleetSurface";
 import { KeybindingsPanel } from "./KeybindingsPanel";
+import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { OverviewPanel } from "./OverviewPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
@@ -51,6 +52,7 @@ const AGENT_SECTIONS: Section[] = [
   { id: "memory", label: "Memory", icon: Database, render: () => <SettingsCategoryPanel category="Memory" title="Memory" /> },
   { id: "system", label: "System", icon: Settings2, render: () => <SettingsCategoryPanel category="System" title="System" /> },
   { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
+  { id: "chat", label: "Chat", icon: MessageSquare, render: () => <ChatSettingsPanel /> },
   { id: "keybindings", label: "Keyboard", icon: Keyboard, render: () => <KeybindingsPanel /> },
 ];
 
