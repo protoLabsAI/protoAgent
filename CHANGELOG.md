@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Settings IA — domain-first (ADR 0048)** (#1393) — the settings dialog is reorganized by what a
+  setting *does*: an **Agent** group (Identity · Operator & access · Model · Behavior · Knowledge ·
+  Integrations), a **Capabilities** group (Tools · MCP · Skills · Subagents · Delegates), a host-only
+  **Box** group (Overview · Fleet · Telemetry), and a device-local **This console** group (Theme ·
+  Chat · Keyboard). Scope (host vs agent) is a per-field inheritance badge, not a navigation axis;
+  sharing/box-runtime knobs are contextual chips on their managers rather than empty panels. Removes
+  the dead "two scope homes" axis and the unused Host-defaults panels, and folds Telemetry into the
+  single Settings door (no separate drawer shortcut).
+- **Tools view — grouped by plugin + subsystem** (#1397) — plugin tools now group under the plugin
+  that contributed them (Artifact, GitHub, …) instead of one flat "Plugin" bucket, and the core
+  "General" bucket is split into Filesystem / Skills / Web & research subsystems. Groups order
+  core → plugin → MCP, with the source shown once on each group header instead of on every row.
 - **CI off the deprecated Node 20 action runtime** (#1391) — bumped every GitHub Actions pin across
   the nine workflow files to the lowest major that runs natively on Node 24, so runs no longer log
   GitHub's "Node.js 20 is deprecated" annotation. Notable non-`+1` jumps where the next major was
