@@ -67,6 +67,22 @@ async def test_data_expr_no_builtins_blocked(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_data_expr_attribute_escape_blocked(tmp_path):
+    """The classic eval-sandbox escape via attribute traversal is statically
+    rejected (Attribute nodes disallowed) — not-met, never code execution."""
+    f = tmp_path / "out.json"
+    f.write_text("[]")
+    for expr in (
+        "().__class__.__bases__[0].__subclasses__()",
+        "data.__class__",
+        "'{0.__class__}'.format(data)",
+    ):
+        res = await run_verifier({"type": "data", "path": str(f), "expr": expr}, VerifyContext())
+        assert res.met is False, expr
+        assert "not allowed" in res.reason or "error" in res.reason.lower()
+
+
+@pytest.mark.asyncio
 async def test_data_missing_file(tmp_path):
     res = await run_verifier({"type": "data", "path": str(tmp_path / "nope.json"), "contains": "x"}, VerifyContext())
     assert res.met is False
