@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-06-28
+
+### Added
+- **Context-window meter + per-turn cost/time** (#1372) — the chat header shows a live
+  context-window usage meter, and each completed turn reports its token cost and wall-clock time,
+  so you can see how close a conversation is to the model's window and what each turn spent.
+- **Vision-describe pass for text-only models** (#1381) — attach images to a chat whose model has no
+  native vision: a describe pass turns each image into a text description the model can reason over,
+  instead of dropping the attachment.
+- **"Get models"** (#1386) — a Settings action that pulls a gateway's advertised model list and
+  populates the Primary model dropdown, so you pick from what the gateway actually serves instead of
+  typing model ids by hand.
+- **Inline components re-enabled** (#1323) — an extensible registry with clean, deterministic
+  ordering replaces the disabled inline-component path, so plugins can contribute inline chat
+  components again.
+- **Per-stimulus Activity attribution** (#1375) — each Activity response is attributed to the
+  specific stimulus it replies to, so the reactive thread reads as paired stimulus → response
+  instead of an undifferentiated stream.
+
+### Changed
+- **Inline action feedback → toasts** (#1389) — settings and seven panels now surface transient
+  action results (save / test / connect / CRUD) as DS toasts instead of inline status lines,
+  continuing the toast sweep.
+
+### Fixed
+- **Deduped inbox/Activity now-item notifications + deliver-before-fire** (#1375) — now-item
+  notifications no longer double-fire across the inbox and Activity surfaces, and a delivery now
+  lands before its fire event.
+- **Clear error for images on a text-only model** (#1374) — attaching an image to a text-only model
+  now shows a clear, actionable error instead of a cryptic extractor rejection.
+- **Chat-tab trash only on the hovered ✕** (#1373) — the delete affordance shows on the ✕ you're
+  hovering, not on every tab at once.
+
 ## [0.71.0] - 2026-06-27
 
 ### Added
